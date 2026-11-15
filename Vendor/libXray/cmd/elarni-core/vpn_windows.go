@@ -159,17 +159,27 @@ func runVPN(payload json.RawMessage) (any, error) {
 	return startVPN(payload)
 }
 
-func startVPN(payload json.RawMessage) (any, error) {
+// readVPNRequest reads a tunnel request for a start or a reload. The elevated process checks it
+// again and ends on one it refuses, so nothing it would refuse is sent to it.
+func readVPNRequest(payload json.RawMessage) (vpnRequest, error) {
 	var request vpnRequest
 	decoder := json.NewDecoder(bytes.NewReader(payload))
 	decoder.DisallowUnknownFields()
 	if decoder.Decode(&request) != nil || request.MemoryLimitMB < 0 || request.MemoryLimitMB > 4096 ||
 		request.TCPMaxConnections < 0 || request.TCPMaxConnections > 4096 || request.UDPMaxConnections < 0 || request.UDPMaxConnections > 4096 ||
 		request.LogLevel != "" && xray.SetLogLevel(request.LogLevel) != nil {
-		return nil, errors.New("invalid_vpn_request")
+		return request, errors.New("invalid_vpn_request")
 	}
 	// Validate before consent and again inside the elevated process.
 	if _, err := share.WindowsTunnelConfig([]byte(request.Config), "elarni-validation", request.RoutePolicy); err != nil {
+		return request, err
+	}
+	return request, nil
+}
+
+func startVPN(payload json.RawMessage) (any, error) {
+	request, err := readVPNRequest(payload)
+	if err != nil {
 		return nil, err
 	}
 	root, err := os.UserCacheDir()
@@ -270,13 +280,8 @@ func (request vpnRequest) handshake(action string) vpnHandshake {
 // reloadVPN hands the running tunnel another configuration. vpn_reload_restart says the tunnel
 // cannot take it as it runs; it then runs as before and the app restarts it.
 func reloadVPN(payload json.RawMessage) (any, error) {
-	var request vpnRequest
-	decoder := json.NewDecoder(bytes.NewReader(payload))
-	decoder.DisallowUnknownFields()
-	if decoder.Decode(&request) != nil {
-		return nil, errors.New("invalid_vpn_request")
-	}
-	if _, err := share.WindowsTunnelConfig([]byte(request.Config), "elarni-validation", request.RoutePolicy); err != nil {
+	request, err := readVPNRequest(payload)
+	if err != nil {
 		return nil, err
 	}
 	vpnBroker.Lock()
@@ -980,6 +985,9 @@ func runVPNTunnel(pipe io.Writer, parent windows.Handle, request vpnCommand, com
 				reply := vpnReply{Ready: true, Adapter: iface.Alias()}
 				if err := reloadVPNTunnel(&request, command, adapter); err != nil {
 					reply.Error = reloadCode(err)
+				} else {
+					// As at the start: an app the change put into the tunnel has connections outside it.
+					go moveOpenedConnections(routedInto(iface.InterfaceLUID))
 				}
 				if writeFrame(pipe, reply) != nil {
 					return 1, true, true

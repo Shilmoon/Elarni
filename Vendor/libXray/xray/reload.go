@@ -202,11 +202,12 @@ func ReloadRouting(configJSON string) error {
 			if handler.Tag != tag {
 				continue
 			}
+			// Noted first: one that fails to start is registered all the same.
+			added = append(added, tag)
 			if err := core.AddOutboundHandler(coreServer, handler); err != nil {
 				undo()
 				return fmt.Errorf("xray_reload_failed: %w", err)
 			}
-			added = append(added, tag)
 		}
 	}
 	// Rules first, outbounds last: no rule may name an outbound that is gone.

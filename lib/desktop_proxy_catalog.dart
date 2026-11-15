@@ -356,6 +356,15 @@ extension _ProxyCatalog on DesktopProxy {
         restart = false;
         // A failure from here on restarts the tunnel with the old rules.
         runtimeChanged = true;
+        // The server ran on: a success it had holds for its new revision.
+        final id = candidate.selected!;
+        final was = before.node(id), kept = candidate.node(id);
+        if (was['lastSuccessRevision'] != null &&
+            was['lastSuccessRevision'] ==
+                (was['configurationRevision'] ?? was['id']))
+          candidate.updateNode(id, {
+            'lastSuccessRevision': kept['configurationRevision'] ?? kept['id'],
+          });
       }
       if (restart) {
         // Another tunnel follows: the core keeps Block traffic without VPN in

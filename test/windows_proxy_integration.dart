@@ -1882,6 +1882,14 @@ for line in sys.stdin:
       expect((await events.readAsLines()).skip(4), [
         'reloadVPN same rules +3 outbounds +1',
       ]);
+      // The server ran on: it is as verified as it was, under its new revision.
+      expect(
+        (await backend.control.subscriptions()).subscriptions
+            .expand((source) => source.nodes)
+            .singleWhere((node) => node.id == named)
+            .lastSuccessCurrent,
+        true,
+      );
       // And back.
       await backend.control.updateTunnelSettings(settings);
       expect(await backend.control.state(), 'connected');

@@ -89,10 +89,12 @@ it takes shows **Started by** with the listed app in **Recent connections**.
 On Windows and Linux a change of the mode, the app list or an app's target goes to the
 running tunnel, which is not restarted: other apps' connections are not cut. A connection
 that is already open keeps the route it was given; the app's next connection follows the new
-rules, so restart the app, or let it reconnect, to move what it has open. The exception is a
-server that the change leaves without any rule: it is closed, and with it the connections
-that shared one session to it (WireGuard, TUIC, XHTTP or a multiplexed transport). A change of
-anything else (the server, routes, DNS, listeners) restarts the tunnel.
+rules, so restart the app, or let it reconnect, to move what it has open. An app the change
+puts into the tunnel has the connections it opened outside the tunnel closed, as when the
+tunnel starts (see below). The other exception is a server that the change leaves without
+any rule: it is closed, and with it the connections that shared one session to it (WireGuard,
+TUIC, XHTTP or a multiplexed transport). A change of anything else (the server, routes, DNS,
+listeners) restarts the tunnel.
 
 ## Apps that were running before you connected
 

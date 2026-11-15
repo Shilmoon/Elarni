@@ -989,6 +989,9 @@ func linuxWorker(ctx context.Context, input io.Reader, output io.Writer) (code i
 			reply := linuxReply{Ready: true}
 			if err := reloadLinuxTunnel(&command, next); err != nil {
 				reply.Error = reloadCode(err)
+			} else {
+				// As at the start: an app the change put into the tunnel has connections outside it.
+				go moveOpenedConnections(nil)
 			}
 			if linuxWriteFrame(output, reply) != nil {
 				return 1
