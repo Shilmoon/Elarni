@@ -17,7 +17,8 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
 - The **Review download destination** prompt lists the addresses of the download. Android
   showed `null://null` and iPhone showed "Invalid destination", because the core sent
   fingerprints where the apps expected addresses; the Windows, Linux and Mac prompt named only
-  the risk, and `elarni-cli` returned no `destinations`.
+  the risk, and `elarni-cli` returned no `destinations`. When a connect address overrides the
+  URL's host, the prompt names it beside the URL.
 - A subscription on this device's own network refreshes while Elarni is connected: a URL with a
   loopback, private, link-local or unique-local address, or a `.local` or dot-less name. The
   name is looked up by the system, a `.local` name also by mDNS when the system cannot answer
@@ -36,6 +37,37 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
   and suggested another format, also for a new subscription, on the refresh failure card and
   for a Clash file. The rule itself (the core accepts such a server only on a private network)
   is unchanged. All platforms.
+- Android asks to run without battery optimization. Doze cut the VPN while the phone slept,
+  because the app was not exempt and never asked. With System VPN on, Home shows the request
+  once and **Settings > General** has a **Run in the background** tile; both open Android's
+  own dialog.
+- Refresh times written while the device clock was far ahead come due once the clock is set
+  right, on Android, macOS and iPhone as on desktop. Before, the subscription, managed lists
+  and geofiles were not refreshed again until that date, and the Mac's maintenance timer slept
+  until it.
+- A pasted or file-imported list with a server the compiler refuses imports the rest and counts
+  the one left out, as a subscription refresh does. Before, the whole import failed. Windows,
+  Linux and Android; on macOS and iPhone a list that joins the local group keeps its count of
+  skipped lines.
+- A Clash file with a rule that points at a proxy the import skipped, or with `no-resolve` on
+  an `IP-CIDR`, `IP-CIDR6` or `GEOIP` rule, imports. The rule to the skipped proxy is left out;
+  when every IP rule has `no-resolve` the profile does not resolve names for IP rules, otherwise
+  it keeps resolving them.
+- A share link is not written for a server whose link would lose settings (mux, a target
+  strategy, pinned certificates, extra WebSocket headers, socket options, a user level): that
+  link imported as another server. **Share links** says so and the server is shared from its
+  own page, as JSON. A WebSocket `Host` header is written as the link's host.
+- Android: a subscription refresh while connected no longer fails for good when the feed
+  dropped both the selected server and a server an app is pinned to. The running tunnel stays
+  as it is and the next Connect names the app's rule.
+- Android: when the saved catalog cannot be read, the failure offers **Reset Elarni** behind a
+  confirmation. Before, the only way out was clearing the app's data in Android settings.
+- Recent connections shows an IPv6 destination as `[2001:db8::1]:443`, not with doubled
+  brackets. Android, Windows and Linux.
+- Windows and Linux: notices and stored failures are in the interface language: links that
+  failed to import, a connection that stopped, the system proxy, a scheduled refresh, the
+  system settings and occupied-port errors, a routing profile's geofile and managed-list
+  failures, a per-app paste that is not JSON. Before, they were English in a Russian interface.
 
 ### Security
 
