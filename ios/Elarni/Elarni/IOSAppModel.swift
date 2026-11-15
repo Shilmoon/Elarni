@@ -1157,13 +1157,13 @@ final class IOSAppModel {
   @ObservationIgnored private var healthPassedNode: String?
   /// Servers whose last failed health check counted only because another server could take over.
   /// Kept per server: checking a backup must not change what is known about the current one.
+  /// An inconclusive check leaves it: the server is as unverified as before, so a retry does not reconnect it.
   @ObservationIgnored private var healthFailureUnverified: Set<String> = []
 
   private func activeHealth(_ node: ServerNode, expectedPlan: Data? = nil) async throws {
     try requireRecoveryPolicy(node)
     // As on macOS and desktop: every target gets its probe before the check is classified.
     var timeouts = 0, verified = 0, invalidTarget = false
-    healthFailureUnverified.remove(node.id)
     let russianEntry = preferences.automation.russianEntryNodeIDs?.contains(node.id) == true
     let passedBefore = healthPassedNode == node.id
     // A server to move to, not only a policy that allows moving: with none allowed now (a list of
@@ -1175,6 +1175,7 @@ final class IOSAppModel {
       do {
         _ = try await probe(node, mode: "activeProxy", target: target, expectedPlan: expectedPlan)
         healthPassedNode = node.id
+        healthFailureUnverified.remove(node.id)
         recovery.observe(node: node.id, passed: true, russianEntry: russianEntry); whitelistMode = recovery.whitelist
         return
       } catch let error as IOSProbeFailure {
@@ -1187,6 +1188,7 @@ final class IOSAppModel {
     if invalidTarget { throw AutomationFailure.invalidTarget }
     guard timeouts >= preferences.automation.endpointFailureTimeouts else { throw AutomationFailure.indeterminate }
     if verified < preferences.automation.endpointFailureTimeouts { healthFailureUnverified.insert(node.id) }
+    else { healthFailureUnverified.remove(node.id) }
     recovery.observe(node: node.id, passed: false, russianEntry: russianEntry); whitelistMode = recovery.whitelist
     throw AutomationFailure.endpointFailure
   }
