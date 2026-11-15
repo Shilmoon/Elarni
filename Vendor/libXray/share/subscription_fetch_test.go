@@ -537,8 +537,8 @@ func TestALocalNameTheSystemCannotAnswerIsAskedOnTheLocalLinks(t *testing.T) {
 		}
 	}()
 	placeholder, roots := dotFixture(t, netip.MustParseAddr("198.18.0.5"))
-	previous, previousGroup := net.DefaultResolver, mdnsGroup
-	t.Cleanup(func() { net.DefaultResolver, mdnsGroup = previous, previousGroup })
+	previous, previousGroup, previousWait := net.DefaultResolver, mdnsGroup, mdnsWait
+	t.Cleanup(func() { net.DefaultResolver, mdnsGroup, mdnsWait = previous, previousGroup, previousWait })
 	net.DefaultResolver = &net.Resolver{PreferGo: true, Dial: func(ctx context.Context, _, _ string) (net.Conn, error) {
 		return (&tls.Dialer{Config: &tls.Config{RootCAs: roots, ServerName: "127.0.0.1"}}).DialContext(ctx, "tcp", placeholder)
 	}}
@@ -553,7 +553,8 @@ func TestALocalNameTheSystemCannotAnswerIsAskedOnTheLocalLinks(t *testing.T) {
 	if answers := mdnsLookup(ctx, "ip4", "router"); answers != nil {
 		t.Fatalf("a name outside .local was asked: %v", answers)
 	}
-	mdnsGroup = "127.0.0.1:1"
+	// Nothing answers there: the wait for an answer is shortened, not slept through.
+	mdnsGroup, mdnsWait = "127.0.0.1:1", 50*time.Millisecond
 	// A placeholder is no answer: connecting to it would hand the local name to the server.
 	if addresses, err := localLookup(ctx, "ip4", "feed.local"); err == nil || err.Error() != "dns_failed" || len(addresses) != 0 {
 		t.Fatalf("without an answer the lookup fails: %v %v", addresses, err)

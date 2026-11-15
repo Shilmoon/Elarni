@@ -55,6 +55,10 @@ func TestImportNamesAnUnencryptedPublicServer(t *testing.T) {
 	if _, err := ImportClientProfiles(plain + "\nvless://broken\nnot a link"); err == nil || errors.Is(err, ErrUnencryptedServer) {
 		t.Errorf("an unencrypted server among broken lines: %v", err)
 	}
+	// After one, another member's error is the file's: a Clash file's names Clash, which macOS matches on.
+	if _, err := ImportClientProfiles("proxies:\n  - {name: Plain, type: vless, server: 8.8.8.8, port: 443, uuid: " + id + "}\n  - {name: Bad, type: snell, server: 127.0.0.1, port: 1080}\n"); err == nil || errors.Is(err, ErrUnencryptedServer) || err.Error() != "unsupported Clash proxy type snell" {
+		t.Errorf("an unencrypted server before a refused Clash proxy: %v", err)
+	}
 	// Among servers that import it is skipped like any other.
 	result, err := ImportClientProfiles("trojan://pw@127.0.0.1:443#Kept\ntrojan://pw@8.8.8.8:443?security=none#Plain")
 	if err != nil || len(result.Profiles) != 1 || result.SkippedCount != 1 {

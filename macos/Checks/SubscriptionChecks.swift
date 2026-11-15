@@ -1354,6 +1354,12 @@ struct SubscriptionChecks {
       candidateChain: ["677336c4661eda0143352dd16adce73d", "764b010402df57e78454a8ed31facc3d", "0f3a"],
       destinations: ["https://[2001:db8::1]:8443/secret-token", "http://user:pass@feed.example/path?key=1", "not a url"])).destinations
     try expect(shown == ["https://[2001:db8::1]:8443", "http://feed.example", "Invalid destination"], "approval destinations were \(shown)")
+    // The core names a connect address after an arrow: the review showed such an origin as "Invalid destination".
+    let connected = try vault.issue(subscriptionID: "e", requirement: SubscriptionApprovalRequirement(riskCodes: [.privateTarget],
+      candidateChain: ["a", "b", "c"],
+      destinations: ["https://feed.example:8443 → 10.0.0.5", "http://[2001:db8::1]:8080", "not a url"])).destinations
+    try expect(connected == ["https://feed.example:8443 → 10.0.0.5", "http://[2001:db8::1]:8080", "Invalid destination"],
+      "approval destinations with a connect address were \(connected)")
     try expect(try vault.issue(subscriptionID: "d", requirement: requirement).destinations.isEmpty, "a fingerprint was shown as a destination")
     print("PASS subscription challenges are scoped single-use expiring and invalidated")
     return 1
