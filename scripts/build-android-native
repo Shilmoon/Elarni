@@ -29,7 +29,7 @@ output = root / '.build/android-native'
 libraries = output / 'jniLibs' / abi
 libraries.mkdir(parents=True, exist_ok=True)
 environment = dict(os.environ, ANDROID_HOME=str(sdk), ANDROID_NDK_HOME=str(ndk),
-    GOTOOLCHAIN='go1.27.3', CARGO_TARGET_DIR=str(output / 'rust'),
+    GOTOOLCHAIN='go1.27.4', CARGO_TARGET_DIR=str(output / 'rust'),
     **{f'CARGO_TARGET_{target.upper().replace("-", "_")}_LINKER': str(clang)})
 # gomobile runs go in a temporary module, where a mise shim finds no pinned version: put the real go first.
 goroot = subprocess.run(['go', 'env', 'GOROOT'], cwd=root, env=environment, check=True, capture_output=True, text=True).stdout.strip()
