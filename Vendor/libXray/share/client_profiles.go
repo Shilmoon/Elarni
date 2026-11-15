@@ -60,11 +60,16 @@ type skippedMembers struct {
 	first error
 	// How many were left out as unencrypted servers: that reason is the import's only when it is every member's.
 	unencrypted int
+	// The first error for another reason, which names what else is wrong (a Clash file's says "Clash").
+	firstOther error
 }
 
 // failure is the import's error when nothing is left to import.
 func (s *skippedMembers) failure() error {
 	if errors.Is(s.first, ErrUnencryptedServer) && s.unencrypted < s.count {
+		if s.firstOther != nil {
+			return s.firstOther
+		}
 		return fmt.Errorf("unsupported client settings")
 	}
 	return s.first
@@ -76,6 +81,8 @@ func (s *skippedMembers) add(name, kind, fallback string, err error) {
 	}
 	if errors.Is(err, ErrUnencryptedServer) {
 		s.unencrypted++
+	} else if s.firstOther == nil {
+		s.firstOther = err
 	}
 	s.count++
 	if len(s.list) >= maxSkippedListed {

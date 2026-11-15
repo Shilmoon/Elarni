@@ -111,72 +111,50 @@ func linkLoses(outbound *conf.OutboundDetourConfig) bool {
 	return userLoses(outbound) || streamLoses(outbound.StreamSetting)
 }
 
-// userLoses reports a user level or email, which pick the user's policy and statistics, wherever the
-// protocol keeps them.
+// userLoses reports user settings the vless:// and vmess:// links have no parameter for: a VLESS reverse
+// proxy, pre-connections or Vision padding seeds, VMess experiments. A user level or email only picks a
+// local policy and labels statistics in a client, so a link without them imports as the same server.
 func userLoses(outbound *conf.OutboundDetourConfig) bool {
-	set := func(level uint32, email string) bool { return level != 0 || email != "" }
-	usersSet := func(users []json.RawMessage) bool {
-		for _, raw := range users {
-			// As Xray reads a member of "users".
-			var user struct {
-				Level uint32 `json:"level"`
-				Email string `json:"email"`
-			}
-			if json.Unmarshal(raw, &user) != nil || set(user.Level, user.Email) {
-				return true
-			}
-		}
-		return false
+	vlessSet := func(reverse *conf.VLessReverseConfig, testpre uint32, testseed []uint32) bool {
+		return reverse != nil || testpre != 0 || len(testseed) > 0
 	}
 	switch outbound.Protocol {
 	case "vless":
 		settings, err := decodeOutboundSettings[conf.VLessOutboundConfig](*outbound)
-		if err != nil || set(settings.Level, settings.Email) {
+		if err != nil || vlessSet(settings.Reverse, settings.Testpre, settings.Testseed) {
 			return true
 		}
 		for _, server := range settings.Vnext {
-			if server != nil && usersSet(server.Users) {
-				return true
+			if server == nil {
+				continue
+			}
+			for _, raw := range server.Users {
+				// As Xray reads a member of "users".
+				var user struct {
+					Reverse  *conf.VLessReverseConfig `json:"reverse"`
+					Testpre  uint32                   `json:"testpre"`
+					Testseed []uint32                 `json:"testseed"`
+				}
+				if json.Unmarshal(raw, &user) != nil || vlessSet(user.Reverse, user.Testpre, user.Testseed) {
+					return true
+				}
 			}
 		}
 	case "vmess":
 		settings, err := decodeOutboundSettings[conf.VMessOutboundConfig](*outbound)
-		if err != nil || set(settings.Level, settings.Email) {
+		if err != nil || settings.Experiments != "" {
 			return true
 		}
 		for _, server := range settings.Receivers {
-			if server != nil && usersSet(server.Users) {
-				return true
+			if server == nil {
+				continue
 			}
-		}
-	case "socks":
-		settings, err := decodeOutboundSettings[conf.SocksClientConfig](*outbound)
-		if err != nil || set(settings.Level, settings.Email) {
-			return true
-		}
-		for _, server := range settings.Servers {
-			if server != nil && usersSet(server.Users) {
-				return true
-			}
-		}
-	case "trojan":
-		settings, err := decodeOutboundSettings[conf.TrojanClientConfig](*outbound)
-		if err != nil || set(uint32(settings.Level), settings.Email) {
-			return true
-		}
-		for _, server := range settings.Servers {
-			if server != nil && set(uint32(server.Level), server.Email) {
-				return true
-			}
-		}
-	case "shadowsocks":
-		settings, err := decodeOutboundSettings[conf.ShadowsocksClientConfig](*outbound)
-		if err != nil || set(uint32(settings.Level), settings.Email) {
-			return true
-		}
-		for _, server := range settings.Servers {
-			if server != nil && set(uint32(server.Level), server.Email) {
-				return true
+			for _, raw := range server.Users {
+				// As Xray reads a member of "users".
+				var user conf.VMessAccount
+				if json.Unmarshal(raw, &user) != nil || user.Experiments != "" {
+					return true
+				}
 			}
 		}
 	}
@@ -219,7 +197,9 @@ func streamLoses(stream *conf.StreamConfig) bool {
 		if json.Unmarshal(raw.HeaderConfig, &header) != nil {
 			return true
 		}
-		if strings.EqualFold(header.Type, "http") && header.Request != nil && (header.Request.Version != "" || header.Request.Method != "") {
+		// Xray's own request line, version 1.1 and GET, is what the link's header imports as.
+		if request := header.Request; strings.EqualFold(header.Type, "http") && request != nil &&
+			((request.Version != "" && request.Version != "1.1") || (request.Method != "" && request.Method != "GET")) {
 			return true
 		}
 	}
