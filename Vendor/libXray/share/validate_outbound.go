@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"net/url"
 	"reflect"
-	"strings"
 
 	"github.com/xtls/xray-core/infra/conf"
 )
@@ -67,8 +66,7 @@ func buildOutbound(outbound *conf.OutboundDetourConfig) (err error) {
 	outbound.ProxySettings = nil
 	defer func() { outbound.ProxySettings = proxySettings }()
 	if _, err = outbound.Build(); err != nil {
-		// Xray's wording, in validateOutboundTransportSecurity.
-		if strings.Contains(err.Error(), "is prohibited unless the server address is a private IP or domain") {
+		if errors.Is(err, conf.ErrUnencryptedOutbound) {
 			return ErrUnencryptedServer
 		}
 		return err

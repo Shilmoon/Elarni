@@ -34,6 +34,10 @@ func TestImportNamesAnUnencryptedPublicServer(t *testing.T) {
 	if _, err := ImportClientProfiles(profile); !errors.Is(err, ErrUnencryptedServer) {
 		t.Errorf("Xray profile: %v", err)
 	}
+	// The same server in a Clash file, which named only "invalid Clash client settings".
+	if _, err := ImportClientProfiles("proxies:\n  - {name: Plain, type: vless, server: 8.8.8.8, port: 443, uuid: " + id + "}\n"); !errors.Is(err, ErrUnencryptedServer) {
+		t.Errorf("Clash profile: %v", err)
+	}
 	// A private address, and a public one with TLS, import as before.
 	for _, link := range []string{
 		"vless://" + id + "@10.0.0.1:443?encryption=none&security=none#Lan",

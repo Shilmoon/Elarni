@@ -2,6 +2,7 @@ package share
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"reflect"
@@ -76,7 +77,7 @@ func importClashProfiles(text string) (*ClientImport, error) {
 		if err == nil {
 			// Checked alone too, so a proxy the core refuses is skipped instead of failing the file.
 			raw, _ := json.Marshal(map[string]any{"outbounds": []any{outbound}})
-			if validateClientProfile(raw) != nil {
+			if err = validateClientProfile(raw); err != nil && !errors.Is(err, ErrUnencryptedServer) {
 				err = fmt.Errorf("invalid Clash client settings")
 			}
 		}
