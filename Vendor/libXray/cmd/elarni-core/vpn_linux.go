@@ -145,7 +145,7 @@ func linuxWriteFrame(writer io.Writer, value any) error {
 }
 func linuxReadCommand(reader io.Reader) (linuxCommand, error) {
 	var command linuxCommand
-	if linuxReadFrame(reader, &command) != nil || (command.Action != "start" && command.Action != "stop") || len(command.AssetSizes) > 2 {
+	if linuxReadFrame(reader, &command) != nil || (command.Action != "start" && command.Action != "stop" && command.Action != "reload") || len(command.AssetSizes) > 2 {
 		return command, errors.New("invalid_request")
 	}
 	command.assets = map[string][]byte{}
@@ -397,6 +397,35 @@ func startVPN(payload json.RawMessage) (any, error) {
 	}
 	return map[string]any{"adapter": reply.Adapter, "helperPid": reply.PID}, nil
 }
+
+// reloadVPN hands the running tunnel another configuration. vpn_reload_restart says the tunnel
+// cannot take it as it runs; it then runs as before and the app restarts it.
+func reloadVPN(payload json.RawMessage) (any, error) {
+	var request vpnRequest
+	if decodeLinuxJSON(payload, &request) != nil {
+		return nil, errors.New("invalid_vpn_request")
+	}
+	if err := validLinuxRequest(request); err != nil {
+		return nil, err
+	}
+	linuxBroker.Lock()
+	child := linuxBroker.child
+	linuxBroker.Unlock()
+	if child == nil || !child.up.Load() {
+		return nil, errors.New(reloadCode(xray.ErrRestartNeeded))
+	}
+	reply, err := child.request(linuxCommand{Action: "reload", Request: request}, 15*time.Second)
+	if err != nil {
+		// No answer, or one out of turn: the next reply could not be told from this one.
+		_ = platformStop()
+		return nil, errors.New("vpn_failed")
+	}
+	if reply.Error != "" {
+		return nil, errors.New(reply.Error)
+	}
+	return map[string]any{}, nil
+}
+
 func stopVPN(payload json.RawMessage) (any, error) {
 	var request struct {
 		Hold bool `json:"hold"`
@@ -715,6 +744,25 @@ func superviseLinuxTunnels(ctx context.Context, commands <-chan linuxCommand, cl
 				}
 				continue
 			}
+			if command.Action == "reload" {
+				// Answered as a running tunnel when one runs: a refused reload changed nothing.
+				reply := linuxReply{Error: reloadCode(nil)}
+				if worker != nil {
+					reply = linuxReply{Ready: true, Adapter: network.Name, PID: os.Getpid()}
+					if validLinuxRequest(command.Request) != nil {
+						reply.Error = reloadCode(nil)
+					} else if answer, err := worker.request(linuxCommand{Action: "reload", Request: command.Request, Network: network}, 10*time.Second); err != nil {
+						// A worker that does not answer is stopped by the request, and reported lost.
+						reply.Error = reloadCode(nil)
+					} else {
+						reply.Error = answer.Error
+					}
+				}
+				if send(reply) != nil {
+					return 1
+				}
+				continue
+			}
 			if worker != nil || validLinuxRequest(command.Request) != nil {
 				_ = send(linuxReply{Error: "invalid_vpn_request"})
 				return 1
@@ -795,6 +843,27 @@ func superviseLinuxTunnels(ctx context.Context, commands <-chan linuxCommand, cl
 			}
 		}
 	}
+}
+
+// reloadLinuxTunnel gives the running tunnel the next configuration's routing. Everything else the
+// tunnel was started with must be the same: its network, routes and limits stay as they are.
+func reloadLinuxTunnel(running *linuxCommand, next linuxCommand) error {
+	strip := func(request *vpnRequest) { request.Config, request.ReuseSession = "", false }
+	if next.Network != running.Network || !sameSession(running.Request, next.Request, strip) {
+		return xray.ErrRestartNeeded
+	}
+	config, err := linuxTunnelConfig([]byte(next.Request.Config), running.Network, next.Request.RoutePolicy)
+	if err != nil {
+		return err
+	}
+	if err := xray.ReloadRouting(string(config)); err != nil {
+		return err
+	}
+	running.Request.Config = next.Request.Config
+	if running.Request.RecordDiagnostics && running.Owner >= 0 {
+		recordRuntimeConfig(next.Request.Config, next.Request.MemoryLimitMB, next.Request.TCPMaxConnections, next.Request.UDPMaxConnections, true)
+	}
+	return nil
 }
 
 func linuxWorker(ctx context.Context, input io.Reader, output io.Writer) (code int) {
@@ -908,8 +977,17 @@ func linuxWorker(ctx context.Context, input io.Reader, output io.Writer) (code i
 			return 0
 		case <-closed:
 			return 0
-		case <-commands:
-			return 0
+		case next := <-commands:
+			if next.Action != "reload" {
+				return 0
+			}
+			reply := linuxReply{Ready: true}
+			if err := reloadLinuxTunnel(&command, next); err != nil {
+				reply.Error = reloadCode(err)
+			}
+			if linuxWriteFrame(output, reply) != nil {
+				return 1
+			}
 		case now := <-ticker.C:
 			if !xray.GetXrayState() {
 				return 1

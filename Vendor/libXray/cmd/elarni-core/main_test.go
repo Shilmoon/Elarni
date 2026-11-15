@@ -389,6 +389,64 @@ func TestVPNSessionOwnerOutlivesFailedStartsAndLostTunnels(t *testing.T) {
 	}
 }
 
+// A reload leaves the session as it is: the tunnel stays the active one whether it took the new
+// routing or refused it, and with no tunnel the reload is answered without reaching the runtime.
+func TestVPNSessionReloadsTheRunningTunnel(t *testing.T) {
+	input, parent := io.Pipe()
+	output, child := io.Pipe()
+	defer input.Close()
+	defer parent.Close()
+	defer output.Close()
+	defer child.Close()
+	var reloads atomic.Int32
+	done := make(chan int, 1)
+	go func() {
+		done <- serve(input, child, func(raw string) response {
+			var request struct {
+				Method string `json:"method"`
+			}
+			_ = json.Unmarshal([]byte(raw), &request)
+			if request.Method == "reloadVPN" {
+				// The first is taken, the second refused; neither says "run".
+				if reloads.Add(1) == 1 {
+					return response{text: `{"success":true}`}
+				}
+				return response{text: `{"success":false,"error":"vpn_reload_restart"}`}
+			}
+			return response{text: `{"success":true}`, run: request.Method == "runVPN", session: request.Method == "runVPN"}
+		}, func() error { return nil }, func() bool { return true }, func() bool { return true })
+	}()
+	reader := bufio.NewReader(output)
+	for _, step := range [][2]string{
+		{"runVPN", `{"success":true}`},
+		{"reloadVPN", `{"success":true}`},
+		{"reloadVPN", `{"success":false,"error":"vpn_reload_restart"}`},
+		// Still the active tunnel: a second start is refused by ending the session, so a stop must work.
+		{"stopVPN", `{"success":true}`},
+		// No tunnel: answered here.
+		{"reloadVPN", `{"success":false,"error":"vpn_reload_restart"}`},
+		{"runVPN", `{"success":true}`},
+	} {
+		_, _ = io.WriteString(parent, `{"apiVersion":1,"method":"`+step[0]+`","payload":{"reuseSession":true}}`+"\n")
+		line, err := reader.ReadString('\n')
+		if err != nil || line != step[1]+"\n" {
+			t.Fatalf("%s answered %q %v", step[0], line, err)
+		}
+	}
+	if reloads.Load() != 2 {
+		t.Fatalf("%d reloads reached the runtime", reloads.Load())
+	}
+	_ = parent.Close()
+	select {
+	case code := <-done:
+		if code != 0 {
+			t.Fatalf("exit %d", code)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("the session survived its owner")
+	}
+}
+
 func TestVPNSessionRejectsUnrelatedCommandsAndCancelsRestart(t *testing.T) {
 	for _, method := range []string{"importClientProfiles", "runVPN"} {
 		t.Run(method, func(t *testing.T) {

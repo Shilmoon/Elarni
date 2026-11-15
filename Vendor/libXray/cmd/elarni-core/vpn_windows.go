@@ -260,6 +260,46 @@ func sendVPNStart(pipe io.Writer, replies <-chan vpnReply, handshake vpnHandshak
 	return reply, ok, nil
 }
 
+// reloadVPN hands the running tunnel another configuration. vpn_reload_restart says the tunnel
+// cannot take it as it runs; it then runs as before and the app restarts it.
+func reloadVPN(payload json.RawMessage) (any, error) {
+	var request vpnRequest
+	decoder := json.NewDecoder(bytes.NewReader(payload))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&request) != nil {
+		return nil, errors.New("invalid_vpn_request")
+	}
+	if _, err := share.WindowsTunnelConfig([]byte(request.Config), "elarni-validation", request.RoutePolicy); err != nil {
+		return nil, err
+	}
+	vpnBroker.Lock()
+	pipe, replies, up, assets := vpnBroker.pipe, vpnBroker.replies, vpnBroker.up, vpnBroker.assets
+	vpnBroker.Unlock()
+	// Other geofiles would have to be sent, which only a start does.
+	if pipe == nil || !up || request.AssetRevision != assets {
+		return nil, errors.New(reloadCode(xray.ErrRestartNeeded))
+	}
+	handshake := vpnHandshake{Version: 1, Action: "reload", Config: request.Config, AssetRevision: request.AssetRevision, MemoryLimitMB: request.MemoryLimitMB,
+		LogLevel: request.LogLevel, StreamMetrics: request.StreamMetrics, TCPMaxConnections: request.TCPMaxConnections, UDPMaxConnections: request.UDPMaxConnections, RoutePolicy: request.RoutePolicy,
+		RecordDiagnostics: request.RecordDiagnostics}
+	if writeFrame(pipe, handshake) != nil {
+		return nil, errors.New("vpn_failed")
+	}
+	select {
+	case reply, ok := <-replies:
+		if ok && reply.Ready && reply.Error == "" {
+			return map[string]any{}, nil
+		}
+		if ok && strings.HasPrefix(reply.Error, "vpn_reload_") {
+			return nil, errors.New(reply.Error)
+		}
+	case <-awakeAfter(10 * time.Second):
+	}
+	// No answer, or one out of turn: the next reply could not be told from this one.
+	platformStop()
+	return nil, errors.New("vpn_failed")
+}
+
 func stopVPN(payload json.RawMessage) (any, error) {
 	var request struct {
 		Hold bool `json:"hold"`
@@ -590,6 +630,13 @@ func vpnChild(name string, brokerPID uint32) int {
 				}
 				continue
 			}
+			if command.Action == "reload" {
+				// No tunnel runs here: the app starts one.
+				if writeFrame(pipe, vpnReply{Error: reloadCode(nil)}) != nil {
+					return 1
+				}
+				continue
+			}
 			if command.Action != "stop" {
 				var code int
 				var ready bool
@@ -716,7 +763,7 @@ func (held *heldAssets) load(command vpnCommand) error {
 
 func readVPNCommand(pipe io.Reader) (vpnCommand, error) {
 	request := vpnCommand{assets: map[string][]byte{}}
-	if readFrame(pipe, &request.vpnHandshake) != nil || request.Version != 1 || (request.Action != "" && request.Action != "stop") ||
+	if readFrame(pipe, &request.vpnHandshake) != nil || request.Version != 1 || (request.Action != "" && request.Action != "stop" && request.Action != "reload") ||
 		len(request.Assets) > 2 || request.AssetRevision != "" && !assetRevision.MatchString(request.AssetRevision) ||
 		request.ReuseAssets && (request.AssetRevision == "" || len(request.Assets) > 0) || request.MemoryLimitMB < 0 || request.MemoryLimitMB > 4096 ||
 		request.TCPMaxConnections < 0 || request.TCPMaxConnections > 4096 || request.UDPMaxConnections < 0 || request.UDPMaxConnections > 4096 {
@@ -754,6 +801,27 @@ func tunnelInterface(guid *windows.GUID) (*winipcfg.MibIfRow2, error) {
 		return nil, err
 	}
 	return luid.Interface()
+}
+
+// reloadVPNTunnel gives the running tunnel the next configuration's routing. Everything else the
+// tunnel was started with must be the same: its adapter, routes and limits stay as they are.
+func reloadVPNTunnel(running *vpnCommand, next vpnCommand, adapter string) error {
+	strip := func(handshake *vpnHandshake) {
+		handshake.Action, handshake.Config, handshake.Assets, handshake.ReuseAssets = "", "", nil, false
+	}
+	if !sameSession(running.vpnHandshake, next.vpnHandshake, strip) {
+		return xray.ErrRestartNeeded
+	}
+	config, err := share.WindowsTunnelConfig([]byte(next.Config), adapter, next.RoutePolicy)
+	if err != nil {
+		return err
+	}
+	if err := xray.ReloadRouting(string(config)); err != nil {
+		return err
+	}
+	running.Config = next.Config
+	recordRuntimeConfig(next.Config, next.MemoryLimitMB, next.TCPMaxConnections, next.UDPMaxConnections, true)
+	return nil
 }
 
 // runVPNTunnel runs one tunnel. code 0 is a requested stop; ready says the tunnel
@@ -903,6 +971,17 @@ func runVPNTunnel(pipe io.Writer, parent windows.Handle, request vpnCommand, com
 		case <-closed:
 			return 1, true, true
 		case command := <-commands:
+			if command.Action == "reload" {
+				// Answered as a running tunnel either way: a refused reload changed nothing.
+				reply := vpnReply{Ready: true, Adapter: iface.Alias()}
+				if err := reloadVPNTunnel(&request, command, adapter); err != nil {
+					reply.Error = reloadCode(err)
+				}
+				if writeFrame(pipe, reply) != nil {
+					return 1, true, true
+				}
+				continue
+			}
 			if command.Action != "stop" {
 				return 1, true, true
 			}

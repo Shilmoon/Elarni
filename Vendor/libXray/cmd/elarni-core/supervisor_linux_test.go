@@ -7,7 +7,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -120,7 +119,21 @@ func TestLinuxWorkerFixture(t *testing.T) {
 		_ = linuxWriteFrame(os.Stdout, linuxReply{Logs: []xray.LogEntry{{Seq: 1, Level: "info", Text: "fixture"}}})
 		_ = linuxWriteFrame(os.Stdout, linuxReply{Lost: true})
 	}
-	_, _ = io.Copy(io.Discard, input) // until the owner closes the input
+	// Until the owner closes the input. A reload is answered as the worker does: still running,
+	// with a code when the tunnel cannot take it (here, a request that asks for 1 MB).
+	for {
+		next, err := linuxReadCommand(input)
+		if err != nil || next.Action != "reload" {
+			break
+		}
+		reply := linuxReply{Ready: true}
+		if next.Request.MemoryLimitMB == 1 {
+			reply.Error = "vpn_reload_restart"
+		}
+		if linuxWriteFrame(os.Stdout, reply) != nil {
+			os.Exit(1)
+		}
+	}
 	os.Exit(0)
 }
 
@@ -293,6 +306,74 @@ func TestLinuxSupervisorOutlivesFailedAndLostTunnels(t *testing.T) {
 // a settings change, failover) removed the kill switch with the old tunnel, and a start
 // removed a kept one before the new tunnel was up: traffic left outside for 60-120 ms
 // on a change and about a second after a lost tunnel.
+// A reload goes to the running tunnel's worker and is answered as a running tunnel, taken or
+// refused; without a tunnel it is refused, and the supervisor stays for the next start.
+func TestLinuxSupervisorPassesAReloadToItsWorker(t *testing.T) {
+	lock := filepath.Join(t.TempDir(), "vpn.lock")
+	host := linuxTunnelHost{
+		lock: func() (*os.File, error) { return acquireLinuxVPNLock(lock) },
+		reserve: func() (linuxNetwork, error) {
+			return linuxNetwork{Name: "rv000000000001", Table: 12001, Priority: 12001, Mark: 0x52560000 | 12001, DNSPort: 5353}, nil
+		},
+		cleanup: func(linuxNetwork) error { return nil },
+		forget:  func(linuxNetwork) {},
+		worker: func(events func(linuxReply)) (*linuxChild, error) {
+			return startLinuxChild(linuxWorkerFixture("run"), events)
+		},
+	}
+	commands, closed, replies := make(chan linuxCommand), make(chan struct{}), make(chan linuxReply, 4)
+	done := make(chan int, 1)
+	go func() {
+		done <- superviseLinuxTunnels(context.Background(), commands, closed, func(reply linuxReply) error { replies <- reply; return nil }, os.Getuid(), host)
+	}()
+	ask := func(stage string, command linuxCommand) linuxReply {
+		t.Helper()
+		select {
+		case commands <- command:
+		case code := <-done:
+			t.Fatalf("%s: the supervisor exited with %d", stage, code)
+		}
+		select {
+		case reply := <-replies:
+			return reply
+		case <-time.After(10 * time.Second):
+			t.Fatalf("%s: the supervisor did not answer", stage)
+		}
+		return linuxReply{}
+	}
+	request := vpnRequest{Config: linuxConfigFixture, RoutePolicy: &share.WindowsRoutePolicy{IncludedRoutes: []string{"0.0.0.0/0"}}}
+	if reply := ask("reload without a tunnel", linuxCommand{Action: "reload", Request: request}); reply.Ready || reply.Error != "vpn_reload_failed" {
+		t.Fatalf("reload without a tunnel answered %+v", reply)
+	}
+	if reply := ask("start", linuxCommand{Action: "start", Request: request}); !reply.Ready {
+		t.Fatalf("start answered %+v", reply)
+	}
+	if reply := ask("reload", linuxCommand{Action: "reload", Request: request}); !reply.Ready || reply.Adapter != "rv000000000001" || reply.Error != "" {
+		t.Fatalf("reload answered %+v", reply)
+	}
+	refused := request
+	refused.MemoryLimitMB = 1
+	if reply := ask("refused reload", linuxCommand{Action: "reload", Request: refused}); !reply.Ready || reply.Adapter != "rv000000000001" || reply.Error != "vpn_reload_restart" {
+		t.Fatalf("refused reload answered %+v", reply)
+	}
+	// The tunnel runs on: it takes another reload and a stop.
+	if reply := ask("reload after a refusal", linuxCommand{Action: "reload", Request: request}); !reply.Ready || reply.Error != "" {
+		t.Fatalf("reload after a refusal answered %+v", reply)
+	}
+	if reply := ask("stop", linuxCommand{Action: "stop"}); !reply.Ready {
+		t.Fatalf("stop answered %+v", reply)
+	}
+	close(closed)
+	select {
+	case code := <-done:
+		if code != 0 {
+			t.Fatalf("exit %d", code)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the supervisor did not end")
+	}
+}
+
 func TestLinuxSupervisorKeepsTheKillSwitchAcrossARestart(t *testing.T) {
 	lock := filepath.Join(t.TempDir(), "vpn.lock")
 	var calls []string
