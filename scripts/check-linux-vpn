@@ -386,6 +386,8 @@ def isolated_main(core, selected, protocol='vless'):
                     current['routing']={'rules':[
                         {'type':'field','process':[process],'outboundTag':'proxy'},
                         {'type':'field','network':'tcp,udp','outboundTag':'direct'}]}
+            # The router a reload hands its rules to exists only when the configuration has a routing section.
+            if case == 'per-app-reload': current['routing'] = {'rules': []}
             if case=='session-limits':
                 current['stats']={}
                 current['policy']={'levels':{'0':{'connIdle':1}},'system':{'statsInboundUplink':True,'statsInboundDownlink':True}}
@@ -421,6 +423,31 @@ def isolated_main(core, selected, protocol='vless'):
                     captured = case.startswith('block-') and ':' not in address
                     assert (route.get('dev') == ready['adapter']) == captured, \
                         case + ': discovery to ' + address + ' takes ' + str(route)
+            if case == 'per-app-reload':
+                # A per-app change goes to the running tunnel: the interface stays, and so does a
+                # connection that is open, on the route it has.
+                held = socket.create_connection((TARGET4, 18081), timeout=5)
+                listed = copy.deepcopy(current)
+                listed['routing'] = {'rules': [{'type':'field','process':[str(Path(sys.executable).resolve())],'outboundTag':'direct'}]}
+                changed = dict(options, configJSON=json.dumps(listed))
+                reloaded = owner.request('reloadVPN', changed)
+                assert reloaded.get('adapter', ready['adapter']) == ready['adapter'] and resource_state()['links'] == [ready['adapter']], 'The reload replaced the tunnel'
+                for address in (TARGET4, TARGET6):
+                    check_http(address, 'direct'); check_udp(address, 'direct')
+                held.sendall(b'GET /fixture HTTP/1.0\r\n\r\n')
+                answer = b''
+                while chunk := held.recv(65536): answer += chunk
+                held.close()
+                assert b'X-Elarni-Path: proxy' in answer and answer.endswith(BODY), 'The reload cut or moved an open connection: '+repr(answer)
+                # More than rules and their outbounds: refused, and the tunnel routes as before.
+                owner.send('reloadVPN', dict(changed, routePolicy=dict(routes, excludedRoutes=['203.0.113.0/24'])))
+                refused = owner.replies.get(timeout=55)
+                assert refused.get('error') == 'vpn_reload_restart', 'A reload of other settings: '+json.dumps(refused)
+                check_http(TARGET4, 'direct'); check_http(TARGET6, 'direct')
+                owner.request('reloadVPN', options)
+                assert resource_state()['links'] == [ready['adapter']], 'The reload replaced the tunnel'
+                for address in (TARGET4, TARGET6):
+                    check_http(address); check_udp(address)
             if case == 'enforcement':
                 check_http(TARGET4, interface='rvclient', allowed=False)
                 check_http(TARGET6, interface='rvclient', allowed=False)
@@ -534,7 +561,7 @@ def isolated_main(core, selected, protocol='vless'):
 if __name__ == '__main__':
     from check_report import record_check
     record_check(ROOT)
-    cases=['graceful','reconnect','startup-cancel','include-all','enforcement','exclusions','per-app-path','per-app-name','per-app-folder','per-app-case','per-app-only-selected','per-app-only-other','session-limits','physical-probes','worker-death','supervisor-death','launcher-death','block-worker-death','block-launcher-death']
+    cases=['graceful','reconnect','startup-cancel','include-all','enforcement','exclusions','per-app-path','per-app-name','per-app-folder','per-app-case','per-app-only-selected','per-app-only-other','per-app-reload','session-limits','physical-probes','worker-death','supervisor-death','launcher-death','block-worker-death','block-launcher-death']
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--core',type=Path,default=ROOT/'build/linux/x64/release/bundle/elarni-core')
     parser.add_argument('--case',choices=cases,action='append')
