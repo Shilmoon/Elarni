@@ -297,7 +297,7 @@ var mdnsGroup = "224.0.0.251:5353"
 var mdnsWait = time.Second
 
 // mdnsLookup asks the local links for the IPv4 addresses of a .local name, once, and waits a
-// second for the first answer. IPv6 answers there are link-local, which a URL cannot dial.
+// second for the first answer, or until the fetch is cancelled. IPv6 answers there are link-local, which a URL cannot dial.
 func mdnsLookup(ctx context.Context, network, host string) []netip.Addr {
 	host = strings.ToLower(strings.TrimSuffix(host, "."))
 	name, err := dnsmessage.NewName(host + ".")
@@ -344,13 +344,22 @@ func mdnsLookup(ctx context.Context, network, host string) []netip.Addr {
 	if limit, ok := ctx.Deadline(); ok && limit.Before(deadline) {
 		deadline = limit
 	}
+	for _, socket := range sockets {
+		_ = socket.SetDeadline(deadline)
+	}
+	// A cancelled fetch does not wait for the answer.
+	stop := context.AfterFunc(ctx, func() {
+		for _, socket := range sockets {
+			_ = socket.SetDeadline(time.Now())
+		}
+	})
+	defer stop()
 	answers := make(chan []netip.Addr, len(sockets))
 	for _, socket := range sockets {
 		go func() {
 			defer socket.Close()
 			var found []netip.Addr
 			defer func() { answers <- found }()
-			_ = socket.SetDeadline(deadline)
 			if _, err := socket.WriteToUDP(query, group); err != nil {
 				return
 			}

@@ -559,6 +559,14 @@ func TestALocalNameTheSystemCannotAnswerIsAskedOnTheLocalLinks(t *testing.T) {
 	if addresses, err := localLookup(ctx, "ip4", "feed.local"); err == nil || err.Error() != "dns_failed" || len(addresses) != 0 {
 		t.Fatalf("without an answer the lookup fails: %v %v", addresses, err)
 	}
+	// A cancelled fetch does not wait for the answer.
+	mdnsWait = time.Minute
+	cancelled, stop := context.WithCancel(context.Background())
+	time.AfterFunc(20*time.Millisecond, stop)
+	started := time.Now()
+	if answers := mdnsLookup(cancelled, "ip4", "feed.local"); answers != nil || time.Since(started) > 10*time.Second {
+		t.Fatalf("a cancelled lookup waited %v for %v", time.Since(started), answers)
+	}
 }
 
 func TestSubscriptionFrontingVerifiesTLSAndBindsApproval(t *testing.T) {
