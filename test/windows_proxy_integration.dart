@@ -5732,6 +5732,80 @@ for line in sys.stdin:
     },
   );
 
+  // A pasted list is as lenient as a download: a server the compiler refuses
+  // is left out and counted, and the servers already there stay.
+  test('a local import leaves out a server the compiler refuses', () async {
+    // Two outbounds with one tag: the importer reads each, the compiler refuses the pair.
+    final refused = jsonEncode([
+      {
+        'remarks': 'Refused',
+        'outbounds': [
+          {
+            'tag': 'proxy',
+            'protocol': 'vless',
+            'settings': {
+              'vnext': [
+                {
+                  'address': '127.0.0.1',
+                  'port': Uri.parse(profile).port,
+                  'users': [
+                    {'id': userID, 'encryption': 'none'},
+                  ],
+                },
+              ],
+            },
+          },
+          {'tag': 'proxy', 'protocol': 'freedom'},
+        ],
+      },
+    ]);
+    final refusedMember =
+        (jsonDecode(refused) as List).single as Map<String, Object?>;
+    final mixed = jsonEncode([
+      {
+        'remarks': 'Kept',
+        'outbounds': [(refusedMember['outbounds']! as List).first],
+      },
+      refusedMember,
+    ]);
+    final first = (await backend.control.importClientProfiles(
+      content: profile,
+    )).snapshot.subscriptions.single;
+    final joined = (await backend.control.importClientProfiles(
+      content: mixed,
+    )).snapshot.subscriptions.single;
+    expect(joined.id, first.id);
+    expect(joined.nodes.map((node) => node.name), ['Fixture', 'Kept']);
+    expect(joined.nodes.first.id, first.nodes.single.id);
+    CatalogMap metadata() => catalogMap(
+      catalogList(
+        catalogMap(storedCatalog!['committed'])['subscriptions'],
+      ).single['metadata'],
+    );
+    expect(metadata()['skippedServers'], 1);
+    expect(metadata()['skippedKinds'], 'vless');
+
+    // Nothing new left: the import fails and changes nothing.
+    final before = jsonEncode(storedCatalog);
+    await expectLater(
+      backend.control.importClientProfiles(content: refused),
+      throwsA(
+        isA<PlatformException>().having(
+          (e) => e.code,
+          'code',
+          'unsupported_profile',
+        ),
+      ),
+    );
+    expect(jsonEncode(storedCatalog), before);
+    expect(
+      (await backend.control.subscriptions()).subscriptions.single.nodes.map(
+        (node) => node.name,
+      ),
+      ['Fixture', 'Kept'],
+    );
+  });
+
   test('provider routing refreshes keep the profile the user assigned', () async {
     const password = 'synthetic backup password';
     Map<String, Object?> route(String name) => {
