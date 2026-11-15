@@ -105,6 +105,23 @@ func TestReloadRoutingReplacesRulesAndTheirOutbounds(t *testing.T) {
 	if answer := read(); answer != "second" {
 		t.Fatalf("after the app's rule came: %q", answer)
 	}
+	// Per-app routing as the app compiles it: its rules send the tunnel's traffic through a
+	// loopback outbound back to the router, where the rest of the rules see it under that tag.
+	again := `{"tag":"elarni-apps-0","protocol":"loopback","settings":{"inboundTag":"elarni-apps-0"}}`
+	throughLoopback := `{"ruleTag":"elarni-per-app-other","inboundTag":["in"],"outboundTag":"elarni-apps-0"},` +
+		`{"inboundTag":["elarni-apps-0"],"outboundTag":"elarni-app-0"}`
+	if err := ReloadRouting(config(port, direct+","+app+","+again, throughLoopback)); err != nil {
+		t.Fatal(err)
+	}
+	if answer := read(); answer != "second" {
+		t.Fatalf("through the loopback outbound: %q", answer)
+	}
+	if err := ReloadRouting(config(port, direct+","+app, toApp)); err != nil {
+		t.Fatal(err)
+	}
+	if answer := read(); answer != "second" {
+		t.Fatalf("after the loopback outbound left: %q", answer)
+	}
 	// The listener was never closed.
 	if _, err := held.Write([]byte{5, 1, 0}); err != nil {
 		t.Fatalf("the reloads closed an open connection: %v", err)

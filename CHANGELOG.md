@@ -6,6 +6,13 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
 
 ### Fixed
 
+- A change of per-app routing while connected no longer restarts the tunnel on Windows and
+  Linux. Before, adding or removing an app, changing its target or switching the mode stopped
+  the tunnel and started it again, which cut every connection of every app for about two
+  seconds (a voice call dropped, for one). The running tunnel now takes the new rules as it
+  is: connections that are open stay open on the route they have, and new ones follow the new
+  rules. A change the running tunnel cannot take (another server, routes, DNS, a listener) is
+  restarted as before.
 - Automatic failover now leaves a server that refuses or closes connections even when that
   server never passed a health check since the last change. Before, a server that was already
   down at Connect, or that went down right after failover was turned on, stayed selected and

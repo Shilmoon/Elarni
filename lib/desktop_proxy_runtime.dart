@@ -201,27 +201,70 @@ extension _ProxyRuntime on DesktopProxy {
     _livenessFailures = 0;
   }
 
-  Future<void> _startCore(DesktopCatalog catalog, String config) =>
-      _native(catalog.settings.xrayTunEnabled ? 'runVPN' : 'runXrayFromJson', {
-        'configJSON': config,
-        'memoryLimitMB': catalog.settings.memoryLimitMB,
-        'logLevel': catalog.settings.logLevel,
-        'streamMetrics': true,
-        'recordDiagnostics': catalog.settings.recordDiagnostics,
-        if (catalog.settings.xrayTunEnabled) ...{
-          'tcpMaxConnections': catalog.settings.tcpMaxConnections,
-          'udpMaxConnections': catalog.settings.udpMaxConnections,
-          'routePolicy': {
-            'includedRoutes': catalog.settings.includedRoutes,
-            'excludedRoutes': catalog.settings.excludedRoutes,
-            'includeAllNetworks': catalog.settings.includeAllNetworks,
-            'blockWithoutVPN': catalog.settings.blockWithoutVPN,
-            'enforceRoutes': catalog.settings.enforceRoutes,
-            'hideVPNIcon': catalog.settings.hideVPNIcon,
-          },
-        },
-        ...DesktopProxy._runtimeAssets(catalog),
-      });
+  Future<void> _startCore(DesktopCatalog catalog, String config) => _native(
+    catalog.settings.xrayTunEnabled ? 'runVPN' : 'runXrayFromJson',
+    _corePayload(catalog, config),
+  );
+
+  // What a core is started with.
+  CatalogMap _corePayload(DesktopCatalog catalog, String config) => {
+    'configJSON': config,
+    'memoryLimitMB': catalog.settings.memoryLimitMB,
+    'logLevel': catalog.settings.logLevel,
+    'streamMetrics': true,
+    'recordDiagnostics': catalog.settings.recordDiagnostics,
+    if (catalog.settings.xrayTunEnabled) ...{
+      'tcpMaxConnections': catalog.settings.tcpMaxConnections,
+      'udpMaxConnections': catalog.settings.udpMaxConnections,
+      'routePolicy': {
+        'includedRoutes': catalog.settings.includedRoutes,
+        'excludedRoutes': catalog.settings.excludedRoutes,
+        'includeAllNetworks': catalog.settings.includeAllNetworks,
+        'blockWithoutVPN': catalog.settings.blockWithoutVPN,
+        'enforceRoutes': catalog.settings.enforceRoutes,
+        'hideVPNIcon': catalog.settings.hideVPNIcon,
+      },
+    },
+    ...DesktopProxy._runtimeAssets(catalog),
+  };
+
+  // Whether the running tunnel took the candidate's configuration as it is.
+  // The helper takes one that differs from the running one only in routing
+  // rules and the outbounds they name; it refuses any other and changes
+  // nothing, and the caller restarts the tunnel as for any other change.
+  Future<bool> _reloadTunnel(
+    DesktopCatalog before,
+    DesktopCatalog candidate,
+    int generation,
+  ) async {
+    final launch = _process;
+    if (_state != 'connected' ||
+        launch == null ||
+        launch != _vpnSession ||
+        _vpnReply != null ||
+        _stopping != null ||
+        !before.settings.xrayTunEnabled ||
+        !candidate.settings.xrayTunEnabled ||
+        candidate.selected == null ||
+        candidate.selected != before.selected ||
+        jsonEncode(_corePayload(candidate, '')) !=
+            jsonEncode(_corePayload(before, '')))
+      return false;
+    try {
+      final config = await _prepareConfig(
+        candidate,
+        candidate.node(candidate.selected!),
+        reload: true,
+      );
+      _checkGeneration(generation);
+      if (_process != launch || _state != 'connected') return false;
+      await _native('reloadVPN', _corePayload(candidate, config));
+      return true;
+    } on Object {
+      _checkGeneration(generation);
+      return false;
+    }
+  }
 
   Future<CatalogMap> _native(
     String method,
@@ -229,7 +272,7 @@ extension _ProxyRuntime on DesktopProxy {
     Duration? timeout,
   }) async {
     final generation = _generation;
-    final session = method == 'runVPN' || method == 'stopVPN';
+    final session = {'runVPN', 'stopVPN', 'reloadVPN'}.contains(method);
     final request = jsonEncode({
       'apiVersion': 1,
       'method': method,

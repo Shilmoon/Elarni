@@ -1780,6 +1780,142 @@ for line in sys.stdin:
     await backend.control.disconnect();
   });
 
+  // A change of per-app routing used to stop the tunnel and start it again,
+  // which cut every connection for about two seconds.
+  test(
+    'a per-app change reaches the running tunnel without a restart',
+    () async {
+      await prepare();
+      final settings = (await backend.control.tunnelSettings()).copyWith(
+        xrayTunEnabled: true,
+        blockWithoutVPN: true,
+        enforceRoutes: false,
+      );
+      await backend.control.updateTunnelSettings(settings);
+      final events = File.fromUri(temporary.uri.resolve('vpn-reload-events'));
+      final refuse = File.fromUri(temporary.uri.resolve('vpn-reload-refuse'));
+      await useStub('''
+import json, os, socket, subprocess, sys
+listeners = []
+running = None
+def note(entry):
+    with open(${jsonEncode(events.path)}, 'a') as events: print(entry, file=events)
+# What a reload may not change: the request but its configuration, and the
+# configuration but its routing rules and its outbounds after the first.
+def frame(payload):
+    config = json.loads(payload['configJSON'])
+    rules = config.get('routing', {}).pop('rules', [])
+    outbounds = config.pop('outbounds')
+    rest = {key: value for key, value in payload.items() if key not in ('configJSON', 'reuseSession')}
+    return json.dumps([rest, config, outbounds[0]], sort_keys=True), len(rules), len(outbounds)
+for line in sys.stdin:
+    request = json.loads(line)
+    method = request['method']
+    if method == 'runVPN':
+        note(method)
+        running = frame(request['payload'])
+        config = json.loads(request['payload']['configJSON'])
+        for inbound in config['inbounds']:
+            if inbound['protocol'] in ('socks', 'http'):
+                listener = socket.socket()
+                listener.bind(('127.0.0.1', inbound['port']))
+                listener.listen(32)
+                listeners.append(listener)
+        print(json.dumps({'success': True, 'data': {}}), flush=True)
+    elif method == 'reloadVPN':
+        asked = frame(request['payload'])
+        note('reloadVPN ' + ('same' if asked[0] == running[0] else 'other') + ' rules %+d outbounds %+d' % (asked[1] - running[1], asked[2] - running[2]))
+        if os.path.exists(${jsonEncode(refuse.path)}):
+            print(json.dumps({'success': False, 'error': 'vpn_reload_restart'}), flush=True)
+        else:
+            running = asked
+            print(json.dumps({'success': True, 'data': {}}), flush=True)
+    elif method == 'stopVPN':
+        note('stopVPN hold' if request['payload'].get('hold') else method)
+        for listener in listeners: listener.close()
+        listeners.clear()
+        print(json.dumps({'success': True, 'data': {}}), flush=True)
+    elif method == 'lookupHost':
+        note(method + ' ' + request['payload']['host'])
+        print(json.dumps({'success': True, 'data': {'addresses': ['127.0.0.1']}}), flush=True)
+        break
+    else:
+        child = subprocess.Popen([${jsonEncode(corePath)}], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+        child.stdin.write(line)
+        child.stdin.flush()
+        print(child.stdout.readline(), end='', flush=True)
+        child.stdin.close()
+        child.wait(timeout=10)
+        break
+''');
+      // A server by name: the reload must keep the address the tunnel started
+      // with, and not look the name up again.
+      final named =
+          (await backend.control.importClientProfiles(
+                content: profile
+                    .replaceFirst('127.0.0.1', 'server.invalid')
+                    .replaceFirst('#Fixture', '#Named'),
+              )).snapshot.subscriptions
+              .expand((source) => source.nodes)
+              .singleWhere((node) => node.name == 'Named')
+              .id;
+      await backend.control.connect();
+      await backend.control.selectNode(named);
+      expect(await events.readAsLines(), [
+        'runVPN',
+        'lookupHost server.invalid',
+        'stopVPN hold',
+        'runVPN',
+      ]);
+
+      // One app leaves the tunnel: its rules and their outbound, with the same
+      // listeners, login, server address and tunnel settings.
+      final bypass = settings.copyWith(
+        perAppMode: 'bypass',
+        perAppProcesses: ['fixture.exe'],
+      );
+      expect(
+        (await backend.control.updateTunnelSettings(bypass)).perAppProcesses,
+        ['fixture.exe'],
+      );
+      expect(await backend.control.state(), 'connected');
+      expect((await events.readAsLines()).skip(4), [
+        'reloadVPN same rules +3 outbounds +1',
+      ]);
+      // And back.
+      await backend.control.updateTunnelSettings(settings);
+      expect(await backend.control.state(), 'connected');
+      expect((await events.readAsLines()).skip(5), [
+        'reloadVPN same rules -3 outbounds -1',
+      ]);
+
+      // A tunnel that cannot take the change is restarted, as before.
+      await refuse.writeAsString('the core needs a restart');
+      await backend.control.updateTunnelSettings(bypass);
+      expect(await backend.control.state(), 'connected');
+      expect((await backend.control.tunnelSettings()).perAppMode, 'bypass');
+      expect((await events.readAsLines()).skip(6), [
+        'reloadVPN same rules +3 outbounds +1',
+        'lookupHost server.invalid',
+        'stopVPN hold',
+        'runVPN',
+      ]);
+      await refuse.delete();
+
+      // A change of the tunnel's own settings is not offered to it.
+      await backend.control.updateTunnelSettings(
+        bypass.copyWith(excludedRoutes: ['203.0.113.0/24']),
+      );
+      expect((await events.readAsLines()).skip(10), [
+        'lookupHost server.invalid',
+        'stopVPN hold',
+        'runVPN',
+      ]);
+      await backend.control.disconnect();
+      expect((await events.readAsLines()).skip(13), ['stopVPN']);
+    },
+  );
+
   // A crashed Windows helper leaves its kill switch, which lets the next
   // helper through: clearing it before the reconnect let traffic out until the
   // new tunnel was up.

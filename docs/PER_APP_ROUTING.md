@@ -84,6 +84,14 @@ it takes shows **Started by** with the listed app in **Recent connections**.
   program that did.
 - Android routes by package, so it has no such option.
 
+## Changing the rules while connected
+
+On Windows and Linux a change of the mode, the app list or an app's target goes to the
+running tunnel, which is not restarted: other apps' connections are not cut. A connection
+that is already open keeps the route it was given; the app's next connection follows the new
+rules, so restart the app, or let it reconnect, to move what it has open. A change of
+anything else (the server, routes, DNS, listeners) restarts the tunnel.
+
 ## Apps that were running before you connected
 
 A connection an app opened before Elarni connected can keep its old route: Windows keeps

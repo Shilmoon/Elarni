@@ -1,7 +1,14 @@
 part of 'desktop_proxy.dart';
 
 extension _ProxyCatalog on DesktopProxy {
-  Future<String> _prepareConfig(DesktopCatalog catalog, CatalogMap node) async {
+  // reload prepares a configuration for the running tunnel to take as it is:
+  // with the login and the server addresses the tunnel started with, since
+  // another login or address would differ from it in more than routing rules.
+  Future<String> _prepareConfig(
+    DesktopCatalog catalog,
+    CatalogMap node, {
+    bool reload = false,
+  }) async {
     if (catalog.settings.xrayTunEnabled &&
         !catalog.settings.inboundAuthEnabled) {
       // Other apps, including ones excluded from the VPN, must not proxy
@@ -16,10 +23,10 @@ extension _ProxyCatalog on DesktopProxy {
       catalog.data['settings'] = catalog.settings
           .copyWith(inboundAuthEnabled: true)
           .toMap();
-      catalog.data['inboundCredentials'] = _vpnLogin = {
-        'username': token(),
-        'password': token(),
-      };
+      catalog.data['inboundCredentials'] = _vpnLogin =
+          reload && _vpnLogin != null
+          ? _vpnLogin
+          : {'username': token(), 'password': token()};
     }
     final raw = await _compile(catalog, node);
     final config = catalogMap(jsonDecode(raw));
@@ -35,12 +42,16 @@ extension _ProxyCatalog on DesktopProxy {
     );
     for (final endpoint in endpoints.where((e) => e['physical'] == true)) {
       final path = endpoint['addressPath']! as String;
+      final host = endpoint['host']! as String;
       try {
-        resolved[path] = (await _endpointAddresses(
-          endpoint,
-          DesktopProxy._nodeSettings(catalog, node),
-          mapping: mappings[endpoint['host']] as Map?,
-        )).first.address;
+        final address = resolved[path] =
+            (reload ? _tunnelAddresses[host] : null) ??
+            (await _endpointAddresses(
+              endpoint,
+              DesktopProxy._nodeSettings(catalog, node),
+              mapping: mappings[host] as Map?,
+            )).first.address;
+        if (catalog.settings.xrayTunEnabled) _tunnelAddresses[host] = address;
       } on Object catch (error) {
         // A declined clear of a crashed helper's kill switch is its own error.
         if (error is PlatformException && error.code == 'vpn_guard_stale')
@@ -310,11 +321,14 @@ extension _ProxyCatalog on DesktopProxy {
       await _save({'version': 1, 'committed': before.data, 'pending': true});
       checkpoint = true;
       _checkGeneration(generation);
-      if ((wasConnected || forceRestart) &&
+      final sameAssets =
+          jsonEncode(DesktopProxy._runtimeAssets(candidate)) ==
+          jsonEncode(DesktopProxy._runtimeAssets(before));
+      var restart =
+          (wasConnected || forceRestart) &&
           (forceRestart ||
               candidate.selected == null ||
-              jsonEncode(DesktopProxy._runtimeAssets(candidate)) !=
-                  jsonEncode(DesktopProxy._runtimeAssets(before)) ||
+              !sameAssets ||
               jsonEncode(_runtimeSettings(candidate.settings)) !=
                   jsonEncode(_runtimeSettings(before.settings)) ||
               await _selectedConfigChanged(
@@ -322,7 +336,19 @@ extension _ProxyCatalog on DesktopProxy {
                 beforeSemantics[before.selected!]!,
                 candidate,
                 candidateSemantics[candidate.selected!]!,
-              ))) {
+              ));
+      // A change of routing rules alone, as per-app routing makes, goes to the
+      // running tunnel, which keeps its connections; a restart cuts them all.
+      if (restart &&
+          !forceRestart &&
+          sameAssets &&
+          verifyRuntime == null &&
+          await _reloadTunnel(before, candidate, generation)) {
+        restart = false;
+        // A failure from here on restarts the tunnel with the old rules.
+        runtimeChanged = true;
+      }
+      if (restart) {
         // Another tunnel follows: the core keeps Block traffic without VPN in
         // place between the two.
         final hold =
@@ -384,7 +410,10 @@ extension _ProxyCatalog on DesktopProxy {
         }
       }
       _checkGeneration(generation);
-      if (runtimeChanged && candidate.selected != null && _state == 'connected')
+      if (restart &&
+          runtimeChanged &&
+          candidate.selected != null &&
+          _state == 'connected')
         candidate.recordSuccess(candidate.selected!);
       await _save({'version': 1, 'committed': candidate.data});
       _checkGeneration(generation);
