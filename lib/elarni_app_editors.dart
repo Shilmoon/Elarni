@@ -1426,8 +1426,13 @@ extension _HomeEditors on _ElarniHomeState {
             );
           // The stored message is English; without a known code it is all
           // there is (macOS, older catalogs).
+          // Missing codes are named only in the message: the user needs
+          // them to fix the profile, in whatever language it lists them.
           String failure(String? code, String message) =>
-              (code == null ? null : failureText(code)) ?? message;
+              (code == null || code == 'missing_geodata'
+                  ? null
+                  : failureText(code)) ??
+              message;
           return AlertDialog(
             title: Text(profile.name),
             content: SizedBox(
