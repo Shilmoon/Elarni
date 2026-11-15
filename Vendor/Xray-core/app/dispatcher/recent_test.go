@@ -80,6 +80,21 @@ func TestRecentConnectionsJoinARoutedAgainConnection(t *testing.T) {
 	}
 }
 
+// A destination without a name is listed as the bare address: every reader adds the brackets
+// an IPv6 address needs before its port, and the list desktop builds on its own is bare too.
+func TestRecentConnectionsListABareAddress(t *testing.T) {
+	var recent recentConnections
+	recent.reset()
+	direct := recentHandler{"elarni-direct", &serial.TypedMessage{Type: "xray.proxy.freedom.Config"}}
+	for id, address := range []string{"2001:db8::1", "192.0.2.1"} {
+		link := &routing_session.Context{Inbound: &session.Inbound{Tag: "elarni-tun", Source: net.TCPDestination(net.LocalHostIP, net.Port(50000+id))}}
+		recent.record(uint32(id+1), link, net.TCPDestination(net.ParseAddress(address), 443), direct, "")
+		if host := recent.entries[id].Host; host != address {
+			t.Fatalf("%s is listed as %s", address, host)
+		}
+	}
+}
+
 // The list keeps the newest connections; a connection routed again after older ones were
 // dropped still finds its entry, and dropped ones stop waiting.
 func TestRecentConnectionsKeepTheNewest(t *testing.T) {
