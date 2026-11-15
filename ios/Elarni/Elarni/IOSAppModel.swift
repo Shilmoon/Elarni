@@ -1168,7 +1168,8 @@ final class IOSAppModel {
     let passedBefore = healthPassedNode == node.id
     // A server to move to, not only a policy that allows moving: with none allowed now (a list of
     // one, the others cooling down) such a failure stays indeterminate and the connection is kept.
-    let canLeave = !recovery.recoveryCandidates(policy: preferences.automation.policy,
+    // An episode out of attempts moves nowhere either. Asked only when a refused request is classified.
+    lazy var canLeave = !recovery.episode.exhausted && !recovery.recoveryCandidates(policy: preferences.automation.policy,
       order: recoveryOrder(current: node.id), current: node.id, now: ProcessInfo.processInfo.systemUptime).isEmpty
     for target in preferences.automation.targets {
       do {

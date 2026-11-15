@@ -286,7 +286,8 @@ extension _ProxyAutomation on DesktopProxy {
     // "Can move" means a server to move to: with none allowed now (a list of
     // one, the others cooling down) such a failure stays indeterminate and
     // the connection is kept, not retried until the budget runs out.
-    final canLeave =
+    // Asked only when a refused request is classified: the order reads every server.
+    late final canLeave =
         _automationConfig['enabled'] == true &&
         _automationConfig['policy'] != 'fixed' &&
         !_automation.exhausted &&
