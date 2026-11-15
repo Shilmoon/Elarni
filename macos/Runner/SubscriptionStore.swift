@@ -21,16 +21,34 @@ struct RefreshSchedule: Codable, Equatable {
     Self(nextRefreshAt: last?.addingTimeInterval(interval) ?? now)
   }
 
+  /// The share of the interval a success moves the next refresh by, either way.
+  static let jitterShare = 0.1
+
+  /// A time further ahead than `longest`, the furthest its schedule writes one, and an hour for a clock
+  /// corrected by minutes, was written while the clock ran ahead: it is due now, or it could take years.
+  static func deadline(_ at: Date?, now: Date, longest: Double) -> Date? {
+    guard let at else { return nil }
+    return at.timeIntervalSince(now) > longest + 3600 ? now : at
+  }
+
   var due: Date? { paused ? nil : (retryAt ?? nextRefreshAt) }
+
+  /// `due` under `deadline`. Retries, at most 1800 s ahead, stay within the bound of the shortest interval.
+  func due(now: Date, interval: Double) -> Date? {
+    Self.deadline(due, now: now, longest: interval * (1 + Self.jitterShare))
+  }
 
   mutating func succeeded(now: Date, interval: Double, jitter: Double) {
     let bounded = jitter.isFinite ? min(1, max(-1, jitter)) : 0
-    nextRefreshAt = now.addingTimeInterval(interval * (1 + 0.1 * bounded))
+    nextRefreshAt = now.addingTimeInterval(interval * (1 + Self.jitterShare * bounded))
     retryIndex = 0; retryAt = nil; errorCategory = nil; paused = false
   }
 
   mutating func failed(now: Date, interval: Double, category: String, authorization: Bool) {
-    if nextRefreshAt <= now { nextRefreshAt = now.addingTimeInterval(interval) }
+    // One written while the clock ran ahead counts as passed, or every round of retries would start at once.
+    if (Self.deadline(nextRefreshAt, now: now, longest: interval * (1 + Self.jitterShare)) ?? now) <= now {
+      nextRefreshAt = now.addingTimeInterval(interval)
+    }
     errorCategory = category; paused = authorization
     let delays: [Double] = [60, 300, 1800]
     if !authorization && (0..<delays.count).contains(retryIndex) {
@@ -525,12 +543,16 @@ final class SubscriptionStore {
 
   func dueSubscriptions() -> [String] {
     guard !publicationRecoveryRequired else { return [] }
-    return catalog.subscriptions.filter { $0.isLocal != true && refreshTasks[$0.id] == nil && scheduleFor($0).due.map { $0 <= now() } == true }.map(\.id)
+    let current = now()
+    return catalog.subscriptions.filter { $0.isLocal != true && refreshTasks[$0.id] == nil &&
+      scheduleFor($0).due(now: current, interval: intervalFor($0)).map { $0 <= current } == true }.map(\.id)
   }
 
   func nextRefreshDate() -> Date? {
     guard !publicationRecoveryRequired else { return nil }
-    return catalog.subscriptions.filter { $0.isLocal != true && refreshTasks[$0.id] == nil }.compactMap { scheduleFor($0).due }.min()
+    let current = now()
+    return catalog.subscriptions.filter { $0.isLocal != true && refreshTasks[$0.id] == nil }
+      .compactMap { scheduleFor($0).due(now: current, interval: intervalFor($0)) }.min()
   }
 
   func cancelRefreshes() {
