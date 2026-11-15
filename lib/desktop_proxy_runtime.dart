@@ -256,7 +256,11 @@ extension _ProxyRuntime on DesktopProxy {
         // Of the settings only per-app routing compiles to rules alone; any
         // other would be prepared here and then again for its restart.
         jsonEncode(perAppLess(candidate.settings)) !=
-            jsonEncode(perAppLess(before.settings)))
+            jsonEncode(perAppLess(before.settings)) ||
+        // And only a change of it: a routing profile's rules are meant for
+        // the connections that are open too, which a restart moves.
+        jsonEncode(_runtimeSettings(candidate.settings)) ==
+            jsonEncode(_runtimeSettings(before.settings)))
       return false;
     try {
       final config = await _prepareConfig(

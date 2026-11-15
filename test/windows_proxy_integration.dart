@@ -1932,8 +1932,28 @@ for line in sys.stdin:
         'stopVPN hold',
         'runVPN',
       ]);
+      // Nor is a change of the routing profile: its rules are meant for the
+      // connections that are open too, so the tunnel restarts with them.
+      final source = (await backend.control.subscriptions()).subscriptions
+          .singleWhere((source) => source.nodes.any((node) => node.id == named))
+          .id;
+      final route = (await backend.control.importRouting(
+        jsonEncode({
+          'Name': 'Direct site',
+          'RemoteDNSType': 'DoU',
+          'RemoteDNSIP': '1.1.1.1',
+          'DomesticDNSType': 'DoU',
+          'DomesticDNSIP': '8.8.8.8',
+          'DirectSites': ['full:direct.example'],
+        }),
+      )).profiles.single.id;
+      await backend.control.assignRoutingProfile(source, route);
+      expect(await backend.control.state(), 'connected');
+      final routed = (await events.readAsLines()).skip(16).toList();
+      expect(routed, isNot(contains(startsWith('reloadVPN'))));
+      expect(routed.last, 'runVPN');
       await backend.control.disconnect();
-      expect((await events.readAsLines()).skip(16), ['stopVPN']);
+      expect((await events.readAsLines()).last, 'stopVPN');
     },
   );
 
