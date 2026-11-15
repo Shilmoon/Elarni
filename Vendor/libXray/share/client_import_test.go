@@ -200,18 +200,48 @@ rules:
 	if !reflect.DeepEqual(root.Groups, wantGroups) {
 		t.Fatalf("groups %+v", root.Groups)
 	}
-	// A rule naming what was dropped cannot be kept or rerouted: the file fails with the proxy's error.
+	// A rule naming what was dropped is left out with its server; the rules around it stay in order, and
+	// it has no say in whether the profile resolves domains for IP rules.
 	for _, target := range []string{"Bad", "OnlyBad"} {
-		if _, err := ImportClientProfiles(strings.Replace(input, "MATCH,Outer", "MATCH,"+target, 1)); err == nil || err.Error() != "unsupported Clash proxy type snell" {
+		rules := "IP-CIDR,10.0.0.0/8," + target + "\n  - IP-CIDR,192.168.0.0/16,DIRECT,no-resolve\n  - MATCH," + target + "\n  - MATCH,Outer"
+		result, err := ImportClientProfiles(strings.Replace(input, "MATCH,Outer", rules, 1))
+		if err != nil {
 			t.Errorf("rule to %s: %v", target, err)
+			continue
 		}
+		if !reflect.DeepEqual(result.Skipped, want) {
+			t.Errorf("rule to %s: skipped %+v", target, result.Skipped)
+		}
+		var routed struct {
+			Routing struct {
+				DomainStrategy string `json:"domainStrategy"`
+				Rules          []struct {
+					Tag    string   `json:"outboundTag"`
+					Domain []string `json:"domain"`
+					IP     []string `json:"ip"`
+				} `json:"rules"`
+			} `json:"routing"`
+		}
+		if err := json.Unmarshal(result.Profiles[0].Config, &routed); err != nil {
+			t.Fatal(err)
+		}
+		rest := routed.Routing.Rules
+		if len(rest) != 3 || rest[0].Tag != "DIRECT" || !slices.Equal(rest[0].Domain, []string{"domain:example.org"}) ||
+			rest[1].Tag != "DIRECT" || !slices.Equal(rest[1].IP, []string{"192.168.0.0/16"}) || rest[2].Tag != "Outer" || routed.Routing.DomainStrategy != "AsIs" {
+			t.Errorf("rule to %s: routing %+v", target, routed.Routing)
+		}
+	}
+	// A rule naming what the file never defined still fails it.
+	if _, err := ImportClientProfiles(strings.Replace(input, "MATCH,Outer", "MATCH,Nowhere", 1)); err == nil || err.Error() != "Clash rule has a missing target" {
+		t.Errorf("rule to an undefined target: %v", err)
 	}
 	// With no proxy left, the first one's error is the file's.
 	if _, err := ImportClientProfiles("proxies:\n  - {name: Bad, type: snell, server: 127.0.0.1, port: 1080}\n  - {name: weird, type: x, server: 127.0.0.1, port: 1080}\n"); err == nil || err.Error() != "unsupported Clash proxy type snell" {
 		t.Errorf("all proxies refused: %v", err)
 	}
-	// Structural errors still fail the file.
-	for _, broken := range []string{input + "unknown-top-level: 1\n", strings.Replace(input, "type: select, proxies: [Bad, spaced]", "type: url-test, proxies: [Bad, spaced]", 1), input + "  - [not, a, rule\n"} {
+	// Structural errors still fail the file, also in a rule to a dropped proxy.
+	for _, broken := range []string{input + "unknown-top-level: 1\n", strings.Replace(input, "type: select, proxies: [Bad, spaced]", "type: url-test, proxies: [Bad, spaced]", 1), input + "  - [not, a, rule\n",
+		strings.Replace(input, "MATCH,Outer", "PROCESS-NAME,curl,Bad\n  - MATCH,Outer", 1)} {
 		if _, err := ImportClientProfiles(broken); err == nil {
 			t.Errorf("structurally broken file imported:\n%s", broken)
 		}

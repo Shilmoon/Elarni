@@ -138,22 +138,39 @@ func importClashProfiles(text string) (*ClientImport, error) {
 		root["elarniGroups"] = groups
 	}
 	rules := []map[string]any{}
+	ipRules, unresolvedIPRules := 0, 0
 	for _, rule := range source.Rules {
 		if global {
 			break
 		}
+		parts, noResolve := clashRuleParts(rule)
 		converted, err := clashRoutingRule(rule, names)
-		if err != nil {
-			// The route a rule to a skipped proxy meant is gone; the file fails as that proxy did.
-			if parts := strings.Split(rule, ","); dropped[strings.TrimSpace(parts[len(parts)-1])] {
-				return nil, skipped.first
+		if target := parts[len(parts)-1]; err != nil && dropped[target] {
+			// The route a rule to a skipped proxy meant is gone with its server, and the following rules
+			// decide. The rule is still checked, so one the import cannot read fails the file as before.
+			if _, err = clashRoutingRule(rule, map[string]bool{target: true}); err == nil {
+				continue
 			}
+		}
+		if err != nil {
 			return nil, err
+		}
+		if _, ok := converted["ip"]; ok {
+			ipRules++
+			if noResolve {
+				unresolvedIPRules++
+			}
 		}
 		rules = append(rules, converted)
 	}
 	if len(rules) > 0 {
-		root["routing"] = map[string]any{"domainStrategy": "IPOnDemand", "rules": rules}
+		// Xray has no per-rule no-resolve, only the profile's strategy. When every IP rule carries the
+		// option no IP rule resolves a domain; a file that mixes both keeps resolving, the closest it gets.
+		strategy := "IPOnDemand"
+		if ipRules > 0 && unresolvedIPRules == ipRules {
+			strategy = "AsIs"
+		}
+		root["routing"] = map[string]any{"domainStrategy": strategy, "rules": rules}
 	}
 	if len(source.DNS) > 0 {
 		dns, err := clashDNS(source.DNS)
@@ -523,14 +540,21 @@ func clashXHTTP(opts map[string]any) (map[string]any, error) {
 	return result, nil
 }
 
-func clashRoutingRule(text string, names map[string]bool) (map[string]any, error) {
+// clashRuleParts is a rule's trimmed comma-separated parts, the target last, without a no-resolve option
+// after the target, and whether the rule had one.
+func clashRuleParts(text string) ([]string, bool) {
 	parts := strings.Split(text, ",")
 	for i := range parts {
 		parts[i] = strings.TrimSpace(parts[i])
 	}
-	if len(parts) > 0 && parts[len(parts)-1] == "no-resolve" {
-		return nil, fmt.Errorf("unsupported Clash per-rule no-resolve; use an Xray JSON profile")
+	if len(parts) > 3 && parts[len(parts)-1] == "no-resolve" {
+		return parts[:len(parts)-1], true
 	}
+	return parts, false
+}
+
+func clashRoutingRule(text string, names map[string]bool) (map[string]any, error) {
+	parts, noResolve := clashRuleParts(text)
 	if len(parts) < 2 || !names[parts[len(parts)-1]] {
 		return nil, fmt.Errorf("Clash rule has a missing target")
 	}
@@ -539,7 +563,8 @@ func clashRoutingRule(text string, names map[string]bool) (map[string]any, error
 		rule["network"] = "tcp,udp"
 		return rule, nil
 	}
-	if len(parts) != 3 {
+	// Only rules on the destination IP read no-resolve; the caller turns it into the profile's strategy.
+	if len(parts) != 3 || (noResolve && parts[0] != "IP-CIDR" && parts[0] != "IP-CIDR6" && parts[0] != "GEOIP") {
 		return nil, fmt.Errorf("unsupported Clash rule shape")
 	}
 	switch parts[0] {
