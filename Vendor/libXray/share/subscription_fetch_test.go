@@ -442,14 +442,28 @@ func TestALocalAddressIsDialedFromThisDeviceOncePerFetch(t *testing.T) {
 	if !dials.try(first) || !dials.try(second) {
 		t.Fatal("a new fetch refused a local dial")
 	}
-	dials.fail(first, errors.New("connection refused"))
+	dials.fail(first, errors.New("connection refused"), true)
 	if dials.try(first) || !dials.try(second) {
 		t.Fatal("a refused address must be skipped, and only that one")
 	}
-	_, err := (&net.Dialer{Timeout: time.Nanosecond}).Dial("tcp", "192.0.2.1:9")
-	dials.fail(second, err)
+	// A dial the fetch's own deadline cut short says nothing about the address or the network.
+	timeout := &net.OpError{Op: "dial", Err: os.ErrDeadlineExceeded}
+	dials.fail(second, timeout, false)
+	if !dials.try(second) {
+		t.Fatal("a dial the fetch cut short counted against its address")
+	}
+	// Nor does this device drop packets to itself.
+	loopback := netip.MustParseAddr("127.0.0.1")
+	dials.fail(loopback, timeout, true)
+	if dials.try(loopback) || !dials.try(second) || !dials.try(netip.MustParseAddr("127.0.0.2")) {
+		t.Fatal("a loopback timeout must skip that address only")
+	}
+	dials.fail(second, timeout, true)
 	if dials.try(netip.MustParseAddr("10.0.0.3")) {
-		t.Fatalf("after a timeout (%v) no other address is waited for", err)
+		t.Fatal("after a timeout no other address of the network is waited for")
+	}
+	if !dials.try(netip.MustParseAddr("::1")) {
+		t.Fatal("a silent network stopped the dials to this device")
 	}
 	// Through a whole fetch: two hops to one closed port, and one local dial.
 	closed, err := net.Listen("tcp", "127.0.0.1:0")
@@ -540,8 +554,9 @@ func TestALocalNameTheSystemCannotAnswerIsAskedOnTheLocalLinks(t *testing.T) {
 		t.Fatalf("a name outside .local was asked: %v", answers)
 	}
 	mdnsGroup = "127.0.0.1:1"
-	if addresses, err := localLookup(ctx, "ip4", "feed.local"); err != nil || len(addresses) != 1 || !fakeDNSAddress(addresses[0]) {
-		t.Fatalf("without an answer the placeholder stays: %v %v", addresses, err)
+	// A placeholder is no answer: connecting to it would hand the local name to the server.
+	if addresses, err := localLookup(ctx, "ip4", "feed.local"); err == nil || err.Error() != "dns_failed" || len(addresses) != 0 {
+		t.Fatalf("without an answer the lookup fails: %v %v", addresses, err)
 	}
 }
 
@@ -575,6 +590,10 @@ func TestSubscriptionFrontingVerifiesTLSAndBindsApproval(t *testing.T) {
 	result, err := fetchFeedUsing(request, resolve, transport)
 	if err != nil {
 		t.Fatal(err)
+	}
+	// The risk is the connect address's, so the destination names it beside the URL's host.
+	if shown := result.(map[string]any)["warning"].(map[string]any)["destinations"].([]string); !slices.Equal(shown, []string{"https://example.com:" + port + " → 127.0.0.1"}) {
+		t.Fatalf("the destination hides the connect address: %v", shown)
 	}
 	request.ApprovedChain = result.(map[string]any)["warning"].(map[string]any)["chain"].([]string)
 	result, err = fetchFeedUsing(request, resolve, transport)

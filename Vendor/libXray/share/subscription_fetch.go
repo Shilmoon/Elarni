@@ -106,24 +106,30 @@ type localDials struct {
 	sync.Mutex
 	failed map[netip.Addr]bool
 	// One address timed out: a network that drops the packets drops them for the others too.
+	// This device itself drops none, so its own addresses are still dialed.
 	silent bool
 }
 
 func (l *localDials) try(address netip.Addr) bool {
 	l.Lock()
 	defer l.Unlock()
-	return !l.silent && !l.failed[address]
+	return !l.failed[address] && (!l.silent || address.Unmap().IsLoopback())
 }
 
-func (l *localDials) fail(address netip.Addr, err error) {
+// fail notes that the address did not answer. waited says the dial had its whole wait: one cut
+// short by the fetch's own deadline (a mirror's share of the time) says nothing about the network.
+func (l *localDials) fail(address netip.Addr, err error, waited bool) {
 	l.Lock()
 	defer l.Unlock()
 	if l.failed == nil {
 		l.failed = map[netip.Addr]bool{}
 	}
+	if !waited {
+		return
+	}
 	l.failed[address] = true
 	var timeout net.Error
-	if errors.As(err, &timeout) && timeout.Timeout() {
+	if errors.As(err, &timeout) && timeout.Timeout() && !address.Unmap().IsLoopback() {
 		l.silent = true
 	}
 }
@@ -268,7 +274,7 @@ func systemLookup(ctx context.Context, network, host string) ([]netip.Addr, erro
 // localLookup resolves a name of the local network. The system resolver comes first. It may
 // not know the name: under the desktop TUN with FakeDNS it answers every name with a
 // placeholder, and the core's resolver (built without cgo) never asks mDNS. A .local name is
-// then asked on the local links. Without an answer there the system's stays, as before.
+// then asked on the local links. Without an answer there the name has none.
 func localLookup(ctx context.Context, network, host string) ([]netip.Addr, error) {
 	addresses, err := net.DefaultResolver.LookupNetIP(ctx, network, host)
 	if err == nil && len(addresses) > 0 && !slices.ContainsFunc(addresses, fakeDNSAddress) {
@@ -276,6 +282,10 @@ func localLookup(ctx context.Context, network, host string) ([]netip.Addr, error
 	}
 	if answers := mdnsLookup(ctx, network, host); len(answers) > 0 {
 		return answers, nil
+	}
+	if err == nil && len(addresses) > 0 {
+		// Only placeholders: connecting to one sends the name to the server, which cannot know it.
+		return nil, errors.New("dns_failed")
 	}
 	return addresses, err
 }
@@ -558,7 +568,12 @@ func fetchResourceAttempt(ctx context.Context, request SubscriptionFetchRequest,
 			fingerprint := approvalFingerprint(target, risks)
 			position := len(chain)
 			chain = append(chain, fingerprint)
-			*destinations = append(*destinations, u.Scheme+"://"+u.Host)
+			named := u.Scheme + "://" + u.Host
+			if dialHost != u.Hostname() {
+				// The risk is the connect address's; the URL alone would hide it.
+				named += " → " + dialHost
+			}
+			*destinations = append(*destinations, named)
 			if position >= len(request.ApprovedChain) || request.ApprovedChain[position] != fingerprint {
 				// The chain is fingerprints, which name nothing to the user: destinations does.
 				return map[string]any{"warning": map[string]any{"riskCodes": risks, "chain": chain, "destinations": *destinations}}, nil
@@ -599,7 +614,7 @@ func fetchResourceAttempt(ctx context.Context, request SubscriptionFetchRequest,
 				conn, err := net.Conn(nil), errUnreachable
 				if localDial != nil && localAddress(ip) && local.try(ip) {
 					if conn, err = localDial(ctx, "tcp", target); err != nil {
-						local.fail(ip, err)
+						local.fail(ip, err, ctx.Err() == nil)
 					}
 				}
 				if err != nil {
