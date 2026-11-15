@@ -277,10 +277,16 @@ extension _ProxyAutomation on DesktopProxy {
     final runtime = _connectedAt;
     // A server whose check passed before: when its requests are now refused,
     // reset or closed, its service or route has gone. One that never passed
-    // may be rejecting the credentials, which no other moment changes.
+    // may be rejecting the credentials, or its exit the check targets, which
+    // a restart does not change: that counts only while failover can move to
+    // another server, which must pass the same check to be kept.
     final passedBefore =
         _verifiedHealth?.node == catalog.selected &&
         _verifiedHealth?.epoch == _automation.epoch;
+    final canLeave =
+        _automationConfig['enabled'] == true &&
+        _automationConfig['policy'] != 'fixed' &&
+        !_automation.exhausted;
     for (final target in targets) {
       try {
         await _ping(
@@ -321,7 +327,7 @@ extension _ProxyAutomation on DesktopProxy {
             : <String, Object?>{};
         final diagnostic = catalogMap(details['diagnostics'] ?? {});
         if (diagnostic['code'] == 'timeout' ||
-            ((unattended || passedBefore) &&
+            ((unattended || passedBefore || canLeave) &&
                 diagnostic['stage'] == 'target_request' &&
                 {
                   'failed',

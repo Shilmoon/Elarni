@@ -5059,6 +5059,129 @@ for line in sys.stdin:
     timeout: const Timeout(Duration(minutes: 3)),
   );
 
+  // A check that never passed on this connection did not count, so a server
+  // that was already down at Connect, or stopped before its first check,
+  // stayed selected and shown as connected while a backup was allowed.
+  test(
+    'failover leaves a server that refuses connections before a check passed',
+    () async {
+      await backend.dispose();
+      backend = createBackend(
+        automationProbeSeconds: 2,
+        automationRetrySeconds: 1,
+        livenessInterval: const Duration(minutes: 5),
+      );
+      try {
+        final imported = await backend.control.importClientProfiles(
+          content: [
+            Uri.parse(
+              profile,
+            ).replace(port: await freePort(), fragment: 'Primary').toString(),
+            profile,
+          ].join('\n'),
+        );
+        final group = imported.snapshot.subscriptions.single;
+        String id(String name) =>
+            group.nodes.singleWhere((node) => node.name == name).id;
+        await backend.control.selectNode(id('Primary'));
+        await backend.control.configureAutomation(
+          AutomationConfiguration(
+            enabled: true,
+            policy: AutomationSelectionPolicy.orderedFallback,
+            subscriptionId: group.id,
+            nodeIds: [id('Primary'), id('Fixture')],
+            targets: [
+              AutomationTarget(
+                id: 'fixture',
+                url: 'http://127.0.0.1:${target.port}/fixture',
+                expectedStatus: 200,
+                expectedBody: body,
+              ),
+            ],
+          ),
+        );
+        // The core starts whether or not its server answers.
+        expect(await backend.control.connect(), 'connected');
+        for (var i = 0; i < 900; i++) {
+          if ((await backend.control.subscriptions()).selectedNodeId ==
+                  id('Fixture') &&
+              await backend.control.state() == 'connected')
+            break;
+          await Future<void>.delayed(const Duration(milliseconds: 100));
+        }
+        expect(
+          (await backend.control.subscriptions()).selectedNodeId,
+          id('Fixture'),
+        );
+        expect(await backend.control.state(), 'connected');
+        final settings = await backend.control.tunnelSettings();
+        await checkSocks(settings.socksPort, target.port);
+      } finally {
+        await backend.control.disconnect();
+      }
+    },
+    timeout: const Timeout(Duration(minutes: 3)),
+  );
+
+  // With no other server to move to, a restart would not help a server that
+  // rejects the credentials or whose exit refuses the check targets.
+  test(
+    'a fixed server that never passed its check is not restarted',
+    () async {
+      await backend.dispose();
+      backend = createBackend(
+        automationProbeSeconds: 2,
+        automationRetrySeconds: 1,
+        livenessInterval: const Duration(minutes: 5),
+      );
+      try {
+        final imported = await backend.control.importClientProfiles(
+          content: Uri.parse(
+            profile,
+          ).replace(port: await freePort(), fragment: 'Primary').toString(),
+        );
+        final group = imported.snapshot.subscriptions.single;
+        await backend.control.selectNode(group.nodes.single.id);
+        await backend.control.configureAutomation(
+          AutomationConfiguration(
+            enabled: true,
+            policy: AutomationSelectionPolicy.fixed,
+            subscriptionId: group.id,
+            nodeIds: [group.nodes.single.id],
+            targets: [
+              AutomationTarget(
+                id: 'fixture',
+                url: 'http://127.0.0.1:${target.port}/fixture',
+                expectedStatus: 200,
+                expectedBody: body,
+              ),
+            ],
+          ),
+        );
+        expect(await backend.control.connect(), 'connected');
+        final since = (await backend.control
+            .runtimeMetrics())['connectedSince'];
+        for (var i = 0; i < 300; i++) {
+          if ((await backend.control.automationStatus())['status'] ==
+              'indeterminate')
+            break;
+          await Future<void>.delayed(const Duration(milliseconds: 100));
+        }
+        final status = await backend.control.automationStatus();
+        expect(status['status'], 'indeterminate');
+        expect(status['attempts'], 0);
+        expect(await backend.control.state(), 'connected');
+        expect(
+          (await backend.control.runtimeMetrics())['connectedSince'],
+          since,
+        );
+      } finally {
+        await backend.control.disconnect();
+      }
+    },
+    timeout: const Timeout(Duration(minutes: 2)),
+  );
+
   // An unresolvable server name is a failed connection, so failover moves on.
   test(
     'ordered fallback moves on from a primary whose server name does not resolve',

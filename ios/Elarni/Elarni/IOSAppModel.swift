@@ -1154,13 +1154,17 @@ final class IOSAppModel {
 
   /// The server whose active health check passed on this connection; see `countsAgainstServer`.
   @ObservationIgnored private var healthPassedNode: String?
+  /// The last failed health check counted only because another server may take over.
+  @ObservationIgnored private var healthFailureUnverified = false
 
   private func activeHealth(_ node: ServerNode, expectedPlan: Data? = nil) async throws {
     try requireRecoveryPolicy(node)
     // As on macOS and desktop: every target gets its probe before the check is classified.
-    var timeouts = 0, invalidTarget = false
+    var timeouts = 0, verified = 0, invalidTarget = false
+    healthFailureUnverified = false
     let russianEntry = preferences.automation.russianEntryNodeIDs?.contains(node.id) == true
     let passedBefore = healthPassedNode == node.id
+    let canLeave = preferences.automation.policy != .fixed
     for target in preferences.automation.targets {
       do {
         _ = try await probe(node, mode: "activeProxy", target: target, expectedPlan: expectedPlan)
@@ -1170,11 +1174,13 @@ final class IOSAppModel {
       } catch let error as IOSProbeFailure {
         if error.cleanupPending { throw AutomationFailure.quarantine }
         if error.receivedHTTP || error.code == "target_dns_failed" { invalidTarget = true }
-        if AutomationConfiguration.countsAgainstServer(code: error.code, stage: error.stage, passedBefore: passedBefore) { timeouts += 1 }
+        if AutomationConfiguration.countsAgainstServer(code: error.code, stage: error.stage, passedBefore: passedBefore, canLeave: canLeave) { timeouts += 1 }
+        if AutomationConfiguration.countsAgainstServer(code: error.code, stage: error.stage, passedBefore: passedBefore) { verified += 1 }
       } catch { throw error }
     }
     if invalidTarget { throw AutomationFailure.invalidTarget }
     guard timeouts >= preferences.automation.endpointFailureTimeouts else { throw AutomationFailure.indeterminate }
+    healthFailureUnverified = verified < preferences.automation.endpointFailureTimeouts
     recovery.observe(node: node.id, passed: false, russianEntry: russianEntry); whitelistMode = recovery.whitelist
     throw AutomationFailure.endpointFailure
   }
@@ -1286,7 +1292,8 @@ final class IOSAppModel {
         var canVerifyTraffic = true
         do { try self.requireRecoveryPolicy(node) }
         catch AutomationFailure.unsupportedPolicy where config.policy == .fixed { canVerifyTraffic = false }
-        if retry {
+        // Reconnecting a running server that never passed its check changes nothing; the retry checks it again.
+        if retry, !(self.healthFailureUnverified && self.vpn.connected && !failed) {
           try await self.changingTunnel { [self] in
             if vpn.active { try await vpn.disconnect() }
             try Task.checkCancellation()

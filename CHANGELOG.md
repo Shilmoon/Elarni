@@ -4,6 +4,15 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
 
 ## Unreleased
 
+### Fixed
+
+- Automatic failover now leaves a server that refuses or closes connections even when that
+  server never passed a health check since the last change. Before, a server that was already
+  down at Connect, or that went down right after failover was turned on, stayed selected and
+  shown as connected, and the backup was never used. A server that never passed a check is
+  still not restarted in place, and a fixed server is not touched. Windows, Linux, macOS and
+  iPhone; Android already did this.
+
 ## 0.6.1 - 2026-11-14
 
 ### Changed

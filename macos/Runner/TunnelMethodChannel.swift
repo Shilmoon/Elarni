@@ -26,6 +26,8 @@ final class TunnelMethodChannel {
   var automationCandidateFailures: [String: String] = [:]
   var healthDiagnostics: [ProbeDiagnostic] = []
   var verifiedHealth: (node: String, at: Double, epoch: UInt64)?
+  /// The last failed health check counted only because another server may take over (`countsAgainstServer`).
+  var healthFailureUnverified = false
   var automationPaused = false
   var automationRefreshPath = false
   var automationFailover = false
