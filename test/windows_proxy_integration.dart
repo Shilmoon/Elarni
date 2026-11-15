@@ -3105,7 +3105,12 @@ def lose():
     while not os.path.exists(${jsonEncode(lose.path)}): time.sleep(0.01)
     for listener in listeners: listener.close()
     listeners.clear()
-    os.unlink(${jsonEncode(lose.path)})
+    # Windows refuses the removal while the test still has the file open.
+    while True:
+        try:
+            os.unlink(${jsonEncode(lose.path)})
+            break
+        except PermissionError: time.sleep(0.01)
     send({'event': 'stopped'})
 for line in sys.stdin:
     request = json.loads(line)
