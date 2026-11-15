@@ -5198,6 +5198,66 @@ for line in sys.stdin:
     timeout: const Timeout(Duration(minutes: 2)),
   );
 
+  // A policy that allows moving is not a server to move to: with one server
+  // in the list the refused check counted, the retries ran out and the
+  // connection ended as exhausted.
+  test(
+    'an only allowed server that never passed its check is kept',
+    () async {
+      await backend.dispose();
+      backend = createBackend(
+        automationProbeSeconds: 2,
+        automationRetrySeconds: 1,
+        livenessInterval: const Duration(minutes: 5),
+      );
+      try {
+        final imported = await backend.control.importClientProfiles(
+          content: Uri.parse(
+            profile,
+          ).replace(port: await freePort(), fragment: 'Primary').toString(),
+        );
+        final group = imported.snapshot.subscriptions.single;
+        await backend.control.selectNode(group.nodes.single.id);
+        await backend.control.configureAutomation(
+          AutomationConfiguration(
+            enabled: true,
+            policy: AutomationSelectionPolicy.orderedFallback,
+            subscriptionId: group.id,
+            nodeIds: [group.nodes.single.id],
+            targets: [
+              AutomationTarget(
+                id: 'fixture',
+                url: 'http://127.0.0.1:${target.port}/fixture',
+                expectedStatus: 200,
+                expectedBody: body,
+              ),
+            ],
+          ),
+        );
+        expect(await backend.control.connect(), 'connected');
+        final since = (await backend.control
+            .runtimeMetrics())['connectedSince'];
+        for (var i = 0; i < 300; i++) {
+          if ((await backend.control.automationStatus())['status'] ==
+              'indeterminate')
+            break;
+          await Future<void>.delayed(const Duration(milliseconds: 100));
+        }
+        final status = await backend.control.automationStatus();
+        expect(status['status'], 'indeterminate');
+        expect(status['attempts'], 0);
+        expect(await backend.control.state(), 'connected');
+        expect(
+          (await backend.control.runtimeMetrics())['connectedSince'],
+          since,
+        );
+      } finally {
+        await backend.control.disconnect();
+      }
+    },
+    timeout: const Timeout(Duration(minutes: 2)),
+  );
+
   // An unresolvable server name is a failed connection, so failover moves on.
   test(
     'ordered fallback moves on from a primary whose server name does not resolve',

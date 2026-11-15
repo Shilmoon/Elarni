@@ -418,7 +418,10 @@ extension TunnelMethodChannel {
     var invalidTarget = false
     healthFailureUnverified = false
     let passedBefore = verifiedHealth?.node == context.nodeID && verifiedHealth?.epoch == automation.epoch
-    let canLeave = automationConfiguration.policy != .fixed
+    // A server to move to, not only a policy that allows moving: with none allowed now (a list of
+    // one, the others cooling down) such a failure stays indeterminate and the connection is kept.
+    let canLeave = !automation.recoveryCandidates(policy: automationConfiguration.policy,
+      order: (try? recoveryOrder(current: context.nodeID)) ?? [], current: context.nodeID, now: automationNow()).isEmpty
     for (ordinal, target) in automationConfiguration.targets.prefix(2).enumerated() {
       let started = automationNow()
       var diagnostic = ProbeDiagnostic(targetOrdinal: ordinal + 1, revision: context.intentRevision,
