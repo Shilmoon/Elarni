@@ -110,6 +110,14 @@ class AndroidE2E {
             feed.body = link("Provider one", 18083)
             ui.waitUntil(10_000) { runBlocking { repo.maintenance(due) }; feed.requests.get() > requests }
             assertEquals(18083, endpointPort(snapshot()))
+            // A time the schedule wrote waits out its interval; one written under a clock that was ahead is due once the clock is set back.
+            val fetched = snapshot().source(id).getDouble("lastSuccessfulFetch")
+            val waiting = feed.requests.get()
+            feed.body = link("Provider one", 18085)
+            runBlocking { repo.maintenance(fetched, wait = true) }
+            assertEquals(waiting, feed.requests.get())
+            runBlocking { repo.maintenance(fetched - 365 * 86400, wait = true) }
+            assertEquals(18085, endpointPort(snapshot()))
             feed.body = link("Provider one", 18081)
             call("refresh", obj("id" to id))
             assertEquals(18081, endpointPort(snapshot()))
@@ -127,6 +135,22 @@ class AndroidE2E {
             feed.body = JSONArray(listOf(member("Refused", true))).toString()
             assertEquals("unsupported_profile", expectFailure { call("refresh", obj("id" to id)) })
             assertEquals(18084, endpointPort(snapshot()))
+            // Pasted, the same list adds the server the compiler takes to the local group and counts the other.
+            call("import", obj("text" to JSONArray(listOf(member("Pasted", false), member("Pasted refused", true))).toString()))
+            val local = snapshot().sources.single { !it.has("url") }.getString("id")
+            fun pasted() = snapshot().source(local)
+            assertEquals(listOf("Pasted"), pasted().objects("nodes").map { it.string("name") })
+            assertEquals("1", pasted().mapObject("metadata").string("skippedServers"))
+            assertEquals("vless", pasted().mapObject("metadata").string("skippedKinds"))
+            assertEquals("unsupported_profile", expectFailure { call("import", obj("text" to JSONArray(listOf(member("Refused alone", true))).toString())) })
+            assertEquals(listOf("Pasted"), pasted().objects("nodes").map { it.string("name") })
+            assertEquals("1", pasted().mapObject("metadata").string("skippedServers"))
+            // The count is the latest import's; the servers the group had stay.
+            call("import", obj("text" to link("Pasted clean", 18086)))
+            assertEquals(listOf("Pasted", "Pasted clean"), pasted().objects("nodes").map { it.string("name") })
+            assertFalse(pasted().mapObject("metadata").has("skippedServers"))
+            assertFalse(pasted().mapObject("metadata").has("skippedKinds"))
+            call("deleteSource", obj("id" to local))
             // A server without encryption on a public address is refused with its own reason.
             feed.body = "vless://00000000-0000-4000-8000-000000000001@8.8.8.8:443?encryption=none&type=tcp&security=none#Plain"
             assertEquals("unencrypted_server", expectFailure { call("refresh", obj("id" to id)) })

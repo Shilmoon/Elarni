@@ -164,11 +164,35 @@ class Catalog(val data: JSONObject, private val snapshot: Boolean = false) {
         fun key(node: JSONObject) = node.string("format") + "\n" + Native.domain("catalogIdentity", node.getJSONObject("config")).getString("identity")
         val known = kept.associateByTo(mutableMapOf(), ::key)
         val nodes = parseNodes(imported, emptyList()).filter { known.putIfAbsent(key(it), it) == null }.onEach { it.put("hideURL", hidden) }
-        putSource((group ?: obj("id" to id, "name" to input.string("name", "Local profiles"), "format" to "source", "status" to "ready"))
-            .put("nodes", JSONArray(kept + nodes)))
-        if (selected.isEmpty()) nodes.firstOrNull { it.string("format") == "xrayProfile" }?.let { data.put("selectedNodeId", it.string("id")) }
+        val source = (group ?: obj("id" to id, "name" to input.string("name", "Local profiles"), "format" to "source", "status" to "ready"))
+            .put("nodes", JSONArray(kept + nodes))
+        putSource(source)
         addressedRouting(imported.strings("directives").filter(::isRoutingLink)).forEach { importsRouting(it, id) }
+        // The group's page counts what its latest import left out, as a subscription's does for its latest refresh.
+        val metadata = source.mapObject("metadata").apply { remove("skippedServers"); remove("skippedKinds") }
+        val added = leaveOutUnusable(source, nodes, imported, metadata)
+        if (metadata.length() > 0) source.put("metadata", metadata)
+        if (selected.isEmpty()) added.firstOrNull { it.string("format") == "xrayProfile" }?.let { data.put("selectedNodeId", it.string("id")) }
         return null
+    }
+    /** Counts in [metadata] the lines [imported] could not read, then leaves out of [source] the servers of [added], the ones a refresh or
+     *  an import brings, that the compiler refuses, and counts them too. With none of [added] left the change fails; returns the rest. */
+    private fun leaveOutUnusable(source: JSONObject, added: List<JSONObject>, imported: JSONObject, metadata: JSONObject): List<JSONObject> {
+        // Lines the importer cannot read are left out; the subscription page says how many and of which kind.
+        if (imported.optInt("skippedCount") > 0) metadata.put("skippedServers", imported.optInt("skippedCount").toString())
+            .put("skippedKinds", imported.objects("skipped").map { it.string("kind") }.filter(String::isNotEmpty).distinct().take(5).joinToString(", "))
+        // A server the compiler refuses is left out like a line the importer cannot read.
+        val refused = mutableListOf<JSONObject>()
+        try { validateNodes(only = source.string("id"), ids = added.map { it.string("id") }.toSet(), refused = refused) } catch (_: OutOfMemoryError) { throw AppFailure("input_too_large") }
+        if (refused.isEmpty()) return added
+        val gone = refused.map { it.string("id") }.toSet()
+        val kept = added.filter { it.string("id") !in gone }
+        if (kept.isEmpty()) throw AppFailure("unsupported_profile")
+        val kinds = metadata.string("skippedKinds").split(", ") + refused.map { it.mapObject("config").objects("outbounds").firstOrNull()?.string("protocol").orEmpty() }
+        metadata.put("skippedServers", ((metadata.string("skippedServers").toIntOrNull() ?: 0) + refused.size).toString())
+            .put("skippedKinds", kinds.filter(String::isNotEmpty).distinct().take(5).joinToString(", "))
+        source.put("nodes", JSONArray(source.objects("nodes").filter { it.string("id") !in gone }))
+        return kept
     }
     /** Imports a provider's routing link. A link the decoder refuses is left out and reported as false:
      *  it must not cost the user the servers it came with. */
@@ -232,9 +256,6 @@ class Catalog(val data: JSONObject, private val snapshot: Boolean = false) {
         if (migrated.isNotEmpty()) { source.put("url", migrated).put("shareLink", migrated); listOf("raw", "json", "clash").forEach(links::remove) }
         if (targetFormat == "source" && imported.string("fallbackURL").isNotEmpty()) source.put("fallbackURL", imported.getString("fallbackURL"))
         if (imported.strings("directives").any { !isRoutingLink(it) }) metadata.put("directiveNotice", "Unsupported provider directives")
-        // Lines the importer cannot read are left out; the subscription page says how many and of which kind.
-        if (imported.optInt("skippedCount") > 0) metadata.put("skippedServers", imported.optInt("skippedCount").toString())
-            .put("skippedKinds", imported.objects("skipped").map { it.string("kind") }.filter(String::isNotEmpty).distinct().take(5).joinToString(", "))
         if (imported.optBoolean("systemResolverDNS")) metadata.put("dnsNotice", "The provider's DNS asks this device's resolver, outside the tunnel. Elarni uses its own DNS for these servers.")
         val title = display(headers.string("profile-title")) ?: source.string("importedName", source.string("providerName", URI(url).host))
         val hours = refreshHours(source, metadata)
@@ -250,19 +271,8 @@ class Catalog(val data: JSONObject, private val snapshot: Boolean = false) {
             addressedRouting(listOf(headers.string("routing")).filter(String::isNotEmpty) + imported.strings("directives").filter(::isRoutingLink))
                 .forEach { if (!importsRouting(it, id)) metadata.put("directiveNotice", "Unsupported provider directives") }
         }
-        // A server the compiler refuses is left out like a line the importer cannot read; with none left the refresh fails.
-        val refused = mutableListOf<JSONObject>()
-        try { validateNodes(only = id, refused = refused) } catch (_: OutOfMemoryError) { throw AppFailure("input_too_large") }
-        val usable = if (refused.isEmpty()) nodes else {
-            val gone = refused.map { it.string("id") }.toSet()
-            val kept = nodes.filter { it.string("id") !in gone }
-            if (kept.isEmpty()) throw AppFailure("unsupported_profile")
-            val kinds = metadata.string("skippedKinds").split(", ") + refused.map { it.mapObject("config").objects("outbounds").firstOrNull()?.string("protocol").orEmpty() }
-            metadata.put("skippedServers", ((metadata.string("skippedServers").toIntOrNull() ?: 0) + refused.size).toString())
-                .put("skippedKinds", kinds.filter(String::isNotEmpty).distinct().take(5).joinToString(", "))
-            source.put("nodes", JSONArray(kept))
-            kept
-        }
+        // Lines and servers this app cannot use are left out; with no server left the refresh fails.
+        val usable = leaveOutUnusable(source, nodes, imported, metadata)
         reconcileSelection()
         if (selected.isEmpty()) usable.firstOrNull { it.string("format") == "xrayProfile" }?.let { data.put("selectedNodeId", it.string("id")) }
         return null
@@ -445,8 +455,8 @@ class Catalog(val data: JSONObject, private val snapshot: Boolean = false) {
     }
     /** Compiles each server in turn, which validates it: 4,096 compiled trees at once outgrew the API 30 heap.
      *  A request that compiled before is not compiled again, so an edit costs the servers it changes.
-     *  With [refused], only the subscription [only] is compiled and a server the compiler refuses is collected, not thrown. */
-    fun validateNodes(only: String? = null, refused: MutableList<JSONObject>? = null, valid: () -> Unit = {}) {
+     *  With [refused], only the subscription [only] is compiled, or of it only the servers [ids], and a server the compiler refuses is collected, not thrown. */
+    fun validateNodes(only: String? = null, ids: Set<String>? = null, refused: MutableList<JSONObject>? = null, valid: () -> Unit = {}) {
         // Resolve settings and each source's route once; per-node lookups were quadratic.
         val setting = settings
         val vpn = setting.getBoolean("xrayTunEnabled")
@@ -460,7 +470,7 @@ class Catalog(val data: JSONObject, private val snapshot: Boolean = false) {
             val routeId = assigned.string(source.string("id"))
             val route = allRoutes.firstOrNull { it.string("id") == routeId && it.optBoolean("enabled", true) }
             source.objects("nodes").forEach { node ->
-                if (node.getString("format") != "xrayProfile") return@forEach
+                if (node.getString("format") != "xrayProfile" || ids != null && node.string("id") !in ids) return@forEach
                 val (request, context) = shared.getOrPut(route?.string("id").orEmpty() + "\n" + node.string("ipPreference")) {
                     compileRequest(node, route, setting, null, vpn, null).let { it to sha256(it.toString()) }
                 }
@@ -626,6 +636,9 @@ class Catalog(val data: JSONObject, private val snapshot: Boolean = false) {
             if (settings.string("perAppMode") == "off") null else settings.strings("perAppProcesses").associateWith(uid)
         // Subscriptions, managed lists and geodata retry a failed refresh after 60, 300, then 1800 s.
         fun retryDelay(failures: Int) = listOf(60, 300, 1800)[(failures - 1).coerceIn(0, 2)]
+        /** Whether a refresh stored for [at] is due at [time]. [longest] is the furthest ahead its schedule writes a time; one further
+         *  away than that, and an hour for a clock corrected by minutes, was written under a clock since set back and would take years. */
+        fun refreshDue(at: Double, time: Double, longest: Double) = at <= time || at > time + longest + 3600
         // Whole hours from 1 to 168, without a leading zero.
         val validRefreshHours = Regex("[1-9]|[1-9][0-9]|1[0-5][0-9]|16[0-8]")
         // Other local apps must not reach a fresh install's listeners without a login (v2rayNG #5457).

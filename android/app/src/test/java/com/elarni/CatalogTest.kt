@@ -124,6 +124,15 @@ class CatalogTest {
         assertNotEquals("A listed app removed, whose UID another app may get", taken, Catalog.listedUids(settings) { started[it] })
     }
 
+    @Test fun refreshWrittenUnderAClockThatWasAheadIsDue() {
+        val time = 1_800_000_000.0; val interval = 4 * 3600.0; val longest = interval * 1.1
+        assertTrue("A time that has passed", Catalog.refreshDue(time - 1, time, longest))
+        assertTrue(Catalog.refreshDue(time, time, longest))
+        assertFalse("The furthest time the schedule writes", Catalog.refreshDue(time + longest, time, longest))
+        assertFalse("A clock corrected by minutes", Catalog.refreshDue(time + longest + 3600, time, longest))
+        assertTrue("Written under a clock a year ahead", Catalog.refreshDue(time + 365 * 86400, time, longest))
+    }
+
     @Test fun retryDelayAndCanonicalForm() {
         assertEquals(listOf(60, 60, 300, 1800, 1800), listOf(0, 1, 2, 3, 9).map(Catalog::retryDelay))
         assertEquals(Catalog.canonical(JSONObject("""{"b":[1,{"y":2,"x":"s"}],"a":null}""")), Catalog.canonical(JSONObject("""{"a":null,"b":[1,{"x":"s","y":2}]}""")))
