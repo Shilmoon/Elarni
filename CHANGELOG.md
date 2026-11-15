@@ -10,15 +10,21 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
   server never passed a health check since the last change. Before, a server that was already
   down at Connect, or that went down right after failover was turned on, stayed selected and
   shown as connected, and the backup was never used. A server that never passed a check is
-  still not restarted in place, and a fixed server is not touched. Windows, Linux, macOS and
-  iPhone; Android already did this.
-- The **Review download destination** prompt lists the addresses of the download again. Android
-  showed `null://null` and iPhone and Mac showed "Invalid destination", because the core sent
-  fingerprints where the apps expected addresses.
-- A subscription on this device's own network (a private or loopback address, or a `.local`
-  name) refreshes while Elarni is connected. Its name is looked up by the system and its
-  address is tried from this device first, then through the tunnel. Before, both went
-  through the tunnel and the refresh failed. Android, Windows and Linux.
+  still not restarted in place, and a fixed server is not touched. With no other allowed server
+  to move to (a list of one, or the others just tried) such a server is kept as it is, not
+  retried until the retry limit ends the connection. Windows, Linux, macOS and iPhone; Android
+  already did this.
+- The **Review download destination** prompt lists the addresses of the download. Android
+  showed `null://null` and iPhone showed "Invalid destination", because the core sent
+  fingerprints where the apps expected addresses; the Windows, Linux and Mac prompt named only
+  the risk, and `elarni-cli` returned no `destinations`.
+- A subscription on this device's own network refreshes while Elarni is connected: a URL with a
+  loopback, private, link-local or unique-local address, or a `.local` or dot-less name. The
+  name is looked up by the system, a `.local` name also by mDNS when the system cannot answer
+  (FakeDNS in VPN mode, Linux), and the address is tried from this device first, then through
+  the tunnel. Before, both went through the tunnel and the refresh failed. A name that a
+  resolver in the tunnel answered with a private address stays in the tunnel, as it was: that
+  is the server's network. Android, Windows and Linux.
 - An address with an IPv6 zone (`fe80::1%eth0`) is classed as a local address in the download
   review, like the same address without the zone.
 - The `elarni-cli` daemon names why it could not start: `storage_corrupt` for a damaged catalog,
@@ -27,8 +33,14 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
   not a code is still never printed.
 - A VLESS or Trojan link without TLS, REALITY or VLESS encryption that points at a public
   address is refused with that reason. Before, the message said the profile was unsupported
-  and suggested another format. The rule itself (the core accepts such a server only on a
-  private network) is unchanged. All platforms.
+  and suggested another format, also for a new subscription, on the refresh failure card and
+  for a Clash file. The rule itself (the core accepts such a server only on a private network)
+  is unchanged. All platforms.
+
+### Security
+
+- Go 1.27.4 (GO-2026-6859 in `net/http`), hickory-proto 0.26.3 (RUSTSEC-2026-0487 to
+  RUSTSEC-2026-0491) and rustix 1.1.6 (RUSTSEC-2026-0486).
 
 ## 0.6.1 - 2026-11-14
 
