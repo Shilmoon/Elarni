@@ -31,14 +31,15 @@ func ConvertXrayJsonToShareLinks(xrayBytes []byte) (string, error) {
 	for _, outbound := range outbounds {
 		link, err := shareLink(outbound)
 		if outbound.Protocol == "tuic" && (err != nil || len(outbounds) != 1 || xray.RouterConfig != nil || xray.DNSConfig != nil) {
-			return string(xrayBytes), nil
+			// The callers tell the profile from links by its first character.
+			return string(bytes.TrimSpace(xrayBytes)), nil
 		}
 		if err != nil || link == nil {
 			continue
 		}
 		// A link that would import as another server is not written: the server is shared as its profile.
 		if outbound.Protocol != "tuic" && len(outbounds) == 1 && linkLoses(&outbound) {
-			return string(xrayBytes), nil
+			return string(bytes.TrimSpace(xrayBytes)), nil
 		}
 		text := link.String()
 		if text != "" {
@@ -190,17 +191,27 @@ func streamLoses(stream *conf.StreamConfig) bool {
 		var header struct {
 			Type    string `json:"type"`
 			Request *struct {
-				Version string `json:"version"`
-				Method  string `json:"method"`
+				Version string                     `json:"version"`
+				Method  string                     `json:"method"`
+				Headers map[string]json.RawMessage `json:"headers"`
 			} `json:"request"`
 		}
 		if json.Unmarshal(raw.HeaderConfig, &header) != nil {
 			return true
 		}
+		request := header.Request
+		if !strings.EqualFold(header.Type, "http") || request == nil {
+			continue
+		}
 		// Xray's own request line, version 1.1 and GET, is what the link's header imports as.
-		if request := header.Request; strings.EqualFold(header.Type, "http") && request != nil &&
-			((request.Version != "" && request.Version != "1.1") || (request.Method != "" && request.Method != "GET")) {
+		if (request.Version != "" && request.Version != "1.1") || (request.Method != "" && request.Method != "GET") {
 			return true
+		}
+		// Of the request headers the link says Host. The response is the server's side: a client sends none.
+		for key := range request.Headers {
+			if !strings.EqualFold(key, "host") {
+				return true
+			}
 		}
 	}
 	return setJSON(stream.SocketSettings) != nil

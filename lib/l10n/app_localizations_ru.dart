@@ -256,6 +256,11 @@ class AppLocalizationsRu extends AppLocalizations {
       'Закройте мешающее приложение или смените порт в настройках подключения.';
 
   @override
+  String issueListenerPortUnavailable(int port) {
+    return 'Порт $port занят или недоступен. Выберите другой порт.';
+  }
+
+  @override
   String get issueListenerUnavailable =>
       'Порт локального прокси занят или недоступен.';
 

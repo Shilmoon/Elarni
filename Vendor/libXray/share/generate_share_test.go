@@ -275,6 +275,8 @@ func TestShareLinkThatWouldLoseSettingsIsNotWritten(t *testing.T) {
 		// Xray's own request line, said in full, is no setting of its own.
 		{"HTTP header defaults", plain("raw", `"rawSettings":{"header":{"type":"http","request":{"version":"1.1","method":"POST","path":["/p"],"headers":{"Host":["cdn.example"]}}}},`),
 			plain("raw", `"rawSettings":{"header":{"type":"http","request":{"version":"1.1","method":"GET","path":["/p"],"headers":{"Host":["cdn.example"]}}}},`)},
+		{"HTTP request header", plain("raw", `"rawSettings":{"header":{"type":"http","request":{"path":["/p"],"headers":{"Host":["cdn.example"],"User-Agent":["curl/8"]}}}},`),
+			plain("raw", `"rawSettings":{"header":{"type":"http","request":{"path":["/p"],"headers":{"Host":["cdn.example"]}},"response":{"status":"404"}}},`)},
 		{"socket options", vless("", `"security":"tls","sockopt":{"mark":255}`), vless("", `"security":"tls","sockopt":{}`)},
 		{"VLESS reverse", user("vless", `"address":"203.0.113.7","port":443,"id":"`+id+`","encryption":"none","reverse":{"tag":"r"}`),
 			user("vless", `"address":"203.0.113.7","port":443,"id":"`+id+`","encryption":"none","reverse":null`)},

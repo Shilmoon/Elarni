@@ -146,6 +146,11 @@ func importClashProfiles(text string) (*ClientImport, error) {
 		parts, noResolve := clashRuleParts(rule)
 		converted, err := clashRoutingRule(rule, names)
 		if err != nil && dropped[parts[len(parts)-1]] {
+			if parts[0] == "MATCH" {
+				// Blocking what no other rule matched would import a profile that connects and carries
+				// nothing, with no word about it.
+				return nil, fmt.Errorf("Clash MATCH rule refers to a skipped proxy")
+			}
 			// A rule to a skipped proxy blocks what it matched, so no later rule sends that traffic another
 			// way. It is still read as written: one the import cannot read fails the file.
 			blocked := strings.Join(append(parts[:len(parts)-1:len(parts)-1], "REJECT"), ",")

@@ -68,6 +68,7 @@
   "issueCheckTargetFailedRemedy": "Проверьте адрес проверки и настройки DNS. Это не значит, что сервер не работает.",
   "issueCheckTargetFailed": "Проверка соединения не смогла проверить целевой адрес.",
   "issueListenerUnavailableRemedy": "Закройте мешающее приложение или смените порт в настройках подключения.",
+  "issueListenerPortUnavailable": "Порт {port} занят или недоступен. Выберите другой порт.",
   "issueListenerUnavailable": "Порт локального прокси занят или недоступен.",
   "issueVpnConfigurationFailedRemedy": "Проверьте разрешения VPN в системных настройках и повторите попытку.",
   "issueVpnConfigurationFailed": "Системе не удалось подготовить VPN.",

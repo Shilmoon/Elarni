@@ -567,7 +567,7 @@ final class TunnelMethodChannel {
         } catch RunnerTunnelError.unsupportedPingMethod {
           result(FlutterError(code: "unsupported_ping_method", message: "Direct TCP is not supported by this endpoint's transport. Use Proxy testing.", details: nil))
         } catch RunnerTunnelError.listenerUnavailable(let port) {
-          result(FlutterError(code: "listener_unavailable", message: "Port \(port) is occupied or unavailable. Choose another listener port.", details: nil))
+          result(FlutterError(code: "listener_unavailable", message: "Port \(port) is occupied or unavailable. Choose another listener port.", details: port))
         } catch RunnerTunnelError.perAppTargetMissing {
           result(FlutterError(code: "per_app_target_missing", message: "An app in Per-app routing uses a server that no longer exists. Choose another target for it in Per-app routing.", details: nil))
         } catch RunnerTunnelError.invalidRouteEnforcement {

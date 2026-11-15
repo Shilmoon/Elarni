@@ -719,13 +719,14 @@ extension _HomeController on _ElarniHomeState {
       if (mounted) {
         final issue = ConnectionIssue.from(error);
         _set(
-          // An occupied port says which setting to change on its own; the
-          // platform's text names the port when it has one (macOS).
+          // An occupied port says which setting to change on its own; it is
+          // named when the platform says which one (macOS).
           () => _message =
               error is PlatformException && error.code == 'listener_unavailable'
-              ? (error.message?.contains(RegExp(r'\d')) ?? false)
-                    ? error.message
-                    : issue.description
+              ? switch (error.details) {
+                  final int port => l10n.issueListenerPortUnavailable(port),
+                  _ => issue.description,
+                }
               : issue.code == 'operation_failed'
               ? l10n.settingNotAppliedCheck
               : l10n.settingNotApplied(issue.description),
