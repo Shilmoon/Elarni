@@ -590,6 +590,13 @@ struct SubscriptionChecks {
       let group = (repeatStore.snapshot()["subscriptions"] as! [[String: Any]])[0]
       try expect((group["nodes"] as! [[String: Any]]).map { $0["name"] as! String } == ["One", "Two"], "a repeated server was kept")
     }
+    _ = try repeatStore.registerProfiles("socks://127.0.0.1:1082#Three\nunrecognized broken node\n")
+    _ = try await repeatStore.refresh(id: repeatID)
+    try check("a local import that joins its group counts the lines it left out") {
+      let group = (repeatStore.snapshot()["subscriptions"] as! [[String: Any]])[0]
+      try expect((group["nodes"] as! [[String: Any]]).map { $0["name"] as! String } == ["One", "Two", "Three"], "the joined import lost a server")
+      try expect((group["metadata"] as? [String: Any])?["skippedServers"] as? Int == 1, "the joined import lost its count of skipped lines")
+    }
     try check("a local group shares its servers as links in group order") {
       let group = (localStore.snapshot()["subscriptions"] as! [[String: Any]]).first { $0["id"] as? String == localID }!
       let ids = (group["nodes"] as! [[String: Any]]).map { $0["id"] as! String }

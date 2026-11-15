@@ -219,7 +219,9 @@ final class SubscriptionStore {
     // A first import keeps its own text unless it repeats a server.
     if index == nil && nodes.count == imported.nodes.count { return try registerSource(data, local: true) }
     let source = try JSONSerialization.data(withJSONObject: ["elarniLocalNodes": nodes,
-      "elarniDirectives": imported.directives])
+      "elarniDirectives": imported.directives,
+      // What this import left out, which the group's page counts as a subscription's does.
+      "elarniSkippedCount": imported.skippedCount, "elarniSkippedKinds": imported.skippedKinds])
     guard source.count <= Self.maxFeedBytes else { throw SubscriptionError.feedTooLarge }
     guard let index else { return try registerSource(source, local: true) }
     let group = catalog.subscriptions[index]
@@ -388,7 +390,8 @@ final class SubscriptionStore {
          let container = try? JSONSerialization.jsonObject(with: fetched.data) as? [String: Any],
          let nodes = container["elarniLocalNodes"] as? [[String: Any]] {
         // shortcut: a joined local import forgets the provider DNS notice; carry it in the container if local groups need it.
-        imported = (try nodes.map(parseBackupNode), container["elarniDirectives"] as? [String] ?? [], false, nil, false, nil, 0, "")
+        imported = (try nodes.map(parseBackupNode), container["elarniDirectives"] as? [String] ?? [], false, nil, false, nil,
+          container["elarniSkippedCount"] as? Int ?? 0, container["elarniSkippedKinds"] as? String ?? "")
       } else {
         imported = try parseImport(fetched.data, sourceURL: migrationSource,
           migrationHeaders: fetched.migrationHeaders.merging(initialMigrationHeaders) { _, first in first })
@@ -1073,7 +1076,7 @@ final class SubscriptionStore {
     // The link takes its name from the outbound tag.
     config["tag"] = node.displayName
     let json = String(decoding: try JSONSerialization.data(withJSONObject: ["outbounds": [config]]), as: UTF8.self)
-    // A TUIC outbound without a link comes back as the JSON it was given.
+    // An outbound whose link would lose settings comes back as the JSON it was given.
     guard let links = (try? SubscriptionFeedFetcher.invoke("convertXrayJsonToShareLinks", ["xrayJson": json]))?["links"] as? String,
           !links.hasPrefix("{") else { throw none }
     return links
