@@ -238,6 +238,10 @@ extension _ProxyRuntime on DesktopProxy {
     int generation,
   ) async {
     final launch = _process;
+    CatalogMap perAppLess(TunnelSettings settings) => _runtimeSettings(settings)
+      ..remove('perAppMode')
+      ..remove('perAppProcesses')
+      ..remove('perAppTargets');
     if (_state != 'connected' ||
         launch == null ||
         launch != _vpnSession ||
@@ -248,7 +252,11 @@ extension _ProxyRuntime on DesktopProxy {
         candidate.selected == null ||
         candidate.selected != before.selected ||
         jsonEncode(_corePayload(candidate, '')) !=
-            jsonEncode(_corePayload(before, '')))
+            jsonEncode(_corePayload(before, '')) ||
+        // Of the settings only per-app routing compiles to rules alone; any
+        // other would be prepared here and then again for its restart.
+        jsonEncode(perAppLess(candidate.settings)) !=
+            jsonEncode(perAppLess(before.settings)))
       return false;
     try {
       final config = await _prepareConfig(
@@ -365,6 +373,10 @@ extension _ProxyRuntime on DesktopProxy {
                 ? const Duration(seconds: 370)
                 : method == 'runVPN'
                 ? const Duration(seconds: 120)
+                // Longer than the helper waits for its tunnel to load the
+                // configuration, so the helper's answer is the one that counts.
+                : method == 'reloadVPN'
+                ? const Duration(seconds: 50)
                 : _replyTimeout),
       );
       // A lease that missed a reply can no longer pair replies with requests,

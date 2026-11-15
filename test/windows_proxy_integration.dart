@@ -1911,8 +1911,21 @@ for line in sys.stdin:
         'stopVPN hold',
         'runVPN',
       ]);
+      // Nor is a setting that is not per-app routing: only that one compiles
+      // to rules alone, and the others would be prepared twice.
+      await backend.control.updateTunnelSettings(
+        bypass.copyWith(
+          excludedRoutes: ['203.0.113.0/24'],
+          sniffingEnabled: !bypass.sniffingEnabled,
+        ),
+      );
+      expect((await events.readAsLines()).skip(13), [
+        'lookupHost server.invalid',
+        'stopVPN hold',
+        'runVPN',
+      ]);
       await backend.control.disconnect();
-      expect((await events.readAsLines()).skip(13), ['stopVPN']);
+      expect((await events.readAsLines()).skip(16), ['stopVPN']);
     },
   );
 

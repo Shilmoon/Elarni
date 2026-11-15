@@ -212,8 +212,8 @@ final class DesktopProxy {
   String _state = 'disconnected', _revision = '';
   // The login of the VPN's listeners when the user set none; only probes use it.
   CatalogMap? _vpnLogin;
-  // The address each server host of the last prepared tunnel resolved to.
-  final Map<String, String> _tunnelAddresses = {};
+  // The address each server endpoint of the last prepared tunnel resolved to.
+  Map<String, String> _tunnelAddresses = {};
   final Map<
     String,
     ({String id, String format, List<String> chain, DateTime expires})

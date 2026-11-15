@@ -202,9 +202,8 @@ func startVPN(payload json.RawMessage) (any, error) {
 	if pipe == nil {
 		return nil, errors.New("cancelled")
 	}
-	handshake := vpnHandshake{Version: 1, Config: request.Config, AssetRevision: request.AssetRevision, ReuseAssets: reuse, MemoryLimitMB: request.MemoryLimitMB,
-		LogLevel: request.LogLevel, StreamMetrics: request.StreamMetrics, TCPMaxConnections: request.TCPMaxConnections, UDPMaxConnections: request.UDPMaxConnections, RoutePolicy: request.RoutePolicy,
-		RecordDiagnostics: request.RecordDiagnostics}
+	handshake := request.handshake("")
+	handshake.ReuseAssets = reuse
 	reply, ok, err := sendVPNStart(pipe, replies, handshake, assets)
 	if err == nil && ok && reuse && reply.Error == errAssetsReleased.Error() {
 		// The child gave them back after its idle hold.
@@ -260,6 +259,14 @@ func sendVPNStart(pipe io.Writer, replies <-chan vpnReply, handshake vpnHandshak
 	return reply, ok, nil
 }
 
+// handshake is what the child is told of a request: for a start, and for a reload, which the
+// child compares with the start it runs. One list of fields, so that the two cannot differ.
+func (request vpnRequest) handshake(action string) vpnHandshake {
+	return vpnHandshake{Version: 1, Action: action, Config: request.Config, AssetRevision: request.AssetRevision, MemoryLimitMB: request.MemoryLimitMB,
+		LogLevel: request.LogLevel, StreamMetrics: request.StreamMetrics, TCPMaxConnections: request.TCPMaxConnections, UDPMaxConnections: request.UDPMaxConnections,
+		RoutePolicy: request.RoutePolicy, RecordDiagnostics: request.RecordDiagnostics}
+}
+
 // reloadVPN hands the running tunnel another configuration. vpn_reload_restart says the tunnel
 // cannot take it as it runs; it then runs as before and the app restarts it.
 func reloadVPN(payload json.RawMessage) (any, error) {
@@ -279,10 +286,7 @@ func reloadVPN(payload json.RawMessage) (any, error) {
 	if pipe == nil || !up || request.AssetRevision != assets {
 		return nil, errors.New(reloadCode(xray.ErrRestartNeeded))
 	}
-	handshake := vpnHandshake{Version: 1, Action: "reload", Config: request.Config, AssetRevision: request.AssetRevision, MemoryLimitMB: request.MemoryLimitMB,
-		LogLevel: request.LogLevel, StreamMetrics: request.StreamMetrics, TCPMaxConnections: request.TCPMaxConnections, UDPMaxConnections: request.UDPMaxConnections, RoutePolicy: request.RoutePolicy,
-		RecordDiagnostics: request.RecordDiagnostics}
-	if writeFrame(pipe, handshake) != nil {
+	if writeFrame(pipe, request.handshake("reload")) != nil {
 		return nil, errors.New("vpn_failed")
 	}
 	select {
@@ -293,7 +297,7 @@ func reloadVPN(payload json.RawMessage) (any, error) {
 		if ok && strings.HasPrefix(reply.Error, "vpn_reload_") {
 			return nil, errors.New(reply.Error)
 		}
-	case <-awakeAfter(10 * time.Second):
+	case <-awakeAfter(reloadWait):
 	}
 	// No answer, or one out of turn: the next reply could not be told from this one.
 	platformStop()
@@ -632,7 +636,7 @@ func vpnChild(name string, brokerPID uint32) int {
 			}
 			if command.Action == "reload" {
 				// No tunnel runs here: the app starts one.
-				if writeFrame(pipe, vpnReply{Error: reloadCode(nil)}) != nil {
+				if writeFrame(pipe, vpnReply{Error: reloadCode(xray.ErrRestartNeeded)}) != nil {
 					return 1
 				}
 				continue

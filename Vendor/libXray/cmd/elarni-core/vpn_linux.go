@@ -414,7 +414,11 @@ func reloadVPN(payload json.RawMessage) (any, error) {
 	if child == nil || !child.up.Load() {
 		return nil, errors.New(reloadCode(xray.ErrRestartNeeded))
 	}
-	reply, err := child.request(linuxCommand{Action: "reload", Request: request}, 15*time.Second)
+	reply, err := child.request(linuxCommand{Action: "reload", Request: request}, reloadWait+10*time.Second)
+	if err != nil && strings.HasPrefix(err.Error(), "vpn_reload_") {
+		// The supervisor answered, with no tunnel to reload: it lives on for the next start.
+		return nil, err
+	}
 	if err != nil {
 		// No answer, or one out of turn: the next reply could not be told from this one.
 		_ = platformStop()
@@ -746,12 +750,13 @@ func superviseLinuxTunnels(ctx context.Context, commands <-chan linuxCommand, cl
 			}
 			if command.Action == "reload" {
 				// Answered as a running tunnel when one runs: a refused reload changed nothing.
-				reply := linuxReply{Error: reloadCode(nil)}
+				// Without one there is nothing to reload, and the app starts a tunnel.
+				reply := linuxReply{Error: reloadCode(xray.ErrRestartNeeded)}
 				if worker != nil {
 					reply = linuxReply{Ready: true, Adapter: network.Name, PID: os.Getpid()}
 					if validLinuxRequest(command.Request) != nil {
 						reply.Error = reloadCode(nil)
-					} else if answer, err := worker.request(linuxCommand{Action: "reload", Request: command.Request, Network: network}, 10*time.Second); err != nil {
+					} else if answer, err := worker.request(linuxCommand{Action: "reload", Request: command.Request, Network: network}, reloadWait); err != nil {
 						// A worker that does not answer is stopped by the request, and reported lost.
 						reply.Error = reloadCode(nil)
 					} else {

@@ -6,6 +6,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -129,6 +130,10 @@ func TestLinuxWorkerFixture(t *testing.T) {
 		reply := linuxReply{Ready: true}
 		if next.Request.MemoryLimitMB == 1 {
 			reply.Error = "vpn_reload_restart"
+		}
+		// As the supervisor answers when no worker runs.
+		if next.Request.MemoryLimitMB == 2 {
+			reply = linuxReply{Error: "vpn_reload_restart"}
 		}
 		if linuxWriteFrame(os.Stdout, reply) != nil {
 			os.Exit(1)
@@ -308,6 +313,48 @@ func TestLinuxSupervisorOutlivesFailedAndLostTunnels(t *testing.T) {
 // on a change and about a second after a lost tunnel.
 // A reload goes to the running tunnel's worker and is answered as a running tunnel, taken or
 // refused; without a tunnel it is refused, and the supervisor stays for the next start.
+// A reload that finds no tunnel (the worker ended a moment before) is refused, not lost: the
+// broker used to take the refusal for a missing answer and stop its root supervisor, so the
+// next connect asked for polkit consent again.
+func TestLinuxBrokerKeepsItsSupervisorWhenNoTunnelTakesAReload(t *testing.T) {
+	child, err := startLinuxChild(linuxWorkerFixture("run"), func(linuxReply) {})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := child.request(linuxCommand{Action: "start", Network: linuxNetwork{Name: "rv000000000002"}}, 10*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	child.up.Store(true)
+	linuxBroker.Lock()
+	before, closed := linuxBroker.child, linuxBroker.closed
+	linuxBroker.child, linuxBroker.closed = child, false
+	linuxBroker.Unlock()
+	t.Cleanup(func() {
+		_ = child.stop()
+		linuxBroker.Lock()
+		linuxBroker.child, linuxBroker.closed = before, closed
+		linuxBroker.Unlock()
+	})
+	payload, err := json.Marshal(vpnRequest{Config: linuxConfigFixture, MemoryLimitMB: 2, RoutePolicy: &share.WindowsRoutePolicy{IncludedRoutes: []string{"0.0.0.0/0"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := reloadVPN(payload); err == nil || err.Error() != "vpn_reload_restart" {
+		t.Fatalf("the reload answered %v", err)
+	}
+	linuxBroker.Lock()
+	kept := linuxBroker.child == child
+	linuxBroker.Unlock()
+	select {
+	case <-child.done:
+		kept = false
+	default:
+	}
+	if !kept {
+		t.Fatal("a refused reload stopped the supervisor")
+	}
+}
+
 func TestLinuxSupervisorPassesAReloadToItsWorker(t *testing.T) {
 	lock := filepath.Join(t.TempDir(), "vpn.lock")
 	host := linuxTunnelHost{
@@ -342,7 +389,7 @@ func TestLinuxSupervisorPassesAReloadToItsWorker(t *testing.T) {
 		return linuxReply{}
 	}
 	request := vpnRequest{Config: linuxConfigFixture, RoutePolicy: &share.WindowsRoutePolicy{IncludedRoutes: []string{"0.0.0.0/0"}}}
-	if reply := ask("reload without a tunnel", linuxCommand{Action: "reload", Request: request}); reply.Ready || reply.Error != "vpn_reload_failed" {
+	if reply := ask("reload without a tunnel", linuxCommand{Action: "reload", Request: request}); reply.Ready || reply.Error != "vpn_reload_restart" {
 		t.Fatalf("reload without a tunnel answered %+v", reply)
 	}
 	if reply := ask("start", linuxCommand{Action: "start", Request: request}); !reply.Ready {

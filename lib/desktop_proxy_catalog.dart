@@ -36,6 +36,9 @@ extension _ProxyCatalog on DesktopProxy {
       }))['endpoints'],
     );
     final resolved = <String, Object?>{}, unavailable = <String>[];
+    // A start begins anew: only what this tunnel resolved may be given to its
+    // reloads, never an address an earlier tunnel had for the host.
+    final addresses = <String, String>{if (reload) ..._tunnelAddresses};
     final mappings = await _hostMappings(
       raw,
       endpoints.where((e) => e['physical'] == true).toList(),
@@ -43,15 +46,20 @@ extension _ProxyCatalog on DesktopProxy {
     for (final endpoint in endpoints.where((e) => e['physical'] == true)) {
       final path = endpoint['addressPath']! as String;
       final host = endpoint['host']! as String;
+      // The endpoint as a whole, not only its host: its own address hints
+      // and mapping choose among the host's addresses.
+      final key = jsonEncode([
+        {...endpoint}..remove('addressPath'),
+        mappings[host],
+      ]);
       try {
-        final address = resolved[path] =
-            (reload ? _tunnelAddresses[host] : null) ??
+        addresses[key] = resolved[path] =
+            (reload ? addresses[key] : null) ??
             (await _endpointAddresses(
               endpoint,
               DesktopProxy._nodeSettings(catalog, node),
               mapping: mappings[host] as Map?,
             )).first.address;
-        if (catalog.settings.xrayTunEnabled) _tunnelAddresses[host] = address;
       } on Object catch (error) {
         // A declined clear of a crashed helper's kill switch is its own error.
         if (error is PlatformException && error.code == 'vpn_guard_stale')
@@ -74,6 +82,7 @@ extension _ProxyCatalog on DesktopProxy {
       if (unavailable.isEmpty || error.code != 'invalid_routing') rethrow;
       throw desktopError('connection_failed');
     }
+    if (catalog.settings.xrayTunEnabled) _tunnelAddresses = addresses;
     return jsonEncode(prepared['config']);
   }
 

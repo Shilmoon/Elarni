@@ -9,6 +9,7 @@ import (
 
 	"github.com/xtls/libxray/share"
 	"github.com/xtls/xray-core/app/router"
+	"github.com/xtls/xray-core/common"
 	"github.com/xtls/xray-core/core"
 	"github.com/xtls/xray-core/features/outbound"
 	"github.com/xtls/xray-core/features/routing"
@@ -133,15 +134,19 @@ func routingDiff(running, next string) (routingChange, error) {
 
 // ReloadRouting gives the running core the routing rules of configJSON, with the outbounds they
 // newly name, and takes away the outbounds it no longer has. Connections already open keep the
-// route they were given; new ones follow the new rules. ErrRestartNeeded says the configuration
+// route they were given, unless it led through an outbound that is taken away and kept them in
+// a session of its own; new ones follow the new rules. ErrRestartNeeded says the configuration
 // differs in more than that, and nothing was changed.
 func ReloadRouting(configJSON string) error {
 	coreServerMu.Lock()
-	defer coreServerMu.Unlock()
-	if coreServer == nil || !coreServer.IsRunning() {
+	running, alive := runningConfig, coreServer != nil && coreServer.IsRunning()
+	coreServerMu.Unlock()
+	if !alive {
 		return errors.New("xray is not running")
 	}
-	change, err := routingDiff(runningConfig, configJSON)
+	// Comparing and parsing need nothing of the running core, and geodata makes the parse slow:
+	// the core's lock, which its metrics and connection readers wait for, is taken after them.
+	change, err := routingDiff(running, configJSON)
 	if err != nil {
 		return err
 	}
@@ -162,15 +167,34 @@ func ReloadRouting(configJSON string) error {
 			}
 		}
 	}
+	coreServerMu.Lock()
+	defer coreServerMu.Unlock()
+	if coreServer == nil || !coreServer.IsRunning() {
+		return errors.New("xray is not running")
+	}
+	// Another core, or another reload, came in between: the comparison was with what no longer runs.
+	if runningConfig != running {
+		return ErrRestartNeeded
+	}
 	routes, ok := coreServer.GetFeature(routing.RouterType()).(*router.Router)
 	manager, managed := coreServer.GetFeature(outbound.ManagerType()).(outbound.Manager)
 	if rules == nil || !ok || !managed {
 		return ErrRestartNeeded
 	}
+	// remove takes an outbound out of the core and ends what it holds open by itself: a pooled or
+	// multiplexed transport, a WireGuard or TUIC session. Those would otherwise run on, unused,
+	// until the tunnel stops.
+	remove := func(tag string) {
+		handler := manager.GetHandler(tag)
+		_ = manager.RemoveHandler(context.Background(), tag)
+		if handler != nil {
+			_ = common.Close(handler)
+		}
+	}
 	var added []string
 	undo := func() {
 		for _, tag := range added {
-			_ = manager.RemoveHandler(context.Background(), tag)
+			remove(tag)
 		}
 	}
 	for _, tag := range change.added {
@@ -191,8 +215,7 @@ func ReloadRouting(configJSON string) error {
 		return fmt.Errorf("xray_reload_failed: %w", err)
 	}
 	for _, tag := range change.removed {
-		// Its open connections end by themselves; closing the handler would cut them.
-		_ = manager.RemoveHandler(context.Background(), tag)
+		remove(tag)
 	}
 	runningConfig = configJSON
 	tunnelRules, tunnelRest = perAppGate(configJSON)

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"time"
 
 	"github.com/xtls/libxray/xray"
 )
@@ -22,6 +23,10 @@ func sameSession[T any](running, next T, strip func(*T)) bool {
 	after, errAfter := json.Marshal(next)
 	return errBefore == nil && errAfter == nil && bytes.Equal(before, after)
 }
+
+// reloadWait is how long a tunnel has to take a reload: as long as a start has to load the same
+// configuration and its geofiles.
+const reloadWait = 30 * time.Second
 
 // reloadCode is the reply's code for a reload that did not happen. The tunnel runs as it did.
 func reloadCode(err error) string {
