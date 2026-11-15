@@ -68,6 +68,14 @@
   "issueCheckTargetFailedRemedy": "Check the test URL and DNS settings. This does not prove the server is down.",
   "issueCheckTargetFailed": "The connection check could not verify its target.",
   "issueListenerUnavailableRemedy": "Close the conflicting app or change the listener port in Connection settings.",
+  "issueListenerPortUnavailable": "Port {port} is occupied or unavailable. Choose another listener port.",
+  "@issueListenerPortUnavailable": {
+    "placeholders": {
+      "port": {
+        "type": "int"
+      }
+    }
+  },
   "issueListenerUnavailable": "A local proxy port is occupied or unavailable.",
   "issueVpnConfigurationFailedRemedy": "Review VPN permissions in system settings, then retry.",
   "issueVpnConfigurationFailed": "The system could not prepare the VPN.",

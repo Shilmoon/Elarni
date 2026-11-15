@@ -51,7 +51,8 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
   skipped lines.
 - A Clash file with a rule that points at a proxy the import skipped, or with `no-resolve` on
   an `IP-CIDR`, `IP-CIDR6` or `GEOIP` rule, imports. The rule to the skipped proxy blocks what it
-  matched, so a later rule such as `MATCH,DIRECT` does not send that traffic another way; when
+  matched, so a later rule such as `MATCH,DIRECT` does not send that traffic another way, and a
+  file whose `MATCH` rule points at a skipped proxy is refused with that reason; when
   every IP rule has `no-resolve` the profile does not resolve names for IP rules, otherwise it
   keeps resolving them.
 - A share link is not written for a server whose link would lose settings (mux, a target

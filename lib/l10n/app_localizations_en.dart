@@ -257,6 +257,11 @@ class AppLocalizationsEn extends AppLocalizations {
       'Close the conflicting app or change the listener port in Connection settings.';
 
   @override
+  String issueListenerPortUnavailable(int port) {
+    return 'Port $port is occupied or unavailable. Choose another listener port.';
+  }
+
+  @override
   String get issueListenerUnavailable =>
       'A local proxy port is occupied or unavailable.';
 

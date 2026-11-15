@@ -217,7 +217,7 @@ rules:
 	// no-resolve, in whether the profile resolves domains for IP rules.
 	for _, test := range []struct{ target, option, strategy string }{{"Bad", "", "IPOnDemand"}, {"OnlyBad", ",no-resolve", "AsIs"}} {
 		target := test.target
-		rules := "IP-CIDR,10.0.0.0/8," + target + test.option + "\n  - IP-CIDR,192.168.0.0/16,DIRECT,no-resolve\n  - MATCH," + target + "\n  - MATCH,Outer"
+		rules := "IP-CIDR,10.0.0.0/8," + target + test.option + "\n  - IP-CIDR,192.168.0.0/16,DIRECT,no-resolve\n  - MATCH,Outer"
 		result, err := ImportClientProfiles(strings.Replace(input, "MATCH,Outer", rules, 1))
 		if err != nil {
 			t.Errorf("rule to %s: %v", target, err)
@@ -241,12 +241,15 @@ rules:
 			t.Fatal(err)
 		}
 		rest := routed.Routing.Rules
-		if len(rest) != 5 || rest[0].Tag != "DIRECT" || !slices.Equal(rest[0].Domain, []string{"domain:example.org"}) ||
+		if len(rest) != 4 || rest[0].Tag != "DIRECT" || !slices.Equal(rest[0].Domain, []string{"domain:example.org"}) ||
 			rest[1].Tag != "REJECT" || !slices.Equal(rest[1].IP, []string{"10.0.0.0/8"}) ||
 			rest[2].Tag != "DIRECT" || !slices.Equal(rest[2].IP, []string{"192.168.0.0/16"}) ||
-			rest[3].Tag != "REJECT" || rest[3].Network != "tcp,udp" || rest[3].IP != nil || rest[3].Domain != nil ||
-			rest[4].Tag != "Outer" || routed.Routing.DomainStrategy != test.strategy {
+			rest[3].Tag != "Outer" || rest[3].Network != "tcp,udp" || routed.Routing.DomainStrategy != test.strategy {
 			t.Errorf("rule to %s: routing %+v", target, routed.Routing)
+		}
+		// The rule for everything else cannot be blocked without a word: the file says why it is refused.
+		if _, err := ImportClientProfiles(strings.Replace(input, "MATCH,Outer", "MATCH,"+target, 1)); err == nil || err.Error() != "Clash MATCH rule refers to a skipped proxy" {
+			t.Errorf("MATCH to %s: %v", target, err)
 		}
 	}
 	// A rule naming what the file never defined still fails it.

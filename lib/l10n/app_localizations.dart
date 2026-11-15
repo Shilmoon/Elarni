@@ -506,6 +506,12 @@ abstract class AppLocalizations {
   /// **'Close the conflicting app or change the listener port in Connection settings.'**
   String get issueListenerUnavailableRemedy;
 
+  /// No description provided for @issueListenerPortUnavailable.
+  ///
+  /// In en, this message translates to:
+  /// **'Port {port} is occupied or unavailable. Choose another listener port.'**
+  String issueListenerPortUnavailable(int port);
+
   /// No description provided for @issueListenerUnavailable.
   ///
   /// In en, this message translates to:
