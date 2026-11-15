@@ -33,8 +33,9 @@ import (
 	"golang.org/x/net/dns/dnsmessage"
 )
 
-// socksFixture accepts user:pass and records each IPv4 CONNECT target.
-func socksFixture(t *testing.T, targets chan<- string) string {
+// socksFixture accepts user:pass and records each IPv4 CONNECT target. It connects to the
+// target, or to upstream when one is given: the server a tunnel would reach in its place.
+func socksFixture(t *testing.T, targets chan<- string, upstream ...string) string {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -75,6 +76,9 @@ func socksFixture(t *testing.T, targets chan<- string) string {
 				}
 				target := net.JoinHostPort(net.IP(buffer[4:8]).String(), strconv.Itoa(int(binary.BigEndian.Uint16(buffer[8:10]))))
 				targets <- target
+				if len(upstream) > 0 {
+					target = upstream[0]
+				}
 				upstream, err := net.Dial("tcp", target)
 				if err != nil {
 					return
@@ -128,7 +132,7 @@ func plainDNSFixture(t *testing.T, answer netip.Addr) string {
 	return dnsServer.Addr().String()
 }
 
-// serveDNSFixture answers feed.test with answer over DNS-over-TCP framing.
+// serveDNSFixture answers feed.test and feed.local with answer over DNS-over-TCP framing.
 func serveDNSFixture(t *testing.T, dnsServer net.Listener, answer netip.Addr) {
 	t.Cleanup(func() { _ = dnsServer.Close() })
 	go func() {
@@ -154,7 +158,7 @@ func serveDNSFixture(t *testing.T, dnsServer net.Listener, answer netip.Addr) {
 					}
 					question := message.Questions[0]
 					message.Header.Response = true
-					if question.Name.String() == "feed.test." && question.Type == dnsmessage.TypeA {
+					if (question.Name.String() == "feed.test." || question.Name.String() == "feed.local.") && question.Type == dnsmessage.TypeA {
 						message.Answers = []dnsmessage.Resource{{Header: dnsmessage.ResourceHeader{Name: question.Name, Type: dnsmessage.TypeA, Class: dnsmessage.ClassINET, TTL: 60},
 							Body: &dnsmessage.AResource{A: answer.As4()}}}
 					}
@@ -277,19 +281,21 @@ func TestFetchThroughLocalSocksDialsOnlyEvaluatedAddresses(t *testing.T) {
 		_, _ = w.Write([]byte("via core"))
 	}))
 	defer server.Close()
+	_, port, _ := net.SplitHostPort(server.Listener.Addr().String())
 	targets := make(chan string, 4)
-	proxy := "socks5://user:pass@" + socksFixture(t, targets)
+	// The feed is on a public address, which only the tunnel reaches: here, the test server.
+	proxy := "socks5://user:pass@" + socksFixture(t, targets, server.Listener.Addr().String())
 	resolve := func(_ context.Context, _ string, host string) ([]netip.Addr, error) {
 		address, err := netip.ParseAddr(host)
 		return []netip.Addr{address}, err
 	}
-	feed := server.URL + "/feed"
-	request := SubscriptionFetchRequest{URL: feed, Proxy: proxy, ApprovedChain: []string{approvalFingerprint(feed, []string{"cleartext_http", "loopback_target"})}}
+	feed := "http://8.8.8.8:" + port + "/feed"
+	request := SubscriptionFetchRequest{URL: feed, Proxy: proxy, ApprovedChain: []string{approvalFingerprint(feed, []string{"cleartext_http"})}}
 	value, err := fetchFeedUsing(request, resolve, func() *http.Transport { return &http.Transport{} })
 	if err != nil || value.(map[string]any)["body"] != "via core" {
 		t.Fatalf("fetch through the core failed: %v %v", value, err)
 	}
-	if target := <-targets; target != server.Listener.Addr().String() {
+	if target := <-targets; target != "8.8.8.8:"+port {
 		t.Fatalf("proxy dialed %s, not the evaluated address", target)
 	}
 	// Only the running core's loopback SOCKS inbound is accepted.
@@ -308,6 +314,79 @@ func TestFetchThroughLocalSocksDialsOnlyEvaluatedAddresses(t *testing.T) {
 	_ = closed.Close()
 	if _, err := fetchFeedUsing(request, resolve, func() *http.Transport { return &http.Transport{} }); err == nil || requests != 1 {
 		t.Fatalf("fetch bypassed the stopped proxy: %v, %d requests", err, requests)
+	}
+}
+
+// While connected, a feed on this device or its local network went into the tunnel, whose
+// server cannot reach it: the download hung for 30 s and failed.
+func TestProxiedFetchDialsALocalAddressFromThisDevice(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("local feed"))
+	}))
+	defer server.Close()
+	resolve := func(_ context.Context, _ string, host string) ([]netip.Addr, error) {
+		address, err := netip.ParseAddr(host)
+		return []netip.Addr{address}, err
+	}
+	transport := func() *http.Transport { return &http.Transport{} }
+	targets := make(chan string, 4)
+	feed := server.URL + "/feed"
+	request := SubscriptionFetchRequest{URL: feed, Proxy: "socks5://user:pass@" + socksFixture(t, targets),
+		ApprovedChain: []string{approvalFingerprint(feed, []string{"cleartext_http", "loopback_target"})}}
+	value, err := fetchFeedUsing(request, resolve, transport)
+	if err != nil || value.(map[string]any)["body"] != "local feed" {
+		t.Fatalf("local feed: %v %v", value, err)
+	}
+	select {
+	case target := <-targets:
+		t.Fatalf("the local feed went through the tunnel: %s", target)
+	default:
+	}
+	// An address that does not answer here may be in the server's own network: the tunnel gets its turn.
+	closed, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	feed = "http://" + closed.Addr().String() + "/feed"
+	_ = closed.Close()
+	request = SubscriptionFetchRequest{URL: feed, Proxy: "socks5://user:pass@" + socksFixture(t, targets, server.Listener.Addr().String()),
+		ApprovedChain: []string{approvalFingerprint(feed, []string{"cleartext_http", "loopback_target"})}}
+	value, err = fetchFeedUsing(request, resolve, transport)
+	if err != nil || value.(map[string]any)["body"] != "local feed" {
+		t.Fatalf("feed in the server's network: %v %v", value, err)
+	}
+	if target := <-targets; target != closed.Addr().String() {
+		t.Fatalf("proxy dialed %s", target)
+	}
+}
+
+// A proxied lookup asks a public resolver through the tunnel, which cannot know a name
+// of the local network: a feed on name.local failed to resolve while connected.
+func TestProxiedLookupAsksTheSystemForALocalName(t *testing.T) {
+	for host, local := range map[string]bool{"printer.local": true, "PRINTER.Local.": true, "router": true,
+		"feed.example": false, "local.example": false, "192.168.1.1": false, "fe80::1": false, "": false} {
+		if localName(host) != local {
+			t.Errorf("localName(%q) = %v", host, !local)
+		}
+	}
+	lan, roots := dotFixture(t, netip.MustParseAddr("192.168.7.7"))
+	previous, previousDNS := net.DefaultResolver, tunnelDNS
+	t.Cleanup(func() { net.DefaultResolver, tunnelDNS = previous, previousDNS })
+	net.DefaultResolver = &net.Resolver{PreferGo: true, Dial: func(ctx context.Context, _, _ string) (net.Conn, error) {
+		return (&tls.Dialer{Config: &tls.Config{RootCAs: roots, ServerName: "127.0.0.1"}}).DialContext(ctx, "tcp", lan)
+	}}
+	tunnelDNS = "127.0.0.1:1"
+	targets := make(chan string, 32)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	addresses, err := tunnelLookup("socks5://user:pass@"+socksFixture(t, targets))(ctx, "ip4", "feed.local")
+	if err != nil || len(addresses) != 1 || addresses[0] != netip.MustParseAddr("192.168.7.7") {
+		t.Fatalf("lookup of a local name: %v %v", addresses, err)
+	}
+	select {
+	case target := <-targets:
+		t.Fatalf("the local name was asked through the tunnel: %s", target)
+	default:
 	}
 }
 
@@ -453,6 +532,8 @@ func TestFetchAddressPolicy(t *testing.T) {
 		"127.0.0.1": "loopback_target", "::ffff:127.0.0.1": "loopback_target", "64:ff9b::7f00:1": "loopback_target",
 		"192.168.1.1": "private_target", "100.64.0.1": "private_target", "2001:db8::1": "private_target", "3fff::1": "private_target",
 		"100:0:0:1::1": "private_target", "100:0:0:1:ffff:ffff:ffff:ffff": "private_target",
+		// A link-local answer names its interface, and a prefix matches no address with a zone.
+		"fe80::1": "private_target", "fe80::1%eth0": "private_target",
 	} {
 		if got := addressRisk(netip.MustParseAddr(address)); got != want {
 			t.Errorf("%s classified %q, want %q", address, got, want)
@@ -494,6 +575,10 @@ func TestHTTPSubscriptionOnADomainIsApprovedHopByHop(t *testing.T) {
 		warning, ok := value.(map[string]any)["warning"].(map[string]any)
 		if !ok || !slices.Equal(warning["riskCodes"].([]string), []string{"cleartext_http", "loopback_target"}) || len(warning["chain"].([]string)) != hops {
 			t.Fatalf("hop %d: %v", hops, value)
+		}
+		// The chain is fingerprints; the review names each hop by its origin, without path or token.
+		if shown := []string{"http://feed.example:" + port, "http://next.example:" + port}[:hops]; !slices.Equal(warning["destinations"].([]string), shown) {
+			t.Fatalf("hop %d shows %v, want %v", hops, warning["destinations"], shown)
 		}
 		request.ApprovedChain = warning["chain"].([]string)
 	}

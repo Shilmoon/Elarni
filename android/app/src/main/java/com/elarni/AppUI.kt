@@ -415,7 +415,8 @@ private val LocalReselect = compositionLocalOf { 0 }
         state.approval?.let { warning -> AlertDialog(onDismissRequest = { activity.run("reject") }, title = { Text(tr(R.string.review_download_destination)) },
             text = { Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text(tr(R.string.this_download_needs_your_approval_before))
-                warning.strings("chain").forEach { value -> Text(runCatching { val uri = java.net.URI(value); "${uri.scheme}://${uri.host}${if (uri.port == -1) "" else ":${uri.port}"}" }.getOrDefault(tr(R.string.invalid_destination))) }
+                // "chain" holds approval fingerprints; the core names each hop's origin beside them.
+                warning.strings("destinations").forEach { Text(it) }
                 warning.strings("riskCodes").forEach { Text(it.replace('_', ' ')) }
             } }, confirmButton = { TextButton({ activity.run(if (warning.string("mode") == "resource") "approveResource" else "approveSource", obj("token" to warning.getString("token"))) }, enabled = !state.busy) { Text(tr(R.string.approve_destination)) } },
             dismissButton = { TextButton({ activity.run("reject") }, enabled = !state.busy) { Text(tr(R.string.cancel)) } }) }

@@ -317,7 +317,6 @@
     <string name="your_local_proxy_accepts_apps_without">Ваш локальный прокси принимает приложения без логина</string>
     <string name="any_app_on_this_device_can">Им может пользоваться любое приложение на этом устройстве.</string>
     <string name="approve_destination">Подтвердить адрес</string>
-    <string name="invalid_destination">Недопустимый адрес</string>
     <string name="this_download_needs_your_approval_before">Перед загрузкой с этих адресов нужно ваше подтверждение. Продолжайте, только если доверяете провайдеру.</string>
     <string name="review_download_destination">Проверьте адрес загрузки</string>
     <string name="disconnect_elarni">Отключить Elarni?</string>

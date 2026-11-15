@@ -64,7 +64,8 @@ var privateNetworks = func() []netip.Prefix {
 var nat64Prefix = netip.MustParsePrefix("64:ff9b::/96")
 
 func addressRisk(address netip.Addr) string {
-	address = address.Unmap()
+	// A prefix contains no address with a zone, and a link-local answer carries one.
+	address = address.Unmap().WithZone("")
 	if nat64Prefix.Contains(address) {
 		bytes := address.As16()
 		address = netip.AddrFrom4([4]byte(bytes[12:]))
@@ -182,16 +183,28 @@ func LookupHost(ctx context.Context, host string) ([]netip.Addr, error) {
 // fakeDNSPools are Xray's default FakeDNS ranges, which Elarni's profiles use.
 var fakeDNSPools = []netip.Prefix{netip.MustParsePrefix("198.18.0.0/15"), netip.MustParsePrefix("fc00::/18")}
 
+func fakeDNSAddress(address netip.Addr) bool {
+	return slices.ContainsFunc(fakeDNSPools, func(pool netip.Prefix) bool { return pool.Contains(address.Unmap()) })
+}
+
+// localName reports a name only this device's network can answer: mDNS (.local) and a
+// name without a dot, which a router, hosts file or search domain may know and no public
+// resolver does.
+func localName(host string) bool {
+	if _, err := netip.ParseAddr(host); err == nil {
+		return false
+	}
+	host = strings.ToLower(strings.TrimSuffix(host, "."))
+	return host != "" && (strings.HasSuffix(host, ".local") || !strings.Contains(host, "."))
+}
+
 // systemLookup asks the system resolver. While a VPN with FakeDNS carries the app's own
 // traffic (Apple, the desktop TUN), that answers with FakeDNS placeholders, which a fetch
 // refuses as private; the name is then looked up over TLS, through that VPN. Without an
 // answer there the placeholder stays: approved, it still connects through the VPN.
 func systemLookup(ctx context.Context, network, host string) ([]netip.Addr, error) {
 	addresses, err := net.DefaultResolver.LookupNetIP(ctx, network, host)
-	fake := func(address netip.Addr) bool {
-		return slices.ContainsFunc(fakeDNSPools, func(pool netip.Prefix) bool { return pool.Contains(address.Unmap()) })
-	}
-	if err != nil || !slices.ContainsFunc(addresses, fake) {
+	if err != nil || !slices.ContainsFunc(addresses, fakeDNSAddress) {
 		return addresses, err
 	}
 	lookup, cancel := context.WithTimeout(ctx, 5*time.Second)
@@ -231,6 +244,10 @@ var tunnelPlainDNS = "1.1.1.1:53"
 
 func tunnelLookup(proxy string) func(context.Context, string, string) ([]netip.Addr, error) {
 	return func(ctx context.Context, network, host string) ([]netip.Addr, error) {
+		if localName(host) {
+			// The server's resolvers cannot know it, and the name never leaves the local network.
+			return net.DefaultResolver.LookupNetIP(ctx, network, host)
+		}
 		secure, cancel := context.WithTimeout(ctx, 5*time.Second)
 		addresses, err := tunnelResolver(proxy).LookupNetIP(secure, network, host)
 		cancel()
@@ -308,6 +325,8 @@ func fetchResourceUsing(parent context.Context, request SubscriptionFetchRequest
 		targets = append(targets, fallback)
 	}
 	chain := append([]string{}, request.EncounteredChain...)
+	// What a review shows for the fingerprints this fetch added to the chain.
+	destinations := []string{}
 	var result any
 	var err error
 	for index, target := range targets {
@@ -318,7 +337,7 @@ func fetchResourceUsing(parent context.Context, request SubscriptionFetchRequest
 			deadline, _ := ctx.Deadline()
 			attempt, stop = context.WithTimeout(ctx, min(fallbackAttemptLimit, time.Until(deadline)/time.Duration(len(targets)-index)))
 		}
-		result, err = fetchResourceAttempt(attempt, request, targets[0], resolve, newTransport, limit, binaryBody, destination, &chain)
+		result, err = fetchResourceAttempt(attempt, request, targets[0], resolve, newTransport, limit, binaryBody, destination, &chain, &destinations)
 		if stop != nil {
 			stop()
 		}
@@ -335,7 +354,7 @@ func fetchResourceUsing(parent context.Context, request SubscriptionFetchRequest
 	return nil, err
 }
 
-func fetchResourceAttempt(ctx context.Context, request SubscriptionFetchRequest, identity string, resolve func(context.Context, string, string) ([]netip.Addr, error), newTransport func() *http.Transport, limit int64, binaryBody bool, destination string, encountered *[]string) (any, error) {
+func fetchResourceAttempt(ctx context.Context, request SubscriptionFetchRequest, identity string, resolve func(context.Context, string, string) ([]netip.Addr, error), newTransport func() *http.Transport, limit int64, binaryBody bool, destination string, encountered, destinations *[]string) (any, error) {
 	u, err := feedTarget(request.URL)
 	if err != nil {
 		return nil, err
@@ -389,12 +408,18 @@ func fetchResourceAttempt(ctx context.Context, request SubscriptionFetchRequest,
 			fingerprint := approvalFingerprint(target, risks)
 			position := len(chain)
 			chain = append(chain, fingerprint)
+			*destinations = append(*destinations, u.Scheme+"://"+u.Host)
 			if position >= len(request.ApprovedChain) || request.ApprovedChain[position] != fingerprint {
-				return map[string]any{"warning": map[string]any{"riskCodes": risks, "chain": chain}}, nil
+				// The chain is fingerprints, which name nothing to the user: destinations does.
+				return map[string]any{"warning": map[string]any{"riskCodes": risks, "chain": chain, "destinations": *destinations}}, nil
 			}
 		}
 		dial := (&net.Dialer{Timeout: 5 * time.Second}).DialContext
+		// A server cannot reach this device or its local network, so an address there is dialed
+		// from here first. The tunnel still gets its turn: the feed may be in the server's network.
+		var local func(context.Context, string, string) (net.Conn, error)
 		if request.Proxy != "" {
+			local = (&net.Dialer{Timeout: 2 * time.Second}).DialContext
 			// Only the connection goes through the core; addresses were evaluated above.
 			proxyURL, _ := url.Parse(request.Proxy)
 			socks, err := socksproxy.FromURL(proxyURL, &net.Dialer{Timeout: 5 * time.Second})
@@ -412,7 +437,14 @@ func fetchResourceAttempt(ctx context.Context, request SubscriptionFetchRequest,
 				return nil, err
 			}
 			for _, ip := range addresses {
-				conn, err := dial(ctx, "tcp", net.JoinHostPort(ip.String(), port))
+				target := net.JoinHostPort(ip.String(), port)
+				conn, err := net.Conn(nil), errUnreachable
+				if local != nil && addressRisk(ip) != "" && !fakeDNSAddress(ip) {
+					conn, err = local(ctx, "tcp", target)
+				}
+				if err != nil {
+					conn, err = dial(ctx, "tcp", target)
+				}
 				if err == nil {
 					if request.FragmentLength != "" && u.Scheme == "https" {
 						length, _ := fetchRange(request.FragmentLength, 1, 65535)

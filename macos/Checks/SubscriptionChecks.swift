@@ -1342,9 +1342,13 @@ struct SubscriptionChecks {
     try rejects { _ = try vault.consume(old, subscriptionID: "a") }
     vault.invalidate(subscriptionID: "a")
     try rejects { _ = try vault.consume(replacement, subscriptionID: "a") }
+    // The chain is fingerprints: the review showed each as "Invalid destination". It shows the
+    // origins the core names beside them, and never a path or credentials.
     let shown = try vault.issue(subscriptionID: "c", requirement: SubscriptionApprovalRequirement(riskCodes: [.privateTarget],
-      candidateChain: ["https://[2001:db8::1]:8443/secret-token", "http://user:pass@feed.example/path?key=1", "not a url"])).destinations
+      candidateChain: ["677336c4661eda0143352dd16adce73d", "764b010402df57e78454a8ed31facc3d", "0f3a"],
+      destinations: ["https://[2001:db8::1]:8443/secret-token", "http://user:pass@feed.example/path?key=1", "not a url"])).destinations
     try expect(shown == ["https://[2001:db8::1]:8443", "http://feed.example", "Invalid destination"], "approval destinations were \(shown)")
+    try expect(try vault.issue(subscriptionID: "d", requirement: requirement).destinations.isEmpty, "a fingerprint was shown as a destination")
     print("PASS subscription challenges are scoped single-use expiring and invalidated")
     return 1
   }

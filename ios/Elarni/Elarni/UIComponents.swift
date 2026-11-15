@@ -273,8 +273,8 @@ func approvalText(_ warning: SubscriptionSafetyWarning?) -> String {
   let descriptions = warning.riskCodes.map { code in
     switch code { case .cleartextHTTP: String(localized: "The subscription uses unencrypted HTTP."); case .loopbackTarget: String(localized: "It contacts this device."); case .privateTarget: String(localized: "It contacts a private network address.") }
   }
-  return (descriptions + [String(localized: "Destinations: \(warning.destinations.joined(separator: ", "))."),
-    String(localized: "Continue only if you trust this subscription provider. Approval applies to this destination chain.")]).joined(separator: " ")
+  return (descriptions + (warning.destinations.isEmpty ? [] : [String(localized: "Destinations: \(warning.destinations.joined(separator: ", ")).")]) +
+    [String(localized: "Continue only if you trust this subscription provider. Approval applies to this destination chain.")]).joined(separator: " ")
 }
 enum SaveStatus { case saving, saved }
 /// How long a flipped switch waits before it saves, so several flipped in a row make one save. UI tests do not wait it out.

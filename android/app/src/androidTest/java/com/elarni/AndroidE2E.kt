@@ -93,6 +93,8 @@ class AndroidE2E {
             feed.body = link("Provider one")
             feed.headers = mapOf("profile-title" to "Synthetic provider", "subscription-userinfo" to "upload=10; download=20; total=1000; expire=2000000000")
             val warning = call("import", obj("text" to feed.url)).getJSONObject("warning")
+            // The review names the address; the chain beside it is fingerprints.
+            assertEquals(listOf(feed.url.removeSuffix("/feed")), warning.strings("destinations"))
             assertEquals(0, snapshot().sources.size)
             call("approveSource", obj("token" to warning.getString("token")))
             val original = snapshot(); val source = original.sources.single(); val id = source.getString("id")

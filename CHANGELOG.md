@@ -12,6 +12,15 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
   shown as connected, and the backup was never used. A server that never passed a check is
   still not restarted in place, and a fixed server is not touched. Windows, Linux, macOS and
   iPhone; Android already did this.
+- The **Review download destination** prompt lists the addresses of the download again. Android
+  showed `null://null` and iPhone and Mac showed "Invalid destination", because the core sent
+  fingerprints where the apps expected addresses.
+- A subscription on this device's own network (a private or loopback address, or a `.local`
+  name) refreshes while Elarni is connected. Its name is looked up by the system and its
+  address is tried from this device first, then through the tunnel. Before, both went
+  through the tunnel and the refresh failed. Android, Windows and Linux.
+- An address with an IPv6 zone (`fe80::1%eth0`) is classed as a local address in the download
+  review, like the same address without the zone.
 
 ## 0.6.1 - 2026-11-14
 
