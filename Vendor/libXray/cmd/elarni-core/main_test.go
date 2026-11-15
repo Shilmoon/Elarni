@@ -120,6 +120,19 @@ func TestDispatchOnlyAcceptsSafeOperationsAndRedactsErrors(t *testing.T) {
 	}
 }
 
+// An import failure is one fixed code, except the one whose reason the user can act on.
+func TestImportFailureNamesAnUnencryptedServer(t *testing.T) {
+	for link, code := range map[string]string{
+		"vless://00000000-0000-4000-8000-000000000001@8.8.8.8:443?encryption=none&security=none": "unencrypted_server",
+		"vless://broken": "unsupported_profile",
+	} {
+		request, _ := json.Marshal(map[string]any{"apiVersion": 1, "method": "importClientProfiles", "payload": map[string]any{"text": link}})
+		if result := dispatch(string(request)); result.text != `{"success":false,"error":"`+code+`"}` {
+			t.Fatalf("%s: %s", link, result.text)
+		}
+	}
+}
+
 func TestParentEOFDuringStartupDoesNotWaitForStartup(t *testing.T) {
 	input, parent := io.Pipe()
 	defer input.Close()

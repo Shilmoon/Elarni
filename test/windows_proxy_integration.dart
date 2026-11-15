@@ -1937,6 +1937,22 @@ for line in sys.stdin:
     );
   }
 
+  test('an unencrypted link to a public address names its reason', () async {
+    await expectLater(
+      backend.control.importClientProfiles(
+        content:
+            'vless://00000000-0000-4000-8000-000000000001@8.8.8.8:443?encryption=none&type=tcp&security=none#Plain',
+      ),
+      throwsA(
+        isA<PlatformException>().having(
+          (e) => e.code,
+          'code',
+          'unencrypted_server',
+        ),
+      ),
+    );
+  });
+
   test(
     'file and QR imports use the native decoder and retain the catalog on cancel',
     () async {

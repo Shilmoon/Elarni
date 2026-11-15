@@ -35,7 +35,7 @@ typedef _CountryGroup = ({
         l10n.failureLinkRemoved,
         l10n.failureLinkRemovedText(provider),
       ),
-      'unsupported_profile' => (
+      'unsupported_profile' || 'unencrypted_server' => (
         l10n.failureUnsupported,
         l10n.failureUnsupportedText(provider),
       ),

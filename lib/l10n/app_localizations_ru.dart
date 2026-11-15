@@ -1150,6 +1150,10 @@ class AppLocalizationsRu extends AppLocalizations {
       'Этот профиль использует неподдерживаемые настройки. Попробуйте формат Xray JSON от провайдера.';
 
   @override
+  String get unencryptedServer =>
+      'У этого сервера нет шифрования: ни TLS, ни REALITY, ни шифрования VLESS. Elarni принимает такой сервер только в частной сети.';
+
+  @override
   String get subscriptionAddedFirstDownloadFailed =>
       'Подписка добавлена, но первая загрузка не удалась. Обновите, чтобы повторить.';
 

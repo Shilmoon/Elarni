@@ -1417,6 +1417,7 @@ final class SubscriptionStore {
       // Core errors may include provider-controlled keys or credentials. Only
       // fixed descriptions cross the UI boundary.
       let detail = envelope["error"] as? String ?? ""
+      if detail == "unencrypted_server" { throw SubscriptionError.unencryptedServer }
       let message: String
       if detail.contains("Clash") { message = "This Clash profile contains invalid or unsupported options. Use the provider’s Xray JSON format for advanced groups, rules, or DNS." }
       else if detail.contains("WireGuard") || detail.contains("Amnezia") { message = "The WireGuard or AmneziaWG configuration has invalid keys, endpoints, or unsupported interface options." }
@@ -2012,6 +2013,8 @@ enum SubscriptionError: Error, Equatable {
   case invalidURL
   case invalidFeed
   case incompatibleProfile(String)
+  /// A VLESS or Trojan server without TLS, REALITY or VLESS encryption on a public address.
+  case unencryptedServer
   case noSupportedNodes
   case invalidDisplayName
   case invalidState

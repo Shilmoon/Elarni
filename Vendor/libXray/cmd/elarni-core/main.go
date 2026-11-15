@@ -94,9 +94,14 @@ func dispatch(raw string) (result response) {
 	}
 	result.text = libxray.InvokeRequest(request)
 	var reply struct {
-		Success bool `json:"success"`
+		Success bool   `json:"success"`
+		Error   string `json:"error"`
 	}
 	if json.Unmarshal([]byte(result.text), &reply) != nil || !reply.Success {
+		// The one import failure whose reason the user can act on keeps its own code.
+		if code == "unsupported_profile" && reply.Error == "unencrypted_server" {
+			code = reply.Error
+		}
 		if request.Method == libxray.LibXrayMethodPing {
 			// Probe diagnostics contain typed codes and stages, never endpoints.
 			var parsed struct {

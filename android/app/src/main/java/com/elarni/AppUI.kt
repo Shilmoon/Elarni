@@ -1375,6 +1375,7 @@ fun errorMessage(code: String): String = when (code) {
     "foreground_start_denied" -> tr(R.string.android_could_not_start_the_service)
     "storage_locked", "storage_corrupt", "storage_unavailable" -> tr(R.string.your_encrypted_catalog_could_not_be)
     "unsupported_profile", "invalid_input" -> tr(R.string.this_profile_could_not_be_imported)
+    "unencrypted_server" -> tr(R.string.this_server_has_no_encryption)
     "connection_failed" -> tr(R.string.the_connection_could_not_start_check)
     "invalid_settings" -> tr(R.string.some_settings_are_invalid_check_port)
     "invalid_update_feed" -> tr(R.string.use_an_https_address_for_the)

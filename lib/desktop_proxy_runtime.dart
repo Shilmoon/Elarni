@@ -360,6 +360,7 @@ extension _ProxyRuntime on DesktopProxy {
           'invalid_catalog',
           'invalid_configuration',
           'unsupported_profile',
+          'unencrypted_server',
           'connection_failed',
           'elevation_denied',
           'elevation_failed',

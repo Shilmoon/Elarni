@@ -78,6 +78,8 @@ PlatformException desktopError(
     'recording_destination_required' =>
       'Give an absolute path for the new recording ZIP.',
     'invalid_url' => 'Enter a valid http or https URL.',
+    'unencrypted_server' =>
+      'This server has no encryption: no TLS, REALITY or VLESS encryption. Elarni accepts such a server only on a private network.',
     // A download failure says whose fault it is, so provider outages are not reported as app bugs.
     _ when subscriptionFailures.containsKey(code) =>
       subscriptionFailures[code]!.$2,

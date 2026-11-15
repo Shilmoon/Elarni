@@ -1994,6 +1994,12 @@ abstract class AppLocalizations {
   /// **'This profile uses unsupported settings. Try the provider’s Xray JSON format.'**
   String get unsupportedProfileTryJson;
 
+  /// No description provided for @unencryptedServer.
+  ///
+  /// In en, this message translates to:
+  /// **'This server has no encryption: no TLS, REALITY or VLESS encryption. Elarni accepts such a server only on a private network.'**
+  String get unencryptedServer;
+
   /// No description provided for @subscriptionAddedFirstDownloadFailed.
   ///
   /// In en, this message translates to:

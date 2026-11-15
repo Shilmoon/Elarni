@@ -511,6 +511,7 @@
   "couldNotImport": "Could not import. Use a subscription link, client configuration, or routing profile.",
   "selectServerFirstRoutingLink": "Select a server first. This routing link turns its profile on for the selected server’s subscription.",
   "unsupportedProfileTryJson": "This profile uses unsupported settings. Try the provider’s Xray JSON format.",
+  "unencryptedServer": "This server has no encryption: no TLS, REALITY or VLESS encryption. Elarni accepts such a server only on a private network.",
   "subscriptionAddedFirstDownloadFailed": "Subscription added, but the first download failed. Refresh to retry.",
   "subscriptionAddedUnreadable": "Subscription added, but Elarni cannot read what the provider sent: its format or one of its settings is not supported. Try the provider’s Xray JSON link, or ask the provider.",
   "importFileTooLarge": "The file is larger than Elarni can import.",

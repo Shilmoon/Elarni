@@ -144,6 +144,7 @@ String supportIssueCode(String code) => switch (code.replaceFirst(
   'missingCredentials' || 'missing_credentials' => 'missing_credentials',
   'invalid_automation' || 'invalidConfiguration' => 'invalid_recovery',
   'unsupported_profile' ||
+  'unencrypted_server' ||
   'invalid_profile' ||
   'invalid_configuration' ||
   'invalid_settings' => 'invalid_configuration',

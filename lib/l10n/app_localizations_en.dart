@@ -1138,6 +1138,10 @@ class AppLocalizationsEn extends AppLocalizations {
       'This profile uses unsupported settings. Try the provider’s Xray JSON format.';
 
   @override
+  String get unencryptedServer =>
+      'This server has no encryption: no TLS, REALITY or VLESS encryption. Elarni accepts such a server only on a private network.';
+
+  @override
   String get subscriptionAddedFirstDownloadFailed =>
       'Subscription added, but the first download failed. Refresh to retry.';
 

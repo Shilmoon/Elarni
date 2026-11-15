@@ -25,6 +25,10 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
   `keyring_unavailable` for a keyring it cannot open, `socket_unavailable` for a socket it
   cannot bind, instead of `operation_failed` or `daemon_unavailable` for each. Text that is
   not a code is still never printed.
+- A VLESS or Trojan link without TLS, REALITY or VLESS encryption that points at a public
+  address is refused with that reason. Before, the message said the profile was unsupported
+  and suggested another format. The rule itself (the core accepts such a server only on a
+  private network) is unchanged. All platforms.
 
 ## 0.6.1 - 2026-11-14
 

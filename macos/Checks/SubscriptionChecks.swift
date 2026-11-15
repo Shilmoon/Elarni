@@ -292,6 +292,12 @@ struct SubscriptionChecks {
         try expect(!message.contains("malformed") && message.contains("entire import"), "unsafe or unclear profile diagnostic")
       }
     }
+    try check("a server without encryption on a public address is refused with its own reason") {
+      do {
+        _ = try store.parseImport(Data("vless://00000000-0000-4000-8000-000000000001@8.8.8.8:443?encryption=none&type=tcp&security=none#Plain\n".utf8))
+        throw Failure(message: "an unencrypted public server was accepted")
+      } catch SubscriptionError.unencryptedServer {}
+    }
     try check("an unrecognized line is left out and counted beside the servers that parse") {
       let imported = try store.parseImport(Data("\(vless)\nunrecognized broken node\n".utf8))
       try expect(imported.nodes.count == 1 && imported.skippedCount == 1, "an unrecognized line was not left out and counted")

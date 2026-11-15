@@ -38,6 +38,7 @@
     <string name="some_settings_are_invalid_check_port">Some settings are invalid. Check port numbers, ranges, DNS addresses, and required login details.</string>
     <string name="the_connection_could_not_start_check">The connection could not start. Check the server, network, proxy ports, and routing assets, then retry.</string>
     <string name="this_profile_could_not_be_imported">This profile could not be imported. Check the complete link or configuration and try again.</string>
+    <string name="this_server_has_no_encryption">This server has no encryption: no TLS, REALITY or VLESS encryption. Elarni accepts such a server only on a private network.</string>
     <string name="your_encrypted_catalog_could_not_be">Your encrypted catalog could not be opened or saved. Existing data has been preserved. Unlock the device and restart the app. If this does not go away, the only way to start over is to clear Elarni\'s storage in Android Settings › Apps, which removes its servers and settings.</string>
     <string name="android_could_not_start_the_service">Android could not start the service from the background. Open Elarni and tap Connect.</string>
     <string name="android_has_not_made_the_vpn">Android has not made the VPN network ready. Reconnect or check Android VPN settings.</string>

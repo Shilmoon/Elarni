@@ -127,6 +127,10 @@ class AndroidE2E {
             feed.body = JSONArray(listOf(member("Refused", true))).toString()
             assertEquals("unsupported_profile", expectFailure { call("refresh", obj("id" to id)) })
             assertEquals(18084, endpointPort(snapshot()))
+            // A server without encryption on a public address is refused with its own reason.
+            feed.body = "vless://00000000-0000-4000-8000-000000000001@8.8.8.8:443?encryption=none&type=tcp&security=none#Plain"
+            assertEquals("unencrypted_server", expectFailure { call("refresh", obj("id" to id)) })
+            assertEquals(18084, endpointPort(snapshot()))
             // A line the importer cannot read is left out and counted; the server beside it still updates.
             feed.body = link("Valid") + "\nnot-a-supported-profile"
             call("refresh", obj("id" to id))

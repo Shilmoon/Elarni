@@ -3,6 +3,7 @@ package share
 import (
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	dnsapp "github.com/xtls/xray-core/app/dns"
 	dnsfeature "github.com/xtls/xray-core/features/dns"
@@ -213,7 +214,11 @@ func importClientProfiles(text string) (*ClientImport, error) {
 				raw, _ = json.Marshal(map[string]any{"outbounds": []json.RawMessage{raw}})
 			}
 			if err := validateClientProfile(raw); err != nil {
+				unencrypted := errors.Is(err, ErrUnencryptedServer)
 				err := fmt.Errorf("profile %d has invalid or unsupported outbound settings", index+1)
+				if unencrypted {
+					err = ErrUnencryptedServer
+				}
 				if !array {
 					return nil, err
 				}
@@ -264,8 +269,14 @@ func importClientProfiles(text string) (*ClientImport, error) {
 			outbound.SendThrough = nil // URI remarks are metadata, never a bind address.
 			outbound.Tag = "proxy"
 			raw, err := json.Marshal(map[string]any{"outbounds": []conf.OutboundDetourConfig{*outbound}})
-			if err != nil || validateClientProfile(raw) != nil {
-				skipped.addLink(line, fmt.Errorf("unsupported client settings on line %d", index+1))
+			if err == nil {
+				err = validateClientProfile(raw)
+			}
+			if err != nil {
+				if !errors.Is(err, ErrUnencryptedServer) {
+					err = fmt.Errorf("unsupported client settings on line %d", index+1)
+				}
+				skipped.addLink(line, err)
 				continue
 			}
 			result.Profiles = append(result.Profiles, ClientProfile{Format: "xrayProfile", Name: name, Config: raw})

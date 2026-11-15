@@ -38,6 +38,7 @@
     <string name="some_settings_are_invalid_check_port">Некоторые настройки недопустимы. Проверьте номера портов, диапазоны, адреса DNS и обязательные данные для входа.</string>
     <string name="the_connection_could_not_start_check">Не удалось начать подключение. Проверьте сервер, сеть, порты прокси и файлы маршрутизации и повторите.</string>
     <string name="this_profile_could_not_be_imported">Не удалось импортировать профиль. Проверьте ссылку или конфигурацию целиком и попробуйте снова.</string>
+    <string name="this_server_has_no_encryption">У этого сервера нет шифрования: ни TLS, ни REALITY, ни шифрования VLESS. Elarni принимает такой сервер только в частной сети.</string>
     <string name="your_encrypted_catalog_could_not_be">Не удалось открыть или сохранить зашифрованный каталог. Имеющиеся данные сохранены. Разблокируйте устройство и перезапустите приложение. Если это не помогает, начать заново можно только очистив хранилище Elarni в настройках Android › Приложения: серверы и настройки будут удалены.</string>
     <string name="android_could_not_start_the_service">Android не смог запустить службу из фона. Откройте Elarni и нажмите «Подключить».</string>
     <string name="android_has_not_made_the_vpn">Android не подготовил сеть VPN. Переподключитесь или проверьте настройки VPN Android.</string>

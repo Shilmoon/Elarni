@@ -1121,11 +1121,14 @@ extension _HomeController on _ElarniHomeState {
         );
         final message = switch (error) {
           // The provider sent what Elarni cannot read: no network problem.
-          PlatformException(code: 'unsupported_profile') when added =>
+          PlatformException(code: 'unsupported_profile' || 'unencrypted_server')
+              when added =>
             l10n.subscriptionAddedUnreadable,
           _ when added => l10n.subscriptionAddedFirstDownloadFailed,
           PlatformException(code: 'unsupported_profile') =>
             l10n.unsupportedProfileTryJson,
+          PlatformException(code: 'unencrypted_server') =>
+            l10n.unencryptedServer,
           PlatformException(code: 'catalog_limit') => l10n.catalogLimit,
           PlatformException(code: 'no_selected_subscription') =>
             l10n.selectServerFirstRoutingLink,

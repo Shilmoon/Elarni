@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"reflect"
@@ -13,6 +14,41 @@ import (
 	"strings"
 	"testing"
 )
+
+// Xray refuses a VLESS or Trojan server without TLS, REALITY or VLESS encryption unless its
+// address is private. The import said only "unsupported", which sent the user to look for
+// another format; it names the reason.
+func TestImportNamesAnUnencryptedPublicServer(t *testing.T) {
+	const id = "00000000-0000-4000-8000-000000000001"
+	for _, link := range []string{
+		"vless://" + id + "@8.8.8.8:443?encryption=none&type=tcp&security=none#Plain",
+		"vless://" + id + "@dns.google:443?encryption=none#Plain",
+		"trojan://pw@8.8.8.8:443?security=none#Plain",
+	} {
+		if _, err := ImportClientProfiles(link); !errors.Is(err, ErrUnencryptedServer) || err.Error() != "unencrypted_server" {
+			t.Errorf("%s: %v", link, err)
+		}
+	}
+	// The same server as an Xray profile.
+	profile := `{"outbounds":[{"protocol":"vless","settings":{"vnext":[{"address":"8.8.8.8","port":443,"users":[{"id":"` + id + `","encryption":"none"}]}]}}]}`
+	if _, err := ImportClientProfiles(profile); !errors.Is(err, ErrUnencryptedServer) {
+		t.Errorf("Xray profile: %v", err)
+	}
+	// A private address, and a public one with TLS, import as before.
+	for _, link := range []string{
+		"vless://" + id + "@10.0.0.1:443?encryption=none&security=none#Lan",
+		"vless://" + id + "@8.8.8.8:443?encryption=none&security=tls&sni=plain.example#Tls",
+	} {
+		if result, err := ImportClientProfiles(link); err != nil || len(result.Profiles) != 1 {
+			t.Errorf("%s: %v", link, err)
+		}
+	}
+	// Among servers that import it is skipped like any other.
+	result, err := ImportClientProfiles("trojan://pw@127.0.0.1:443#Kept\ntrojan://pw@8.8.8.8:443?security=none#Plain")
+	if err != nil || len(result.Profiles) != 1 || result.SkippedCount != 1 {
+		t.Fatalf("mixed feed: %+v %v", result, err)
+	}
+}
 
 // One unsupported line used to cost the user every server of the subscription: a member that
 // cannot be imported is now skipped and reported, and the rest import.

@@ -586,6 +586,8 @@ final class TunnelMethodChannel {
           result(FlutterError(code: "missing_geodata", message: "Proxy rules and servers need codes the geofiles lack: \(missing.joined(separator: ", ")). Fix the profile or its geofile links.", details: nil))
         } catch SubscriptionError.incompatibleProfile(let message) {
           result(FlutterError(code: "unsupported_profile", message: message, details: nil))
+        } catch SubscriptionError.unencryptedServer {
+          result(FlutterError(code: "unencrypted_server", message: "This server has no encryption: no TLS, REALITY or VLESS encryption. Elarni accepts such a server only on a private network.", details: nil))
         } catch SubscriptionError.invalidFeed {
           result(FlutterError(code: "invalid_profile", message: "The input is not a valid client profile or subscription.", details: nil))
         } catch RunnerTunnelError.invalidState {

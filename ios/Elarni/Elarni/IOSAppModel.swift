@@ -1386,6 +1386,7 @@ final class IOSAppModel {
       case .keychainFailure: return String(localized: "Secure storage is unavailable. Use a correctly signed build and reopen the app.")
       case .invalidURL: return String(localized: "The subscription address or download options are invalid. Check the URL and provider-supported formats.")
       case .invalidFeed, .noSupportedNodes, .incompatibleProfile: return String(localized: "No supported server configuration was found. Check the link or file format and try again.")
+      case .unencryptedServer: return String(localized: "This server has no encryption: no TLS, REALITY or VLESS encryption. Elarni accepts such a server only on a private network.")
       case .hwidRequired: return String(localized: "This provider requires device registration. Open your provider account or contact support.")
       case .hwidLimit: return String(localized: "The provider’s device limit has been reached. Manage registered devices in your provider account.")
       case .invalidDisplayName: return String(localized: "Use a nonempty name without control characters.")
