@@ -208,10 +208,12 @@ rules:
 	if !reflect.DeepEqual(root.Groups, wantGroups) {
 		t.Fatalf("groups %+v", root.Groups)
 	}
-	// A rule naming what was dropped is left out with its server; the rules around it stay in order, and
-	// it has no say in whether the profile resolves domains for IP rules.
-	for _, target := range []string{"Bad", "OnlyBad"} {
-		rules := "IP-CIDR,10.0.0.0/8," + target + "\n  - IP-CIDR,192.168.0.0/16,DIRECT,no-resolve\n  - MATCH," + target + "\n  - MATCH,Outer"
+	// A rule naming what was dropped blocks what it matched, in its place among the rules around it, so
+	// that a later rule cannot send that traffic directly. It counts as the IP rule it is, with its
+	// no-resolve, in whether the profile resolves domains for IP rules.
+	for _, test := range []struct{ target, option, strategy string }{{"Bad", "", "IPOnDemand"}, {"OnlyBad", ",no-resolve", "AsIs"}} {
+		target := test.target
+		rules := "IP-CIDR,10.0.0.0/8," + target + test.option + "\n  - IP-CIDR,192.168.0.0/16,DIRECT,no-resolve\n  - MATCH," + target + "\n  - MATCH,Outer"
 		result, err := ImportClientProfiles(strings.Replace(input, "MATCH,Outer", rules, 1))
 		if err != nil {
 			t.Errorf("rule to %s: %v", target, err)
@@ -224,9 +226,10 @@ rules:
 			Routing struct {
 				DomainStrategy string `json:"domainStrategy"`
 				Rules          []struct {
-					Tag    string   `json:"outboundTag"`
-					Domain []string `json:"domain"`
-					IP     []string `json:"ip"`
+					Tag     string   `json:"outboundTag"`
+					Domain  []string `json:"domain"`
+					IP      []string `json:"ip"`
+					Network string   `json:"network"`
 				} `json:"rules"`
 			} `json:"routing"`
 		}
@@ -234,8 +237,11 @@ rules:
 			t.Fatal(err)
 		}
 		rest := routed.Routing.Rules
-		if len(rest) != 3 || rest[0].Tag != "DIRECT" || !slices.Equal(rest[0].Domain, []string{"domain:example.org"}) ||
-			rest[1].Tag != "DIRECT" || !slices.Equal(rest[1].IP, []string{"192.168.0.0/16"}) || rest[2].Tag != "Outer" || routed.Routing.DomainStrategy != "AsIs" {
+		if len(rest) != 5 || rest[0].Tag != "DIRECT" || !slices.Equal(rest[0].Domain, []string{"domain:example.org"}) ||
+			rest[1].Tag != "REJECT" || !slices.Equal(rest[1].IP, []string{"10.0.0.0/8"}) ||
+			rest[2].Tag != "DIRECT" || !slices.Equal(rest[2].IP, []string{"192.168.0.0/16"}) ||
+			rest[3].Tag != "REJECT" || rest[3].Network != "tcp,udp" || rest[3].IP != nil || rest[3].Domain != nil ||
+			rest[4].Tag != "Outer" || routed.Routing.DomainStrategy != test.strategy {
 			t.Errorf("rule to %s: routing %+v", target, routed.Routing)
 		}
 	}

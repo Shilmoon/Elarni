@@ -145,12 +145,14 @@ func importClashProfiles(text string) (*ClientImport, error) {
 		}
 		parts, noResolve := clashRuleParts(rule)
 		converted, err := clashRoutingRule(rule, names)
-		if target := parts[len(parts)-1]; err != nil && dropped[target] {
-			// The route a rule to a skipped proxy meant is gone with its server, and the following rules
-			// decide. The rule is still checked, so one the import cannot read fails the file as before.
-			if _, err = clashRoutingRule(rule, map[string]bool{target: true}); err == nil {
-				continue
+		if err != nil && dropped[parts[len(parts)-1]] {
+			// A rule to a skipped proxy blocks what it matched, so no later rule sends that traffic another
+			// way. It is still read as written: one the import cannot read fails the file.
+			blocked := strings.Join(append(parts[:len(parts)-1:len(parts)-1], "REJECT"), ",")
+			if noResolve {
+				blocked += ",no-resolve"
 			}
+			converted, err = clashRoutingRule(blocked, names)
 		}
 		if err != nil {
 			return nil, err

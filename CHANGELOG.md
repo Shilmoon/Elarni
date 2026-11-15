@@ -50,13 +50,14 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
   Linux and Android; on macOS and iPhone a list that joins the local group keeps its count of
   skipped lines.
 - A Clash file with a rule that points at a proxy the import skipped, or with `no-resolve` on
-  an `IP-CIDR`, `IP-CIDR6` or `GEOIP` rule, imports. The rule to the skipped proxy is left out;
-  when every IP rule has `no-resolve` the profile does not resolve names for IP rules, otherwise
-  it keeps resolving them.
+  an `IP-CIDR`, `IP-CIDR6` or `GEOIP` rule, imports. The rule to the skipped proxy blocks what it
+  matched, so a later rule such as `MATCH,DIRECT` does not send that traffic another way; when
+  every IP rule has `no-resolve` the profile does not resolve names for IP rules, otherwise it
+  keeps resolving them.
 - A share link is not written for a server whose link would lose settings (mux, a target
-  strategy, pinned certificates, extra WebSocket headers, socket options, a user level): that
-  link imported as another server. **Share links** says so and the server is shared from its
-  own page, as JSON. A WebSocket `Host` header is written as the link's host.
+  strategy, pinned certificates, extra WebSocket headers, socket options, a VLESS reverse
+  proxy): that link imported as another server. **Share links** says so and the server is
+  shared from its own page, as JSON. A WebSocket `Host` header is written as the link's host.
 - Android: a subscription refresh while connected no longer fails for good when the feed
   dropped both the selected server and a server an app is pinned to. The running tunnel stays
   as it is and the next Connect names the app's rule.

@@ -2161,6 +2161,14 @@ void main() {
       findsOneWidget,
     );
     expect(find.textContaining('native text'), findsNothing);
+    // The platform's text that names the port is shown as it is.
+    const named =
+        'Port 10808 is occupied or unavailable. Choose another listener port.';
+    control.onUpdate = (_) async =>
+        throw PlatformException(code: 'listener_unavailable', message: named);
+    await tester.tap(find.text('Enable fragmentation'));
+    await tester.pumpAndSettle();
+    expect(find.text(named), findsOneWidget);
   });
 
   testWidgets(
