@@ -24,7 +24,7 @@ import (
 
 // fixtureStrings collects the string literals in this package's tests that keep accepts,
 // so every corpus starts from the fixtures the unit tests use.
-func fixtureStrings(f *testing.F, keep func(string) bool) []string {
+func fixtureStrings(f testing.TB, keep func(string) bool) []string {
 	files, err := filepath.Glob("*_test.go")
 	if err != nil {
 		f.Fatal(err)
