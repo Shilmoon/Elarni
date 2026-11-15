@@ -21,16 +21,34 @@ struct RefreshSchedule: Codable, Equatable {
     Self(nextRefreshAt: last?.addingTimeInterval(interval) ?? now)
   }
 
+  /// The share of the interval a success moves the next refresh by, either way.
+  static let jitterShare = 0.1
+
+  /// A time further ahead than `longest`, the furthest its schedule writes one, and an hour for a clock
+  /// corrected by minutes, was written while the clock ran ahead: it is due now, or it could take years.
+  static func deadline(_ at: Date?, now: Date, longest: Double) -> Date? {
+    guard let at else { return nil }
+    return at.timeIntervalSince(now) > longest + 3600 ? now : at
+  }
+
   var due: Date? { paused ? nil : (retryAt ?? nextRefreshAt) }
+
+  /// `due` under `deadline`. Retries, at most 1800 s ahead, stay within the bound of the shortest interval.
+  func due(now: Date, interval: Double) -> Date? {
+    Self.deadline(due, now: now, longest: interval * (1 + Self.jitterShare))
+  }
 
   mutating func succeeded(now: Date, interval: Double, jitter: Double) {
     let bounded = jitter.isFinite ? min(1, max(-1, jitter)) : 0
-    nextRefreshAt = now.addingTimeInterval(interval * (1 + 0.1 * bounded))
+    nextRefreshAt = now.addingTimeInterval(interval * (1 + Self.jitterShare * bounded))
     retryIndex = 0; retryAt = nil; errorCategory = nil; paused = false
   }
 
   mutating func failed(now: Date, interval: Double, category: String, authorization: Bool) {
-    if nextRefreshAt <= now { nextRefreshAt = now.addingTimeInterval(interval) }
+    // One written while the clock ran ahead counts as passed, or every round of retries would start at once.
+    if (Self.deadline(nextRefreshAt, now: now, longest: interval * (1 + Self.jitterShare)) ?? now) <= now {
+      nextRefreshAt = now.addingTimeInterval(interval)
+    }
     errorCategory = category; paused = authorization
     let delays: [Double] = [60, 300, 1800]
     if !authorization && (0..<delays.count).contains(retryIndex) {
@@ -201,7 +219,9 @@ final class SubscriptionStore {
     // A first import keeps its own text unless it repeats a server.
     if index == nil && nodes.count == imported.nodes.count { return try registerSource(data, local: true) }
     let source = try JSONSerialization.data(withJSONObject: ["elarniLocalNodes": nodes,
-      "elarniDirectives": imported.directives])
+      "elarniDirectives": imported.directives,
+      // What this import left out, which the group's page counts as a subscription's does.
+      "elarniSkippedCount": imported.skippedCount, "elarniSkippedKinds": imported.skippedKinds])
     guard source.count <= Self.maxFeedBytes else { throw SubscriptionError.feedTooLarge }
     guard let index else { return try registerSource(source, local: true) }
     let group = catalog.subscriptions[index]
@@ -370,7 +390,8 @@ final class SubscriptionStore {
          let container = try? JSONSerialization.jsonObject(with: fetched.data) as? [String: Any],
          let nodes = container["elarniLocalNodes"] as? [[String: Any]] {
         // shortcut: a joined local import forgets the provider DNS notice; carry it in the container if local groups need it.
-        imported = (try nodes.map(parseBackupNode), container["elarniDirectives"] as? [String] ?? [], false, nil, false, nil, 0, "")
+        imported = (try nodes.map(parseBackupNode), container["elarniDirectives"] as? [String] ?? [], false, nil, false, nil,
+          container["elarniSkippedCount"] as? Int ?? 0, container["elarniSkippedKinds"] as? String ?? "")
       } else {
         imported = try parseImport(fetched.data, sourceURL: migrationSource,
           migrationHeaders: fetched.migrationHeaders.merging(initialMigrationHeaders) { _, first in first })
@@ -525,12 +546,16 @@ final class SubscriptionStore {
 
   func dueSubscriptions() -> [String] {
     guard !publicationRecoveryRequired else { return [] }
-    return catalog.subscriptions.filter { $0.isLocal != true && refreshTasks[$0.id] == nil && scheduleFor($0).due.map { $0 <= now() } == true }.map(\.id)
+    let current = now()
+    return catalog.subscriptions.filter { $0.isLocal != true && refreshTasks[$0.id] == nil &&
+      scheduleFor($0).due(now: current, interval: intervalFor($0)).map { $0 <= current } == true }.map(\.id)
   }
 
   func nextRefreshDate() -> Date? {
     guard !publicationRecoveryRequired else { return nil }
-    return catalog.subscriptions.filter { $0.isLocal != true && refreshTasks[$0.id] == nil }.compactMap { scheduleFor($0).due }.min()
+    let current = now()
+    return catalog.subscriptions.filter { $0.isLocal != true && refreshTasks[$0.id] == nil }
+      .compactMap { scheduleFor($0).due(now: current, interval: intervalFor($0)) }.min()
   }
 
   func cancelRefreshes() {
@@ -1051,7 +1076,7 @@ final class SubscriptionStore {
     // The link takes its name from the outbound tag.
     config["tag"] = node.displayName
     let json = String(decoding: try JSONSerialization.data(withJSONObject: ["outbounds": [config]]), as: UTF8.self)
-    // A TUIC outbound without a link comes back as the JSON it was given.
+    // An outbound whose link would lose settings comes back as the JSON it was given.
     guard let links = (try? SubscriptionFeedFetcher.invoke("convertXrayJsonToShareLinks", ["xrayJson": json]))?["links"] as? String,
           !links.hasPrefix("{") else { throw none }
     return links
