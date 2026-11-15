@@ -29,7 +29,8 @@ private const val EMPTY_BACKUP_PASSWORD = "synthetic empty catalog"
 /** Runs the production UI, Rust/Go APIs, Keystore and catalog on an isolated emulator. */
 @FixMethodOrder(MethodSorters.NAME_ASCENDING)
 class AndroidE2E {
-    @get:Rule val ui = createAndroidComposeRule<MainActivity>()
+    @get:Rule(order = 0) val battery = BatteryExemption()
+    @get:Rule(order = 1) val ui = createAndroidComposeRule<MainActivity>()
     private val repo get() = ui.activity.repository
     private fun call(command: String, args: JSONObject = JSONObject()) = runBlocking { repo.execute(command, args) }
     private fun snapshot() = Catalog(call("read"))
@@ -1450,7 +1451,8 @@ class AndroidE2E {
 }
 
 class AndroidRestartE2E {
-    @get:Rule val ui = createAndroidComposeRule<MainActivity>()
+    @get:Rule(order = 0) val battery = BatteryExemption()
+    @get:Rule(order = 1) val ui = createAndroidComposeRule<MainActivity>()
     @Test fun committedCatalogSurvivesProcessRestart() {
         val repository = ui.activity.repository
         ui.waitUntil(10_000) { !repository.state.value.loading }
@@ -1465,7 +1467,8 @@ class AndroidRestartE2E {
 
 /** Process death immediately after the real encrypted journal write, before commit. */
 class AndroidJournalSeedE2E {
-    @get:Rule val ui = createAndroidComposeRule<MainActivity>()
+    @get:Rule(order = 0) val battery = BatteryExemption()
+    @get:Rule(order = 1) val ui = createAndroidComposeRule<MainActivity>()
     @Test fun leaveInterruptedEncryptedTransaction() {
         assertTrue(BuildConfig.DEBUG && android.os.Build.MODEL.contains("sdk_gphone"))
         ui.waitUntil(10_000) { !ui.activity.repository.state.value.loading }
@@ -1504,6 +1507,24 @@ internal fun ip(code: String, first: Int) =
 private class ForeignParcelable : android.os.Parcelable {
     override fun describeContents() = 0
     override fun writeToParcel(dest: android.os.Parcel, flags: Int) = Unit
+}
+
+/** Exempts the app from battery optimization before the test's activity starts, so Home's battery notice stays out of
+ *  tests about something else. Android's default comes back after it: the VPN suite, later on the same emulator, sleeps
+ *  in Doze as an app nobody exempted. */
+class BatteryExemption : org.junit.rules.ExternalResource() {
+    private var was = true
+    override fun before() { was = exempt(); if (!was) set(true) }
+    override fun after() { if (!was) set(false) }
+    companion object {
+        private val context get() = InstrumentationRegistry.getInstrumentation().targetContext
+        fun exempt() = context.getSystemService(android.os.PowerManager::class.java).isIgnoringBatteryOptimizations(context.packageName)
+        /** Reading the output to its end waits for the command; closing the stream closes the descriptor. */
+        fun set(on: Boolean) {
+            android.os.ParcelFileDescriptor.AutoCloseInputStream(InstrumentationRegistry.getInstrumentation().uiAutomation
+                .executeShellCommand("cmd deviceidle whitelist ${if (on) "+" else "-"}${context.packageName}")).use { it.readBytes() }
+        }
+    }
 }
 
 /** Minimal synthetic local feed; no request leaves the emulator. */

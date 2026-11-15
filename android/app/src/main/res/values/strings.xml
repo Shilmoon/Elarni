@@ -725,4 +725,12 @@
     <string name="connection_per_app_rule">Per-app rule</string>
     <string name="connection_not_listed">Not listed</string>
     <string name="add_to_list">Add to list</string>
+    <string name="android_may_stop_the_vpn_while">Android may stop the VPN while the phone sleeps</string>
+    <string name="battery_optimization_lets_android_cut_the">Battery optimization lets Android cut the connection in the background. Allow Elarni to run without it.</string>
+    <string name="run_in_the_background">Run in the background</string>
+    <string name="allowed">Allowed</string>
+    <string name="reset_elarni">Reset Elarni</string>
+    <string name="reset_elarni_2">Reset Elarni?</string>
+    <string name="this_deletes_every_subscription_server_and">This deletes every subscription, server and setting on this device. It cannot be undone.</string>
+    <string name="a_chosen_server_has_no_share">A chosen server has no share link that keeps all its settings. Share it from its own page.</string>
 </resources>

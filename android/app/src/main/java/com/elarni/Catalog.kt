@@ -496,7 +496,8 @@ class Catalog(val data: JSONObject, private val snapshot: Boolean = false) {
         return Native.call("clientQR", obj("text" to text)).put("text", text)
     }
     /** A profile with several outbounds has no share link; it is shared from its own page. */
-    // Nor do the protocols libXray share/generate_share.go writes no link for, such as WireGuard and HTTP.
+    // Nor do the protocols libXray share/generate_share.go writes no link for, such as WireGuard and HTTP. For a server
+    // whose link would lose settings, the converter returns no link either, but its JSON, which [shareLinks] refuses.
     fun linkable(node: JSONObject) = node.string("format") == "telegram" || node.mapObject("config").objects("outbounds").singleOrNull()
         ?.string("protocol") in setOf("vless", "vmess", "trojan", "shadowsocks", "socks", "hysteria", "tuic")
     /** Servers of a local group, which has no subscription link, as share links in group order. */
@@ -505,13 +506,13 @@ class Catalog(val data: JSONObject, private val snapshot: Boolean = false) {
         val text = ids.joinToString("\n") { id ->
             val node = node(id)
             if (node.optBoolean("hideURL") || sourceFor(id).mapObject("metadata").optBoolean("hideURL")) throw AppFailure("sharing_disabled")
-            if (!linkable(node)) throw AppFailure("unsupported_profile")
+            if (!linkable(node)) throw AppFailure("no_share_link")
             if (node.string("format") == "telegram") node.mapObject("config").getString("url")
             else {
                 // The link takes its name from the outbound tag.
                 val outbound = node.mapObject("config").objects("outbounds").single().copy().put("tag", node.getString("name"))
                 Native.call("convertXrayJsonToShareLinks", obj("xrayJson" to obj("outbounds" to JSONArray(listOf(outbound))).toString())).getString("links")
-                    .also { if (it.startsWith("{")) throw AppFailure("unsupported_profile") }
+                    .also { if (it.startsWith("{")) throw AppFailure("no_share_link") }
             }
         }
         return Native.call("clientQR", obj("text" to text)).put("text", text)

@@ -71,6 +71,8 @@ class Repository(private val app: ElarniApplication) {
     private var storageFailure: String? = null
     /** The stored data failed to load, so the catalog in memory is a placeholder that must never replace it. */
     private var loadFailed = false
+    /** The saved catalog cannot be read, which only a reset gets past. A refused change reports the same code and needs none. */
+    val catalogUnreadable get() = loadFailed && storageFailure == "storage_corrupt"
     private var automation = Automation(JSONObject())
     private var approval: Approval? = null
     /** Routes whose background refresh raised an approval, until when the other routes go first. */
@@ -697,7 +699,8 @@ class Repository(private val app: ElarniApplication) {
     private fun systemInfo() = obj("platform" to "Android ${Build.VERSION.RELEASE}", "sdk" to Build.VERSION.SDK_INT, "device" to "${Build.MANUFACTURER} ${Build.MODEL}",
         "abis" to JSONArray(Build.SUPPORTED_ABIS.toList()), "cores" to Runtime.getRuntime().availableProcessors(), "app" to BuildConfig.VERSION_NAME,
         "core" to Native.call("xrayVersion").string("version"), "vpnConsent" to vpnConsented(app),
-        "alwaysOn" to (engine.service?.isAlwaysOn == true), "lockdown" to (engine.service?.isLockdownEnabled == true), "networkAvailable" to (engine.physical() != null))
+        "alwaysOn" to (engine.service?.isAlwaysOn == true), "lockdown" to (engine.service?.isLockdownEnabled == true), "networkAvailable" to (engine.physical() != null),
+        "batteryExempt" to app.getSystemService(android.os.PowerManager::class.java).isIgnoringBatteryOptimizations(app.packageName))
     private fun routeTable(): JSONObject {
         val connectivity = app.getSystemService(android.net.ConnectivityManager::class.java)
         return obj("networks" to JSONArray(connectivity.allNetworks.mapNotNull { network ->
