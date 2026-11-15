@@ -751,4 +751,12 @@
     <string name="connection_per_app_rule">Правило приложения</string>
     <string name="connection_not_listed">Не в списке</string>
     <string name="add_to_list">Добавить в список</string>
+    <string name="android_may_stop_the_vpn_while">Android может остановить VPN, пока телефон спит</string>
+    <string name="battery_optimization_lets_android_cut_the">Оптимизация батареи позволяет Android обрывать соединение в фоне. Разрешите Elarni работать без неё.</string>
+    <string name="run_in_the_background">Работа в фоне</string>
+    <string name="allowed">Разрешено</string>
+    <string name="reset_elarni">Сбросить Elarni</string>
+    <string name="reset_elarni_2">Сбросить Elarni?</string>
+    <string name="this_deletes_every_subscription_server_and">Все подписки, серверы и настройки на этом устройстве будут удалены. Отменить это нельзя.</string>
+    <string name="a_chosen_server_has_no_share">У выбранного сервера нет ссылки, которая сохраняет все его настройки. Поделитесь им с его страницы.</string>
 </resources>

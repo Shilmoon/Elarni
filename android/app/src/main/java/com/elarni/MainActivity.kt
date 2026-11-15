@@ -1,6 +1,8 @@
 package com.elarni
 
 import android.Manifest
+import android.app.ActivityManager
+import android.content.ActivityNotFoundException
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Intent
@@ -8,6 +10,7 @@ import android.net.Uri
 import android.net.VpnService
 import android.os.Build
 import android.os.Bundle
+import android.os.PowerManager
 import android.provider.Settings as AndroidSettings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -306,4 +309,13 @@ class MainActivity : ComponentActivity() {
     }
     fun vpnSettings() { startActivity(Intent(AndroidSettings.ACTION_VPN_SETTINGS)) }
     fun appSettings() { startActivity(Intent(AndroidSettings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName"))) }
+    fun batteryExempt(): Boolean = getSystemService(PowerManager::class.java).isIgnoringBatteryOptimizations(packageName)
+    // Some builds drop Android's dialog or its list; the app's own page still reaches the battery setting.
+    fun allowBackground() {
+        for (intent in listOf(Intent(AndroidSettings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:$packageName")), Intent(AndroidSettings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)))
+            try { startActivity(intent); return } catch (_: ActivityNotFoundException) { }
+        appSettings()
+    }
+    // Android removes the app's data and ends its process; nothing here runs after it.
+    fun resetApp() { getSystemService(ActivityManager::class.java).clearApplicationUserData() }
 }

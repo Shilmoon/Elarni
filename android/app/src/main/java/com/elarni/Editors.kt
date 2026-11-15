@@ -199,6 +199,9 @@ private fun canonical(json: String) = JSONObject(json).let { value -> value.keys
     val immediate = if (section == "General") setOf("onDemandEnabled", "disconnectOnSleep", "connectOnUntrustedWiFi", "expiryReminders", "allowExternalControl") else emptySet()
     var namesAllowed by remember { mutableStateOf(true) }
     LifecycleResumeEffect(activity.wifiAnswers) { namesAllowed = WiFiRule.namesAllowed(activity); onPauseOrDispose {} }
+    // Android's battery dialog answers with no result; back from it, the tile reads the answer again.
+    var batteryExempt by remember { mutableStateOf(true) }
+    LifecycleResumeEffect(Unit) { batteryExempt = activity.batteryExempt(); onPauseOrDispose {} }
     /** Saves the edits: only the flipped switches after their pause, or the whole draft for Save changes and for leaving ([move]). */
     fun apply(switchesOnly: Boolean, move: String? = null) {
         val edits = fields.filter { it.key !in immediate && edited(it.key) && (!switchesOnly || it.initial is Boolean) }
@@ -277,6 +280,8 @@ private fun canonical(json: String) = JSONObject(json).let { value -> value.keys
     SettingsColumn {
         if (section == "General") SettingsGroup(tr(R.string.connection_2)) {
             SettingsTile(tr(R.string.connection_recovery), if (catalog.data.mapObject("automation").optBoolean("enabled")) tr(R.string.on) else tr(R.string.off)) { navigate("automation", "") }
+            SettingsTile(tr(R.string.run_in_the_background), if (batteryExempt) tr(R.string.allowed) else tr(R.string.android_may_stop_the_vpn_while),
+                trailing = if (batteryExempt) null else {{ TextButton({ activity.allowBackground() }) { Text(tr(R.string.allow)) } }})
             fields.filter { it.key in immediate && it.key != "allowExternalControl" }.forEach { toggle(it) }
             if (saved.optBoolean("connectOnUntrustedWiFi")) {
                 SettingsText(tr(R.string.trusted_wi_fi_networks), values["trustedWiFiNetworks"] ?: "", lines(values["trustedWiFiNetworks"] ?: "").joinToString(", ")
