@@ -625,7 +625,9 @@ final class RoutingStore {
     let previous = catalog.profiles[index]
     pendingAssetRevisions[id] = Set([previous.assetRevision, previous.originalAssetRevision].compactMap { $0 })
     defer { pendingAssetRevisions.removeValue(forKey: id) }
-    let fresh = previous.lastGeoRefresh.map { now().timeIntervalSince($0) < 7 * 24 * 60 * 60 } ?? false
+    // Fresh until due, by the rule dueGeofiles applies; otherwise a refresh it finds due would do nothing.
+    let started = now()
+    let fresh = Self.nextGeofileRefresh(last: previous.lastGeoRefresh, now: started).map { $0 > started } ?? false
     // A failed refresh runs again when it is retried, also within the week of an earlier success.
     if !force, !reapply, fresh, previous.geofileStatus == "ready" {
       return snapshot()
@@ -794,20 +796,27 @@ final class RoutingStore {
   // A failed refresh is due again after its retry delay, like a pending one: one failure (offline at the
   // weekly refresh, a server error) used to end automatic refreshes for the profile.
   func dueGeofiles() -> [String] {
-    catalog.profiles.filter { record in
+    let current = now()
+    return catalog.profiles.filter { record in
       !refreshingGeofiles.contains(record.id) && record.enabled &&
-        (geofileRetryAfter[record.id].map { $0 <= now() } ?? true) &&
+        (geofileRetryAfter[record.id].map { $0 <= current } ?? true) &&
         (record.geofileStatus == "pending" || record.geofileStatus == "failed" || (record.geofileStatus == "ready" &&
-          record.lastGeoRefresh.map { $0.addingTimeInterval(7 * 86400) <= now() } == true))
+          Self.nextGeofileRefresh(last: record.lastGeoRefresh, now: current).map { $0 <= current } == true))
     }.map(\.id)
   }
 
   func nextGeofileDate() -> Date? {
-    catalog.profiles.filter { $0.enabled && !refreshingGeofiles.contains($0.id) }.compactMap { record in
-      let due = record.geofileStatus == "pending" || record.geofileStatus == "failed" ? now() :
-        (record.geofileStatus == "ready" ? record.lastGeoRefresh?.addingTimeInterval(7 * 86400) : nil)
+    let current = now()
+    return catalog.profiles.filter { $0.enabled && !refreshingGeofiles.contains($0.id) }.compactMap { record in
+      let due = record.geofileStatus == "pending" || record.geofileStatus == "failed" ? current :
+        (record.geofileStatus == "ready" ? Self.nextGeofileRefresh(last: record.lastGeoRefresh, now: current) : nil)
       return due.map { max($0, geofileRetryAfter[record.id] ?? $0) }
     }.min()
+  }
+
+  // A week after the last success. A last success more than an hour ahead was written while the clock ran ahead.
+  private static func nextGeofileRefresh(last: Date?, now: Date) -> Date? {
+    RefreshSchedule.deadline(last?.addingTimeInterval(7 * 86400), now: now, longest: 7 * 86400)
   }
 
   private func managedSources(_ profile: Data) throws -> [ManagedSourceConfiguration] {
@@ -828,7 +837,7 @@ final class RoutingStore {
         $0.source.destination == source.destination && $0.source.matchMode == source.matchMode })
       return ManagedSourceState(source: source, domains: retained?.domains ?? [], revision: retained?.revision,
         lastSuccessfulFetch: retained?.lastSuccessfulFetch,
-        schedule: .initial(last: nil, now: now(), interval: 86400))
+        schedule: .initial(last: nil, now: now(), interval: Self.managedInterval))
     }
     catalog.profiles[index].routeModel = try effectiveManagedRoute(catalog.profiles[index])
   }
@@ -843,16 +852,21 @@ final class RoutingStore {
     return data
   }
 
+  // Managed lists refresh daily; the due checks need the interval their schedules are written with.
+  private static let managedInterval: Double = 86400
+
   func dueManagedSources() -> [(profileID: String, sourceID: String)] {
-    catalog.profiles.filter { $0.enabled && managedTasks[$0.id] == nil }.flatMap { record in
-      (record.managedSources ?? []).filter { $0.schedule.due.map { $0 <= now() } == true }
+    let current = now()
+    return catalog.profiles.filter { $0.enabled && managedTasks[$0.id] == nil }.flatMap { record in
+      (record.managedSources ?? []).filter { $0.schedule.due(now: current, interval: Self.managedInterval).map { $0 <= current } == true }
         .map { (record.id, $0.source.id) }
     }
   }
 
   func nextManagedDate() -> Date? {
-    catalog.profiles.filter { $0.enabled && managedTasks[$0.id] == nil }
-      .flatMap { $0.managedSources ?? [] }.compactMap { $0.schedule.due }.min()
+    let current = now()
+    return catalog.profiles.filter { $0.enabled && managedTasks[$0.id] == nil }
+      .flatMap { $0.managedSources ?? [] }.compactMap { $0.schedule.due(now: current, interval: Self.managedInterval) }.min()
   }
 
   func cancelManagedRefreshes() {
@@ -892,7 +906,7 @@ final class RoutingStore {
       candidate.managedSources![sourceIndex].domains = domains
       candidate.managedSources![sourceIndex].revision = UUID().uuidString.lowercased()
       candidate.managedSources![sourceIndex].lastSuccessfulFetch = now()
-      candidate.managedSources![sourceIndex].schedule.succeeded(now: now(), interval: 86400, jitter: jitter())
+      candidate.managedSources![sourceIndex].schedule.succeeded(now: now(), interval: Self.managedInterval, jitter: jitter())
       candidate.routeModel = try effectiveManagedRoute(candidate)
       candidate.managedRevision = UUID().uuidString.lowercased()
       guard let publishManaged else { throw RoutingStoreError.invalidImport }
@@ -905,7 +919,7 @@ final class RoutingStore {
          let sourceIndex = catalog.profiles[index].managedSources?.firstIndex(where: { $0.source == source }) {
         let prior = catalog
         let authorization = error is SubscriptionApprovalRequirement
-        catalog.profiles[index].managedSources![sourceIndex].schedule.failed(now: now(), interval: 86400,
+        catalog.profiles[index].managedSources![sourceIndex].schedule.failed(now: now(), interval: Self.managedInterval,
           category: authorization ? "authorization" : "refresh", authorization: authorization)
         do { try save() } catch { catalog = prior; throw error }
       }

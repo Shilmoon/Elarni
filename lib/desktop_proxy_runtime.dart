@@ -32,9 +32,12 @@ extension _ProxyRuntime on DesktopProxy {
       try {
         await _save({'version': 1, 'committed': candidate.data});
       } on Object catch (error) {
+        // A code the window has no text for is still a failed save.
         unsaved =
-            (error is PlatformException ? error.message : null) ??
-            desktopError('storage_unavailable').message;
+            error is PlatformException &&
+                supportIssueCode(error.code) != 'operation_failed'
+            ? error.code
+            : 'storage_unavailable';
       }
       _checkGeneration(generation);
       if (unsaved == null) _catalog = candidate;
@@ -198,27 +201,82 @@ extension _ProxyRuntime on DesktopProxy {
     _livenessFailures = 0;
   }
 
-  Future<void> _startCore(DesktopCatalog catalog, String config) =>
-      _native(catalog.settings.xrayTunEnabled ? 'runVPN' : 'runXrayFromJson', {
-        'configJSON': config,
-        'memoryLimitMB': catalog.settings.memoryLimitMB,
-        'logLevel': catalog.settings.logLevel,
-        'streamMetrics': true,
-        'recordDiagnostics': catalog.settings.recordDiagnostics,
-        if (catalog.settings.xrayTunEnabled) ...{
-          'tcpMaxConnections': catalog.settings.tcpMaxConnections,
-          'udpMaxConnections': catalog.settings.udpMaxConnections,
-          'routePolicy': {
-            'includedRoutes': catalog.settings.includedRoutes,
-            'excludedRoutes': catalog.settings.excludedRoutes,
-            'includeAllNetworks': catalog.settings.includeAllNetworks,
-            'blockWithoutVPN': catalog.settings.blockWithoutVPN,
-            'enforceRoutes': catalog.settings.enforceRoutes,
-            'hideVPNIcon': catalog.settings.hideVPNIcon,
-          },
-        },
-        ...DesktopProxy._runtimeAssets(catalog),
-      });
+  Future<void> _startCore(DesktopCatalog catalog, String config) => _native(
+    catalog.settings.xrayTunEnabled ? 'runVPN' : 'runXrayFromJson',
+    _corePayload(catalog, config),
+  );
+
+  // What a core is started with.
+  CatalogMap _corePayload(DesktopCatalog catalog, String config) => {
+    'configJSON': config,
+    'memoryLimitMB': catalog.settings.memoryLimitMB,
+    'logLevel': catalog.settings.logLevel,
+    'streamMetrics': true,
+    'recordDiagnostics': catalog.settings.recordDiagnostics,
+    if (catalog.settings.xrayTunEnabled) ...{
+      'tcpMaxConnections': catalog.settings.tcpMaxConnections,
+      'udpMaxConnections': catalog.settings.udpMaxConnections,
+      'routePolicy': {
+        'includedRoutes': catalog.settings.includedRoutes,
+        'excludedRoutes': catalog.settings.excludedRoutes,
+        'includeAllNetworks': catalog.settings.includeAllNetworks,
+        'blockWithoutVPN': catalog.settings.blockWithoutVPN,
+        'enforceRoutes': catalog.settings.enforceRoutes,
+        'hideVPNIcon': catalog.settings.hideVPNIcon,
+      },
+    },
+    ...DesktopProxy._runtimeAssets(catalog),
+  };
+
+  // Whether the running tunnel took the candidate's configuration as it is.
+  // The helper takes one that differs from the running one only in routing
+  // rules and the outbounds they name; it refuses any other and changes
+  // nothing, and the caller restarts the tunnel as for any other change.
+  Future<bool> _reloadTunnel(
+    DesktopCatalog before,
+    DesktopCatalog candidate,
+    int generation,
+  ) async {
+    final launch = _process;
+    CatalogMap perAppLess(TunnelSettings settings) => _runtimeSettings(settings)
+      ..remove('perAppMode')
+      ..remove('perAppProcesses')
+      ..remove('perAppTargets');
+    if (_state != 'connected' ||
+        launch == null ||
+        launch != _vpnSession ||
+        _vpnReply != null ||
+        _stopping != null ||
+        !before.settings.xrayTunEnabled ||
+        !candidate.settings.xrayTunEnabled ||
+        candidate.selected == null ||
+        candidate.selected != before.selected ||
+        jsonEncode(_corePayload(candidate, '')) !=
+            jsonEncode(_corePayload(before, '')) ||
+        // Of the settings only per-app routing compiles to rules alone; any
+        // other would be prepared here and then again for its restart.
+        jsonEncode(perAppLess(candidate.settings)) !=
+            jsonEncode(perAppLess(before.settings)) ||
+        // And only a change of it: a routing profile's rules are meant for
+        // the connections that are open too, which a restart moves.
+        jsonEncode(_runtimeSettings(candidate.settings)) ==
+            jsonEncode(_runtimeSettings(before.settings)))
+      return false;
+    try {
+      final config = await _prepareConfig(
+        candidate,
+        candidate.node(candidate.selected!),
+        reload: true,
+      );
+      _checkGeneration(generation);
+      if (_process != launch || _state != 'connected') return false;
+      await _native('reloadVPN', _corePayload(candidate, config));
+      return true;
+    } on Object {
+      _checkGeneration(generation);
+      return false;
+    }
+  }
 
   Future<CatalogMap> _native(
     String method,
@@ -226,7 +284,7 @@ extension _ProxyRuntime on DesktopProxy {
     Duration? timeout,
   }) async {
     final generation = _generation;
-    final session = method == 'runVPN' || method == 'stopVPN';
+    final session = {'runVPN', 'stopVPN', 'reloadVPN'}.contains(method);
     final request = jsonEncode({
       'apiVersion': 1,
       'method': method,
@@ -319,6 +377,10 @@ extension _ProxyRuntime on DesktopProxy {
                 ? const Duration(seconds: 370)
                 : method == 'runVPN'
                 ? const Duration(seconds: 120)
+                // Longer than the helper waits for its tunnel to load the
+                // configuration, so the helper's answer is the one that counts.
+                : method == 'reloadVPN'
+                ? const Duration(seconds: 50)
                 : _replyTimeout),
       );
       // A lease that missed a reply can no longer pair replies with requests,
@@ -360,6 +422,7 @@ extension _ProxyRuntime on DesktopProxy {
           'invalid_catalog',
           'invalid_configuration',
           'unsupported_profile',
+          'unencrypted_server',
           'connection_failed',
           'elevation_denied',
           'elevation_failed',
@@ -547,15 +610,14 @@ extension _ProxyRuntime on DesktopProxy {
     _state = 'failed';
     if (session && _catalog?.settings.blockWithoutVPN == true)
       _guardKept = true;
-    // The listener shows text; codes are for exceptions.
     // Settings edits reconnect, so the catalog matches the running session.
     _listener?.call(
       !session
-          ? 'Connection stopped unexpectedly. Reconnect to retry.'
+          ? 'connection_stopped'
           : _catalog?.settings.blockWithoutVPN == true
-          ? 'Connection stopped unexpectedly. Block traffic without VPN keeps traffic blocked until you reconnect, or use Repair VPN setup to lift the block.'
+          ? 'connection_stopped_blocked'
           // A killed helper can leave its DNS guard; Repair VPN setup clears it.
-          : 'Connection stopped unexpectedly. Reconnect to retry; if sites stay unreachable, use Repair VPN setup.',
+          : 'connection_stopped_repair',
     );
   }
 
@@ -600,9 +662,7 @@ extension _ProxyRuntime on DesktopProxy {
             _catalog?.settings.blockWithoutVPN == true;
         // The helper keeps retrying the release; until it works, names may not resolve.
         if (stopped['warning'] == 'vpn_dns_release_failed')
-          _listener?.call(
-            'Disconnected, but Windows DNS could not be restored yet. If sites stay unreachable, use Repair VPN setup.',
-          );
+          _listener?.call('vpn_dns_release_failed');
       } on Object {
         // The helper's routes and guards end with its broker. A failed stop
         // must not leave Stop, intent and reconnect stuck behind it.

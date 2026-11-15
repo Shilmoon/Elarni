@@ -33,8 +33,9 @@ import (
 	"golang.org/x/net/dns/dnsmessage"
 )
 
-// socksFixture accepts user:pass and records each IPv4 CONNECT target.
-func socksFixture(t *testing.T, targets chan<- string) string {
+// socksFixture accepts user:pass and records each IPv4 CONNECT target. It connects to the
+// target, or to upstream when one is given: the server a tunnel would reach in its place.
+func socksFixture(t *testing.T, targets chan<- string, upstream ...string) string {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -75,6 +76,9 @@ func socksFixture(t *testing.T, targets chan<- string) string {
 				}
 				target := net.JoinHostPort(net.IP(buffer[4:8]).String(), strconv.Itoa(int(binary.BigEndian.Uint16(buffer[8:10]))))
 				targets <- target
+				if len(upstream) > 0 {
+					target = upstream[0]
+				}
 				upstream, err := net.Dial("tcp", target)
 				if err != nil {
 					return
@@ -128,7 +132,7 @@ func plainDNSFixture(t *testing.T, answer netip.Addr) string {
 	return dnsServer.Addr().String()
 }
 
-// serveDNSFixture answers feed.test with answer over DNS-over-TCP framing.
+// serveDNSFixture answers feed.test and feed.local with answer over DNS-over-TCP framing.
 func serveDNSFixture(t *testing.T, dnsServer net.Listener, answer netip.Addr) {
 	t.Cleanup(func() { _ = dnsServer.Close() })
 	go func() {
@@ -154,7 +158,7 @@ func serveDNSFixture(t *testing.T, dnsServer net.Listener, answer netip.Addr) {
 					}
 					question := message.Questions[0]
 					message.Header.Response = true
-					if question.Name.String() == "feed.test." && question.Type == dnsmessage.TypeA {
+					if (question.Name.String() == "feed.test." || question.Name.String() == "feed.local.") && question.Type == dnsmessage.TypeA {
 						message.Answers = []dnsmessage.Resource{{Header: dnsmessage.ResourceHeader{Name: question.Name, Type: dnsmessage.TypeA, Class: dnsmessage.ClassINET, TTL: 60},
 							Body: &dnsmessage.AResource{A: answer.As4()}}}
 					}
@@ -277,19 +281,21 @@ func TestFetchThroughLocalSocksDialsOnlyEvaluatedAddresses(t *testing.T) {
 		_, _ = w.Write([]byte("via core"))
 	}))
 	defer server.Close()
+	_, port, _ := net.SplitHostPort(server.Listener.Addr().String())
 	targets := make(chan string, 4)
-	proxy := "socks5://user:pass@" + socksFixture(t, targets)
+	// The feed is on a public address, which only the tunnel reaches: here, the test server.
+	proxy := "socks5://user:pass@" + socksFixture(t, targets, server.Listener.Addr().String())
 	resolve := func(_ context.Context, _ string, host string) ([]netip.Addr, error) {
 		address, err := netip.ParseAddr(host)
 		return []netip.Addr{address}, err
 	}
-	feed := server.URL + "/feed"
-	request := SubscriptionFetchRequest{URL: feed, Proxy: proxy, ApprovedChain: []string{approvalFingerprint(feed, []string{"cleartext_http", "loopback_target"})}}
+	feed := "http://8.8.8.8:" + port + "/feed"
+	request := SubscriptionFetchRequest{URL: feed, Proxy: proxy, ApprovedChain: []string{approvalFingerprint(feed, []string{"cleartext_http"})}}
 	value, err := fetchFeedUsing(request, resolve, func() *http.Transport { return &http.Transport{} })
 	if err != nil || value.(map[string]any)["body"] != "via core" {
 		t.Fatalf("fetch through the core failed: %v %v", value, err)
 	}
-	if target := <-targets; target != server.Listener.Addr().String() {
+	if target := <-targets; target != "8.8.8.8:"+port {
 		t.Fatalf("proxy dialed %s, not the evaluated address", target)
 	}
 	// Only the running core's loopback SOCKS inbound is accepted.
@@ -308,6 +314,258 @@ func TestFetchThroughLocalSocksDialsOnlyEvaluatedAddresses(t *testing.T) {
 	_ = closed.Close()
 	if _, err := fetchFeedUsing(request, resolve, func() *http.Transport { return &http.Transport{} }); err == nil || requests != 1 {
 		t.Fatalf("fetch bypassed the stopped proxy: %v, %d requests", err, requests)
+	}
+}
+
+// While connected, a feed on this device or its local network went into the tunnel, whose
+// server cannot reach it: the download hung for 30 s and failed.
+func TestProxiedFetchDialsALocalAddressFromThisDevice(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("local feed"))
+	}))
+	defer server.Close()
+	resolve := func(_ context.Context, _ string, host string) ([]netip.Addr, error) {
+		address, err := netip.ParseAddr(host)
+		return []netip.Addr{address}, err
+	}
+	transport := func() *http.Transport { return &http.Transport{} }
+	targets := make(chan string, 4)
+	feed := server.URL + "/feed"
+	request := SubscriptionFetchRequest{URL: feed, Proxy: "socks5://user:pass@" + socksFixture(t, targets),
+		ApprovedChain: []string{approvalFingerprint(feed, []string{"cleartext_http", "loopback_target"})}}
+	value, err := fetchFeedUsing(request, resolve, transport)
+	if err != nil || value.(map[string]any)["body"] != "local feed" {
+		t.Fatalf("local feed: %v %v", value, err)
+	}
+	select {
+	case target := <-targets:
+		t.Fatalf("the local feed went through the tunnel: %s", target)
+	default:
+	}
+	// An address that does not answer here may be in the server's own network: the tunnel gets its turn.
+	closed, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	feed = "http://" + closed.Addr().String() + "/feed"
+	_ = closed.Close()
+	request = SubscriptionFetchRequest{URL: feed, Proxy: "socks5://user:pass@" + socksFixture(t, targets, server.Listener.Addr().String()),
+		ApprovedChain: []string{approvalFingerprint(feed, []string{"cleartext_http", "loopback_target"})}}
+	value, err = fetchFeedUsing(request, resolve, transport)
+	if err != nil || value.(map[string]any)["body"] != "local feed" {
+		t.Fatalf("feed in the server's network: %v %v", value, err)
+	}
+	if target := <-targets; target != closed.Addr().String() {
+		t.Fatalf("proxy dialed %s", target)
+	}
+}
+
+// A proxied lookup asks a public resolver through the tunnel, which cannot know a name
+// of the local network: a feed on name.local failed to resolve while connected.
+func TestProxiedLookupAsksTheSystemForALocalName(t *testing.T) {
+	for host, local := range map[string]bool{"printer.local": true, "PRINTER.Local.": true, "router": true,
+		"feed.example": false, "local.example": false, "192.168.1.1": false, "fe80::1": false, "": false} {
+		if localName(host) != local {
+			t.Errorf("localName(%q) = %v", host, !local)
+		}
+	}
+	lan, roots := dotFixture(t, netip.MustParseAddr("192.168.7.7"))
+	previous, previousDNS := net.DefaultResolver, tunnelDNS
+	t.Cleanup(func() { net.DefaultResolver, tunnelDNS = previous, previousDNS })
+	net.DefaultResolver = &net.Resolver{PreferGo: true, Dial: func(ctx context.Context, _, _ string) (net.Conn, error) {
+		return (&tls.Dialer{Config: &tls.Config{RootCAs: roots, ServerName: "127.0.0.1"}}).DialContext(ctx, "tcp", lan)
+	}}
+	tunnelDNS = "127.0.0.1:1"
+	targets := make(chan string, 32)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	addresses, err := tunnelLookup("socks5://user:pass@"+socksFixture(t, targets))(ctx, "ip4", "feed.local")
+	if err != nil || len(addresses) != 1 || addresses[0] != netip.MustParseAddr("192.168.7.7") {
+		t.Fatalf("lookup of a local name: %v %v", addresses, err)
+	}
+	select {
+	case target := <-targets:
+		t.Fatalf("the local name was asked through the tunnel: %s", target)
+	default:
+	}
+}
+
+// A name the tunnel's resolver answered with a private address is the server's view of its own
+// network. Dialed from this device first, it reached whatever has that address here, with the
+// subscription's path and device headers.
+func TestProxiedFetchKeepsATunnelAnswerInTheTunnel(t *testing.T) {
+	here := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("another host"))
+	}))
+	defer here.Close()
+	there := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("provider feed"))
+	}))
+	defer there.Close()
+	_, port, _ := net.SplitHostPort(here.Listener.Addr().String())
+	resolve := func(context.Context, string, string) ([]netip.Addr, error) {
+		return []netip.Addr{netip.MustParseAddr("127.0.0.1")}, nil
+	}
+	targets := make(chan string, 4)
+	feed := "http://feed.example:" + port + "/feed"
+	request := SubscriptionFetchRequest{URL: feed, Proxy: "socks5://user:pass@" + socksFixture(t, targets, there.Listener.Addr().String()),
+		ApprovedChain: []string{approvalFingerprint(feed, []string{"cleartext_http", "loopback_target"})}}
+	value, err := fetchFeedUsing(request, resolve, func() *http.Transport { return &http.Transport{} })
+	if err != nil || value.(map[string]any)["body"] != "provider feed" {
+		t.Fatalf("feed in the server's network: %v %v", value, err)
+	}
+	if target := <-targets; target != "127.0.0.1:"+port {
+		t.Fatalf("proxy dialed %s", target)
+	}
+}
+
+// Dialing from this device is for the networks a device is on. NAT64, CGNAT and the
+// documentation ranges are private for the approval, and left the tunnel with it.
+func TestLocalDialIsForLocalNetworksOnly(t *testing.T) {
+	for address, local := range map[string]bool{
+		"127.0.0.1": true, "::1": true, "10.1.2.3": true, "172.16.0.1": true, "192.168.1.1": true, "169.254.1.1": true,
+		"fd00::1": true, "fe80::1%eth0": true, "::ffff:192.168.1.1": true,
+		"64:ff9b::a00:1": false, "64:ff9b::7f00:1": false, "100.64.0.1": false, "192.0.2.1": false, "2001:db8::1": false, "3fff::1": false,
+		"198.18.0.1": false, "fc00::1": false, "8.8.8.8": false,
+	} {
+		if localAddress(netip.MustParseAddr(address)) != local {
+			t.Errorf("localAddress(%s) = %v", address, !local)
+		}
+	}
+}
+
+// Every redirect hop and mirror attempt dials anew: an address that did not answer from this
+// device was waited for again each time, 2 s for each address.
+func TestALocalAddressIsDialedFromThisDeviceOncePerFetch(t *testing.T) {
+	var dials localDials
+	first, second := netip.MustParseAddr("10.0.0.1"), netip.MustParseAddr("10.0.0.2")
+	if !dials.try(first) || !dials.try(second) {
+		t.Fatal("a new fetch refused a local dial")
+	}
+	dials.fail(first, errors.New("connection refused"), true)
+	if dials.try(first) || !dials.try(second) {
+		t.Fatal("a refused address must be skipped, and only that one")
+	}
+	// A dial the fetch's own deadline cut short says nothing about the address or the network.
+	timeout := &net.OpError{Op: "dial", Err: os.ErrDeadlineExceeded}
+	dials.fail(second, timeout, false)
+	if !dials.try(second) {
+		t.Fatal("a dial the fetch cut short counted against its address")
+	}
+	// Nor does this device drop packets to itself.
+	loopback := netip.MustParseAddr("127.0.0.1")
+	dials.fail(loopback, timeout, true)
+	if dials.try(loopback) || !dials.try(second) || !dials.try(netip.MustParseAddr("127.0.0.2")) {
+		t.Fatal("a loopback timeout must skip that address only")
+	}
+	dials.fail(second, timeout, true)
+	if dials.try(netip.MustParseAddr("10.0.0.3")) {
+		t.Fatal("after a timeout no other address of the network is waited for")
+	}
+	if !dials.try(netip.MustParseAddr("::1")) {
+		t.Fatal("a silent network stopped the dials to this device")
+	}
+	// Through a whole fetch: two hops to one closed port, and one local dial.
+	closed, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	address := closed.Addr().String()
+	_ = closed.Close()
+	hops := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if hops++; hops == 1 {
+			http.Redirect(w, r, "http://"+address+"/next", http.StatusFound)
+			return
+		}
+		_, _ = w.Write([]byte("feed"))
+	}))
+	defer server.Close()
+	resolve := func(_ context.Context, _ string, host string) ([]netip.Addr, error) {
+		parsed, err := netip.ParseAddr(host)
+		return []netip.Addr{parsed}, err
+	}
+	targets := make(chan string, 4)
+	request := SubscriptionFetchRequest{URL: "http://" + address + "/feed", Proxy: "socks5://user:pass@" + socksFixture(t, targets, server.Listener.Addr().String())}
+	request.ApprovedChain = []string{approvalFingerprint(request.URL, []string{"cleartext_http", "loopback_target"}),
+		approvalFingerprint("http://"+address+"/next", []string{"cleartext_http", "loopback_target"})}
+	state := &localDials{}
+	var chain, destinations []string
+	value, err := fetchResourceAttempt(context.Background(), request, request.URL, resolve, func() *http.Transport { return &http.Transport{} }, 1<<20, false, "", &chain, &destinations, state)
+	if err != nil || value.(map[string]any)["body"] != "feed" {
+		t.Fatalf("two hops through the tunnel: %v %v", value, err)
+	}
+	if port := netip.MustParseAddrPort(address); !state.failed[port.Addr()] || len(state.failed) != 1 {
+		t.Fatalf("the closed address is not remembered: %v", state.failed)
+	}
+}
+
+// Under the desktop TUN with FakeDNS the system resolver answers every name with a
+// placeholder, a .local one too: the fetch went into the tunnel, whose server cannot know it.
+func TestALocalNameTheSystemCannotAnswerIsAskedOnTheLocalLinks(t *testing.T) {
+	responder, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = responder.Close() })
+	go func() {
+		buffer := make([]byte, 1500)
+		for {
+			size, from, err := responder.ReadFromUDP(buffer)
+			if err != nil {
+				return
+			}
+			var message dnsmessage.Message
+			if message.Unpack(buffer[:size]) != nil || len(message.Questions) != 1 {
+				continue
+			}
+			question := message.Questions[0]
+			message.Header.Response = true
+			// Another device's record first, as a shared link carries.
+			other := dnsmessage.MustNewName("other.local.")
+			message.Answers = []dnsmessage.Resource{
+				{Header: dnsmessage.ResourceHeader{Name: other, Type: dnsmessage.TypeA, Class: dnsmessage.ClassINET, TTL: 60}, Body: &dnsmessage.AResource{A: [4]byte{192, 168, 7, 9}}},
+			}
+			if question.Name.String() == "feed.local." && question.Type == dnsmessage.TypeA && question.Class == dnsmessage.ClassINET|1<<15 {
+				message.Answers = append(message.Answers, dnsmessage.Resource{Header: dnsmessage.ResourceHeader{Name: dnsmessage.MustNewName("Feed.local."), Type: dnsmessage.TypeA, Class: dnsmessage.ClassINET, TTL: 60},
+					Body: &dnsmessage.AResource{A: [4]byte{192, 168, 7, 8}}})
+			}
+			message.Questions = nil
+			if packed, err := message.Pack(); err == nil {
+				_, _ = responder.WriteToUDP(packed, from)
+			}
+		}
+	}()
+	placeholder, roots := dotFixture(t, netip.MustParseAddr("198.18.0.5"))
+	previous, previousGroup, previousWait := net.DefaultResolver, mdnsGroup, mdnsWait
+	t.Cleanup(func() { net.DefaultResolver, mdnsGroup, mdnsWait = previous, previousGroup, previousWait })
+	net.DefaultResolver = &net.Resolver{PreferGo: true, Dial: func(ctx context.Context, _, _ string) (net.Conn, error) {
+		return (&tls.Dialer{Config: &tls.Config{RootCAs: roots, ServerName: "127.0.0.1"}}).DialContext(ctx, "tcp", placeholder)
+	}}
+	mdnsGroup = responder.LocalAddr().String()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	addresses, err := localLookup(ctx, "ip4", "feed.local")
+	if err != nil || len(addresses) != 1 || addresses[0] != netip.MustParseAddr("192.168.7.8") {
+		t.Fatalf("lookup on the local links: %v %v", addresses, err)
+	}
+	// Nothing answers a name without .local there: the system's answer stays.
+	if answers := mdnsLookup(ctx, "ip4", "router"); answers != nil {
+		t.Fatalf("a name outside .local was asked: %v", answers)
+	}
+	// Nothing answers there: the wait for an answer is shortened, not slept through.
+	mdnsGroup, mdnsWait = "127.0.0.1:1", 50*time.Millisecond
+	// A placeholder is no answer: connecting to it would hand the local name to the server.
+	if addresses, err := localLookup(ctx, "ip4", "feed.local"); err == nil || err.Error() != "dns_failed" || len(addresses) != 0 {
+		t.Fatalf("without an answer the lookup fails: %v %v", addresses, err)
+	}
+	// A cancelled fetch does not wait for the answer.
+	mdnsWait = time.Minute
+	cancelled, stop := context.WithCancel(context.Background())
+	time.AfterFunc(20*time.Millisecond, stop)
+	started := time.Now()
+	if answers := mdnsLookup(cancelled, "ip4", "feed.local"); answers != nil || time.Since(started) > 10*time.Second {
+		t.Fatalf("a cancelled lookup waited %v for %v", time.Since(started), answers)
 	}
 }
 
@@ -341,6 +599,10 @@ func TestSubscriptionFrontingVerifiesTLSAndBindsApproval(t *testing.T) {
 	result, err := fetchFeedUsing(request, resolve, transport)
 	if err != nil {
 		t.Fatal(err)
+	}
+	// The risk is the connect address's, so the destination names it beside the URL's host.
+	if shown := result.(map[string]any)["warning"].(map[string]any)["destinations"].([]string); !slices.Equal(shown, []string{"https://example.com:" + port + " → 127.0.0.1"}) {
+		t.Fatalf("the destination hides the connect address: %v", shown)
 	}
 	request.ApprovedChain = result.(map[string]any)["warning"].(map[string]any)["chain"].([]string)
 	result, err = fetchFeedUsing(request, resolve, transport)
@@ -453,6 +715,8 @@ func TestFetchAddressPolicy(t *testing.T) {
 		"127.0.0.1": "loopback_target", "::ffff:127.0.0.1": "loopback_target", "64:ff9b::7f00:1": "loopback_target",
 		"192.168.1.1": "private_target", "100.64.0.1": "private_target", "2001:db8::1": "private_target", "3fff::1": "private_target",
 		"100:0:0:1::1": "private_target", "100:0:0:1:ffff:ffff:ffff:ffff": "private_target",
+		// A link-local answer names its interface, and a prefix matches no address with a zone.
+		"fe80::1": "private_target", "fe80::1%eth0": "private_target",
 	} {
 		if got := addressRisk(netip.MustParseAddr(address)); got != want {
 			t.Errorf("%s classified %q, want %q", address, got, want)
@@ -494,6 +758,10 @@ func TestHTTPSubscriptionOnADomainIsApprovedHopByHop(t *testing.T) {
 		warning, ok := value.(map[string]any)["warning"].(map[string]any)
 		if !ok || !slices.Equal(warning["riskCodes"].([]string), []string{"cleartext_http", "loopback_target"}) || len(warning["chain"].([]string)) != hops {
 			t.Fatalf("hop %d: %v", hops, value)
+		}
+		// The chain is fingerprints; the review names each hop by its origin, without path or token.
+		if shown := []string{"http://feed.example:" + port, "http://next.example:" + port}[:hops]; !slices.Equal(warning["destinations"].([]string), shown) {
+			t.Fatalf("hop %d shows %v, want %v", hops, warning["destinations"], shown)
 		}
 		request.ApprovedChain = warning["chain"].([]string)
 	}

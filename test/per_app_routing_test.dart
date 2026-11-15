@@ -76,6 +76,20 @@ void main() {
         () => PerAppProfile.decode('x' * (512 * 1024 + 1), platform: 'macos'),
         throwsFormatException,
       );
+      // The JSON parser's English would reach the interface as is.
+      for (final text in ['', 'curl.exe', '{"format":']) {
+        expect(
+          () => PerAppProfile.decode(text, platform: 'windows'),
+          throwsA(
+            isA<FormatException>().having(
+              (error) => error.message,
+              'message',
+              'Unsupported per-app routing profile.',
+            ),
+          ),
+          reason: text,
+        );
+      }
     },
   );
 

@@ -3,6 +3,7 @@ package share
 import (
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	dnsapp "github.com/xtls/xray-core/app/dns"
 	dnsfeature "github.com/xtls/xray-core/features/dns"
@@ -57,11 +58,31 @@ type skippedMembers struct {
 	list  []SkippedProfile
 	count int
 	first error
+	// How many were left out as unencrypted servers: that reason is the import's only when it is every member's.
+	unencrypted int
+	// The first error for another reason, which names what else is wrong (a Clash file's says "Clash").
+	firstOther error
+}
+
+// failure is the import's error when nothing is left to import.
+func (s *skippedMembers) failure() error {
+	if errors.Is(s.first, ErrUnencryptedServer) && s.unencrypted < s.count {
+		if s.firstOther != nil {
+			return s.firstOther
+		}
+		return fmt.Errorf("unsupported client settings")
+	}
+	return s.first
 }
 
 func (s *skippedMembers) add(name, kind, fallback string, err error) {
 	if s.first == nil {
 		s.first = err
+	}
+	if errors.Is(err, ErrUnencryptedServer) {
+		s.unencrypted++
+	} else if s.firstOther == nil {
+		s.firstOther = err
 	}
 	s.count++
 	if len(s.list) >= maxSkippedListed {
@@ -213,7 +234,11 @@ func importClientProfiles(text string) (*ClientImport, error) {
 				raw, _ = json.Marshal(map[string]any{"outbounds": []json.RawMessage{raw}})
 			}
 			if err := validateClientProfile(raw); err != nil {
+				unencrypted := errors.Is(err, ErrUnencryptedServer)
 				err := fmt.Errorf("profile %d has invalid or unsupported outbound settings", index+1)
+				if unencrypted {
+					err = ErrUnencryptedServer
+				}
 				if !array {
 					return nil, err
 				}
@@ -264,15 +289,21 @@ func importClientProfiles(text string) (*ClientImport, error) {
 			outbound.SendThrough = nil // URI remarks are metadata, never a bind address.
 			outbound.Tag = "proxy"
 			raw, err := json.Marshal(map[string]any{"outbounds": []conf.OutboundDetourConfig{*outbound}})
-			if err != nil || validateClientProfile(raw) != nil {
-				skipped.addLink(line, fmt.Errorf("unsupported client settings on line %d", index+1))
+			if err == nil {
+				err = validateClientProfile(raw)
+			}
+			if err != nil {
+				if !errors.Is(err, ErrUnencryptedServer) {
+					err = fmt.Errorf("unsupported client settings on line %d", index+1)
+				}
+				skipped.addLink(line, err)
 				continue
 			}
 			result.Profiles = append(result.Profiles, ClientProfile{Format: "xrayProfile", Name: name, Config: raw})
 		}
 	}
 	if len(result.Profiles) == 0 && skipped.first != nil {
-		return nil, skipped.first
+		return nil, skipped.failure()
 	}
 	if len(result.Profiles) == 0 || len(result.Profiles) > 1024 {
 		return nil, fmt.Errorf("expected 1 to 1024 client profiles")

@@ -506,6 +506,12 @@ abstract class AppLocalizations {
   /// **'Close the conflicting app or change the listener port in Connection settings.'**
   String get issueListenerUnavailableRemedy;
 
+  /// No description provided for @issueListenerPortUnavailable.
+  ///
+  /// In en, this message translates to:
+  /// **'Port {port} is occupied or unavailable. Choose another listener port.'**
+  String issueListenerPortUnavailable(int port);
+
   /// No description provided for @issueListenerUnavailable.
   ///
   /// In en, this message translates to:
@@ -1958,6 +1964,42 @@ abstract class AppLocalizations {
   /// **'Connection stopped unexpectedly. Reconnect to retry.'**
   String get connectionStoppedUnexpectedly;
 
+  /// No description provided for @connectionStoppedRepair.
+  ///
+  /// In en, this message translates to:
+  /// **'Connection stopped unexpectedly. Reconnect to retry; if sites stay unreachable, use Repair VPN setup.'**
+  String get connectionStoppedRepair;
+
+  /// No description provided for @connectionStoppedBlocked.
+  ///
+  /// In en, this message translates to:
+  /// **'Connection stopped unexpectedly. Block traffic without VPN keeps traffic blocked until you reconnect, or use Repair VPN setup to lift the block.'**
+  String get connectionStoppedBlocked;
+
+  /// No description provided for @windowsDnsNotRestored.
+  ///
+  /// In en, this message translates to:
+  /// **'Disconnected, but Windows DNS could not be restored yet. If sites stay unreachable, use Repair VPN setup.'**
+  String get windowsDnsNotRestored;
+
+  /// No description provided for @systemProxyNotRestored.
+  ///
+  /// In en, this message translates to:
+  /// **'The system proxy setting could not be restored. Check it in your system network settings.'**
+  String get systemProxyNotRestored;
+
+  /// No description provided for @systemProxyNotSet.
+  ///
+  /// In en, this message translates to:
+  /// **'The system proxy could not be set. Apps can still use the HTTP proxy at 127.0.0.1:{port}.'**
+  String systemProxyNotSet(Object port);
+
+  /// No description provided for @scheduledRefreshFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'A scheduled subscription or routing refresh failed.'**
+  String get scheduledRefreshFailed;
+
   /// No description provided for @groupSelectionFailed.
   ///
   /// In en, this message translates to:
@@ -1988,17 +2030,41 @@ abstract class AppLocalizations {
   /// **'Select a server first. This routing link turns its profile on for the selected server’s subscription.'**
   String get selectServerFirstRoutingLink;
 
+  /// No description provided for @clientLinksNotHandled.
+  ///
+  /// In en, this message translates to:
+  /// **'One or more client links could not be handled.'**
+  String get clientLinksNotHandled;
+
+  /// No description provided for @clientLinkNotImported.
+  ///
+  /// In en, this message translates to:
+  /// **'The client link could not be imported.'**
+  String get clientLinkNotImported;
+
   /// No description provided for @unsupportedProfileTryJson.
   ///
   /// In en, this message translates to:
   /// **'This profile uses unsupported settings. Try the provider’s Xray JSON format.'**
   String get unsupportedProfileTryJson;
 
+  /// No description provided for @unencryptedServer.
+  ///
+  /// In en, this message translates to:
+  /// **'This server has no encryption: no TLS, REALITY or VLESS encryption. Elarni accepts such a server only on a private network.'**
+  String get unencryptedServer;
+
   /// No description provided for @subscriptionAddedFirstDownloadFailed.
   ///
   /// In en, this message translates to:
   /// **'Subscription added, but the first download failed. Refresh to retry.'**
   String get subscriptionAddedFirstDownloadFailed;
+
+  /// No description provided for @subscriptionAddedUnencrypted.
+  ///
+  /// In en, this message translates to:
+  /// **'Subscription added, but its servers have no encryption: no TLS, REALITY or VLESS encryption. Elarni accepts such a server only on a private network. Ask the provider for a server with encryption.'**
+  String get subscriptionAddedUnencrypted;
 
   /// No description provided for @subscriptionAddedUnreadable.
   ///
@@ -4076,6 +4142,12 @@ abstract class AppLocalizations {
   /// **'This subscription uses an unencrypted HTTP connection.'**
   String get riskCleartextHttp;
 
+  /// No description provided for @subscriptionDestinations.
+  ///
+  /// In en, this message translates to:
+  /// **'Destinations: {destinations}.'**
+  String subscriptionDestinations(String destinations);
+
   /// No description provided for @connectionNotChecked.
   ///
   /// In en, this message translates to:
@@ -4435,6 +4507,18 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'{provider} sent nothing Elarni can read: the format or one of its settings is not supported.'**
   String failureUnsupportedText(String provider);
+
+  /// No description provided for @failureUnencrypted.
+  ///
+  /// In en, this message translates to:
+  /// **'Servers without encryption'**
+  String get failureUnencrypted;
+
+  /// No description provided for @failureUnencryptedText.
+  ///
+  /// In en, this message translates to:
+  /// **'{provider} sent only servers without TLS, REALITY or VLESS encryption. Elarni accepts such a server only on a private network.'**
+  String failureUnencryptedText(String provider);
 
   /// No description provided for @failureDeviceLimitText.
   ///

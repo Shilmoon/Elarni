@@ -38,7 +38,7 @@ if len(sys.argv) == 3 and sys.argv[1] == '--owner':
 from check_report import record_check
 from tuic_fixture import android_tuic_peer
 record_check(Path(__file__).resolve().parent.parent)
-modes = ('graceful', 'reconnect', 'startup-cancel', 'helper-death', 'broker-death', 'block-broker-death', 'app-owner-death', 'route-enforcement', 'session-limits', 'adapter-loss', 'per-app')
+modes = ('graceful', 'reconnect', 'startup-cancel', 'helper-death', 'broker-death', 'block-broker-death', 'app-owner-death', 'route-enforcement', 'session-limits', 'adapter-loss', 'per-app-reload', 'per-app')
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--deny-elevation', action='store_true')
 parser.add_argument('--case', choices=modes, action='append')
@@ -333,6 +333,10 @@ try:
             # As the app sends it: only such a session reports a lost tunnel and takes the next connect.
             options['reuseSession'] = True
         current = json.loads(json.dumps(config))
+        if mode == 'per-app-reload':
+            options['reuseSession'] = True
+            # The router a reload hands its rules to exists only when the configuration has a routing section.
+            current['routing'] = {'rules': []}
         if mode == 'route-enforcement':
             options['routePolicy'] = {'includedRoutes': ['198.18.0.0/16', '2001:db8::/32', physical_address + '/32'],
                 'excludedRoutes': ['198.18.0.99/32'], 'includeAllNetworks': False, 'enforceRoutes': True, 'hideVPNIcon': False}
@@ -506,6 +510,39 @@ try:
                         result = powershell("@(Resolve-DnsName '" + fixture_name + "' -Server 198.51.100.253 -Type " + kind + " -DnsOnly -ErrorAction Stop | Where-Object IPAddress | Select-Object -ExpandProperty IPAddress) | ConvertTo-Json -Compress")
                         assert address in result, 'DNS failed after reconnect'
                     dns_probe(False)
+            broker.stdin.close()
+        elif mode == 'per-app-reload':
+            # A per-app change goes to the running tunnel: the adapter and the elevated owner stay, and so
+            # does a connection that is open, on the route it has.
+            index = powershell("(Get-NetAdapter -IncludeHidden -Name '" + adapter + "').ifIndex")
+            held = socket.create_connection(('198.18.0.1', http_server.server_port), timeout=5)
+            changed = json.loads(json.dumps(current))
+            changed['outbounds'].append({'tag': 'block', 'protocol': 'blackhole'})
+            changed['routing'] = {'rules': [{'type': 'field', 'ip': ['198.18.0.1/32'], 'outboundTag': 'block'}]}
+            reloaded = request(broker, 'reloadVPN', {'configJSON': json.dumps(changed), **options})
+            assert reloaded.get('helperPid', ready['helperPid']) == ready['helperPid'], 'The reload replaced the elevated owner'
+            http_target('198.18.0.1', http_server.server_port, False)
+            http_target('2001:db8::1', http_server.server_port)
+            held.sendall(b'GET /synthetic-fixture HTTP/1.0\r\n\r\n')
+            answer = b''
+            while True:
+                chunk = held.recv(65536)
+                if not chunk:
+                    break
+                answer += chunk
+            held.close()
+            assert answer.endswith(body), 'The reload cut an open connection: ' + repr(answer)
+            # More than rules and their outbounds: refused, and the tunnel routes as before.
+            try:
+                request(broker, 'reloadVPN', {'configJSON': json.dumps(changed), **options, 'memoryLimitMB': 128})
+                raise AssertionError('A reload of other settings was taken')
+            except RuntimeError as error:
+                assert 'vpn_reload_restart' in str(error), str(error)
+            http_target('198.18.0.1', http_server.server_port, False)
+            request(broker, 'reloadVPN', {'configJSON': json.dumps(current), **options})
+            http_target('198.18.0.1', http_server.server_port)
+            http_target('2001:db8::1', http_server.server_port)
+            assert powershell("(Get-NetAdapter -IncludeHidden -Name '" + adapter + "').ifIndex") == index, 'The reload replaced the adapter'
             broker.stdin.close()
         elif mode == 'route-enforcement':
             broker.stdin.close()

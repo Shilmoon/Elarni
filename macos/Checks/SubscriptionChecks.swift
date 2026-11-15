@@ -292,6 +292,12 @@ struct SubscriptionChecks {
         try expect(!message.contains("malformed") && message.contains("entire import"), "unsafe or unclear profile diagnostic")
       }
     }
+    try check("a server without encryption on a public address is refused with its own reason") {
+      do {
+        _ = try store.parseImport(Data("vless://00000000-0000-4000-8000-000000000001@8.8.8.8:443?encryption=none&type=tcp&security=none#Plain\n".utf8))
+        throw Failure(message: "an unencrypted public server was accepted")
+      } catch SubscriptionError.unencryptedServer {}
+    }
     try check("an unrecognized line is left out and counted beside the servers that parse") {
       let imported = try store.parseImport(Data("\(vless)\nunrecognized broken node\n".utf8))
       try expect(imported.nodes.count == 1 && imported.skippedCount == 1, "an unrecognized line was not left out and counted")
@@ -353,6 +359,95 @@ struct SubscriptionChecks {
       reopened.now = { last.addingTimeInterval(13 * 3600) }
       try expect(Set(reopened.dueSubscriptions()) == ["ready", "retry"], "new interval lost after reopening")
       try expect(reopened.nextRefreshDate() == last.addingTimeInterval(60), "retry deadline changed with interval")
+    }
+    // Schedules written while the device clock ran a month ahead, then corrected, and ones written now.
+    let clockNow = Date(timeIntervalSince1970: 1_700_000_000)
+    let clockAhead = clockNow.addingTimeInterval(30 * 86400)
+    func persisted(_ time: Date, _ write: (inout RefreshSchedule) -> Void) throws -> [String: Any] {
+      var written = RefreshSchedule(nextRefreshAt: time)
+      write(&written)
+      return try JSONSerialization.jsonObject(with: JSONEncoder().encode(written)) as! [String: Any]
+    }
+    func scheduledSubscriptions(_ name: String, _ schedules: [String: [String: Any]]) throws -> SubscriptionStore {
+      let root = directory.appendingPathComponent(name)
+      try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+      // Written with the four-hour default interval, which therefore leaves them as they are.
+      let records: [[String: Any]] = schedules.map { id, written in
+        ["id": id, "providerName": id, "sourceRef": "synthetic", "nodes": [],
+         "status": written["paused"] as? Bool == true ? "approval_required" : (written["errorCategory"] == nil ? "ready" : "refresh_failed"),
+         "lastSuccessfulFetch": clockNow.timeIntervalSinceReferenceDate, "refreshInterval": 4 * 3600, "refreshSchedule": written]
+      }
+      try JSONSerialization.data(withJSONObject: ["schemaVersion": 1, "subscriptions": records])
+        .write(to: root.appendingPathComponent("subscriptions-v1.json"))
+      let opened = try SubscriptionStore(directory: root, routing: routing, secretAccess: MemorySecrets().access())
+      opened.now = { clockNow }
+      return opened
+    }
+    try check("a subscription deadline written while the clock ran ahead is due now") {
+      let succeeded = try scheduledSubscriptions("clock-ahead-success", ["ahead": persisted(clockAhead) {
+        $0.succeeded(now: clockAhead, interval: 4 * 3600, jitter: 0)
+      }])
+      try expect(succeeded.dueSubscriptions() == ["ahead"], "a refresh scheduled under a clock that ran ahead was not due")
+      try expect(succeeded.nextRefreshDate().map { $0 <= clockNow } == true, "the next refresh waits for the clock that ran ahead")
+      let retrying = try scheduledSubscriptions("clock-ahead-retry", ["retry": persisted(clockAhead) {
+        $0.failed(now: clockAhead, interval: 4 * 3600, category: "refresh", authorization: false)
+      }])
+      try expect(retrying.dueSubscriptions() == ["retry"], "a retry scheduled under a clock that ran ahead was not due")
+      try expect(retrying.nextRefreshDate().map { $0 <= clockNow } == true, "the retry waits for the clock that ran ahead")
+      // A refresh that then fails starts over from now, as one whose time had passed does.
+      var failing = RefreshSchedule(nextRefreshAt: clockAhead.addingTimeInterval(4 * 3600))
+      failing.failed(now: clockNow, interval: 4 * 3600, category: "refresh", authorization: false)
+      try expect(failing.nextRefreshAt == clockNow.addingTimeInterval(4 * 3600), "a failure kept the deadline of the clock that ran ahead")
+      var waiting = RefreshSchedule(nextRefreshAt: clockNow.addingTimeInterval(4.4 * 3600))
+      waiting.failed(now: clockNow, interval: 4 * 3600, category: "refresh", authorization: false)
+      try expect(waiting.nextRefreshAt == clockNow.addingTimeInterval(4.4 * 3600), "a failure moved a deadline within its interval")
+    }
+    try check("a subscription deadline within its jittered interval or last retry delay is not due early") {
+      let jittered = try persisted(clockNow) { $0.succeeded(now: clockNow, interval: 4 * 3600, jitter: 1) }
+      let lastRetry = try persisted(clockNow) {
+        $0.retryIndex = 2
+        $0.failed(now: clockNow, interval: 4 * 3600, category: "refresh", authorization: false)
+      }
+      let both = try scheduledSubscriptions("clock-in-schedule", ["jittered": jittered, "retry": lastRetry])
+      try expect(both.dueSubscriptions().isEmpty, "a deadline the schedule wrote was due early")
+      try expect(both.nextRefreshDate() == clockNow.addingTimeInterval(1800), "the last retry delay moved")
+      // A clock corrected by half an hour leaves them where they were.
+      both.now = { clockNow.addingTimeInterval(-1800) }
+      try expect(both.dueSubscriptions().isEmpty, "a clock corrected by minutes made a deadline due")
+      let alone = try scheduledSubscriptions("clock-jittered", ["jittered": jittered])
+      try expect(alone.dueSubscriptions().isEmpty && alone.nextRefreshDate() == clockNow.addingTimeInterval(4 * 3600 * 1.1),
+        "the longest jittered interval was not kept")
+    }
+    try check("a paused subscription stays paused when its deadline was written while the clock ran ahead") {
+      let paused = try scheduledSubscriptions("clock-ahead-paused", ["paused": persisted(clockAhead) {
+        $0.failed(now: clockAhead, interval: 4 * 3600, category: "authorization", authorization: true)
+      }])
+      try expect(paused.dueSubscriptions().isEmpty && paused.nextRefreshDate() == nil, "a paused subscription was scheduled")
+    }
+    try check("a managed list deadline written while the clock ran ahead is due now, one within its jitter is not") {
+      let routes = try RoutingStore(directory: directory.appendingPathComponent("managed-clock"))
+      try routes.importProvider(#"{"Name":"Managed fixture","RemoteDNSType":"DoU","RemoteDNSIP":"1.1.1.1","DomesticDNSType":"DoU","DomesticDNSIP":"8.8.8.8","DirectSites":["full:example.com"]}"#,
+        subscriptionID: "managed")
+      routes.now = { clockNow }
+      @MainActor func restore(_ schedules: [String: [String: Any]]) throws {
+        var checkpoint = try JSONSerialization.jsonObject(with: routes.checkpoint()) as! [String: Any]
+        var profiles = checkpoint["profiles"] as! [[String: Any]]
+        profiles[0]["managedSources"] = schedules.map { id, written -> [String: Any] in
+          ["source": ["id": id, "url": "https://fixture.invalid/\(id).txt", "destination": "block", "matchMode": "subdomains"],
+           "domains": [String](), "schedule": written]
+        }
+        checkpoint["profiles"] = profiles
+        try routes.restore(JSONSerialization.data(withJSONObject: checkpoint))
+      }
+      let jittered = try persisted(clockNow) { $0.succeeded(now: clockNow, interval: 86400, jitter: 1) }
+      let paused = try persisted(clockAhead) { $0.failed(now: clockAhead, interval: 86400, category: "authorization", authorization: true) }
+      try restore(["ahead": persisted(clockAhead) { $0.succeeded(now: clockAhead, interval: 86400, jitter: 0) },
+        "jittered": jittered, "paused": paused])
+      try expect(routes.dueManagedSources().map { $0.sourceID } == ["ahead"], "a list scheduled under a clock that ran ahead was not due, or another was")
+      try expect(routes.nextManagedDate().map { $0 <= clockNow } == true, "the next list refresh waits for the clock that ran ahead")
+      try restore(["jittered": jittered, "paused": paused])
+      try expect(routes.dueManagedSources().isEmpty && routes.nextManagedDate() == clockNow.addingTimeInterval(86400 * 1.1),
+        "the longest jittered list interval was not kept")
     }
     try check("duplicate node matching retains the selected node first") {
       try expect(prioritizingSelection(["first", "selected"], selected: "selected") == ["selected", "first"], "selected duplicate priority")
@@ -494,6 +589,13 @@ struct SubscriptionChecks {
     try check("a first local import skips the servers it repeats") {
       let group = (repeatStore.snapshot()["subscriptions"] as! [[String: Any]])[0]
       try expect((group["nodes"] as! [[String: Any]]).map { $0["name"] as! String } == ["One", "Two"], "a repeated server was kept")
+    }
+    _ = try repeatStore.registerProfiles("socks://127.0.0.1:1082#Three\nunrecognized broken node\n")
+    _ = try await repeatStore.refresh(id: repeatID)
+    try check("a local import that joins its group counts the lines it left out") {
+      let group = (repeatStore.snapshot()["subscriptions"] as! [[String: Any]])[0]
+      try expect((group["nodes"] as! [[String: Any]]).map { $0["name"] as! String } == ["One", "Two", "Three"], "the joined import lost a server")
+      try expect((group["metadata"] as? [String: Any])?["skippedServers"] as? Int == 1, "the joined import lost its count of skipped lines")
     }
     try check("a local group shares its servers as links in group order") {
       let group = (localStore.snapshot()["subscriptions"] as! [[String: Any]]).first { $0["id"] as? String == localID }!
@@ -943,6 +1045,19 @@ struct SubscriptionChecks {
     try expect(retriedStatus() == "ready" && retried.dueGeofiles().isEmpty, "the retry left fresh geofiles failed")
     print("PASS a failed geofile refresh is retried after its delay")
 
+    // A clock set back after a refresh leaves that refresh in its future.
+    let refreshed = clock
+    clock = refreshed.addingTimeInterval(-1800)
+    try expect(retried.dueGeofiles().isEmpty && retried.nextGeofileDate() == refreshed.addingTimeInterval(7 * 86400),
+      "a clock corrected by minutes moved the weekly geofile refresh")
+    clock = refreshed.addingTimeInterval(-30 * 86400)
+    try expect(retried.dueGeofiles() == [retriedID] && retried.nextGeofileDate().map { $0 <= clock } == true,
+      "geofiles refreshed while the clock ran ahead were not due")
+    _ = try await retried.refreshGeofiles(id: retriedID)
+    try expect(retriedStatus() == "ready" && retried.dueGeofiles().isEmpty &&
+      retried.nextGeofileDate() == clock.addingTimeInterval(7 * 86400), "the due refresh left the geofiles of the clock that ran ahead")
+    print("PASS geofiles refreshed while the clock ran ahead are due now and refresh")
+
     let retained = try routes.checkpoint()
     try routes.importProvider(content.replacingOccurrences(of: "geosite:TEST", with: "geosite:UNUSED"), subscriptionID: "source")
     try expect(routes.runtimeRevision(subscriptionID: "source")?.assetRevision == original.assetRevision,
@@ -1039,7 +1154,7 @@ struct SubscriptionChecks {
       try expect(missing == ["geosite:absent"], "wrong missing server codes \(missing)")
     }
     print("PASS reduced geodata keeps the codes the assigned servers' own rules name")
-    return 6
+    return 7
   }
 
   static func subscriptionNameChecks(fixture: URL) async throws -> Int {
@@ -1342,9 +1457,19 @@ struct SubscriptionChecks {
     try rejects { _ = try vault.consume(old, subscriptionID: "a") }
     vault.invalidate(subscriptionID: "a")
     try rejects { _ = try vault.consume(replacement, subscriptionID: "a") }
+    // The chain is fingerprints: the review showed each as "Invalid destination". It shows the
+    // origins the core names beside them, and never a path or credentials.
     let shown = try vault.issue(subscriptionID: "c", requirement: SubscriptionApprovalRequirement(riskCodes: [.privateTarget],
-      candidateChain: ["https://[2001:db8::1]:8443/secret-token", "http://user:pass@feed.example/path?key=1", "not a url"])).destinations
+      candidateChain: ["677336c4661eda0143352dd16adce73d", "764b010402df57e78454a8ed31facc3d", "0f3a"],
+      destinations: ["https://[2001:db8::1]:8443/secret-token", "http://user:pass@feed.example/path?key=1", "not a url"])).destinations
     try expect(shown == ["https://[2001:db8::1]:8443", "http://feed.example", "Invalid destination"], "approval destinations were \(shown)")
+    // The core names a connect address after an arrow: the review showed such an origin as "Invalid destination".
+    let connected = try vault.issue(subscriptionID: "e", requirement: SubscriptionApprovalRequirement(riskCodes: [.privateTarget],
+      candidateChain: ["a", "b", "c"],
+      destinations: ["https://feed.example:8443 → 10.0.0.5", "http://[2001:db8::1]:8080", "not a url"])).destinations
+    try expect(connected == ["https://feed.example:8443 → 10.0.0.5", "http://[2001:db8::1]:8080", "Invalid destination"],
+      "approval destinations with a connect address were \(connected)")
+    try expect(try vault.issue(subscriptionID: "d", requirement: requirement).destinations.isEmpty, "a fingerprint was shown as a destination")
     print("PASS subscription challenges are scoped single-use expiring and invalidated")
     return 1
   }

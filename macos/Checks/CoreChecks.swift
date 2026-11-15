@@ -379,13 +379,23 @@ struct CoreChecks {
     try check("a refused request counts against a server that passed before") {
       let counts = AutomationConfiguration.countsAgainstServer
       for code in ["failed", "eof", "unexpected_eof", "closed_pipe"] {
-        try expect(counts(code, "target_request", true), code)
-        // It may be rejecting the credentials, which another server does not fix.
-        try expect(!counts(code, "target_request", false), code + " on a server that never passed")
-        try expect(!counts(code, "instance_start", true), code + " before the request")
+        try expect(counts(code, "target_request", true, false), code)
+        // It may be rejecting the credentials, which a restart of the same server does not fix.
+        try expect(!counts(code, "target_request", false, false), code + " on a server that never passed")
+        try expect(!counts(code, "instance_start", true, true), code + " before the request")
       }
-      try expect(counts("timeout", "target_request", false) && counts("timeout", nil, false), "timeouts always count")
-      try expect(!counts("target_dns_failed", "target_dns", true) && !counts(nil, nil, true), "other failures")
+      try expect(counts("timeout", "target_request", false, false) && counts("timeout", nil, false, false), "timeouts always count")
+      try expect(!counts("target_dns_failed", "target_dns", true, true) && !counts(nil, nil, true, true), "other failures")
+    }
+
+    // A server that was already down at Connect, or stopped before its first check passed, was
+    // never left while a backup was allowed.
+    try check("a refused request on a server that never passed counts when another server can take over") {
+      let counts = AutomationConfiguration.countsAgainstServer
+      for code in ["failed", "eof", "unexpected_eof", "closed_pipe"] {
+        try expect(counts(code, "target_request", false, true), code)
+      }
+      try expect(!counts("target_dns_failed", "target_dns", false, true), "a failed target lookup")
     }
 
     try check("automation thresholds and retry deadlines are bounded") {

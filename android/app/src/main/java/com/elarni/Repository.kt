@@ -71,6 +71,8 @@ class Repository(private val app: ElarniApplication) {
     private var storageFailure: String? = null
     /** The stored data failed to load, so the catalog in memory is a placeholder that must never replace it. */
     private var loadFailed = false
+    /** The saved catalog cannot be read, which only a reset gets past. A refused change reports the same code and needs none. */
+    val catalogUnreadable get() = loadFailed && storageFailure == "storage_corrupt"
     private var automation = Automation(JSONObject())
     private var approval: Approval? = null
     /** Routes whose background refresh raised an approval, until when the other routes go first. */
@@ -302,7 +304,7 @@ class Repository(private val app: ElarniApplication) {
         check(generation)
         engine.start(value, keepTunnel = wantsRecovery()) { check(generation) }
     }
-    private fun apply(candidate: Catalog, generation: Long): JSONObject {
+    private fun apply(candidate: Catalog, generation: Long, refresh: Boolean = false): JSONObject {
         check(generation); candidate.reconcileSelection(); candidate.validate()
         if (candidate.data.mapObject("automation").optBoolean("enabled")) {
             runCatching { Automation.validate(candidate.data.getJSONObject("automation"), candidate) }.onFailure { candidate.data.getJSONObject("automation").put("enabled", false) }
@@ -313,11 +315,13 @@ class Repository(private val app: ElarniApplication) {
         try { candidate.validateNodes { check(generation) } } catch (_: OutOfMemoryError) { throw AppFailure("input_too_large") }
         val wasRunning = engine.running
         // A server an app is pinned to can leave with a refresh. That fails the next Connect, which names the app's
-        // rule; it must not fail the refresh, so the running tunnel then stays as it is.
+        // rule; it must not fail the refresh, so the running tunnel then stays as it is, even when the refresh also
+        // took the selected server. Another change that would restart the tunnel without that server fails instead.
         fun runtime(catalog: Catalog) = try { Catalog.canonical(catalog.compile(catalog.selected, app)) }
             catch (error: AppFailure) { if (error.code != "per_app_target_missing") throw error; null }
-        val runtimeChanged = wasRunning && (before.selected != candidate.selected || candidate.selected.isEmpty() ||
-            runtime(candidate).let { next -> next != null && runtime(before) != next } ||
+        val next by lazy { runtime(candidate) }
+        val runtimeChanged = wasRunning && !(refresh && candidate.selected.isNotEmpty() && next == null) &&
+            (before.selected != candidate.selected || candidate.selected.isEmpty() || next.let { it != null && runtime(before) != it } ||
             Catalog.canonical(Settings.runtime(before.settings)) != Catalog.canonical(Settings.runtime(candidate.settings)) ||
             before.routeFor(before.selected)?.string("assetRevision") != candidate.routeFor(candidate.selected)?.string("assetRevision"))
         // A failed start keeps its interface only for recovery to retry; without a server or recovery it just drops traffic.
@@ -528,7 +532,7 @@ class Repository(private val app: ElarniApplication) {
                 try {
                     warning = candidate.refresh(id, format = args.string("format").takeIf(String::isNotEmpty))
                     // A failure to apply counts as a failed refresh too, so the retry delays apply.
-                    if (warning == null) { check(generation); return apply(candidate, generation) }
+                    if (warning == null) { check(generation); return apply(candidate, generation, refresh = true) }
                 } catch (error: Exception) {
                     if (error is ResourceReview) throw error
                     // The candidate may hold half the update; record the failure on the applied catalog.
@@ -695,7 +699,8 @@ class Repository(private val app: ElarniApplication) {
     private fun systemInfo() = obj("platform" to "Android ${Build.VERSION.RELEASE}", "sdk" to Build.VERSION.SDK_INT, "device" to "${Build.MANUFACTURER} ${Build.MODEL}",
         "abis" to JSONArray(Build.SUPPORTED_ABIS.toList()), "cores" to Runtime.getRuntime().availableProcessors(), "app" to BuildConfig.VERSION_NAME,
         "core" to Native.call("xrayVersion").string("version"), "vpnConsent" to vpnConsented(app),
-        "alwaysOn" to (engine.service?.isAlwaysOn == true), "lockdown" to (engine.service?.isLockdownEnabled == true), "networkAvailable" to (engine.physical() != null))
+        "alwaysOn" to (engine.service?.isAlwaysOn == true), "lockdown" to (engine.service?.isLockdownEnabled == true), "networkAvailable" to (engine.physical() != null),
+        "batteryExempt" to app.getSystemService(android.os.PowerManager::class.java).isIgnoringBatteryOptimizations(app.packageName))
     private fun routeTable(): JSONObject {
         val connectivity = app.getSystemService(android.net.ConnectivityManager::class.java)
         return obj("networks" to JSONArray(connectivity.allNetworks.mapNotNull { network ->
@@ -840,7 +845,8 @@ class Repository(private val app: ElarniApplication) {
                 check(generation)
                 val at = catalog.nextRefresh(source) ?: continue
                 val id = source.getString("id")
-                if (at > time || (approvalBackoff["refresh $id"] ?: 0.0) > time) continue
+                // A subscription is scheduled its interval ahead, give or take a tenth.
+                if (!Catalog.refreshDue(at, time, catalog.refreshHours(source).coerceIn(1, 168) * 3600 * 1.1) || (approvalBackoff["refresh $id"] ?: 0.0) > time) continue
                 // A failed refresh, applying it included, records its own retry delay.
                 try { dispatch("refresh", obj("id" to id), generation) }
                 catch (_: Exception) { check(generation) }
@@ -853,7 +859,9 @@ class Repository(private val app: ElarniApplication) {
                 fun route() = catalog.routes.firstOrNull { it.string("id") == id }
                 for ((command, next, error, count) in listOf(listOf("refreshManaged", "nextManagedRefreshAt", "managedError", "managedFailures"),
                     listOf("refreshGeofiles", "nextGeoRefreshAt", "geofileError", "geoFailures"))) {
-                    if (route()?.let { !it.isNull(next) && it.optDouble(next) <= time } != true || (approvalBackoff["$command $id"] ?: 0.0) > time) continue
+                    // Managed lists refresh daily, geofiles weekly.
+                    val longest = if (command == "refreshManaged") 86400.0 else 7 * 86400.0
+                    if (route()?.let { !it.isNull(next) && Catalog.refreshDue(it.optDouble(next), time, longest) } != true || (approvalBackoff["$command $id"] ?: 0.0) > time) continue
                     try { dispatch(command, obj("id" to id), generation) }
                     catch (failure: Exception) {
                         // A Cancel or Stop ends the pass, and a network change only its download; neither failed.

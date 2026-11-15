@@ -81,7 +81,7 @@ extension _ProxyAutomation on DesktopProxy {
         until: now.add(Duration(seconds: DesktopCatalog.retryDelay(failures))),
         failures: failures,
       );
-      _listener?.call('A scheduled subscription or routing refresh failed.');
+      _listener?.call('scheduled_refresh_failed');
     } finally {
       _automationBusy = false;
     }
@@ -277,10 +277,28 @@ extension _ProxyAutomation on DesktopProxy {
     final runtime = _connectedAt;
     // A server whose check passed before: when its requests are now refused,
     // reset or closed, its service or route has gone. One that never passed
-    // may be rejecting the credentials, which no other moment changes.
+    // may be rejecting the credentials, or its exit the check targets, which
+    // a restart does not change: that counts only while failover can move to
+    // another server, which must pass the same check to be kept.
     final passedBefore =
         _verifiedHealth?.node == catalog.selected &&
         _verifiedHealth?.epoch == _automation.epoch;
+    // "Can move" means a server to move to: with none allowed now (a list of
+    // one, the others cooling down) such a failure stays indeterminate and
+    // the connection is kept, not retried until the budget runs out.
+    // Asked only when a refused request is classified: the order reads every server.
+    late final canLeave =
+        _automationConfig['enabled'] == true &&
+        _automationConfig['policy'] != 'fixed' &&
+        !_automation.exhausted &&
+        _automation
+            .recoveryCandidates(
+              _automationConfig['policy']! as String,
+              _recoveryOrder(catalog.selected!),
+              catalog.selected!,
+              _now,
+            )
+            .isNotEmpty;
     for (final target in targets) {
       try {
         await _ping(
@@ -321,7 +339,7 @@ extension _ProxyAutomation on DesktopProxy {
             : <String, Object?>{};
         final diagnostic = catalogMap(details['diagnostics'] ?? {});
         if (diagnostic['code'] == 'timeout' ||
-            ((unattended || passedBefore) &&
+            ((unattended || passedBefore || canLeave) &&
                 diagnostic['stage'] == 'target_request' &&
                 {
                   'failed',

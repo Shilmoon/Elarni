@@ -57,11 +57,13 @@ struct AutomationConfiguration: Codable, Equatable {
   var endpointFailureTimeouts: Int { policy == .fixed || targets.count == 1 ? 1 : 2 }
 
   /// Whether a failed health probe counts against the server. A timeout always does. A request
-  /// that was refused, reset or closed counts only for a server whose check passed before on this
+  /// that was refused, reset or closed counts for a server whose check passed before on this
   /// connection: its service or its route has gone since. One that never passed may be rejecting
-  /// the credentials, which no other moment changes.
-  static func countsAgainstServer(code: String?, stage: String?, passedBefore: Bool) -> Bool {
-    code == "timeout" || passedBefore && stage == "target_request"
+  /// the credentials, or its exit the check targets, which a restart does not change: that
+  /// counts only while failover can move to another server (`canLeave`), which must pass the
+  /// same check to be kept.
+  static func countsAgainstServer(code: String?, stage: String?, passedBefore: Bool, canLeave: Bool = false) -> Bool {
+    code == "timeout" || (passedBefore || canLeave) && stage == "target_request"
       && ["failed", "eof", "unexpected_eof", "closed_pipe"].contains(code ?? "")
   }
 }

@@ -31,10 +31,15 @@ func ConvertXrayJsonToShareLinks(xrayBytes []byte) (string, error) {
 	for _, outbound := range outbounds {
 		link, err := shareLink(outbound)
 		if outbound.Protocol == "tuic" && (err != nil || len(outbounds) != 1 || xray.RouterConfig != nil || xray.DNSConfig != nil) {
-			return string(xrayBytes), nil
+			// The callers tell the profile from links by its first character.
+			return string(bytes.TrimSpace(xrayBytes)), nil
 		}
 		if err != nil || link == nil {
 			continue
+		}
+		// A link that would import as another server is not written: the server is shared as its profile.
+		if outbound.Protocol != "tuic" && len(outbounds) == 1 && linkLoses(&outbound) {
+			return string(bytes.TrimSpace(xrayBytes)), nil
 		}
 		text := link.String()
 		if text != "" {
@@ -93,6 +98,146 @@ func shareLink(proxy conf.OutboundDetourConfig) (*url.URL, error) {
 	streamSettingsQuery(proxy, shareUrl)
 
 	return shareUrl, nil
+}
+
+// linkLoses reports whether the outbound sets something no link parameter carries, so that its link
+// would import as another server.
+func linkLoses(outbound *conf.OutboundDetourConfig) bool {
+	if outbound.MuxSettings != nil && outbound.MuxSettings.Enabled {
+		return true
+	}
+	if outbound.TargetStrategy != "" && !strings.EqualFold(outbound.TargetStrategy, "asis") {
+		return true
+	}
+	return userLoses(outbound) || streamLoses(outbound.StreamSetting)
+}
+
+// userLoses reports user settings the vless:// and vmess:// links have no parameter for: a VLESS reverse
+// proxy, pre-connections or Vision padding seeds, VMess experiments. A user level or email only picks a
+// local policy and labels statistics in a client, so a link without them imports as the same server.
+func userLoses(outbound *conf.OutboundDetourConfig) bool {
+	vlessSet := func(reverse *conf.VLessReverseConfig, testpre uint32, testseed []uint32) bool {
+		return reverse != nil || testpre != 0 || len(testseed) > 0
+	}
+	switch outbound.Protocol {
+	case "vless":
+		settings, err := decodeOutboundSettings[conf.VLessOutboundConfig](*outbound)
+		if err != nil || vlessSet(settings.Reverse, settings.Testpre, settings.Testseed) {
+			return true
+		}
+		for _, server := range settings.Vnext {
+			if server == nil {
+				continue
+			}
+			for _, raw := range server.Users {
+				// As Xray reads a member of "users".
+				var user struct {
+					Reverse  *conf.VLessReverseConfig `json:"reverse"`
+					Testpre  uint32                   `json:"testpre"`
+					Testseed []uint32                 `json:"testseed"`
+				}
+				if json.Unmarshal(raw, &user) != nil || vlessSet(user.Reverse, user.Testpre, user.Testseed) {
+					return true
+				}
+			}
+		}
+	case "vmess":
+		settings, err := decodeOutboundSettings[conf.VMessOutboundConfig](*outbound)
+		if err != nil || settings.Experiments != "" {
+			return true
+		}
+		for _, server := range settings.Receivers {
+			if server == nil {
+				continue
+			}
+			for _, raw := range server.Users {
+				// As Xray reads a member of "users".
+				var user conf.VMessAccount
+				if json.Unmarshal(raw, &user) != nil || user.Experiments != "" {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+// streamLoses reports transport and TLS settings that streamSettingsQuery has no parameter for.
+func streamLoses(stream *conf.StreamConfig) bool {
+	if stream == nil {
+		return false
+	}
+	if tls := stream.TLSSettings; tls != nil && (len(tls.Certs) > 0 || tls.DisableSystemRoot || tls.MinVersion != "") {
+		return true
+	}
+	// A "Host" header is said as the link's host.
+	if ws := stream.WSSettings; ws != nil && !onlyHostHeader(ws.Headers) {
+		return true
+	}
+	if upgrade := stream.HTTPUPGRADESettings; upgrade != nil && !onlyHostHeader(upgrade.Headers) {
+		return true
+	}
+	if grpc := stream.GRPCSettings; grpc != nil && (grpc.UserAgent != "" || grpc.IdleTimeout > 0) {
+		return true
+	}
+	// Xray's own mKCP defaults.
+	if kcp := stream.KCPSettings; kcp != nil && ((kcp.Mtu != nil && *kcp.Mtu != 1350) || (kcp.Tti != nil && *kcp.Tti != 50)) {
+		return true
+	}
+	for _, raw := range []*conf.TCPConfig{stream.RAWSettings, stream.TCPSettings} {
+		if raw == nil || len(bytes.TrimSpace(raw.HeaderConfig)) == 0 {
+			continue
+		}
+		var header struct {
+			Type    string `json:"type"`
+			Request *struct {
+				Version string                     `json:"version"`
+				Method  string                     `json:"method"`
+				Headers map[string]json.RawMessage `json:"headers"`
+			} `json:"request"`
+		}
+		if json.Unmarshal(raw.HeaderConfig, &header) != nil {
+			return true
+		}
+		request := header.Request
+		if !strings.EqualFold(header.Type, "http") || request == nil {
+			continue
+		}
+		// Xray's own request line, version 1.1 and GET, is what the link's header imports as.
+		if (request.Version != "" && request.Version != "1.1") || (request.Method != "" && request.Method != "GET") {
+			return true
+		}
+		// Of the request headers the link says Host. The response is the server's side: a client sends none.
+		for key := range request.Headers {
+			if !strings.EqualFold(key, "host") {
+				return true
+			}
+		}
+	}
+	return setJSON(stream.SocketSettings) != nil
+}
+
+func onlyHostHeader(headers map[string]string) bool {
+	for key := range headers {
+		if !strings.EqualFold(key, "host") {
+			return false
+		}
+	}
+	return true
+}
+
+// transportHost is the host a WebSocket or HTTPUpgrade request names, a "Host" header when the settings
+// name none: Xray reads the header so for WebSocket, and Clash files keep the host there for both.
+func transportHost(host string, headers map[string]string) string {
+	if host != "" {
+		return host
+	}
+	for key, value := range headers {
+		if strings.EqualFold(key, "host") {
+			return value
+		}
+	}
+	return ""
 }
 
 func decodeOutboundSettings[T any](
@@ -466,7 +611,7 @@ func streamSettingsQuery(proxy conf.OutboundDetourConfig, link *url.URL) {
 		if len(path) > 0 {
 			query = addQuery(query, "path", path)
 		}
-		host := streamSettings.WSSettings.Host
+		host := transportHost(streamSettings.WSSettings.Host, streamSettings.WSSettings.Headers)
 		if len(host) > 0 {
 			query = addQuery(query, "host", host)
 		}
@@ -492,7 +637,7 @@ func streamSettingsQuery(proxy conf.OutboundDetourConfig, link *url.URL) {
 		if streamSettings.HTTPUPGRADESettings == nil {
 			break
 		}
-		host := streamSettings.HTTPUPGRADESettings.Host
+		host := transportHost(streamSettings.HTTPUPGRADESettings.Host, streamSettings.HTTPUPGRADESettings.Headers)
 		if len(host) > 0 {
 			query = addQuery(query, "host", host)
 		}
@@ -536,7 +681,8 @@ func streamSettingsQuery(proxy conf.OutboundDetourConfig, link *url.URL) {
 			query = addQuery(query, "fp", fp)
 		}
 		sni := streamSettings.TLSSettings.ServerName
-		if sni == "" && network == "ws" && streamSettings.WSSettings != nil && streamSettings.WSSettings.Host != "" && !isIPHost(link.Hostname()) {
+		if sni == "" && network == "ws" && streamSettings.WSSettings != nil && transportHost(streamSettings.WSSettings.Host, streamSettings.WSSettings.Headers) != "" &&
+			!isIPHost(link.Hostname()) {
 			// Xray sends the server's own name; a link without "sni" is read as the WebSocket host.
 			sni = link.Hostname()
 		}

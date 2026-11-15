@@ -126,6 +126,7 @@ func RunXrayFromJSON(configJSON string) (err error) {
 		return
 	}
 	coreServer = server
+	runningConfig = configJSON
 	tunnelRules, tunnelRest = perAppGate(configJSON)
 	keptOpened = nil
 
@@ -146,7 +147,7 @@ func StopXray() error {
 	defer coreServerMu.Unlock()
 	if coreServer != nil {
 		err := coreServer.Close()
-		coreServer, tunnelRules, keptOpened = nil, nil, nil
+		coreServer, tunnelRules, keptOpened, runningConfig = nil, nil, nil, ""
 		if err != nil {
 			return err
 		}

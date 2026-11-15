@@ -12,6 +12,35 @@ import 'package:elarni/windows_private_directory.dart';
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
+  // A daemon whose catalog or keyring was damaged printed only
+  // operation_failed, and a socket it could not bind read as "no daemon".
+  test('a failed command or daemon start prints its own code', () {
+    String code(Object error, {bool daemon = true}) =>
+        headlessFailureCode(error, daemon: daemon);
+    expect(
+      code(const FormatException('unknown_command'), daemon: false),
+      'unknown_command',
+    );
+    expect(code(desktopError('storage_corrupt')), 'storage_corrupt');
+    expect(code(StateError('keyring_unavailable')), 'keyring_unavailable');
+    expect(code(StateError('socket_path_occupied')), 'socket_path_occupied');
+    expect(
+      code(ArgumentError('keyring_password_requires_linux')),
+      'keyring_password_requires_linux',
+    );
+    const refused = SocketException('Connection refused');
+    expect(code(refused, daemon: false), 'daemon_unavailable');
+    expect(code(refused), 'socket_unavailable');
+    // Text that is no code (a path, a system message) is never printed.
+    expect(
+      code(const FormatException('Unexpected character (at character 3)')),
+      'operation_failed',
+    );
+    expect(code(StateError('No element')), 'operation_failed');
+    expect(code(PlatformException(code: '/home/user/x')), 'operation_failed');
+    expect(code(Exception('x'), daemon: false), 'operation_failed');
+  });
+
   test(
     'all catalog controls use the existing controller without dialogs',
     () async {
@@ -229,6 +258,7 @@ echo "/org/freedesktop/login1: org.freedesktop.login1.Manager.PrepareForSleep (f
             'subscriptionId': 'source',
             'challenge': 'approval-token',
             'riskCodes': ['loopback_target'],
+            'destinations': ['http://127.0.0.1:8080'],
             'url': 'secret-url',
           },
         },
@@ -253,6 +283,7 @@ echo "/org/freedesktop/login1: org.freedesktop.login1.Manager.PrepareForSleep (f
       'id': 'source',
     });
     expect(refresh['challenge'], 'approval-token');
+    expect(refresh['destinations'], ['http://127.0.0.1:8080']);
     expect(jsonEncode(refresh), isNot(contains('secret')));
   });
 

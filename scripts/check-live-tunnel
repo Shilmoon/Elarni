@@ -13,7 +13,11 @@ swiftc -swift-version 5 -parse-as-library \
   macos/Runner/ProbeProcess.swift macos/Checks/ProbeChecks.swift \
   -o .build/checks/probes
 .build/checks/probes .build/libxray-macos-arm64/elarni-core
-go test -v -tags=elarni_integration ./Vendor/libXray/share -run '^TestCompiledProvider' -count=1 -timeout=60s
+# The Rust library is named here, not in a "#cgo LDFLAGS" line: since Go 1.27.4 the go command
+# refuses a library from such a line when it has LTO sections, and Rust's standard library
+# has them. A library the environment names is the builder's own, and is not checked.
+CGO_LDFLAGS="-L$ROOT/.build/rust-macos/current -lelarni_domain" \
+  go test -v -tags=elarni_integration ./Vendor/libXray/share -run '^TestCompiledProvider' -count=1 -timeout=60s
 swiftc -swift-version 5 -parse-as-library \
   -import-objc-header macos/ElarniPacketTunnel/ElarniNativeBridge.h \
   -I .build/libxray-macos-arm64 -I include \

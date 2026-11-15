@@ -228,6 +228,7 @@ private val LocalReselect = compositionLocalOf { 0 }
     var reselect by remember { mutableIntStateOf(0) }
     val screenStates = rememberSaveableStateHolder()
     var confirmation by remember { mutableStateOf<Confirmation?>(null) }
+    fun confirmReset() { confirmation = Confirmation(tr(R.string.reset_elarni_2), tr(R.string.this_deletes_every_subscription_server_and), activity::resetApp, tr(R.string.reset)) }
     val snackbar = remember { SnackbarHostState() }
     fun navigate(destination: String, target: String = "") {
         if (destination.isEmpty()) history = emptyList()
@@ -314,8 +315,11 @@ private val LocalReselect = compositionLocalOf { 0 }
                 activity.interaction.lastErrorEvent = state.event
                 // A failed refresh names its provider and offers its support link.
                 val source = state.errorSource?.let { id -> catalog.sources.firstOrNull { it.string("id") == id } }
-                if (source == null) snackbar.showSnackbar(errorMessage(error), withDismissAction = true)
-                else {
+                if (source == null) {
+                    // Only a reset gets past a saved catalog that cannot be read; locked or unavailable storage can come back by itself.
+                    val reset = tr(R.string.reset_elarni).takeIf { error == "storage_corrupt" && activity.repository.catalogUnreadable }
+                    if (snackbar.showSnackbar(errorMessage(error), reset, withDismissAction = true) == SnackbarResult.ActionPerformed) confirmReset()
+                } else {
                     val support = source.mapObject("links").string("support").takeIf { error in providerFaults && it.isNotEmpty() }
                     val result = snackbar.showSnackbar(tr(R.string.the_last_working_servers_were_kept, refreshFailure(error, source.string("name"))), support?.let { tr(R.string.contact_provider) }, withDismissAction = true)
                     if (result == SnackbarResult.ActionPerformed && support != null) activity.openURL(support)
@@ -378,7 +382,7 @@ private val LocalReselect = compositionLocalOf { 0 }
                                 "sourcePing" -> PingEditor("", state, activity, sourceId = id)
                                 "sourceNodes" -> HomeScreen(catalog, state, false, activity, ::navigate, sourceId = id)
                                 "sourceOptions" -> SourceOptionsEditor(catalog, id, state.busy, activity) { back() }
-                                "diagnostics", "systemInfo", "routeTable" -> DiagnosticsScreen(detail, state, activity, ::navigate)
+                                "diagnostics", "systemInfo", "routeTable" -> DiagnosticsScreen(detail, state, activity, ::navigate, ::confirmReset)
                                 "logs" -> LogsScreen(catalog, state.busy, activity)
                                 "notices" -> NoticesScreen(activity)
                                 "backupSupport" -> BackupSupportScreen(state, activity, ::navigate)
@@ -415,7 +419,8 @@ private val LocalReselect = compositionLocalOf { 0 }
         state.approval?.let { warning -> AlertDialog(onDismissRequest = { activity.run("reject") }, title = { Text(tr(R.string.review_download_destination)) },
             text = { Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text(tr(R.string.this_download_needs_your_approval_before))
-                warning.strings("chain").forEach { value -> Text(runCatching { val uri = java.net.URI(value); "${uri.scheme}://${uri.host}${if (uri.port == -1) "" else ":${uri.port}"}" }.getOrDefault(tr(R.string.invalid_destination))) }
+                // "chain" holds approval fingerprints; the core names each hop's origin beside them.
+                warning.strings("destinations").forEach { Text(it) }
                 warning.strings("riskCodes").forEach { Text(it.replace('_', ' ')) }
             } }, confirmButton = { TextButton({ activity.run(if (warning.string("mode") == "resource") "approveResource" else "approveSource", obj("token" to warning.getString("token"))) }, enabled = !state.busy) { Text(tr(R.string.approve_destination)) } },
             dismissButton = { TextButton({ activity.run("reject") }, enabled = !state.busy) { Text(tr(R.string.cancel)) } }) }
@@ -435,6 +440,14 @@ private val LocalReselect = compositionLocalOf { 0 }
             HomeNotice(tr(R.string.your_local_proxy_accepts_apps_without), tr(R.string.any_app_on_this_device_can),
                 tr(R.string.require_a_login) to { activity.run("settings", obj("settings" to obj("inboundAuthEnabled" to true))) },
                 tr(R.string.not_now) to { loginNoticeHidden = true; prefs.edit().putBoolean("loginWarningDismissed", true).apply() })
+        // Doze may cut the tunnel of an app that is not exempt. Android's dialog answers with no result, so the answer is read on return.
+        var batteryExempt by remember { mutableStateOf(true) }
+        LifecycleResumeEffect(Unit) { batteryExempt = activity.batteryExempt(); onPauseOrDispose {} }
+        var batteryNoticeHidden by remember { mutableStateOf(prefs.getBoolean("batteryNoticeDismissed", false)) }
+        if (catalog.settings.optBoolean("xrayTunEnabled") && !batteryExempt && !batteryNoticeHidden)
+            HomeNotice(tr(R.string.android_may_stop_the_vpn_while), tr(R.string.battery_optimization_lets_android_cut_the),
+                tr(R.string.allow) to { activity.allowBackground() },
+                tr(R.string.not_now) to { batteryNoticeHidden = true; prefs.edit().putBoolean("batteryNoticeDismissed", true).apply() })
         val feed = catalog.settings.string("updateFeedURL")
         val lifecycle = LocalLifecycleOwner.current.lifecycle
         // Each minute the app shows asks whether the day (or, while the feed is unreadable, the hour) has passed.
@@ -1229,7 +1242,7 @@ private fun quota(metadata: JSONObject): Triple<String, String, Float?> {
 fun pingFresh(node: JSONObject, result: JSONObject, time: Double) = result.string("configurationRevision") == node.string("configurationRevision", node.string("id")) && time - result.optDouble("timestamp", 0.0) in 0.0..300.0
 fun pingScope(result: JSONObject) = when (result.string("protocol")) { "tcp" -> tr(R.string.direct_tcp); "icmp" -> tr(R.string.direct_icmp); "activeProxy" -> tr(R.string.active_proxy); else -> "proxy" }
 
-@Composable private fun DiagnosticsScreen(page: String, state: AppState, activity: MainActivity, navigate: (String, String) -> Unit) {
+@Composable private fun DiagnosticsScreen(page: String, state: AppState, activity: MainActivity, navigate: (String, String) -> Unit, reset: () -> Unit) {
     var info by remember(page) { mutableStateOf<JSONObject?>(null) }
     fun refresh() { activity.run(if (page == "diagnostics") "read" else page) { info = it } }
     LaunchedEffect(page) { refresh() }
@@ -1240,6 +1253,8 @@ fun pingScope(result: JSONObject) = when (result.string("protocol")) { "tcp" -> 
                 SettingsTile(tr(R.string.connection_recovery), state.automationStatus)
                 if (state.whitelistMode) SettingsTile(tr(R.string.whitelist_mode_russian_entry_servers_first))
                 state.error?.let { SettingsTile(errorMessage(it), titleColor = MaterialTheme.colorScheme.error) }
+                // As on the error's snackbar: only an unreadable catalog needs it.
+                if (state.error == "storage_corrupt" && activity.repository.catalogUnreadable) SettingsTile(tr(R.string.reset_elarni), enabled = !state.busy, titleColor = MaterialTheme.colorScheme.error, onClick = reset)
             }
             SettingsGroup {
                 SettingsTile(tr(R.string.retry_selected_server), enabled = !state.busy) { activity.connect() }
@@ -1374,6 +1389,8 @@ fun errorMessage(code: String): String = when (code) {
     "foreground_start_denied" -> tr(R.string.android_could_not_start_the_service)
     "storage_locked", "storage_corrupt", "storage_unavailable" -> tr(R.string.your_encrypted_catalog_could_not_be)
     "unsupported_profile", "invalid_input" -> tr(R.string.this_profile_could_not_be_imported)
+    "no_share_link" -> tr(R.string.a_chosen_server_has_no_share)
+    "unencrypted_server" -> tr(R.string.this_server_has_no_encryption)
     "connection_failed" -> tr(R.string.the_connection_could_not_start_check)
     "invalid_settings" -> tr(R.string.some_settings_are_invalid_check_port)
     "invalid_update_feed" -> tr(R.string.use_an_https_address_for_the)

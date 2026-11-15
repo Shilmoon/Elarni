@@ -20,9 +20,12 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
+	"golang.org/x/net/dns/dnsmessage"
+	"golang.org/x/net/ipv4"
 	socksproxy "golang.org/x/net/proxy"
 )
 
@@ -64,7 +67,8 @@ var privateNetworks = func() []netip.Prefix {
 var nat64Prefix = netip.MustParsePrefix("64:ff9b::/96")
 
 func addressRisk(address netip.Addr) string {
-	address = address.Unmap()
+	// A prefix contains no address with a zone, and a link-local answer carries one.
+	address = address.Unmap().WithZone("")
 	if nat64Prefix.Contains(address) {
 		bytes := address.As16()
 		address = netip.AddrFrom4([4]byte(bytes[12:]))
@@ -78,6 +82,56 @@ func addressRisk(address netip.Addr) string {
 		}
 	}
 	return ""
+}
+
+// localNetworks are the addresses this device reaches and a server does not: loopback, RFC 1918,
+// link-local and unique-local. Narrower than addressRisk on purpose: NAT64, CGNAT and the
+// documentation ranges are no home or office network, and a fetch to them stays in the tunnel.
+var localNetworks = func() []netip.Prefix {
+	var result []netip.Prefix
+	for _, cidr := range []string{"127.0.0.0/8", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.0.0/16", "::1/128", "fc00::/7", "fe80::/10"} {
+		result = append(result, netip.MustParsePrefix(cidr))
+	}
+	return result
+}()
+
+func localAddress(address netip.Addr) bool {
+	address = address.Unmap().WithZone("")
+	return !fakeDNSAddress(address) && slices.ContainsFunc(localNetworks, func(prefix netip.Prefix) bool { return prefix.Contains(address) })
+}
+
+// localDials remembers, for one fetch, the local addresses that did not answer from this device.
+// Every redirect hop and every mirror attempt dials anew, and each would wait for them again.
+type localDials struct {
+	sync.Mutex
+	failed map[netip.Addr]bool
+	// One address timed out: a network that drops the packets drops them for the others too.
+	// This device itself drops none, so its own addresses are still dialed.
+	silent bool
+}
+
+func (l *localDials) try(address netip.Addr) bool {
+	l.Lock()
+	defer l.Unlock()
+	return !l.failed[address] && (!l.silent || address.Unmap().IsLoopback())
+}
+
+// fail notes that the address did not answer. waited says the dial had its whole wait: one cut
+// short by the fetch's own deadline (a mirror's share of the time) says nothing about the network.
+func (l *localDials) fail(address netip.Addr, err error, waited bool) {
+	l.Lock()
+	defer l.Unlock()
+	if l.failed == nil {
+		l.failed = map[netip.Addr]bool{}
+	}
+	if !waited {
+		return
+	}
+	l.failed[address] = true
+	var timeout net.Error
+	if errors.As(err, &timeout) && timeout.Timeout() && !address.Unmap().IsLoopback() {
+		l.silent = true
+	}
 }
 
 func feedTarget(text string) (*url.URL, error) {
@@ -182,16 +236,28 @@ func LookupHost(ctx context.Context, host string) ([]netip.Addr, error) {
 // fakeDNSPools are Xray's default FakeDNS ranges, which Elarni's profiles use.
 var fakeDNSPools = []netip.Prefix{netip.MustParsePrefix("198.18.0.0/15"), netip.MustParsePrefix("fc00::/18")}
 
+func fakeDNSAddress(address netip.Addr) bool {
+	return slices.ContainsFunc(fakeDNSPools, func(pool netip.Prefix) bool { return pool.Contains(address.Unmap()) })
+}
+
+// localName reports a name only this device's network can answer: mDNS (.local) and a
+// name without a dot, which a router, hosts file or search domain may know and no public
+// resolver does.
+func localName(host string) bool {
+	if _, err := netip.ParseAddr(host); err == nil {
+		return false
+	}
+	host = strings.ToLower(strings.TrimSuffix(host, "."))
+	return host != "" && (strings.HasSuffix(host, ".local") || !strings.Contains(host, "."))
+}
+
 // systemLookup asks the system resolver. While a VPN with FakeDNS carries the app's own
 // traffic (Apple, the desktop TUN), that answers with FakeDNS placeholders, which a fetch
 // refuses as private; the name is then looked up over TLS, through that VPN. Without an
 // answer there the placeholder stays: approved, it still connects through the VPN.
 func systemLookup(ctx context.Context, network, host string) ([]netip.Addr, error) {
 	addresses, err := net.DefaultResolver.LookupNetIP(ctx, network, host)
-	fake := func(address netip.Addr) bool {
-		return slices.ContainsFunc(fakeDNSPools, func(pool netip.Prefix) bool { return pool.Contains(address.Unmap()) })
-	}
-	if err != nil || !slices.ContainsFunc(addresses, fake) {
+	if err != nil || !slices.ContainsFunc(addresses, fakeDNSAddress) {
 		return addresses, err
 	}
 	lookup, cancel := context.WithTimeout(ctx, 5*time.Second)
@@ -203,6 +269,124 @@ func systemLookup(ctx context.Context, network, host string) ([]netip.Addr, erro
 		return answers, nil
 	}
 	return addresses, nil
+}
+
+// localLookup resolves a name of the local network. The system resolver comes first. It may
+// not know the name: under the desktop TUN with FakeDNS it answers every name with a
+// placeholder, and the core's resolver (built without cgo) never asks mDNS. A .local name is
+// then asked on the local links. Without an answer there the name has none.
+func localLookup(ctx context.Context, network, host string) ([]netip.Addr, error) {
+	addresses, err := net.DefaultResolver.LookupNetIP(ctx, network, host)
+	if err == nil && len(addresses) > 0 && !slices.ContainsFunc(addresses, fakeDNSAddress) {
+		return addresses, nil
+	}
+	if answers := mdnsLookup(ctx, network, host); len(answers) > 0 {
+		return answers, nil
+	}
+	if err == nil && len(addresses) > 0 {
+		// Only placeholders: connecting to one sends the name to the server, which cannot know it.
+		return nil, errors.New("dns_failed")
+	}
+	return addresses, err
+}
+
+// mdnsGroup is where a .local name is asked (RFC 6762).
+var mdnsGroup = "224.0.0.251:5353"
+
+// mdnsWait is how long a .local name waits for its first answer; tests shorten it.
+var mdnsWait = time.Second
+
+// mdnsLookup asks the local links for the IPv4 addresses of a .local name, once, and waits a
+// second for the first answer, or until the fetch is cancelled. IPv6 answers there are link-local, which a URL cannot dial.
+func mdnsLookup(ctx context.Context, network, host string) []netip.Addr {
+	host = strings.ToLower(strings.TrimSuffix(host, "."))
+	name, err := dnsmessage.NewName(host + ".")
+	group, groupErr := net.ResolveUDPAddr("udp4", mdnsGroup)
+	if !strings.HasSuffix(host, ".local") || network == "ip6" || err != nil || groupErr != nil {
+		return nil
+	}
+	// The top bit of the class asks for an answer to this socket, not to the group.
+	query, err := (&dnsmessage.Message{Questions: []dnsmessage.Question{{Name: name, Type: dnsmessage.TypeA, Class: dnsmessage.ClassINET | 1<<15}}}).Pack()
+	if err != nil {
+		return nil
+	}
+	var sockets []*net.UDPConn
+	if !group.IP.IsMulticast() {
+		if socket, err := net.ListenUDP("udp4", nil); err == nil {
+			sockets = append(sockets, socket)
+		}
+	} else if interfaces, err := net.Interfaces(); err == nil { // Refused on Android, whose resolver asks mDNS itself.
+		for _, link := range interfaces {
+			if link.Flags&net.FlagUp == 0 || link.Flags&net.FlagMulticast == 0 || link.Flags&(net.FlagLoopback|net.FlagPointToPoint) != 0 {
+				continue
+			}
+			addresses, _ := link.Addrs()
+			for _, address := range addresses {
+				network, ok := address.(*net.IPNet)
+				if !ok || network.IP.To4() == nil {
+					continue
+				}
+				// The default route may be the tunnel's: the question leaves by this link.
+				socket, err := net.ListenUDP("udp4", &net.UDPAddr{IP: network.IP})
+				if err != nil {
+					continue
+				}
+				if ipv4.NewPacketConn(socket).SetMulticastInterface(&link) != nil {
+					_ = socket.Close()
+					continue
+				}
+				sockets = append(sockets, socket)
+				break
+			}
+		}
+	}
+	deadline := time.Now().Add(mdnsWait)
+	if limit, ok := ctx.Deadline(); ok && limit.Before(deadline) {
+		deadline = limit
+	}
+	for _, socket := range sockets {
+		_ = socket.SetDeadline(deadline)
+	}
+	// A cancelled fetch does not wait for the answer.
+	stop := context.AfterFunc(ctx, func() {
+		for _, socket := range sockets {
+			_ = socket.SetDeadline(time.Now())
+		}
+	})
+	defer stop()
+	answers := make(chan []netip.Addr, len(sockets))
+	for _, socket := range sockets {
+		go func() {
+			defer socket.Close()
+			var found []netip.Addr
+			defer func() { answers <- found }()
+			if _, err := socket.WriteToUDP(query, group); err != nil {
+				return
+			}
+			buffer := make([]byte, 1500)
+			for len(found) == 0 {
+				size, _, err := socket.ReadFromUDP(buffer)
+				if err != nil {
+					return
+				}
+				var message dnsmessage.Message
+				if message.Unpack(buffer[:size]) != nil || !message.Response {
+					continue
+				}
+				for _, answer := range message.Answers {
+					if record, ok := answer.Body.(*dnsmessage.AResource); ok && strings.EqualFold(answer.Header.Name.String(), name.String()) {
+						found = append(found, netip.AddrFrom4(record.A))
+					}
+				}
+			}
+		}()
+	}
+	for range sockets {
+		if found := <-answers; len(found) > 0 {
+			return found
+		}
+	}
+	return nil
 }
 
 // fallbackAttemptLimit caps each attempt but the last when a feed has mirrors.
@@ -231,6 +415,10 @@ var tunnelPlainDNS = "1.1.1.1:53"
 
 func tunnelLookup(proxy string) func(context.Context, string, string) ([]netip.Addr, error) {
 	return func(ctx context.Context, network, host string) ([]netip.Addr, error) {
+		if localName(host) {
+			// The server's resolvers cannot know it, and the name never leaves the local network.
+			return localLookup(ctx, network, host)
+		}
 		secure, cancel := context.WithTimeout(ctx, 5*time.Second)
 		addresses, err := tunnelResolver(proxy).LookupNetIP(secure, network, host)
 		cancel()
@@ -308,6 +496,9 @@ func fetchResourceUsing(parent context.Context, request SubscriptionFetchRequest
 		targets = append(targets, fallback)
 	}
 	chain := append([]string{}, request.EncounteredChain...)
+	// What a review shows for the fingerprints this fetch added to the chain.
+	destinations := []string{}
+	local := &localDials{}
 	var result any
 	var err error
 	for index, target := range targets {
@@ -318,7 +509,7 @@ func fetchResourceUsing(parent context.Context, request SubscriptionFetchRequest
 			deadline, _ := ctx.Deadline()
 			attempt, stop = context.WithTimeout(ctx, min(fallbackAttemptLimit, time.Until(deadline)/time.Duration(len(targets)-index)))
 		}
-		result, err = fetchResourceAttempt(attempt, request, targets[0], resolve, newTransport, limit, binaryBody, destination, &chain)
+		result, err = fetchResourceAttempt(attempt, request, targets[0], resolve, newTransport, limit, binaryBody, destination, &chain, &destinations, local)
 		if stop != nil {
 			stop()
 		}
@@ -335,7 +526,7 @@ func fetchResourceUsing(parent context.Context, request SubscriptionFetchRequest
 	return nil, err
 }
 
-func fetchResourceAttempt(ctx context.Context, request SubscriptionFetchRequest, identity string, resolve func(context.Context, string, string) ([]netip.Addr, error), newTransport func() *http.Transport, limit int64, binaryBody bool, destination string, encountered *[]string) (any, error) {
+func fetchResourceAttempt(ctx context.Context, request SubscriptionFetchRequest, identity string, resolve func(context.Context, string, string) ([]netip.Addr, error), newTransport func() *http.Transport, limit int64, binaryBody bool, destination string, encountered, destinations *[]string, local *localDials) (any, error) {
 	u, err := feedTarget(request.URL)
 	if err != nil {
 		return nil, err
@@ -389,11 +580,30 @@ func fetchResourceAttempt(ctx context.Context, request SubscriptionFetchRequest,
 			fingerprint := approvalFingerprint(target, risks)
 			position := len(chain)
 			chain = append(chain, fingerprint)
+			named := u.Scheme + "://" + u.Host
+			if dialHost != u.Hostname() {
+				// The risk is the connect address's; the URL alone would hide it.
+				named += " → " + dialHost
+			}
+			*destinations = append(*destinations, named)
 			if position >= len(request.ApprovedChain) || request.ApprovedChain[position] != fingerprint {
-				return map[string]any{"warning": map[string]any{"riskCodes": risks, "chain": chain}}, nil
+				// The chain is fingerprints, which name nothing to the user: destinations does.
+				return map[string]any{"warning": map[string]any{"riskCodes": risks, "chain": chain, "destinations": *destinations}}, nil
 			}
 		}
 		dial := (&net.Dialer{Timeout: 5 * time.Second}).DialContext
+		// A server cannot reach this device or its local network, so an address there is dialed
+		// from here first. The tunnel still gets its turn: the feed may be in the server's network.
+		// Only for an address the URL gives, or a name the local network answered. What a
+		// resolver in the tunnel answered is the server's view, and stays in the tunnel: a
+		// provider's feed inside its own network must not reach a device that has the same
+		// address here. An address written in the URL can be either one; this device's wins,
+		// after the user approved a private destination.
+		var localDial func(context.Context, string, string) (net.Conn, error)
+		_, literal := netip.ParseAddr(dialHost)
+		if request.Proxy != "" && (literal == nil || localName(dialHost)) {
+			localDial = (&net.Dialer{Timeout: 2 * time.Second}).DialContext
+		}
 		if request.Proxy != "" {
 			// Only the connection goes through the core; addresses were evaluated above.
 			proxyURL, _ := url.Parse(request.Proxy)
@@ -412,7 +622,16 @@ func fetchResourceAttempt(ctx context.Context, request SubscriptionFetchRequest,
 				return nil, err
 			}
 			for _, ip := range addresses {
-				conn, err := dial(ctx, "tcp", net.JoinHostPort(ip.String(), port))
+				target := net.JoinHostPort(ip.String(), port)
+				conn, err := net.Conn(nil), errUnreachable
+				if localDial != nil && localAddress(ip) && local.try(ip) {
+					if conn, err = localDial(ctx, "tcp", target); err != nil {
+						local.fail(ip, err, ctx.Err() == nil)
+					}
+				}
+				if err != nil {
+					conn, err = dial(ctx, "tcp", target)
+				}
 				if err == nil {
 					if request.FragmentLength != "" && u.Scheme == "https" {
 						length, _ := fetchRange(request.FragmentLength, 1, 65535)

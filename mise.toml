@@ -1,5 +1,5 @@
 [tools]
 flutter = "3.44.2"
-go = "1.27.3"
+go = "1.27.4"
 # Rust is selected by rustup using rust-toolchain.toml.
 node = "22.23.2"

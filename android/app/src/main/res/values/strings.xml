@@ -38,6 +38,7 @@
     <string name="some_settings_are_invalid_check_port">Some settings are invalid. Check port numbers, ranges, DNS addresses, and required login details.</string>
     <string name="the_connection_could_not_start_check">The connection could not start. Check the server, network, proxy ports, and routing assets, then retry.</string>
     <string name="this_profile_could_not_be_imported">This profile could not be imported. Check the complete link or configuration and try again.</string>
+    <string name="this_server_has_no_encryption">This server has no encryption: no TLS, REALITY or VLESS encryption. Elarni accepts such a server only on a private network.</string>
     <string name="your_encrypted_catalog_could_not_be">Your encrypted catalog could not be opened or saved. Existing data has been preserved. Unlock the device and restart the app. If this does not go away, the only way to start over is to clear Elarni\'s storage in Android Settings › Apps, which removes its servers and settings.</string>
     <string name="android_could_not_start_the_service">Android could not start the service from the background. Open Elarni and tap Connect.</string>
     <string name="android_has_not_made_the_vpn">Android has not made the VPN network ready. Reconnect or check Android VPN settings.</string>
@@ -317,7 +318,6 @@
     <string name="your_local_proxy_accepts_apps_without">Your local proxy accepts apps without a login</string>
     <string name="any_app_on_this_device_can">Any app on this device can use it.</string>
     <string name="approve_destination">Approve destination</string>
-    <string name="invalid_destination">Invalid destination</string>
     <string name="this_download_needs_your_approval_before">This download needs your approval before fetching from these destinations. Continue only if you trust the provider.</string>
     <string name="review_download_destination">Review download destination</string>
     <string name="disconnect_elarni">Disconnect Elarni?</string>
@@ -725,4 +725,12 @@
     <string name="connection_per_app_rule">Per-app rule</string>
     <string name="connection_not_listed">Not listed</string>
     <string name="add_to_list">Add to list</string>
+    <string name="android_may_stop_the_vpn_while">Android may stop the VPN while the phone sleeps</string>
+    <string name="battery_optimization_lets_android_cut_the">Battery optimization lets Android cut the connection in the background. Allow Elarni to run without it.</string>
+    <string name="run_in_the_background">Run in the background</string>
+    <string name="allowed">Allowed</string>
+    <string name="reset_elarni">Reset Elarni</string>
+    <string name="reset_elarni_2">Reset Elarni?</string>
+    <string name="this_deletes_every_subscription_server_and">This deletes every subscription, server and setting on this device. It cannot be undone.</string>
+    <string name="a_chosen_server_has_no_share">A chosen server has no share link that keeps all its settings. Share it from its own page.</string>
 </resources>

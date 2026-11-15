@@ -303,7 +303,11 @@ extension _HomeController on _ElarniHomeState {
     } on PlatformException catch (error) {
       if (mounted)
         _set(() {
-          _systemError = error.message ?? l10n.systemSettingsNotLoaded;
+          // Native messages are English: only a code without text shows one.
+          _systemError =
+              failureText(error.code) ??
+              error.message ??
+              l10n.systemSettingsNotLoaded;
           if (error.details is Map) {
             _systemInfo = Map<String, Object?>.from(error.details as Map);
           }
@@ -715,9 +719,14 @@ extension _HomeController on _ElarniHomeState {
       if (mounted) {
         final issue = ConnectionIssue.from(error);
         _set(
+          // An occupied port says which setting to change on its own; it is
+          // named when the platform says which one (macOS).
           () => _message =
               error is PlatformException && error.code == 'listener_unavailable'
-              ? error.message
+              ? switch (error.details) {
+                  final int port => l10n.issueListenerPortUnavailable(port),
+                  _ => issue.description,
+                }
               : issue.code == 'operation_failed'
               ? l10n.settingNotAppliedCheck
               : l10n.settingNotApplied(issue.description),
@@ -1027,9 +1036,16 @@ extension _HomeController on _ElarniHomeState {
           content: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
-            children: warning.risks
-                .map((risk) => Text(_riskMessage(risk)))
-                .toList(growable: false),
+            children: [
+              for (final risk in warning.risks) Text(_riskMessage(risk)),
+              // What the approval is for: each address this download goes to.
+              if (warning.destinations.isNotEmpty)
+                Text(
+                  l10n.subscriptionDestinations(
+                    warning.destinations.join(', '),
+                  ),
+                ),
+            ],
           ),
           actions: <Widget>[
             TextButton(
@@ -1121,11 +1137,15 @@ extension _HomeController on _ElarniHomeState {
         );
         final message = switch (error) {
           // The provider sent what Elarni cannot read: no network problem.
+          PlatformException(code: 'unencrypted_server') when added =>
+            l10n.subscriptionAddedUnencrypted,
           PlatformException(code: 'unsupported_profile') when added =>
             l10n.subscriptionAddedUnreadable,
           _ when added => l10n.subscriptionAddedFirstDownloadFailed,
           PlatformException(code: 'unsupported_profile') =>
             l10n.unsupportedProfileTryJson,
+          PlatformException(code: 'unencrypted_server') =>
+            l10n.unencryptedServer,
           PlatformException(code: 'catalog_limit') => l10n.catalogLimit,
           PlatformException(code: 'no_selected_subscription') =>
             l10n.selectServerFirstRoutingLink,

@@ -4,6 +4,85 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
 
 ## Unreleased
 
+### Fixed
+
+- A change of per-app routing while connected no longer restarts the tunnel on Windows and
+  Linux. Before, adding or removing an app, changing its target or switching the mode stopped
+  the tunnel and started it again, which cut every connection of every app for about two
+  seconds (a voice call dropped, for one). The running tunnel now takes the new rules as it
+  is: connections that are open stay open on the route they have, and new ones follow the new
+  rules. A change the running tunnel cannot take (another server, the routing profile, routes,
+  DNS, a listener, or another server for an app that already had one) is restarted as before.
+- Automatic failover now leaves a server that refuses or closes connections even when that
+  server never passed a health check since the last change. Before, a server that was already
+  down at Connect, or that went down right after failover was turned on, stayed selected and
+  shown as connected, and the backup was never used. A server that never passed a check is
+  still not restarted in place, and a fixed server is not touched. With no other allowed server
+  to move to (a list of one, or the others just tried) such a server is kept as it is, not
+  retried until the retry limit ends the connection. Windows, Linux, macOS and iPhone; Android
+  already did this.
+- The **Review download destination** prompt lists the addresses of the download. Android
+  showed `null://null` and iPhone showed "Invalid destination", because the core sent
+  fingerprints where the apps expected addresses; the Windows, Linux and Mac prompt named only
+  the risk, and `elarni-cli` returned no `destinations`. When a connect address overrides the
+  URL's host, the prompt names it beside the URL.
+- A subscription on this device's own network refreshes while Elarni is connected: a URL with a
+  loopback, private, link-local or unique-local address, or a `.local` or dot-less name. The
+  name is looked up by the system, a `.local` name also by mDNS when the system cannot answer
+  (FakeDNS in VPN mode, Linux), and the address is tried from this device first, then through
+  the tunnel. Before, both went through the tunnel and the refresh failed. A name that a
+  resolver in the tunnel answered with a private address stays in the tunnel, as it was: that
+  is the server's network. Android, Windows and Linux.
+- An address with an IPv6 zone (`fe80::1%eth0`) is classed as a local address in the download
+  review, like the same address without the zone.
+- The `elarni-cli` daemon names why it could not start: `storage_corrupt` for a damaged catalog,
+  `keyring_unavailable` for a keyring it cannot open, `socket_unavailable` for a socket it
+  cannot bind, instead of `operation_failed` or `daemon_unavailable` for each. Text that is
+  not a code is still never printed.
+- A VLESS or Trojan link without TLS, REALITY or VLESS encryption that points at a public
+  address is refused with that reason. Before, the message said the profile was unsupported
+  and suggested another format, also for a new subscription, on the refresh failure card and
+  for a Clash file. The rule itself (the core accepts such a server only on a private network)
+  is unchanged. All platforms.
+- Android asks to run without battery optimization. Doze cut the VPN while the phone slept,
+  because the app was not exempt and never asked. With System VPN on, Home shows the request
+  once and **Settings > General** has a **Run in the background** tile; both open Android's
+  own dialog.
+- Refresh times written while the device clock was far ahead come due once the clock is set
+  right, on Android, macOS and iPhone as on desktop. Before, the subscription, managed lists
+  and geofiles were not refreshed again until that date, and the Mac's maintenance timer slept
+  until it.
+- A pasted or file-imported list with a server the compiler refuses imports the rest and counts
+  the one left out, as a subscription refresh does. Before, the whole import failed. Windows,
+  Linux and Android; on macOS and iPhone a list that joins the local group keeps its count of
+  skipped lines.
+- A Clash file with a rule that points at a proxy the import skipped, or with `no-resolve` on
+  an `IP-CIDR`, `IP-CIDR6` or `GEOIP` rule, imports. The rule to the skipped proxy blocks what it
+  matched, so a later rule such as `MATCH,DIRECT` does not send that traffic another way, and a
+  file whose `MATCH` rule points at a skipped proxy is refused with that reason; when
+  every IP rule has `no-resolve` the profile does not resolve names for IP rules, otherwise it
+  keeps resolving them.
+- A share link is not written for a server whose link would lose settings (mux, a target
+  strategy, pinned certificates, extra WebSocket headers, socket options, a VLESS reverse
+  proxy): that link imported as another server. **Share links** says so and the server is
+  shared from its own page, as JSON. A WebSocket `Host` header is written as the link's host.
+- Android: a subscription refresh while connected no longer fails for good when the feed
+  dropped both the selected server and a server an app is pinned to. The running tunnel stays
+  as it is and the next Connect names the app's rule.
+- Android: when the saved catalog cannot be read, the failure offers **Reset Elarni** behind a
+  confirmation. Before, the only way out was clearing the app's data in Android settings.
+- Recent connections shows an IPv6 destination as `[2001:db8::1]:443`, not with doubled
+  brackets. Android, Windows and Linux.
+- Windows and Linux: notices and stored failures are in the interface language: links that
+  failed to import, a connection that stopped, the system proxy, a scheduled refresh, the
+  system settings and occupied-port errors, a routing profile's geofile and managed-list
+  failures, a per-app paste that is not JSON. Before, they were English in a Russian interface.
+
+### Security
+
+- Go 1.27.4 (GO-2026-6859 in `net/http`), hickory-proto 0.26.3 (RUSTSEC-2026-0487 to
+  RUSTSEC-2026-0491) and rustix 1.1.6 (RUSTSEC-2026-0486).
+
 ## 0.6.1 - 2026-11-14
 
 ### Changed

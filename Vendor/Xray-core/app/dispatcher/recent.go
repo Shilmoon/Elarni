@@ -135,7 +135,10 @@ func (r *recentConnections) record(id uint32, link *routing_session.Context, des
 	entry := RecentConnection{Key: r.key, Seq: r.seq, Time: time.Now().UnixMilli(), Network: destination.Network.SystemString(),
 		Host: link.GetTargetDomain(), Port: uint16(destination.Port), Inbound: link.GetInboundTag(), Outbound: handler.Tag(), Kind: kind}
 	if entry.Host == "" && destination.Address != nil {
-		entry.Host = destination.Address.String()
+		// The bare address: String() brackets an IPv6 address, and every reader adds its own.
+		if entry.Host = destination.Address.String(); destination.Address.Family().IsIP() {
+			entry.Host = destination.Address.IP().String()
+		}
 	}
 	if rule != "" {
 		entry.Rules = []string{rule}

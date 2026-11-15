@@ -1,6 +1,6 @@
 module github.com/xtls/libxray
 
-go 1.27.3
+go 1.27.4
 
 require (
 	github.com/INCY-DEV/incy-link-encoder/go v1.3.0

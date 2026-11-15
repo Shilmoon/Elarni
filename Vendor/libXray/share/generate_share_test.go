@@ -67,8 +67,8 @@ func TestShareLinksOfClassicXrayJSONImportAgain(t *testing.T) {
 				t.Fatal(err)
 			}
 			links, err := ConvertXrayJsonToShareLinks(imported.Profiles[0].Config)
-			if err != nil {
-				t.Fatal(err)
+			if err != nil || strings.HasPrefix(links, "{") {
+				t.Fatalf("exported %q (%v)", links, err)
 			}
 			for _, part := range test.want {
 				if !strings.Contains(links, part) {
@@ -150,8 +150,8 @@ func TestShareLinksKeepXHTTPSettings(t *testing.T) {
 				t.Fatal(err)
 			}
 			links, err := ConvertXrayJsonToShareLinks(imported.Profiles[0].Config)
-			if err != nil {
-				t.Fatal(err)
+			if err != nil || strings.HasPrefix(links, "{") {
+				t.Fatalf("exported %q (%v)", links, err)
 			}
 			again, err := ImportClientProfiles(links)
 			if err != nil {
@@ -204,8 +204,8 @@ func TestShareLinksKeepWhatALinkCanSay(t *testing.T) {
 				t.Fatal(err)
 			}
 			links, err := ConvertXrayJsonToShareLinks(imported.Profiles[0].Config)
-			if err != nil {
-				t.Fatal(err)
+			if err != nil || strings.HasPrefix(links, "{") {
+				t.Fatalf("exported %q (%v)", links, err)
 			}
 			again, err := ImportClientProfiles(links)
 			if err != nil {
@@ -233,6 +233,172 @@ func TestShareLinksKeepWhatALinkCanSay(t *testing.T) {
 				t.Errorf("the imported link exports as\n%s\nnot\n%s (%v)", second, links, err)
 			}
 		})
+	}
+}
+
+// A link has no parameter for these settings. A server that sets one is shared as its profile, as a TUIC
+// server with options is, instead of as a link that imports as another server; at its default it is
+// still a link.
+func TestShareLinkThatWouldLoseSettingsIsNotWritten(t *testing.T) {
+	const id = "00000000-0000-4000-8000-000000000001"
+	vless := func(top, stream string) string {
+		return `{"protocol":"vless",` + top + `"settings":{"address":"203.0.113.7","port":443,"id":"` + id + `","encryption":"none"},"streamSettings":{` + stream + `}}`
+	}
+	overTLS := func(network, transport, tlsFields string) string {
+		return vless("", `"network":"`+network+`",`+transport+`"security":"tls","tlsSettings":{"serverName":"example.com"`+tlsFields+`}`)
+	}
+	plain := func(network, transport string) string { return overTLS(network, transport, "") }
+	user := func(protocol, settings string) string {
+		return `{"protocol":"` + protocol + `","settings":{` + settings + `}}`
+	}
+	vlessUser := func(fields string) string {
+		return `"vnext":[{"address":"203.0.113.7","port":443,"users":[{"id":"` + id + `","encryption":"none"` + fields + `}]}]`
+	}
+	for _, test := range []struct{ name, lossy, kept string }{
+		{"mux", vless(`"mux":{"enabled":true,"concurrency":8},`, `"security":"tls"`), vless(`"mux":{"enabled":false,"concurrency":8},`, `"security":"tls"`)},
+		{"target strategy", vless(`"targetStrategy":"ForceIPv4",`, `"security":"tls"`), vless(`"targetStrategy":"asIs",`, `"security":"tls"`)},
+		{"TLS certificate", overTLS("raw", "", `,"certificates":[{"certificate":["fixture"],"usage":"verify"}]`), overTLS("raw", "", `,"certificates":[]`)},
+		{"TLS without system roots", overTLS("raw", "", `,"disableSystemRoot":true`), overTLS("raw", "", `,"disableSystemRoot":false`)},
+		{"TLS minimum version", overTLS("raw", "", `,"minVersion":"1.3"`), overTLS("raw", "", `,"minVersion":""`)},
+		{"WebSocket header", plain("ws", `"wsSettings":{"path":"/w","host":"cdn.example","headers":{"User-Agent":"fixture"}},`),
+			plain("ws", `"wsSettings":{"path":"/w","host":"cdn.example","headers":{"HOST":"cdn.example"}},`)},
+		{"HTTPUpgrade header", plain("httpupgrade", `"httpupgradeSettings":{"path":"/u","host":"cdn.example","headers":{"X-Fixture":"1"}},`),
+			plain("httpupgrade", `"httpupgradeSettings":{"path":"/u","host":"cdn.example","headers":{}},`)},
+		{"gRPC user agent", plain("grpc", `"grpcSettings":{"serviceName":"s","user_agent":"fixture"},`), plain("grpc", `"grpcSettings":{"serviceName":"s","user_agent":""},`)},
+		{"gRPC idle timeout", plain("grpc", `"grpcSettings":{"serviceName":"s","idle_timeout":60},`), plain("grpc", `"grpcSettings":{"serviceName":"s","idle_timeout":0},`)},
+		{"mKCP MTU", plain("kcp", `"kcpSettings":{"mtu":1200},`), plain("kcp", `"kcpSettings":{"mtu":1350},`)},
+		{"mKCP TTI", plain("mkcp", `"kcpSettings":{"tti":20},`), plain("mkcp", `"kcpSettings":{"tti":50},`)},
+		{"HTTP header method", plain("raw", `"rawSettings":{"header":{"type":"http","request":{"method":"POST","path":["/"]}}},`),
+			plain("raw", `"rawSettings":{"header":{"type":"http","request":{"method":"","path":["/"]}}},`)},
+		{"HTTP header version", plain("tcp", `"tcpSettings":{"header":{"type":"http","request":{"version":"1.0"}}},`),
+			plain("tcp", `"tcpSettings":{"header":{"type":"http","request":{"path":["/"]}}},`)},
+		// Xray's own request line, said in full, is no setting of its own.
+		{"HTTP header defaults", plain("raw", `"rawSettings":{"header":{"type":"http","request":{"version":"1.1","method":"POST","path":["/p"],"headers":{"Host":["cdn.example"]}}}},`),
+			plain("raw", `"rawSettings":{"header":{"type":"http","request":{"version":"1.1","method":"GET","path":["/p"],"headers":{"Host":["cdn.example"]}}}},`)},
+		{"HTTP request header", plain("raw", `"rawSettings":{"header":{"type":"http","request":{"path":["/p"],"headers":{"Host":["cdn.example"],"User-Agent":["curl/8"]}}}},`),
+			plain("raw", `"rawSettings":{"header":{"type":"http","request":{"path":["/p"],"headers":{"Host":["cdn.example"]}},"response":{"status":"404"}}},`)},
+		{"socket options", vless("", `"security":"tls","sockopt":{"mark":255}`), vless("", `"security":"tls","sockopt":{}`)},
+		{"VLESS reverse", user("vless", `"address":"203.0.113.7","port":443,"id":"`+id+`","encryption":"none","reverse":{"tag":"r"}`),
+			user("vless", `"address":"203.0.113.7","port":443,"id":"`+id+`","encryption":"none","reverse":null`)},
+		{"VLESS user pre-connections", user("vless", vlessUser(`,"testpre":2`)), user("vless", vlessUser(`,"testpre":0`))},
+		{"VLESS padding seeds", user("vless", `"address":"203.0.113.7","port":443,"id":"`+id+`","encryption":"none","testseed":[900,500,900,256]`),
+			user("vless", `"address":"203.0.113.7","port":443,"id":"`+id+`","encryption":"none","testseed":[]`)},
+		{"VMess user experiments", user("vmess", `"vnext":[{"address":"203.0.113.7","port":443,"users":[{"id":"`+id+`","experiments":"AuthenticatedLength"}]}]`),
+			user("vmess", `"vnext":[{"address":"203.0.113.7","port":443,"users":[{"id":"`+id+`","experiments":""}]}]`)},
+		// A user level or email only picks a local policy and labels statistics: exported Xray JSON carries them.
+		{"VLESS level and email", "", user("vless", `"address":"203.0.113.7","port":443,"id":"`+id+`","encryption":"none","level":8,"email":"t@t.tt"`)},
+		{"VLESS user level and email", "", user("vless", vlessUser(`,"email":"t@t.tt","level":8`))},
+		{"VMess level and email", "", user("vmess", `"address":"203.0.113.7","port":443,"id":"`+id+`","level":8,"email":"t@t.tt"`)},
+		{"VMess user level and email", "", user("vmess", `"vnext":[{"address":"203.0.113.7","port":443,"users":[{"id":"`+id+`","level":8,"email":"t@t.tt"}]}]`)},
+		{"Trojan level and email", "", user("trojan", `"address":"203.0.113.8","port":443,"password":"pw","level":8,"email":"t@t.tt"`)},
+		{"Trojan server level and email", "", user("trojan", `"servers":[{"address":"203.0.113.8","port":443,"password":"pw","level":8,"email":"t@t.tt"}]`)},
+		{"Shadowsocks level and email", "", user("shadowsocks", `"address":"203.0.113.9","port":8388,"method":"aes-256-gcm","password":"pw","level":8,"email":"t@t.tt"`)},
+		{"Shadowsocks server level and email", "", user("shadowsocks", `"servers":[{"address":"203.0.113.9","port":8388,"method":"aes-256-gcm","password":"pw","level":8,"email":"t@t.tt"}]`)},
+		{"SOCKS level and email", "", user("socks", `"address":"203.0.113.10","port":1080,"user":"name","pass":"pw","level":8,"email":"t@t.tt"`)},
+		{"SOCKS user level and email", "", user("socks", `"servers":[{"address":"203.0.113.10","port":1080,"users":[{"user":"name","pass":"pw","level":8,"email":"t@t.tt"}]}]`)},
+		// The name a parsed link keeps in sendThrough.
+		{"name in sendThrough", "", vless(`"sendThrough":"Home",`, `"security":"tls"`)},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if test.lossy != "" {
+				lossy := `{"outbounds":[` + test.lossy + `]}`
+				if !json.Valid([]byte(lossy)) {
+					t.Fatalf("invalid fixture %s", lossy)
+				}
+				if exported, err := ConvertXrayJsonToShareLinks([]byte(lossy)); err != nil || exported != lossy {
+					t.Errorf("exported %q (%v)", exported, err)
+				}
+				// Several outbounds are shared as links each, as before.
+				both := `{"outbounds":[` + test.lossy + `,` + plain("raw", "") + `]}`
+				if exported, err := ConvertXrayJsonToShareLinks([]byte(both)); err != nil || strings.Count(exported, "://") != 2 {
+					t.Errorf("two outbounds exported %q (%v)", exported, err)
+				}
+			}
+			kept := `{"outbounds":[` + test.kept + `]}`
+			if !json.Valid([]byte(kept)) {
+				t.Fatalf("invalid fixture %s", kept)
+			}
+			if exported, err := ConvertXrayJsonToShareLinks([]byte(kept)); err != nil || strings.HasPrefix(exported, "{") || !strings.Contains(exported, "://") {
+				t.Errorf("the default exported %q (%v)", exported, err)
+			}
+		})
+	}
+}
+
+// A link says all of what it imports as, so what it imported always shares as a link again.
+func TestImportedLinksShareAsLinks(t *testing.T) {
+	links := fixtureStrings(t, func(text string) bool {
+		return strings.Contains(text, "://") && !strings.Contains(text, "\n") && !strings.HasPrefix(strings.TrimSpace(text), "{")
+	})
+	checked := 0
+	for _, link := range links {
+		imported, err := ImportClientProfiles(link)
+		if err != nil {
+			continue
+		}
+		for _, profile := range imported.Profiles {
+			var config conf.Config
+			if profile.Format != "xrayProfile" || json.Unmarshal(profile.Config, &config) != nil || len(config.OutboundConfigs) != 1 {
+				continue
+			}
+			// TUIC keeps its own rule; protocols without a link have none to lose.
+			exported, err := ConvertXrayJsonToShareLinks(profile.Config)
+			if config.OutboundConfigs[0].Protocol == "tuic" || err != nil {
+				continue
+			}
+			checked++
+			if strings.HasPrefix(exported, "{") {
+				t.Errorf("%s shares as its profile:\n%s", link, profile.Config)
+			}
+		}
+	}
+	if checked < 20 {
+		t.Fatalf("only %d links checked", checked)
+	}
+}
+
+// Xray takes a WebSocket "Host" header for the host when the settings name none, as older profiles
+// do: the link carries it as its host, and as the name a front is reached by when it names no SNI.
+func TestShareLinkCarriesAHostHeader(t *testing.T) {
+	const id = "00000000-0000-4000-8000-000000000001"
+	for _, test := range []struct{ name, address, stream string }{
+		{"without TLS", "10.0.0.7", `"network":"ws","wsSettings":{"path":"/w","headers":{"Host":"cdn.example"}}`},
+		{"with an SNI", "front.example", `"network":"ws","security":"tls","tlsSettings":{"serverName":"sni.example"},"wsSettings":{"path":"/w","headers":{"host":"cdn.example"}}`},
+		{"behind a front name without an SNI", "front.example", `"network":"websocket","security":"tls","wsSettings":{"path":"/w","headers":{"Host":"cdn.example"}}`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			source := `{"outbounds":[{"protocol":"vless","settings":{"address":"` + test.address + `","port":443,"id":"` + id + `","encryption":"none"},"streamSettings":{` + test.stream + `}}]}`
+			imported, err := ImportClientProfiles(source)
+			if err != nil {
+				t.Fatal(err)
+			}
+			links, err := ConvertXrayJsonToShareLinks(imported.Profiles[0].Config)
+			if err != nil || strings.HasPrefix(links, "{") || !strings.Contains(links, "host=cdn.example") {
+				t.Fatalf("exported %q (%v)", links, err)
+			}
+			again, err := ImportClientProfiles(links)
+			if err != nil {
+				t.Fatalf("the exported link does not import: %v\n%s", err, links)
+			}
+			want, got := builtOutbound(t, imported.Profiles[0].Config), builtOutbound(t, again.Profiles[0].Config)
+			if stream := want.stream.(*internet.StreamConfig); strings.HasPrefix(test.name, "behind") {
+				settings, err := stream.SecuritySettings[0].GetInstance()
+				if err != nil {
+					t.Fatal(err)
+				}
+				settings.(*tls.Config).ServerName = "front.example"
+				stream.SecuritySettings[0] = serial.ToTypedMessage(settings)
+			}
+			if !proto.Equal(want.stream, got.stream) {
+				t.Errorf("transport changed:\n%v\nwas\n%v\nlink %s", got.stream, want.stream, links)
+			}
+		})
+	}
+	// Xray refuses the header on HTTPUpgrade, where Clash files put the host; it means the host there too.
+	links, err := ConvertXrayJsonToShareLinks([]byte(`{"outbounds":[{"protocol":"vless","settings":{"address":"10.0.0.7","port":443,"id":"` + id + `","encryption":"none"},
+		"streamSettings":{"network":"httpupgrade","httpupgradeSettings":{"path":"/u","headers":{"Host":"cdn.example"}}}}]}`))
+	if err != nil || !strings.Contains(links, "host=cdn.example") {
+		t.Errorf("HTTPUpgrade exported %q (%v)", links, err)
 	}
 }
 

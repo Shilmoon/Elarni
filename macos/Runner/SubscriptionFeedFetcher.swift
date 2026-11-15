@@ -191,7 +191,8 @@ enum SubscriptionFeedFetcher {
       try Task.checkCancellation()
       if let warning = result["warning"] as? [String: Any],
          let codes = warning["riskCodes"] as? [String], let chain = warning["chain"] as? [String] {
-        throw SubscriptionApprovalRequirement(riskCodes: codes.compactMap(SubscriptionRiskCode.init(rawValue:)), candidateChain: chain)
+        throw SubscriptionApprovalRequirement(riskCodes: codes.compactMap(SubscriptionRiskCode.init(rawValue:)), candidateChain: chain,
+          destinations: warning["destinations"] as? [String] ?? [])
       }
       guard let body = result["body"] as? String, !body.isEmpty, body.utf8.count <= maxBytes,
             let finalText = result["url"] as? String, let finalURL = URL(string: finalText),
@@ -250,7 +251,8 @@ enum RoutingResourceFetcher {
       try Task.checkCancellation()
       if let warning = result["warning"] as? [String: Any],
          let codes = warning["riskCodes"] as? [String], let chain = warning["chain"] as? [String] {
-        throw SubscriptionApprovalRequirement(riskCodes: codes.compactMap(SubscriptionRiskCode.init(rawValue:)), candidateChain: chain)
+        throw SubscriptionApprovalRequirement(riskCodes: codes.compactMap(SubscriptionRiskCode.init(rawValue:)), candidateChain: chain,
+          destinations: warning["destinations"] as? [String] ?? [])
       }
       return result
     } onCancel: {

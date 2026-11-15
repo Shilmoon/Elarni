@@ -256,6 +256,11 @@ class AppLocalizationsRu extends AppLocalizations {
       'Закройте мешающее приложение или смените порт в настройках подключения.';
 
   @override
+  String issueListenerPortUnavailable(int port) {
+    return 'Порт $port занят или недоступен. Выберите другой порт.';
+  }
+
+  @override
   String get issueListenerUnavailable =>
       'Порт локального прокси занят или недоступен.';
 
@@ -1126,6 +1131,31 @@ class AppLocalizationsRu extends AppLocalizations {
       'Подключение неожиданно прервалось. Переподключитесь, чтобы повторить.';
 
   @override
+  String get connectionStoppedRepair =>
+      'Подключение неожиданно прервалось. Переподключитесь, чтобы повторить; если сайты останутся недоступны, используйте «Исправить настройку VPN».';
+
+  @override
+  String get connectionStoppedBlocked =>
+      'Подключение неожиданно прервалось. «Блокировать трафик без VPN» не пропускает трафик, пока вы не переподключитесь; чтобы снять блокировку, используйте «Исправить настройку VPN».';
+
+  @override
+  String get windowsDnsNotRestored =>
+      'Отключено, но DNS в Windows пока не удалось восстановить. Если сайты останутся недоступны, используйте «Исправить настройку VPN».';
+
+  @override
+  String get systemProxyNotRestored =>
+      'Не удалось восстановить настройку системного прокси. Проверьте её в сетевых настройках системы.';
+
+  @override
+  String systemProxyNotSet(Object port) {
+    return 'Не удалось настроить системный прокси. Приложения по-прежнему могут использовать HTTP-прокси 127.0.0.1:$port.';
+  }
+
+  @override
+  String get scheduledRefreshFailed =>
+      'Не удалось выполнить плановое обновление подписки или маршрутизации.';
+
+  @override
   String get groupSelectionFailed =>
       'Не удалось выбрать сервер в группе. Восстановлен сохранённый выбор.';
 
@@ -1146,12 +1176,28 @@ class AppLocalizationsRu extends AppLocalizations {
       'Сначала выберите сервер. Эта ссылка маршрутизации включает свой профиль для подписки выбранного сервера.';
 
   @override
+  String get clientLinksNotHandled =>
+      'Не удалось обработать одну или несколько клиентских ссылок.';
+
+  @override
+  String get clientLinkNotImported =>
+      'Не удалось импортировать клиентскую ссылку.';
+
+  @override
   String get unsupportedProfileTryJson =>
       'Этот профиль использует неподдерживаемые настройки. Попробуйте формат Xray JSON от провайдера.';
 
   @override
+  String get unencryptedServer =>
+      'У этого сервера нет шифрования: ни TLS, ни REALITY, ни шифрования VLESS. Elarni принимает такой сервер только в частной сети.';
+
+  @override
   String get subscriptionAddedFirstDownloadFailed =>
       'Подписка добавлена, но первая загрузка не удалась. Обновите, чтобы повторить.';
+
+  @override
+  String get subscriptionAddedUnencrypted =>
+      'Подписка добавлена, но у её серверов нет шифрования: ни TLS, ни REALITY, ни шифрования VLESS. Elarni принимает такой сервер только в частной сети. Попросите у провайдера сервер с шифрованием.';
 
   @override
   String get subscriptionAddedUnreadable =>
@@ -2338,6 +2384,11 @@ class AppLocalizationsRu extends AppLocalizations {
       'Эта подписка использует незашифрованное HTTP-подключение.';
 
   @override
+  String subscriptionDestinations(String destinations) {
+    return 'Адреса: $destinations.';
+  }
+
+  @override
   String get connectionNotChecked => 'Подключение не проверялось';
 
   @override
@@ -2583,6 +2634,14 @@ class AppLocalizationsRu extends AppLocalizations {
   @override
   String failureUnsupportedText(String provider) {
     return 'Провайдер «$provider» не прислал ничего, что Elarni может прочитать: формат или одна из настроек не поддерживается.';
+  }
+
+  @override
+  String get failureUnencrypted => 'Серверы без шифрования';
+
+  @override
+  String failureUnencryptedText(String provider) {
+    return 'Провайдер «$provider» прислал только серверы без TLS, REALITY и шифрования VLESS. Elarni принимает такой сервер только в частной сети.';
   }
 
   @override

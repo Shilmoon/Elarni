@@ -527,6 +527,7 @@ final class IOSAppModel {
         let original = id
         recovery.rearm(now: ProcessInfo.processInfo.systemUptime)
         healthPassedNode = nil
+        healthFailureUnverified = []
         try saveEpisode()
         if preferences.automation.enabled, preferences.automation.policy == .lowestLatency, !vpn.active {
           id = try await chooseBeforeConnecting(current: id)
@@ -1154,27 +1155,40 @@ final class IOSAppModel {
 
   /// The server whose active health check passed on this connection; see `countsAgainstServer`.
   @ObservationIgnored private var healthPassedNode: String?
+  /// Servers whose last failed health check counted only because another server could take over.
+  /// Kept per server: checking a backup must not change what is known about the current one.
+  /// An inconclusive check leaves it: the server is as unverified as before, so a retry does not reconnect it.
+  @ObservationIgnored private var healthFailureUnverified: Set<String> = []
 
   private func activeHealth(_ node: ServerNode, expectedPlan: Data? = nil) async throws {
     try requireRecoveryPolicy(node)
     // As on macOS and desktop: every target gets its probe before the check is classified.
-    var timeouts = 0, invalidTarget = false
+    var timeouts = 0, verified = 0, invalidTarget = false
     let russianEntry = preferences.automation.russianEntryNodeIDs?.contains(node.id) == true
     let passedBefore = healthPassedNode == node.id
+    // A server to move to, not only a policy that allows moving: with none allowed now (a list of
+    // one, the others cooling down) such a failure stays indeterminate and the connection is kept.
+    // An episode out of attempts moves nowhere either. Computed once per round, at the first failed check.
+    lazy var canLeave = !recovery.episode.exhausted && !recovery.recoveryCandidates(policy: preferences.automation.policy,
+      order: recoveryOrder(current: node.id), current: node.id, now: ProcessInfo.processInfo.systemUptime).isEmpty
     for target in preferences.automation.targets {
       do {
         _ = try await probe(node, mode: "activeProxy", target: target, expectedPlan: expectedPlan)
         healthPassedNode = node.id
+        healthFailureUnverified.remove(node.id)
         recovery.observe(node: node.id, passed: true, russianEntry: russianEntry); whitelistMode = recovery.whitelist
         return
       } catch let error as IOSProbeFailure {
         if error.cleanupPending { throw AutomationFailure.quarantine }
         if error.receivedHTTP || error.code == "target_dns_failed" { invalidTarget = true }
-        if AutomationConfiguration.countsAgainstServer(code: error.code, stage: error.stage, passedBefore: passedBefore) { timeouts += 1 }
+        if AutomationConfiguration.countsAgainstServer(code: error.code, stage: error.stage, passedBefore: passedBefore, canLeave: canLeave) { timeouts += 1 }
+        if AutomationConfiguration.countsAgainstServer(code: error.code, stage: error.stage, passedBefore: passedBefore) { verified += 1 }
       } catch { throw error }
     }
     if invalidTarget { throw AutomationFailure.invalidTarget }
     guard timeouts >= preferences.automation.endpointFailureTimeouts else { throw AutomationFailure.indeterminate }
+    if verified < preferences.automation.endpointFailureTimeouts { healthFailureUnverified.insert(node.id) }
+    else { healthFailureUnverified.remove(node.id) }
     recovery.observe(node: node.id, passed: false, russianEntry: russianEntry); whitelistMode = recovery.whitelist
     throw AutomationFailure.endpointFailure
   }
@@ -1286,7 +1300,8 @@ final class IOSAppModel {
         var canVerifyTraffic = true
         do { try self.requireRecoveryPolicy(node) }
         catch AutomationFailure.unsupportedPolicy where config.policy == .fixed { canVerifyTraffic = false }
-        if retry {
+        // Reconnecting a running server that never passed its check changes nothing; the retry checks it again.
+        if retry, !(self.healthFailureUnverified.contains(node.id) && self.vpn.connected && !failed) {
           try await self.changingTunnel { [self] in
             if vpn.active { try await vpn.disconnect() }
             try Task.checkCancellation()
@@ -1379,6 +1394,7 @@ final class IOSAppModel {
       case .keychainFailure: return String(localized: "Secure storage is unavailable. Use a correctly signed build and reopen the app.")
       case .invalidURL: return String(localized: "The subscription address or download options are invalid. Check the URL and provider-supported formats.")
       case .invalidFeed, .noSupportedNodes, .incompatibleProfile: return String(localized: "No supported server configuration was found. Check the link or file format and try again.")
+      case .unencryptedServer: return String(localized: "This server has no encryption: no TLS, REALITY or VLESS encryption. Elarni accepts such a server only on a private network.")
       case .hwidRequired: return String(localized: "This provider requires device registration. Open your provider account or contact support.")
       case .hwidLimit: return String(localized: "The provider’s device limit has been reached. Manage registered devices in your provider account.")
       case .invalidDisplayName: return String(localized: "Use a nonempty name without control characters.")

@@ -464,7 +464,7 @@ void main() {
     directives = ['happ://routing/onadd/Large'];
     name = 'local';
     final imported = await catalog.importLocal('local');
-    expect(imported.single['name'], 'local');
+    expect(imported.added.single['name'], 'local');
     expect(catalog.routes.single['name'], 'Good');
     catalog.validate();
   });
@@ -766,6 +766,128 @@ void main() {
     expect(metadata().containsKey('skippedServers'), isFalse);
     expect(metadata().containsKey('skippedKinds'), isFalse);
   });
+
+  test('a refresh leaves out any server the compiler refuses but the last', () {
+    final catalog = DesktopCatalog(
+      DesktopCatalog.empty(),
+      (method, payload) async => throw StateError(method),
+      (operation, payload) => throw StateError(operation),
+    );
+    catalog.putSource({
+      'id': 'feed',
+      'name': 'Feed',
+      'url': 'https://feed.example/sub',
+      'format': 'source',
+      'status': 'ready',
+      'nodes': [
+        for (final (id, protocol) in [('a', 'vless'), ('b', 'trojan')])
+          {
+            'id': id,
+            'name': id,
+            'format': 'xrayProfile',
+            'config': {
+              'outbounds': [
+                {'protocol': protocol},
+              ],
+            },
+          },
+      ],
+    });
+    expect(catalog.dropRefused('feed', {'other'}), isFalse);
+    expect(catalog.dropRefused('feed', {'a', 'b'}), isFalse);
+    expect(catalog.dropRefused('feed', {'a'}), isTrue);
+    expect(catalogList(catalog.source('feed')['nodes']).single['id'], 'b');
+    final metadata = catalogMap(catalog.source('feed')['metadata']);
+    expect(metadata['skippedServers'], 1);
+    expect(metadata['skippedKinds'], 'vless');
+    // A refresh moves to the provider's first server left.
+    expect(catalog.selected, 'b');
+  });
+
+  test(
+    'a local import leaves out only new servers the compiler refuses',
+    () async {
+      CatalogMap server(String name, [String protocol = 'vless']) => {
+        'format': 'xrayProfile',
+        'name': name,
+        'config': {
+          'outbounds': [
+            {
+              'protocol': protocol,
+              'settings': {'id': name},
+            },
+          ],
+        },
+      };
+      var imported = <String, Object?>{};
+      final catalog = DesktopCatalog(
+        DesktopCatalog.empty(),
+        (method, payload) async => switch (method) {
+          'importClientProfiles' => imported,
+          _ => throw StateError(method),
+        },
+        (operation, payload) => switch (operation) {
+          'catalogIdentity' => {'identity': jsonEncode(payload)},
+          _ => throw StateError(operation),
+        },
+      );
+      imported = {
+        'profiles': [server('old')],
+      };
+      final first = await catalog.importLocal('old');
+      final old = first.added.single['id']! as String;
+      CatalogMap metadata() =>
+          catalogMap(catalog.source(first.id)['metadata'] ?? const {});
+      List<Object?> names() => [
+        for (final node in catalogList(catalog.source(first.id)['nodes']))
+          node['name'],
+      ];
+
+      imported = {
+        'profiles': [server('old'), server('good'), server('bad', 'hysteria')],
+        'skippedCount': 1,
+        'skipped': [
+          {'name': 'Server ssh', 'kind': 'ssh'},
+        ],
+      };
+      final second = await catalog.importLocal('old, good and bad');
+      expect(second.id, first.id);
+      final added = {
+        for (final node in second.added) node['name']: node['id']! as String,
+      };
+      expect(added.keys, ['good', 'bad']);
+      // The importer's own report describes the latest import.
+      expect(metadata()['skippedServers'], 1);
+      expect(metadata()['skippedKinds'], 'ssh');
+      // A server that was already there is not this import's to drop.
+      expect(
+        catalog.dropRefused(second.id, {
+          old,
+          added['bad']!,
+        }, added: added.values.toSet()),
+        isTrue,
+      );
+      expect(names(), ['old', 'good']);
+      expect(metadata()['skippedServers'], 2);
+      expect(metadata()['skippedKinds'], 'ssh, hysteria');
+      // Unlike a refresh, an import selects nothing.
+      expect(catalog.selected, isNull);
+
+      // Nothing new would be left: nothing is dropped, and the import fails.
+      imported = {
+        'profiles': [server('good'), server('worse', 'tuic')],
+      };
+      final third = await catalog.importLocal('good and worse');
+      // This import skipped nothing, so the last one's count goes.
+      expect(metadata().containsKey('skippedServers'), isFalse);
+      expect(metadata().containsKey('skippedKinds'), isFalse);
+      final worse = {for (final node in third.added) node['id']! as String};
+      expect(worse, hasLength(1));
+      expect(catalog.dropRefused(third.id, worse, added: worse), isFalse);
+      expect(names(), ['old', 'good', 'worse']);
+      expect(metadata().containsKey('skippedServers'), isFalse);
+    },
+  );
 
   test('a catalog over its limits says so instead of reading as corrupt', () {
     for (final (key, count) in [('subscriptions', 1025), ('profiles', 257)]) {

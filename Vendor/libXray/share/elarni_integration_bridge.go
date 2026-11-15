@@ -2,9 +2,12 @@
 
 package share
 
+// On macOS the Rust library comes from CGO_LDFLAGS (scripts/check-live-tunnel): Go 1.27.4 and
+// later refuse a static library with LTO sections that a "#cgo LDFLAGS" line names.
+
 /*
 #cgo CFLAGS: -I${SRCDIR}/../../../include
-#cgo darwin LDFLAGS: -L${SRCDIR}/../../../.build/rust-macos/current -lelarni_domain -lSystem -lc -lm
+#cgo darwin LDFLAGS: -lSystem -lc -lm
 #cgo android,arm64 LDFLAGS: -L${SRCDIR}/../../../.build/android-native/jniLibs/arm64-v8a
 #cgo android,amd64 LDFLAGS: -L${SRCDIR}/../../../.build/android-native/jniLibs/x86_64
 #cgo android LDFLAGS: -lelarni_domain -llog -ldl -lm

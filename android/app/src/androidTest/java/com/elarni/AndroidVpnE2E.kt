@@ -301,6 +301,27 @@ class AndroidVpnE2E {
                 target("block")
                 assertFalse("A blocked app must not reach the network", traffic("a", "tcp", httpPort, expectReply = false).contains("elarni-synthetic"))
                 call("settings", obj("settings" to obj("perAppTargets" to JSONObject())))
+                // A refresh that takes both the selected server and an app's server keeps the running tunnel; the next Connect names the app's rule.
+                HTTPFixture().use { feed ->
+                    feed.body = "socks://127.0.0.1:${upstream.port}#Feed%20server\nsocks://127.0.0.1:${other.port}#Feed%20app%20server"
+                    call("approveSource", obj("token" to call("import", obj("text" to feed.url)).getJSONObject("warning").getString("token")))
+                    val subscription = snapshot().sources.single { it.string("url") == feed.url }
+                    fun fed(name: String) = subscription.objects("nodes").single { it.string("name") == name }.getString("id")
+                    call("select", obj("id" to fed("Feed server")))
+                    target("node:${fed("Feed app server")}")
+                    val session = Engine.fetchProxy
+                    feed.body = "socks://127.0.0.1:${local.port}#Feed%20replacement"
+                    call("refresh", obj("id" to subscription.getString("id")))
+                    assertEquals("connected", repo.state.value.connection)
+                    assertEquals("The refresh restarted the tunnel", session, Engine.fetchProxy)
+                    val refreshed = snapshot()
+                    assertEquals("Feed replacement", refreshed.node(refreshed.selected).getString("name"))
+                    assertEquals("ready", refreshed.source(subscription.getString("id")).string("status"))
+                    assertEquals("per_app_target_missing", (runCatching { refreshed.compile(refreshed.selected, ui.activity) }.exceptionOrNull() as? AppFailure)?.code)
+                    call("settings", obj("settings" to obj("perAppTargets" to JSONObject())))
+                    call("select", obj("id" to id))
+                    call("deleteSource", obj("id" to subscription.getString("id")))
+                }
                 // While connected, another server's test runs its own core beside the VPN and leaves the selection alone.
                 call("settings", obj("settings" to obj("probeMode" to "proxy", "probeURL" to "http://10.0.2.2:$httpPort/fixture", "probeExpectedStatus" to 200, "probeExpectedBody" to "proxy:elarni-synthetic")))
                 val tested = other.requests

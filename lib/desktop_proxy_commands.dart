@@ -518,6 +518,7 @@ extension _ProxyCommands on DesktopProxy {
           warning = {
             'subscriptionId': id,
             'riskCodes': pending['riskCodes'],
+            'destinations': pending['destinations'] ?? <Object?>[],
             'challenge': token,
           };
         }
@@ -543,7 +544,26 @@ extension _ProxyCommands on DesktopProxy {
                   parsed.path == '/proxy')) {
             await refresh(addSource({...input, 'text': url!}));
           } else {
-            await candidate.importLocal(content);
+            final local = await candidate.importLocal(content);
+            try {
+              await _semantics(candidate);
+            } on PlatformException catch (error) {
+              // As in a refresh, a server the compiler refuses is left out;
+              // only those this import brought may go, and with none of them
+              // left the import fails.
+              if (error.code != 'unsupported_profile') rethrow;
+              final added = {
+                for (final node in local.added) node['id']! as String,
+              };
+              final refused = await DesktopProxy._refusedOff(
+                domainPath,
+                candidate.data,
+                added,
+              );
+              if (!candidate.dropRefused(local.id, refused, added: added))
+                rethrow;
+              await _semantics(candidate);
+            }
           }
         case 'addSubscription':
         case 'refreshSubscription':
@@ -798,7 +818,7 @@ extension _ProxyCommands on DesktopProxy {
               file: args['file'] as String?,
             );
           } on PlatformException catch (error) {
-            candidate.geofilesFailed(args['id']! as String, error.message);
+            candidate.geofilesFailed(args['id']! as String, error);
             refreshError = error;
           }
       }

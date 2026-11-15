@@ -26,6 +26,8 @@ final class TunnelMethodChannel {
   var automationCandidateFailures: [String: String] = [:]
   var healthDiagnostics: [ProbeDiagnostic] = []
   var verifiedHealth: (node: String, at: Double, epoch: UInt64)?
+  /// The last failed health check counted only because another server may take over (`countsAgainstServer`).
+  var healthFailureUnverified = false
   var automationPaused = false
   var automationRefreshPath = false
   var automationFailover = false
@@ -565,7 +567,7 @@ final class TunnelMethodChannel {
         } catch RunnerTunnelError.unsupportedPingMethod {
           result(FlutterError(code: "unsupported_ping_method", message: "Direct TCP is not supported by this endpoint's transport. Use Proxy testing.", details: nil))
         } catch RunnerTunnelError.listenerUnavailable(let port) {
-          result(FlutterError(code: "listener_unavailable", message: "Port \(port) is occupied or unavailable. Choose another listener port.", details: nil))
+          result(FlutterError(code: "listener_unavailable", message: "Port \(port) is occupied or unavailable. Choose another listener port.", details: port))
         } catch RunnerTunnelError.perAppTargetMissing {
           result(FlutterError(code: "per_app_target_missing", message: "An app in Per-app routing uses a server that no longer exists. Choose another target for it in Per-app routing.", details: nil))
         } catch RunnerTunnelError.invalidRouteEnforcement {
@@ -584,6 +586,8 @@ final class TunnelMethodChannel {
           result(FlutterError(code: "missing_geodata", message: "Proxy rules and servers need codes the geofiles lack: \(missing.joined(separator: ", ")). Fix the profile or its geofile links.", details: nil))
         } catch SubscriptionError.incompatibleProfile(let message) {
           result(FlutterError(code: "unsupported_profile", message: message, details: nil))
+        } catch SubscriptionError.unencryptedServer {
+          result(FlutterError(code: "unencrypted_server", message: "This server has no encryption: no TLS, REALITY or VLESS encryption. Elarni accepts such a server only on a private network.", details: nil))
         } catch SubscriptionError.invalidFeed {
           result(FlutterError(code: "invalid_profile", message: "The input is not a valid client profile or subscription.", details: nil))
         } catch RunnerTunnelError.invalidState {

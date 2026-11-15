@@ -212,6 +212,8 @@ final class DesktopProxy {
   String _state = 'disconnected', _revision = '';
   // The login of the VPN's listeners when the user set none; only probes use it.
   CatalogMap? _vpnLogin;
+  // The address each server endpoint of the last prepared tunnel resolved to.
+  Map<String, String> _tunnelAddresses = {};
   final Map<
     String,
     ({String id, String format, List<String> chain, DateTime expires})
@@ -291,11 +293,12 @@ final class DesktopProxy {
           'content': value,
         });
       } on Object catch (error) {
+        // The listener carries codes; the window words them (listenerNotice).
         failure ??=
             error is PlatformException &&
                 error.code == 'no_selected_subscription'
-            ? error.message
-            : 'One or more client links could not be handled.';
+            ? error.code
+            : 'links_failed';
       }
     }
     if (!_disposed) _listener?.call(failure);
@@ -306,7 +309,7 @@ final class DesktopProxy {
       final result = await _platformRequest('takeLinks', {});
       await handleLinks((result['links'] as List? ?? []).cast<String>());
     } on Object {
-      if (!_disposed) _listener?.call('The client link could not be imported.');
+      if (!_disposed) _listener?.call('link_failed');
     }
   }
 
@@ -339,8 +342,8 @@ final class DesktopProxy {
         Future<void> recoverProxy() async {
           if (recovered) return;
           recovered = true;
-          if (await _systemProxy?.recover() case final message?)
-            _listener?.call(message);
+          if (await _systemProxy?.recover() case final code?)
+            _listener?.call(code);
         }
 
         final CatalogMap stored;
@@ -780,7 +783,7 @@ final class DesktopProxy {
   // the user's own setting back.
   Future<void> _syncSystemProxy() async {
     final settings = _catalog?.settings;
-    final message = await _systemProxy?.sync(
+    final code = await _systemProxy?.sync(
       !_disposed &&
               !_proxyReleased &&
               settings != null &&
@@ -789,7 +792,7 @@ final class DesktopProxy {
           ? settings.httpPort
           : null,
     );
-    if (message != null) _listener?.call(message);
+    if (code != null) _listener?.call(code);
   }
 
   Future<void> dispose() async {

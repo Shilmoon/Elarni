@@ -414,9 +414,15 @@ extension TunnelMethodChannel {
           before["configurationDigest"] as? String == Data(SHA256.hash(data: context.plan)).base64EncodedString(),
           let generation = before["generation"] as? UInt64,
           let instance = before["instanceID"] as? String, !instance.isEmpty else { throw AutomationFailure.providerFailure }
-    var qualifyingFailures = 0
+    var qualifyingFailures = 0, verifiedFailures = 0
     var invalidTarget = false
+    healthFailureUnverified = false
     let passedBefore = verifiedHealth?.node == context.nodeID && verifiedHealth?.epoch == automation.epoch
+    // A server to move to, not only a policy that allows moving: with none allowed now (a list of
+    // one, the others cooling down) such a failure stays indeterminate and the connection is kept.
+    // An episode out of attempts moves nowhere either. Computed once per round, at the first failed check.
+    lazy var canLeave = !automation.episode.exhausted && !automation.recoveryCandidates(policy: automationConfiguration.policy,
+      order: (try? recoveryOrder(current: context.nodeID)) ?? [], current: context.nodeID, now: automationNow()).isEmpty
     for (ordinal, target) in automationConfiguration.targets.prefix(2).enumerated() {
       let started = automationNow()
       var diagnostic = ProbeDiagnostic(targetOrdinal: ordinal + 1, revision: context.intentRevision,
@@ -471,15 +477,20 @@ extension TunnelMethodChannel {
             (failure.details["httpStatus"] as? Int ?? 0) != 0 {
           invalidTarget = true
         }
-        // EOF/generic handshake errors may be authentication failures, so they qualify only for
-        // a server that passed before; timeouts always do. Every target (both, when there are
-        // two) must qualify for cycling.
-        if AutomationConfiguration.countsAgainstServer(code: failure.details["code"] as? String,
-            stage: failure.details["stage"] as? String, passedBefore: passedBefore) { qualifyingFailures += 1 }
+        // EOF/generic handshake errors may be authentication failures, so on a server that never
+        // passed they qualify only for moving to another server; timeouts always qualify. Every
+        // target (both, when there are two) must qualify for cycling.
+        let code = failure.details["code"] as? String, stage = failure.details["stage"] as? String
+        if AutomationConfiguration.countsAgainstServer(code: code, stage: stage, passedBefore: passedBefore,
+            canLeave: canLeave) { qualifyingFailures += 1 }
+        if AutomationConfiguration.countsAgainstServer(code: code, stage: stage, passedBefore: passedBefore) {
+          verifiedFailures += 1
+        }
       } catch { /* Unclassified failures remain indeterminate. */ }
     }
     if invalidTarget { throw AutomationFailure.invalidTarget }
     guard qualifyingFailures >= automationConfiguration.endpointFailureTimeouts else { throw AutomationFailure.indeterminate }
+    healthFailureUnverified = verifiedFailures < automationConfiguration.endpointFailureTimeouts
     automation.observe(node: context.nodeID, passed: false, russianEntry: russianEntry(context.nodeID))
     throw AutomationFailure.endpointFailure
   }
@@ -585,6 +596,8 @@ extension TunnelMethodChannel {
       }
       let failover = automation.failedHealth(failure)
       if failover { automationFailover = true }
+      // Read now: checking a backup below sets it for that backup.
+      let unverified = failure == .endpointFailure && healthFailureUnverified
       if retry {
         if automationFailover && automationConfiguration.policy != .fixed {
           do {
@@ -596,6 +609,8 @@ extension TunnelMethodChannel {
             // Retry the current node when no allowed alternate is available.
           }
         }
+        // Restarting a server that never passed its check changes nothing; the retry budget still runs.
+        if unverified { throw failure }
         try await replaceAutomatically(context, previousHealthy: false)
         automation.healthy(now: self.automationNow(), jitter: self.automationJitter())
         automationFailover = false

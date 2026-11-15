@@ -133,3 +133,36 @@ final class ConnectionIssue {
 
   String get description => '$message $remedy';
 }
+
+/// The text for a failure [code], or null for a code without one of its own:
+/// the generic connection text would misname a settings or download failure.
+String? failureText(String code) => switch (code) {
+  // Download failures that name no provider; the others need its name.
+  'fetch_failed' => l10n.failureFetchText,
+  'dns_failed' => l10n.failureDnsText,
+  _ when supportIssueCode(code) != 'operation_failed' =>
+    ConnectionIssue.forCode(code).description,
+  _ => null,
+};
+
+/// What the desktop backend's notice code says. macOS sends text it worded
+/// itself through the same listener, which is shown as it is.
+String listenerNotice(String value) {
+  const unsetProxy = 'system_proxy_not_set:';
+  if (value.startsWith(unsetProxy)) {
+    final port = int.tryParse(value.substring(unsetProxy.length));
+    return port == null ? value : l10n.systemProxyNotSet(port);
+  }
+  return switch (value) {
+    'links_failed' => l10n.clientLinksNotHandled,
+    'link_failed' => l10n.clientLinkNotImported,
+    'no_selected_subscription' => l10n.selectServerFirstRoutingLink,
+    'scheduled_refresh_failed' => l10n.scheduledRefreshFailed,
+    'connection_stopped' => l10n.connectionStoppedUnexpectedly,
+    'connection_stopped_blocked' => l10n.connectionStoppedBlocked,
+    'connection_stopped_repair' => l10n.connectionStoppedRepair,
+    'vpn_dns_release_failed' => l10n.windowsDnsNotRestored,
+    'system_proxy_restore_failed' => l10n.systemProxyNotRestored,
+    _ => failureText(value) ?? value,
+  };
+}

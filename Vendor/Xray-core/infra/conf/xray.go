@@ -246,6 +246,10 @@ func requiresTransportSecurity(address *Address) bool {
 	return !geodata.GetPrivateDomainMatcher().MatchAny(domain)
 }
 
+// ErrUnencryptedOutbound is under every refusal of validateOutboundTransportSecurity (Elarni):
+// an importer tells this reason from other build failures with errors.Is, not by the wording.
+var ErrUnencryptedOutbound = errors.New("unencrypted outbound to a public address")
+
 func validateOutboundTransportSecurity(rawConfig interface{}, senderSettings *proxyman.SenderConfig) error {
 	if senderSettings.StreamSettings != nil && senderSettings.StreamSettings.GetSecurityType() != "" {
 		return nil
@@ -256,13 +260,13 @@ func validateOutboundTransportSecurity(rawConfig interface{}, senderSettings *pr
 			return nil
 		}
 		if requiresTransportSecurity(vlessCfg.Address) {
-			return errors.New("vless without TLS or other encryption is prohibited unless the server address is a private IP or domain")
+			return errors.New("vless without TLS or other encryption is prohibited unless the server address is a private IP or domain").Base(ErrUnencryptedOutbound)
 		}
 	}
 
 	if tjCfg, ok := rawConfig.(*TrojanClientConfig); ok {
 		if requiresTransportSecurity(tjCfg.Servers[0].Address) {
-			return errors.New("trojan without TLS is prohibited unless the server address is a private IP or domain")
+			return errors.New("trojan without TLS is prohibited unless the server address is a private IP or domain").Base(ErrUnencryptedOutbound)
 		}
 	}
 

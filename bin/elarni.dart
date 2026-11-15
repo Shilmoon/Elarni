@@ -187,11 +187,7 @@ Future<void> main(List<String> arguments) async {
     stderr.writeln(
       jsonEncode({
         'success': false,
-        'error': error is FormatException
-            ? error.message
-            : error is SocketException
-            ? 'daemon_unavailable'
-            : 'operation_failed',
+        'error': headlessFailureCode(error, daemon: daemon),
       }),
     );
     exitCode = 1;

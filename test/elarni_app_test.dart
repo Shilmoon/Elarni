@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:elarni/desktop_integration.dart';
 import 'package:elarni/elarni_app.dart';
+import 'package:elarni/strings.dart' show appLocale;
 import 'package:elarni/tunnel_channel.dart';
 import 'support/fake_tunnel_control.dart';
 
@@ -151,6 +152,7 @@ SubscriptionOperationResult warning(String challenge) =>
         subscriptionId: 'group',
         risks: [SubscriptionRisk.loopbackTarget],
         challenge: challenge,
+        destinations: const ['http://127.0.0.1:8080'],
       ),
     );
 
@@ -1532,6 +1534,39 @@ void main() {
     );
   });
 
+  // "Try the provider's Xray JSON link" is no way out: Xray refuses the same
+  // server in that format.
+  testWidgets('a new subscription of unencrypted servers says so', (
+    tester,
+  ) async {
+    final control = FakeTunnelControl();
+    control.onImport = (_, _) async {
+      control.snapshot = SubscriptionSnapshot(
+        selectedNodeId: control.snapshot.selectedNodeId,
+        subscriptions: [
+          ...control.snapshot.subscriptions,
+          const SubscriptionGroup(
+            id: 'added',
+            name: 'provider.example',
+            status: 'refresh_failed',
+            nodes: [],
+          ),
+        ],
+      );
+      throw PlatformException(code: 'unencrypted_server');
+    };
+    await pumpApp(tester, control);
+    await importClipboard(tester, 'https://provider.example/sub');
+    expect(
+      find.text(
+        'Subscription added, but its servers have no encryption: no TLS, '
+        'REALITY or VLESS encryption. Elarni accepts such a server only on a '
+        'private network. Ask the provider for a server with encryption.',
+      ),
+      findsOneWidget,
+    );
+  });
+
   for (final (code, text) in [
     ('import_too_large', 'The file is larger than Elarni can import.'),
     ('input_too_large', 'The file is larger than Elarni can import.'),
@@ -1581,6 +1616,28 @@ void main() {
       expect(control.importListener, isNull);
     },
   );
+
+  // Windows and Linux send a code, which the interface words in its language.
+  testWidgets('a backend notice code shows in the interface language', (
+    tester,
+  ) async {
+    tester.platformDispatcher.localesTestValue = const [Locale('ru', 'RU')];
+    addTearDown(tester.platformDispatcher.clearLocalesTestValue);
+    addTearDown(() => appLocale = const Locale('en'));
+    final control = FakeTunnelControl();
+    await pumpApp(tester, control, windows: true);
+    control.importListener?.call('connection_stopped_repair');
+    await tester.pumpAndSettle();
+    expect(
+      find.text(
+        'Подключение неожиданно прервалось. Переподключитесь, чтобы повторить; '
+        'если сайты останутся недоступны, используйте «Исправить настройку VPN».',
+      ),
+      findsOneWidget,
+    );
+    expect(find.textContaining('connection_stopped'), findsNothing);
+    await tester.pumpWidget(const SizedBox());
+  });
 
   testWidgets(
     'profile group selector sends the node group and selected member',
@@ -1704,6 +1761,8 @@ void main() {
       await pumpApp(tester, control);
       await addSubscription(tester);
       expect(find.text('Approve unsafe subscription?'), findsOneWidget);
+      // The prompt named the risk and not the address the approval is for.
+      expect(find.text('Destinations: http://127.0.0.1:8080.'), findsOneWidget);
       await tester.tap(find.text('Cancel'));
       await tester.pumpAndSettle();
       expect(control.addedURLs, ['https://fixture.example/feed']);
@@ -1994,7 +2053,26 @@ void main() {
     await tester.pumpAndSettle();
     expect(control.vpnServiceChanges, [true, false]);
     expect(checked(), isTrue);
-    expect(find.text('Administrator permission was cancelled.'), findsWidgets);
+    // The code picks the interface's text; the native message is English.
+    expect(
+      find.text(
+        'VPN permission was denied. Retry and allow the system permission request.',
+      ),
+      findsWidgets,
+    );
+    expect(find.text('Administrator permission was cancelled.'), findsNothing);
+    // A code the interface has no text for keeps the native message.
+    control.vpnServiceError = PlatformException(
+      code: 'operation_failed',
+      message: 'The operation failed. Endpoint details were redacted.',
+    );
+    await tester.tap(row);
+    await tester.pumpAndSettle();
+    expect(checked(), isTrue);
+    expect(
+      find.text('The operation failed. Endpoint details were redacted.'),
+      findsWidgets,
+    );
     // The change keeps the rest of the system information.
     control.vpnServiceError = null;
     await tester.tap(row);
@@ -2062,6 +2140,38 @@ void main() {
       ),
       findsOneWidget,
     );
+  });
+
+  testWidgets('an occupied port is worded by its code', (tester) async {
+    final control = FakeTunnelControl()
+      ..onUpdate = (_) async => throw PlatformException(
+        code: 'listener_unavailable',
+        message: 'native text',
+      );
+    await pumpApp(tester, control);
+    await openSettings(tester);
+    await selectCategory(tester, SettingsCategory.advanced);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Enable fragmentation'));
+    await tester.pumpAndSettle();
+    expect(
+      find.text(
+        'A local proxy port is occupied or unavailable. Close the conflicting app or change the listener port in Connection settings.',
+      ),
+      findsOneWidget,
+    );
+    expect(find.textContaining('native text'), findsNothing);
+    // The port the platform names is said in the interface's own words.
+    const named =
+        'Port 10808 is occupied or unavailable. Choose another listener port.';
+    control.onUpdate = (_) async => throw PlatformException(
+      code: 'listener_unavailable',
+      message: 'native text',
+      details: 10808,
+    );
+    await tester.tap(find.text('Enable fragmentation'));
+    await tester.pumpAndSettle();
+    expect(find.text(named), findsOneWidget);
   });
 
   testWidgets(

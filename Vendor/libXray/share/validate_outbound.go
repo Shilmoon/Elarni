@@ -3,12 +3,18 @@ package share
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"reflect"
 
 	"github.com/xtls/xray-core/infra/conf"
 )
+
+// ErrUnencryptedServer is a VLESS or Trojan server without TLS, REALITY or VLESS encryption
+// at a public address. Xray refuses it: everything sent to it could be read on the way. An
+// import that fails for this says so, where "unsupported" sends the user to look elsewhere.
+var ErrUnencryptedServer = errors.New("unencrypted_server")
 
 func filterBuildableOutbounds(config *conf.Config) (*conf.Config, error) {
 	raw, err := json.Marshal(config.OutboundConfigs)
@@ -60,6 +66,9 @@ func buildOutbound(outbound *conf.OutboundDetourConfig) (err error) {
 	outbound.ProxySettings = nil
 	defer func() { outbound.ProxySettings = proxySettings }()
 	if _, err = outbound.Build(); err != nil {
+		if errors.Is(err, conf.ErrUnencryptedOutbound) {
+			return ErrUnencryptedServer
+		}
 		return err
 	}
 	if invalidServer(outbound) {

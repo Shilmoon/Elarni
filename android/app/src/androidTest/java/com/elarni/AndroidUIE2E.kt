@@ -27,7 +27,8 @@ import java.io.File
 
 /** Form/save/review behavior through the production Compose and catalog boundaries. */
 class AndroidUIE2E {
-    @get:Rule val ui = createAndroidComposeRule<MainActivity>()
+    @get:Rule(order = 0) val battery = BatteryExemption()
+    @get:Rule(order = 1) val ui = createAndroidComposeRule<MainActivity>()
     private lateinit var launchIntent: Intent
     private val repo get() = ui.activity.repository
     private fun call(command: String, args: JSONObject = JSONObject()) = runBlocking { repo.execute(command, args) }
@@ -518,6 +519,29 @@ class AndroidUIE2E {
         ui.waitForIdle()
         ui.onNodeWithText(warning).assertDoesNotExist()
         assertTrue(prefs.getBoolean("loginWarningDismissed", false))
+    }
+    // Doze may cut the tunnel of an app that is not exempt from battery optimization; with System VPN on, Home says so until answered.
+    @Test fun homeAsksToRunInTheBackgroundUntilDismissed() {
+        val prefs = ui.activity.getSharedPreferences("ui", android.content.Context.MODE_PRIVATE)
+        prefs.edit().remove("batteryNoticeDismissed").commit()
+        BatteryExemption.set(false)
+        try {
+            assertFalse(ui.activity.batteryExempt())
+            call("settings", obj("settings" to obj("xrayTunEnabled" to true)))
+            // Home reads the exemption as it opens, as it does on each return to the app.
+            ui.onNode(hasText("Settings") and hasClickAction()).performClick()
+            ui.onNode(hasText("Home") and hasClickAction()).performClick()
+            val notice = "Android may stop the VPN while the phone sleeps"
+            ui.waitUntil(5000) { ui.onAllNodesWithText(notice).fetchSemanticsNodes().isNotEmpty() }
+            ui.onNode(hasText("Allow") and hasClickAction()).assertExists()
+            click("Not now")
+            ui.onNodeWithText(notice).assertDoesNotExist()
+            assertTrue(prefs.getBoolean("batteryNoticeDismissed", false))
+            ui.activityRule.scenario.recreate()
+            // Under load the recreated Activity can be idle before its content is set; Home's state comes first.
+            ui.waitUntil(10_000) { runCatching { ui.onAllNodesWithText("Disconnected").fetchSemanticsNodes().isNotEmpty() }.getOrDefault(false) }
+            ui.onNodeWithText(notice).assertDoesNotExist()
+        } finally { BatteryExemption.set(true) }
     }
     @Test fun blockTrafficWithoutVpnOpensAndroidVpnSettings() {
         ui.onNode(hasText("Settings") and hasClickAction()).performClick()

@@ -6079,6 +6079,16 @@
         }
       }
     },
+    "This server has no encryption: no TLS, REALITY or VLESS encryption. Elarni accepts such a server only on a private network." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "У этого сервера нет шифрования: ни TLS, ни REALITY, ни шифрования VLESS. Elarni принимает такой сервер только в частной сети."
+          }
+        }
+      }
+    },
     "This subscription exceeds the supported size. Ask the provider for a smaller feed." : {
       "localizations" : {
         "ru" : {

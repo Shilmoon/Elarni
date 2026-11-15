@@ -9,7 +9,10 @@ enum SubscriptionRiskCode: String, Codable, CaseIterable {
 
 struct SubscriptionApprovalRequirement: Error {
   let riskCodes: [SubscriptionRiskCode]
+  /// Approval fingerprints, which name nothing to the user.
   let candidateChain: [String]
+  /// The origin of each fetch the core met, for the review.
+  var destinations: [String] = []
 }
 
 struct SubscriptionSafetyWarning {
@@ -23,6 +26,7 @@ struct SubscriptionSafetyWarning {
     [
       "subscriptionId": subscriptionID,
       "riskCodes": riskCodes.map(\.rawValue),
+      "destinations": destinations,
       "challenge": challenge,
     ]
   }
@@ -74,10 +78,14 @@ final class SubscriptionApprovalChallengeVault {
       subscriptionID: subscriptionID,
       riskCodes: requirement.riskCodes,
       challenge: token,
-      destinations: requirement.candidateChain.map { text in
-        guard let url = URLComponents(string: text), let scheme = url.scheme, let host = url.host else { return "Invalid destination" }
+      destinations: requirement.destinations.map { text in
+        // The core names the address it connects to after an arrow when that is not the URL's host.
+        let arrow = text.range(of: " → ")
+        let origin = arrow.map { String(text[..<$0.lowerBound]) } ?? text
+        let connect = arrow.map { " → " + String(text[$0.upperBound...]) } ?? ""
+        guard let url = URLComponents(string: origin), let scheme = url.scheme, let host = url.host else { return "Invalid destination" }
         // Foundation keeps an IPv6 literal's brackets in `host`.
-        return "\(scheme)://\(host.contains(":") && !host.hasPrefix("[") ? "[\(host)]" : host)" + (url.port.map { ":\($0)" } ?? "")
+        return "\(scheme)://\(host.contains(":") && !host.hasPrefix("[") ? "[\(host)]" : host)" + (url.port.map { ":\($0)" } ?? "") + connect
       }
     )
   }

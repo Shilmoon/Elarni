@@ -94,9 +94,14 @@ func dispatch(raw string) (result response) {
 	}
 	result.text = libxray.InvokeRequest(request)
 	var reply struct {
-		Success bool `json:"success"`
+		Success bool   `json:"success"`
+		Error   string `json:"error"`
 	}
 	if json.Unmarshal([]byte(result.text), &reply) != nil || !reply.Success {
+		// The one import failure whose reason the user can act on keeps its own code.
+		if code == "unsupported_profile" && reply.Error == "unencrypted_server" {
+			code = reply.Error
+		}
 		if request.Method == libxray.LibXrayMethodPing {
 			// Probe diagnostics contain typed codes and stages, never endpoints.
 			var parsed struct {
@@ -290,8 +295,15 @@ func serveVPNSession(requests <-chan string, closed <-chan struct{}, output io.W
 				} `json:"payload"`
 			}
 			if json.Unmarshal([]byte(raw), &request) != nil || request.APIVersion != 1 ||
-				(request.Method != "runVPN" && request.Method != "stopVPN") || request.Method == "runVPN" && active {
+				(request.Method != "runVPN" && request.Method != "stopVPN" && request.Method != "reloadVPN") || request.Method == "runVPN" && active {
 				return 1
+			}
+			if request.Method == "reloadVPN" && !active {
+				// The tunnel ended while the app asked: there is nothing to reload, and the app starts one.
+				if !write(json.RawMessage(`{"success":false,"error":"vpn_reload_restart"}`)) {
+					return 1
+				}
+				continue
 			}
 			done := make(chan response, 1)
 			go func() { done <- invoke(raw) }()
@@ -310,6 +322,10 @@ func serveVPNSession(requests <-chan string, closed <-chan struct{}, output io.W
 				}
 				if (json.Unmarshal([]byte(result.text), &reply) != nil || !reply.Success) && !running() {
 					return 1
+				}
+				if request.Method == "reloadVPN" {
+					// The tunnel runs on, with the new routing or the old.
+					continue
 				}
 				active = result.run
 				streamMetrics = request.Payload.StreamMetrics

@@ -762,16 +762,66 @@ func TestStockClashProfilePreservesManualGroupAndRules(t *testing.T) {
 	if len(rules) != 2 || rules[1].(map[string]any)["outboundTag"] != "PROXY" || root["dns"] == nil {
 		t.Fatal("Clash policy lost")
 	}
-	if _, err := ImportClientProfiles(strings.Replace(input, "MATCH,PROXY", "MATCH,MISSING", 1)); err == nil {
-		t.Fatal("missing routing target accepted")
+	if _, err := ImportClientProfiles(strings.Replace(input, "MATCH,PROXY", "MATCH,MISSING", 1)); err == nil || err.Error() != "Clash rule has a missing target" {
+		t.Fatalf("missing routing target accepted: %v", err)
+	}
+	if _, err := ImportClientProfiles(strings.Replace(input, "MATCH,PROXY", "IP-CIDR,192.0.2.0/24,DIRECT,no-resolve", 1)); err != nil {
+		t.Fatalf("no-resolve on an IP rule refused: %v", err)
 	}
 	for _, change := range []struct{ before, after string }{
 		{"type: select", "type: select, filter: ignored"},
-		{"MATCH,PROXY", "IP-CIDR,192.0.2.0/24,DIRECT,no-resolve"},
 		{"type: select", "type: url-test"},
 	} {
 		if _, err := ImportClientProfiles(strings.Replace(input, change.before, change.after, 1)); err == nil {
 			t.Fatal("unsupported Clash graph semantics were silently discarded")
+		}
+	}
+}
+
+// Xray has no per-rule no-resolve. An IP rule with it converts as it would without; the profile keeps
+// domains from IP rules only when every IP rule asks for that, and resolves them otherwise.
+func TestClashNoResolveOnIPRules(t *testing.T) {
+	routing := func(t *testing.T, rules ...string) (string, []any) {
+		t.Helper()
+		input := "proxies:\n  - {name: one, type: socks5, server: 127.0.0.1, port: 1080}\nrules:\n  - " + strings.Join(rules, "\n  - ") + "\n"
+		result, err := ImportClientProfiles(input)
+		if err != nil {
+			t.Fatalf("%v\n%s", err, input)
+		}
+		var root struct {
+			Routing struct {
+				DomainStrategy string `json:"domainStrategy"`
+				Rules          []any  `json:"rules"`
+			} `json:"routing"`
+		}
+		if err := json.Unmarshal(result.Profiles[0].Config, &root); err != nil {
+			t.Fatal(err)
+		}
+		return root.Routing.DomainStrategy, root.Routing.Rules
+	}
+	ipRules := []string{"IP-CIDR,10.0.0.0/8,DIRECT", "IP-CIDR6,fd00::/8,DIRECT", "GEOIP,LAN,DIRECT"}
+	var marked []string
+	for _, rule := range ipRules {
+		marked = append(marked, rule+",no-resolve")
+	}
+	plain := append(slices.Clone(ipRules), "DOMAIN-SUFFIX,example.com,one", "MATCH,one")
+	strategy, withOption := routing(t, append(slices.Clone(marked), "DOMAIN-SUFFIX,example.com,one", "MATCH,one")...)
+	if strategy != "AsIs" {
+		t.Errorf("every IP rule with no-resolve: domainStrategy %q", strategy)
+	}
+	if strategy, without := routing(t, plain...); strategy != "IPOnDemand" || !reflect.DeepEqual(withOption, without) {
+		t.Errorf("no-resolve changed the rules or the plain ones stopped resolving (%q):\n%v\n%v", strategy, withOption, without)
+	}
+	if strategy, _ := routing(t, marked[0], ipRules[2], "MATCH,one"); strategy != "IPOnDemand" {
+		t.Errorf("an IP rule with and one without no-resolve: domainStrategy %q", strategy)
+	}
+	if strategy, _ := routing(t, "DOMAIN-SUFFIX,example.com,one", "MATCH,DIRECT"); strategy != "IPOnDemand" {
+		t.Errorf("no IP rule: domainStrategy %q", strategy)
+	}
+	for _, rule := range []string{"DOMAIN-SUFFIX,example.com,DIRECT,no-resolve", "DST-PORT,443,DIRECT,no-resolve", "IP-CIDR,10.0.0.0/8,extra,DIRECT,no-resolve"} {
+		input := "proxies:\n  - {name: one, type: socks5, server: 127.0.0.1, port: 1080}\nrules:\n  - " + rule + "\n"
+		if _, err := ImportClientProfiles(input); err == nil || err.Error() != "unsupported Clash rule shape" {
+			t.Errorf("%s: %v", rule, err)
 		}
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"reflect"
@@ -13,6 +14,57 @@ import (
 	"strings"
 	"testing"
 )
+
+// Xray refuses a VLESS or Trojan server without TLS, REALITY or VLESS encryption unless its
+// address is private. The import said only "unsupported", which sent the user to look for
+// another format; it names the reason.
+func TestImportNamesAnUnencryptedPublicServer(t *testing.T) {
+	const id = "00000000-0000-4000-8000-000000000001"
+	for _, link := range []string{
+		"vless://" + id + "@8.8.8.8:443?encryption=none&type=tcp&security=none#Plain",
+		"vless://" + id + "@dns.google:443?encryption=none#Plain",
+		"trojan://pw@8.8.8.8:443?security=none#Plain",
+	} {
+		if _, err := ImportClientProfiles(link); !errors.Is(err, ErrUnencryptedServer) || err.Error() != "unencrypted_server" {
+			t.Errorf("%s: %v", link, err)
+		}
+	}
+	// The same server as an Xray profile.
+	profile := `{"outbounds":[{"protocol":"vless","settings":{"vnext":[{"address":"8.8.8.8","port":443,"users":[{"id":"` + id + `","encryption":"none"}]}]}}]}`
+	if _, err := ImportClientProfiles(profile); !errors.Is(err, ErrUnencryptedServer) {
+		t.Errorf("Xray profile: %v", err)
+	}
+	// The same server in a Clash file, which named only "invalid Clash client settings".
+	if _, err := ImportClientProfiles("proxies:\n  - {name: Plain, type: vless, server: 8.8.8.8, port: 443, uuid: " + id + "}\n"); !errors.Is(err, ErrUnencryptedServer) {
+		t.Errorf("Clash profile: %v", err)
+	}
+	// A private address, and a public one with TLS, import as before.
+	for _, link := range []string{
+		"vless://" + id + "@10.0.0.1:443?encryption=none&security=none#Lan",
+		"vless://" + id + "@8.8.8.8:443?encryption=none&security=tls&sni=plain.example#Tls",
+	} {
+		if result, err := ImportClientProfiles(link); err != nil || len(result.Profiles) != 1 {
+			t.Errorf("%s: %v", link, err)
+		}
+	}
+	// The reason is the import's only when it is every member's: other broken lines are not servers without encryption.
+	plain := "vless://" + id + "@8.8.8.8:443?encryption=none&type=tcp&security=none#Plain"
+	if _, err := ImportClientProfiles(plain + "\n" + strings.Replace(plain, "8.8.8.8", "8.8.4.4", 1)); !errors.Is(err, ErrUnencryptedServer) {
+		t.Errorf("two unencrypted servers: %v", err)
+	}
+	if _, err := ImportClientProfiles(plain + "\nvless://broken\nnot a link"); err == nil || errors.Is(err, ErrUnencryptedServer) {
+		t.Errorf("an unencrypted server among broken lines: %v", err)
+	}
+	// After one, another member's error is the file's: a Clash file's names Clash, which macOS matches on.
+	if _, err := ImportClientProfiles("proxies:\n  - {name: Plain, type: vless, server: 8.8.8.8, port: 443, uuid: " + id + "}\n  - {name: Bad, type: snell, server: 127.0.0.1, port: 1080}\n"); err == nil || errors.Is(err, ErrUnencryptedServer) || err.Error() != "unsupported Clash proxy type snell" {
+		t.Errorf("an unencrypted server before a refused Clash proxy: %v", err)
+	}
+	// Among servers that import it is skipped like any other.
+	result, err := ImportClientProfiles("trojan://pw@127.0.0.1:443#Kept\ntrojan://pw@8.8.8.8:443?security=none#Plain")
+	if err != nil || len(result.Profiles) != 1 || result.SkippedCount != 1 {
+		t.Fatalf("mixed feed: %+v %v", result, err)
+	}
+}
 
 // One unsupported line used to cost the user every server of the subscription: a member that
 // cannot be imported is now skipped and reported, and the rest import.
@@ -160,18 +212,57 @@ rules:
 	if !reflect.DeepEqual(root.Groups, wantGroups) {
 		t.Fatalf("groups %+v", root.Groups)
 	}
-	// A rule naming what was dropped cannot be kept or rerouted: the file fails with the proxy's error.
-	for _, target := range []string{"Bad", "OnlyBad"} {
-		if _, err := ImportClientProfiles(strings.Replace(input, "MATCH,Outer", "MATCH,"+target, 1)); err == nil || err.Error() != "unsupported Clash proxy type snell" {
+	// A rule naming what was dropped blocks what it matched, in its place among the rules around it, so
+	// that a later rule cannot send that traffic directly. It counts as the IP rule it is, with its
+	// no-resolve, in whether the profile resolves domains for IP rules.
+	for _, test := range []struct{ target, option, strategy string }{{"Bad", "", "IPOnDemand"}, {"OnlyBad", ",no-resolve", "AsIs"}} {
+		target := test.target
+		rules := "IP-CIDR,10.0.0.0/8," + target + test.option + "\n  - IP-CIDR,192.168.0.0/16,DIRECT,no-resolve\n  - MATCH,Outer"
+		result, err := ImportClientProfiles(strings.Replace(input, "MATCH,Outer", rules, 1))
+		if err != nil {
 			t.Errorf("rule to %s: %v", target, err)
+			continue
 		}
+		if !reflect.DeepEqual(result.Skipped, want) {
+			t.Errorf("rule to %s: skipped %+v", target, result.Skipped)
+		}
+		var routed struct {
+			Routing struct {
+				DomainStrategy string `json:"domainStrategy"`
+				Rules          []struct {
+					Tag     string   `json:"outboundTag"`
+					Domain  []string `json:"domain"`
+					IP      []string `json:"ip"`
+					Network string   `json:"network"`
+				} `json:"rules"`
+			} `json:"routing"`
+		}
+		if err := json.Unmarshal(result.Profiles[0].Config, &routed); err != nil {
+			t.Fatal(err)
+		}
+		rest := routed.Routing.Rules
+		if len(rest) != 4 || rest[0].Tag != "DIRECT" || !slices.Equal(rest[0].Domain, []string{"domain:example.org"}) ||
+			rest[1].Tag != "REJECT" || !slices.Equal(rest[1].IP, []string{"10.0.0.0/8"}) ||
+			rest[2].Tag != "DIRECT" || !slices.Equal(rest[2].IP, []string{"192.168.0.0/16"}) ||
+			rest[3].Tag != "Outer" || rest[3].Network != "tcp,udp" || routed.Routing.DomainStrategy != test.strategy {
+			t.Errorf("rule to %s: routing %+v", target, routed.Routing)
+		}
+		// The rule for everything else cannot be blocked without a word: the file says why it is refused.
+		if _, err := ImportClientProfiles(strings.Replace(input, "MATCH,Outer", "MATCH,"+target, 1)); err == nil || err.Error() != "Clash MATCH rule refers to a skipped proxy" {
+			t.Errorf("MATCH to %s: %v", target, err)
+		}
+	}
+	// A rule naming what the file never defined still fails it.
+	if _, err := ImportClientProfiles(strings.Replace(input, "MATCH,Outer", "MATCH,Nowhere", 1)); err == nil || err.Error() != "Clash rule has a missing target" {
+		t.Errorf("rule to an undefined target: %v", err)
 	}
 	// With no proxy left, the first one's error is the file's.
 	if _, err := ImportClientProfiles("proxies:\n  - {name: Bad, type: snell, server: 127.0.0.1, port: 1080}\n  - {name: weird, type: x, server: 127.0.0.1, port: 1080}\n"); err == nil || err.Error() != "unsupported Clash proxy type snell" {
 		t.Errorf("all proxies refused: %v", err)
 	}
-	// Structural errors still fail the file.
-	for _, broken := range []string{input + "unknown-top-level: 1\n", strings.Replace(input, "type: select, proxies: [Bad, spaced]", "type: url-test, proxies: [Bad, spaced]", 1), input + "  - [not, a, rule\n"} {
+	// Structural errors still fail the file, also in a rule to a dropped proxy.
+	for _, broken := range []string{input + "unknown-top-level: 1\n", strings.Replace(input, "type: select, proxies: [Bad, spaced]", "type: url-test, proxies: [Bad, spaced]", 1), input + "  - [not, a, rule\n",
+		strings.Replace(input, "MATCH,Outer", "PROCESS-NAME,curl,Bad\n  - MATCH,Outer", 1)} {
 		if _, err := ImportClientProfiles(broken); err == nil {
 			t.Errorf("structurally broken file imported:\n%s", broken)
 		}

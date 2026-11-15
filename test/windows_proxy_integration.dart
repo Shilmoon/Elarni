@@ -1780,6 +1780,183 @@ for line in sys.stdin:
     await backend.control.disconnect();
   });
 
+  // A change of per-app routing used to stop the tunnel and start it again,
+  // which cut every connection for about two seconds.
+  test(
+    'a per-app change reaches the running tunnel without a restart',
+    () async {
+      await prepare();
+      final settings = (await backend.control.tunnelSettings()).copyWith(
+        xrayTunEnabled: true,
+        blockWithoutVPN: true,
+        enforceRoutes: false,
+      );
+      await backend.control.updateTunnelSettings(settings);
+      final events = File.fromUri(temporary.uri.resolve('vpn-reload-events'));
+      final refuse = File.fromUri(temporary.uri.resolve('vpn-reload-refuse'));
+      await useStub('''
+import json, os, socket, subprocess, sys
+listeners = []
+running = None
+def note(entry):
+    with open(${jsonEncode(events.path)}, 'a') as events: print(entry, file=events)
+# What a reload may not change: the request but its configuration, and the
+# configuration but its routing rules and its outbounds after the first.
+def frame(payload):
+    config = json.loads(payload['configJSON'])
+    rules = config.get('routing', {}).pop('rules', [])
+    outbounds = config.pop('outbounds')
+    rest = {key: value for key, value in payload.items() if key not in ('configJSON', 'reuseSession')}
+    return json.dumps([rest, config, outbounds[0]], sort_keys=True), len(rules), len(outbounds)
+for line in sys.stdin:
+    request = json.loads(line)
+    method = request['method']
+    if method == 'runVPN':
+        note(method)
+        running = frame(request['payload'])
+        config = json.loads(request['payload']['configJSON'])
+        for inbound in config['inbounds']:
+            if inbound['protocol'] in ('socks', 'http'):
+                listener = socket.socket()
+                listener.bind(('127.0.0.1', inbound['port']))
+                listener.listen(32)
+                listeners.append(listener)
+        print(json.dumps({'success': True, 'data': {}}), flush=True)
+    elif method == 'reloadVPN':
+        asked = frame(request['payload'])
+        note('reloadVPN ' + ('same' if asked[0] == running[0] else 'other') + ' rules %+d outbounds %+d' % (asked[1] - running[1], asked[2] - running[2]))
+        if os.path.exists(${jsonEncode(refuse.path)}):
+            print(json.dumps({'success': False, 'error': 'vpn_reload_restart'}), flush=True)
+        else:
+            running = asked
+            print(json.dumps({'success': True, 'data': {}}), flush=True)
+    elif method == 'stopVPN':
+        note('stopVPN hold' if request['payload'].get('hold') else method)
+        for listener in listeners: listener.close()
+        listeners.clear()
+        print(json.dumps({'success': True, 'data': {}}), flush=True)
+    elif method == 'lookupHost':
+        note(method + ' ' + request['payload']['host'])
+        print(json.dumps({'success': True, 'data': {'addresses': ['127.0.0.1']}}), flush=True)
+        break
+    else:
+        child = subprocess.Popen([${jsonEncode(corePath)}], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+        child.stdin.write(line)
+        child.stdin.flush()
+        print(child.stdout.readline(), end='', flush=True)
+        child.stdin.close()
+        child.wait(timeout=10)
+        break
+''');
+      // A server by name: the reload must keep the address the tunnel started
+      // with, and not look the name up again.
+      final named =
+          (await backend.control.importClientProfiles(
+                content: profile
+                    .replaceFirst('127.0.0.1', 'server.invalid')
+                    .replaceFirst('#Fixture', '#Named'),
+              )).snapshot.subscriptions
+              .expand((source) => source.nodes)
+              .singleWhere((node) => node.name == 'Named')
+              .id;
+      await backend.control.connect();
+      await backend.control.selectNode(named);
+      expect(await events.readAsLines(), [
+        'runVPN',
+        'lookupHost server.invalid',
+        'stopVPN hold',
+        'runVPN',
+      ]);
+
+      // One app leaves the tunnel: its rules and their outbound, with the same
+      // listeners, login, server address and tunnel settings.
+      final bypass = settings.copyWith(
+        perAppMode: 'bypass',
+        perAppProcesses: ['fixture.exe'],
+      );
+      expect(
+        (await backend.control.updateTunnelSettings(bypass)).perAppProcesses,
+        ['fixture.exe'],
+      );
+      expect(await backend.control.state(), 'connected');
+      expect((await events.readAsLines()).skip(4), [
+        'reloadVPN same rules +3 outbounds +1',
+      ]);
+      // The server ran on: it is as verified as it was, under its new revision.
+      expect(
+        (await backend.control.subscriptions()).subscriptions
+            .expand((source) => source.nodes)
+            .singleWhere((node) => node.id == named)
+            .lastSuccessCurrent,
+        true,
+      );
+      // And back.
+      await backend.control.updateTunnelSettings(settings);
+      expect(await backend.control.state(), 'connected');
+      expect((await events.readAsLines()).skip(5), [
+        'reloadVPN same rules -3 outbounds -1',
+      ]);
+
+      // A tunnel that cannot take the change is restarted, as before.
+      await refuse.writeAsString('the core needs a restart');
+      await backend.control.updateTunnelSettings(bypass);
+      expect(await backend.control.state(), 'connected');
+      expect((await backend.control.tunnelSettings()).perAppMode, 'bypass');
+      expect((await events.readAsLines()).skip(6), [
+        'reloadVPN same rules +3 outbounds +1',
+        'lookupHost server.invalid',
+        'stopVPN hold',
+        'runVPN',
+      ]);
+      await refuse.delete();
+
+      // A change of the tunnel's own settings is not offered to it.
+      await backend.control.updateTunnelSettings(
+        bypass.copyWith(excludedRoutes: ['203.0.113.0/24']),
+      );
+      expect((await events.readAsLines()).skip(10), [
+        'lookupHost server.invalid',
+        'stopVPN hold',
+        'runVPN',
+      ]);
+      // Nor is a setting that is not per-app routing: only that one compiles
+      // to rules alone, and the others would be prepared twice.
+      await backend.control.updateTunnelSettings(
+        bypass.copyWith(
+          excludedRoutes: ['203.0.113.0/24'],
+          sniffingEnabled: !bypass.sniffingEnabled,
+        ),
+      );
+      expect((await events.readAsLines()).skip(13), [
+        'lookupHost server.invalid',
+        'stopVPN hold',
+        'runVPN',
+      ]);
+      // Nor is a change of the routing profile: its rules are meant for the
+      // connections that are open too, so the tunnel restarts with them.
+      final source = (await backend.control.subscriptions()).subscriptions
+          .singleWhere((source) => source.nodes.any((node) => node.id == named))
+          .id;
+      final route = (await backend.control.importRouting(
+        jsonEncode({
+          'Name': 'Direct site',
+          'RemoteDNSType': 'DoU',
+          'RemoteDNSIP': '1.1.1.1',
+          'DomesticDNSType': 'DoU',
+          'DomesticDNSIP': '8.8.8.8',
+          'DirectSites': ['full:direct.example'],
+        }),
+      )).profiles.single.id;
+      await backend.control.assignRoutingProfile(source, route);
+      expect(await backend.control.state(), 'connected');
+      final routed = (await events.readAsLines()).skip(16).toList();
+      expect(routed, isNot(contains(startsWith('reloadVPN'))));
+      expect(routed.last, 'runVPN');
+      await backend.control.disconnect();
+      expect((await events.readAsLines()).last, 'stopVPN');
+    },
+  );
+
   // A crashed Windows helper leaves its kill switch, which lets the next
   // helper through: clearing it before the reconnect let traffic out until the
   // new tunnel was up.
@@ -1936,6 +2113,22 @@ for line in sys.stdin:
       },
     );
   }
+
+  test('an unencrypted link to a public address names its reason', () async {
+    await expectLater(
+      backend.control.importClientProfiles(
+        content:
+            'vless://00000000-0000-4000-8000-000000000001@8.8.8.8:443?encryption=none&type=tcp&security=none#Plain',
+      ),
+      throwsA(
+        isA<PlatformException>().having(
+          (e) => e.code,
+          'code',
+          'unencrypted_server',
+        ),
+      ),
+    );
+  });
 
   test(
     'file and QR imports use the native decoder and retain the catalog on cancel',
@@ -2883,11 +3076,8 @@ for line in sys.stdin:
       [false, true],
     );
     expect(messages, [
-      'Connection stopped unexpectedly. Reconnect to retry; if sites stay '
-          'unreachable, use Repair VPN setup.',
-      'Connection stopped unexpectedly. Block traffic without VPN keeps '
-          'traffic blocked until you reconnect, or use Repair VPN setup to '
-          'lift the block.',
+      'connection_stopped_repair',
+      'connection_stopped_blocked',
     ]);
   });
 
@@ -2915,7 +3105,12 @@ def lose():
     while not os.path.exists(${jsonEncode(lose.path)}): time.sleep(0.01)
     for listener in listeners: listener.close()
     listeners.clear()
-    os.unlink(${jsonEncode(lose.path)})
+    # Windows refuses the removal while the test still has the file open.
+    while True:
+        try:
+            os.unlink(${jsonEncode(lose.path)})
+            break
+        except PermissionError: time.sleep(0.01)
     send({'event': 'stopped'})
 for line in sys.stdin:
     request = json.loads(line)
@@ -2943,10 +3138,7 @@ for line in sys.stdin:
       await Future<void>.delayed(const Duration(milliseconds: 20));
     }
     expect(await backend.control.state(), 'failed');
-    expect(messages, [
-      'Connection stopped unexpectedly. Reconnect to retry; if sites stay '
-          'unreachable, use Repair VPN setup.',
-    ]);
+    expect(messages, ['connection_stopped_repair']);
     await expectClosed(settings.socksPort);
     expect(await backend.control.connect(), 'connected');
     await backend.control.disconnect();
@@ -4079,8 +4271,8 @@ for line in sys.stdin:
     await backend.handleLinks([
       'happ://routing/onadd/${base64Encode(utf8.encode(jsonEncode(route)))}',
     ]);
-    expect(messages, [desktopError('no_selected_subscription').message]);
-    expect(messages.single, contains('Select a server'));
+    expect(messages, ['no_selected_subscription']);
+    expect(listenerNotice(messages.single!), contains('Select a server'));
     expect((await backend.control.routingProfiles()).profiles, isEmpty);
   });
 
@@ -5059,6 +5251,189 @@ for line in sys.stdin:
     timeout: const Timeout(Duration(minutes: 3)),
   );
 
+  // A check that never passed on this connection did not count, so a server
+  // that was already down at Connect, or stopped before its first check,
+  // stayed selected and shown as connected while a backup was allowed.
+  test(
+    'failover leaves a server that refuses connections before a check passed',
+    () async {
+      await backend.dispose();
+      backend = createBackend(
+        automationProbeSeconds: 2,
+        automationRetrySeconds: 1,
+        livenessInterval: const Duration(minutes: 5),
+      );
+      try {
+        final imported = await backend.control.importClientProfiles(
+          content: [
+            Uri.parse(
+              profile,
+            ).replace(port: await freePort(), fragment: 'Primary').toString(),
+            profile,
+          ].join('\n'),
+        );
+        final group = imported.snapshot.subscriptions.single;
+        String id(String name) =>
+            group.nodes.singleWhere((node) => node.name == name).id;
+        await backend.control.selectNode(id('Primary'));
+        await backend.control.configureAutomation(
+          AutomationConfiguration(
+            enabled: true,
+            policy: AutomationSelectionPolicy.orderedFallback,
+            subscriptionId: group.id,
+            nodeIds: [id('Primary'), id('Fixture')],
+            targets: [
+              AutomationTarget(
+                id: 'fixture',
+                url: 'http://127.0.0.1:${target.port}/fixture',
+                expectedStatus: 200,
+                expectedBody: body,
+              ),
+            ],
+          ),
+        );
+        // The core starts whether or not its server answers.
+        expect(await backend.control.connect(), 'connected');
+        for (var i = 0; i < 900; i++) {
+          if ((await backend.control.subscriptions()).selectedNodeId ==
+                  id('Fixture') &&
+              await backend.control.state() == 'connected')
+            break;
+          await Future<void>.delayed(const Duration(milliseconds: 100));
+        }
+        expect(
+          (await backend.control.subscriptions()).selectedNodeId,
+          id('Fixture'),
+        );
+        expect(await backend.control.state(), 'connected');
+        final settings = await backend.control.tunnelSettings();
+        await checkSocks(settings.socksPort, target.port);
+      } finally {
+        await backend.control.disconnect();
+      }
+    },
+    timeout: const Timeout(Duration(minutes: 3)),
+  );
+
+  // With no other server to move to, a restart would not help a server that
+  // rejects the credentials or whose exit refuses the check targets.
+  test(
+    'a fixed server that never passed its check is not restarted',
+    () async {
+      await backend.dispose();
+      backend = createBackend(
+        automationProbeSeconds: 2,
+        automationRetrySeconds: 1,
+        livenessInterval: const Duration(minutes: 5),
+      );
+      try {
+        final imported = await backend.control.importClientProfiles(
+          content: Uri.parse(
+            profile,
+          ).replace(port: await freePort(), fragment: 'Primary').toString(),
+        );
+        final group = imported.snapshot.subscriptions.single;
+        await backend.control.selectNode(group.nodes.single.id);
+        await backend.control.configureAutomation(
+          AutomationConfiguration(
+            enabled: true,
+            policy: AutomationSelectionPolicy.fixed,
+            subscriptionId: group.id,
+            nodeIds: [group.nodes.single.id],
+            targets: [
+              AutomationTarget(
+                id: 'fixture',
+                url: 'http://127.0.0.1:${target.port}/fixture',
+                expectedStatus: 200,
+                expectedBody: body,
+              ),
+            ],
+          ),
+        );
+        expect(await backend.control.connect(), 'connected');
+        final since = (await backend.control
+            .runtimeMetrics())['connectedSince'];
+        for (var i = 0; i < 300; i++) {
+          if ((await backend.control.automationStatus())['status'] ==
+              'indeterminate')
+            break;
+          await Future<void>.delayed(const Duration(milliseconds: 100));
+        }
+        final status = await backend.control.automationStatus();
+        expect(status['status'], 'indeterminate');
+        expect(status['attempts'], 0);
+        expect(await backend.control.state(), 'connected');
+        expect(
+          (await backend.control.runtimeMetrics())['connectedSince'],
+          since,
+        );
+      } finally {
+        await backend.control.disconnect();
+      }
+    },
+    timeout: const Timeout(Duration(minutes: 2)),
+  );
+
+  // A policy that allows moving is not a server to move to: with one server
+  // in the list the refused check counted, the retries ran out and the
+  // connection ended as exhausted.
+  test(
+    'an only allowed server that never passed its check is kept',
+    () async {
+      await backend.dispose();
+      backend = createBackend(
+        automationProbeSeconds: 2,
+        automationRetrySeconds: 1,
+        livenessInterval: const Duration(minutes: 5),
+      );
+      try {
+        final imported = await backend.control.importClientProfiles(
+          content: Uri.parse(
+            profile,
+          ).replace(port: await freePort(), fragment: 'Primary').toString(),
+        );
+        final group = imported.snapshot.subscriptions.single;
+        await backend.control.selectNode(group.nodes.single.id);
+        await backend.control.configureAutomation(
+          AutomationConfiguration(
+            enabled: true,
+            policy: AutomationSelectionPolicy.orderedFallback,
+            subscriptionId: group.id,
+            nodeIds: [group.nodes.single.id],
+            targets: [
+              AutomationTarget(
+                id: 'fixture',
+                url: 'http://127.0.0.1:${target.port}/fixture',
+                expectedStatus: 200,
+                expectedBody: body,
+              ),
+            ],
+          ),
+        );
+        expect(await backend.control.connect(), 'connected');
+        final since = (await backend.control
+            .runtimeMetrics())['connectedSince'];
+        for (var i = 0; i < 300; i++) {
+          if ((await backend.control.automationStatus())['status'] ==
+              'indeterminate')
+            break;
+          await Future<void>.delayed(const Duration(milliseconds: 100));
+        }
+        final status = await backend.control.automationStatus();
+        expect(status['status'], 'indeterminate');
+        expect(status['attempts'], 0);
+        expect(await backend.control.state(), 'connected');
+        expect(
+          (await backend.control.runtimeMetrics())['connectedSince'],
+          since,
+        );
+      } finally {
+        await backend.control.disconnect();
+      }
+    },
+    timeout: const Timeout(Duration(minutes: 2)),
+  );
+
   // An unresolvable server name is a failed connection, so failover moves on.
   test(
     'ordered fallback moves on from a primary whose server name does not resolve',
@@ -5532,6 +5907,80 @@ for line in sys.stdin:
       }
     },
   );
+
+  // A pasted list is as lenient as a download: a server the compiler refuses
+  // is left out and counted, and the servers already there stay.
+  test('a local import leaves out a server the compiler refuses', () async {
+    // Two outbounds with one tag: the importer reads each, the compiler refuses the pair.
+    final refused = jsonEncode([
+      {
+        'remarks': 'Refused',
+        'outbounds': [
+          {
+            'tag': 'proxy',
+            'protocol': 'vless',
+            'settings': {
+              'vnext': [
+                {
+                  'address': '127.0.0.1',
+                  'port': Uri.parse(profile).port,
+                  'users': [
+                    {'id': userID, 'encryption': 'none'},
+                  ],
+                },
+              ],
+            },
+          },
+          {'tag': 'proxy', 'protocol': 'freedom'},
+        ],
+      },
+    ]);
+    final refusedMember =
+        (jsonDecode(refused) as List).single as Map<String, Object?>;
+    final mixed = jsonEncode([
+      {
+        'remarks': 'Kept',
+        'outbounds': [(refusedMember['outbounds']! as List).first],
+      },
+      refusedMember,
+    ]);
+    final first = (await backend.control.importClientProfiles(
+      content: profile,
+    )).snapshot.subscriptions.single;
+    final joined = (await backend.control.importClientProfiles(
+      content: mixed,
+    )).snapshot.subscriptions.single;
+    expect(joined.id, first.id);
+    expect(joined.nodes.map((node) => node.name), ['Fixture', 'Kept']);
+    expect(joined.nodes.first.id, first.nodes.single.id);
+    CatalogMap metadata() => catalogMap(
+      catalogList(
+        catalogMap(storedCatalog!['committed'])['subscriptions'],
+      ).single['metadata'],
+    );
+    expect(metadata()['skippedServers'], 1);
+    expect(metadata()['skippedKinds'], 'vless');
+
+    // Nothing new left: the import fails and changes nothing.
+    final before = jsonEncode(storedCatalog);
+    await expectLater(
+      backend.control.importClientProfiles(content: refused),
+      throwsA(
+        isA<PlatformException>().having(
+          (e) => e.code,
+          'code',
+          'unsupported_profile',
+        ),
+      ),
+    );
+    expect(jsonEncode(storedCatalog), before);
+    expect(
+      (await backend.control.subscriptions()).subscriptions.single.nodes.map(
+        (node) => node.name,
+      ),
+      ['Fixture', 'Kept'],
+    );
+  });
 
   test('provider routing refreshes keep the profile the user assigned', () async {
     const password = 'synthetic backup password';
@@ -6735,6 +7184,7 @@ else:
         'Proxy rules and servers need codes the geofiles lack: geoip:ru. '
         'Fix the profile or its geofile links.',
       );
+      expect(failed.geofileErrorCode, 'missing_geodata');
     },
   );
 
@@ -7275,8 +7725,7 @@ print(json.dumps({'success': False, 'error': 'connection_failed'}), flush=True)
       });
       final failures = StreamController<void>.broadcast();
       backend.control.setImportListener((message) {
-        if (message == 'A scheduled subscription or routing refresh failed.')
-          failures.add(null);
+        if (message == 'scheduled_refresh_failed') failures.add(null);
       });
       try {
         final added = await backend.control.addSubscription(
@@ -7333,8 +7782,7 @@ print(json.dumps({'success': False, 'error': 'connection_failed'}), flush=True)
     });
     final failures = StreamController<void>.broadcast();
     backend.control.setImportListener((message) {
-      if (message == 'A scheduled subscription or routing refresh failed.')
-        failures.add(null);
+      if (message == 'scheduled_refresh_failed') failures.add(null);
     });
     Future<void> scheduled(int wait) async {
       final attempt = failures.stream.first;

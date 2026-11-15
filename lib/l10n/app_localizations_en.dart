@@ -257,6 +257,11 @@ class AppLocalizationsEn extends AppLocalizations {
       'Close the conflicting app or change the listener port in Connection settings.';
 
   @override
+  String issueListenerPortUnavailable(int port) {
+    return 'Port $port is occupied or unavailable. Choose another listener port.';
+  }
+
+  @override
   String get issueListenerUnavailable =>
       'A local proxy port is occupied or unavailable.';
 
@@ -1114,6 +1119,31 @@ class AppLocalizationsEn extends AppLocalizations {
       'Connection stopped unexpectedly. Reconnect to retry.';
 
   @override
+  String get connectionStoppedRepair =>
+      'Connection stopped unexpectedly. Reconnect to retry; if sites stay unreachable, use Repair VPN setup.';
+
+  @override
+  String get connectionStoppedBlocked =>
+      'Connection stopped unexpectedly. Block traffic without VPN keeps traffic blocked until you reconnect, or use Repair VPN setup to lift the block.';
+
+  @override
+  String get windowsDnsNotRestored =>
+      'Disconnected, but Windows DNS could not be restored yet. If sites stay unreachable, use Repair VPN setup.';
+
+  @override
+  String get systemProxyNotRestored =>
+      'The system proxy setting could not be restored. Check it in your system network settings.';
+
+  @override
+  String systemProxyNotSet(Object port) {
+    return 'The system proxy could not be set. Apps can still use the HTTP proxy at 127.0.0.1:$port.';
+  }
+
+  @override
+  String get scheduledRefreshFailed =>
+      'A scheduled subscription or routing refresh failed.';
+
+  @override
   String get groupSelectionFailed =>
       'Group selection failed. The saved selection was restored.';
 
@@ -1134,12 +1164,27 @@ class AppLocalizationsEn extends AppLocalizations {
       'Select a server first. This routing link turns its profile on for the selected server’s subscription.';
 
   @override
+  String get clientLinksNotHandled =>
+      'One or more client links could not be handled.';
+
+  @override
+  String get clientLinkNotImported => 'The client link could not be imported.';
+
+  @override
   String get unsupportedProfileTryJson =>
       'This profile uses unsupported settings. Try the provider’s Xray JSON format.';
 
   @override
+  String get unencryptedServer =>
+      'This server has no encryption: no TLS, REALITY or VLESS encryption. Elarni accepts such a server only on a private network.';
+
+  @override
   String get subscriptionAddedFirstDownloadFailed =>
       'Subscription added, but the first download failed. Refresh to retry.';
+
+  @override
+  String get subscriptionAddedUnencrypted =>
+      'Subscription added, but its servers have no encryption: no TLS, REALITY or VLESS encryption. Elarni accepts such a server only on a private network. Ask the provider for a server with encryption.';
 
   @override
   String get subscriptionAddedUnreadable =>
@@ -2311,6 +2356,11 @@ class AppLocalizationsEn extends AppLocalizations {
       'This subscription uses an unencrypted HTTP connection.';
 
   @override
+  String subscriptionDestinations(String destinations) {
+    return 'Destinations: $destinations.';
+  }
+
+  @override
   String get connectionNotChecked => 'Connection has not been checked';
 
   @override
@@ -2548,6 +2598,14 @@ class AppLocalizationsEn extends AppLocalizations {
   @override
   String failureUnsupportedText(String provider) {
     return '$provider sent nothing Elarni can read: the format or one of its settings is not supported.';
+  }
+
+  @override
+  String get failureUnencrypted => 'Servers without encryption';
+
+  @override
+  String failureUnencryptedText(String provider) {
+    return '$provider sent only servers without TLS, REALITY or VLESS encryption. Elarni accepts such a server only on a private network.';
   }
 
   @override

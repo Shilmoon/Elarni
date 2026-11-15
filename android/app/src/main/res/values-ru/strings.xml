@@ -38,6 +38,7 @@
     <string name="some_settings_are_invalid_check_port">Некоторые настройки недопустимы. Проверьте номера портов, диапазоны, адреса DNS и обязательные данные для входа.</string>
     <string name="the_connection_could_not_start_check">Не удалось начать подключение. Проверьте сервер, сеть, порты прокси и файлы маршрутизации и повторите.</string>
     <string name="this_profile_could_not_be_imported">Не удалось импортировать профиль. Проверьте ссылку или конфигурацию целиком и попробуйте снова.</string>
+    <string name="this_server_has_no_encryption">У этого сервера нет шифрования: ни TLS, ни REALITY, ни шифрования VLESS. Elarni принимает такой сервер только в частной сети.</string>
     <string name="your_encrypted_catalog_could_not_be">Не удалось открыть или сохранить зашифрованный каталог. Имеющиеся данные сохранены. Разблокируйте устройство и перезапустите приложение. Если это не помогает, начать заново можно только очистив хранилище Elarni в настройках Android › Приложения: серверы и настройки будут удалены.</string>
     <string name="android_could_not_start_the_service">Android не смог запустить службу из фона. Откройте Elarni и нажмите «Подключить».</string>
     <string name="android_has_not_made_the_vpn">Android не подготовил сеть VPN. Переподключитесь или проверьте настройки VPN Android.</string>
@@ -317,7 +318,6 @@
     <string name="your_local_proxy_accepts_apps_without">Ваш локальный прокси принимает приложения без логина</string>
     <string name="any_app_on_this_device_can">Им может пользоваться любое приложение на этом устройстве.</string>
     <string name="approve_destination">Подтвердить адрес</string>
-    <string name="invalid_destination">Недопустимый адрес</string>
     <string name="this_download_needs_your_approval_before">Перед загрузкой с этих адресов нужно ваше подтверждение. Продолжайте, только если доверяете провайдеру.</string>
     <string name="review_download_destination">Проверьте адрес загрузки</string>
     <string name="disconnect_elarni">Отключить Elarni?</string>
@@ -751,4 +751,12 @@
     <string name="connection_per_app_rule">Правило приложения</string>
     <string name="connection_not_listed">Не в списке</string>
     <string name="add_to_list">Добавить в список</string>
+    <string name="android_may_stop_the_vpn_while">Android может остановить VPN, пока телефон спит</string>
+    <string name="battery_optimization_lets_android_cut_the">Оптимизация батареи позволяет Android обрывать соединение в фоне. Разрешите Elarni работать без неё.</string>
+    <string name="run_in_the_background">Работа в фоне</string>
+    <string name="allowed">Разрешено</string>
+    <string name="reset_elarni">Сбросить Elarni</string>
+    <string name="reset_elarni_2">Сбросить Elarni?</string>
+    <string name="this_deletes_every_subscription_server_and">Все подписки, серверы и настройки на этом устройстве будут удалены. Отменить это нельзя.</string>
+    <string name="a_chosen_server_has_no_share">У выбранного сервера нет ссылки, которая сохраняет все его настройки. Поделитесь им с его страницы.</string>
 </resources>
