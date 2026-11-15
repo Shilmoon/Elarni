@@ -6,6 +6,7 @@ import 'desktop_catalog.dart';
 import 'desktop_proxy.dart';
 import 'desktop_version.dart';
 import 'headless_transport.dart';
+import 'platform_services.dart';
 import 'tunnel_channel.dart' show recordingBuild;
 
 export 'headless_transport.dart';
@@ -295,6 +296,26 @@ Future<Process?> watchLinuxSleep(
     },
   );
   return monitor;
+}
+
+/// The code a failed command or daemon start prints. A daemon that cannot
+/// start names its cause (a damaged catalog, a keyring that does not unlock,
+/// a socket it cannot bind); text that is no code never leaves the process.
+String headlessFailureCode(Object error, {required bool daemon}) {
+  if (error is FormatException) return error.message;
+  // A client found no daemon; a daemon could not bind its own socket.
+  if (error is SocketException)
+    return daemon ? 'socket_unavailable' : 'daemon_unavailable';
+  final Object? code = switch (error) {
+    PlatformException(:final code) => code,
+    StateError(:final message) => message,
+    ArgumentError(:final message) => message,
+    _ => null,
+  };
+  return code is String &&
+          RegExp(r'^[A-Za-z][A-Za-z0-9_]{0,63}$').hasMatch(code)
+      ? code
+      : 'operation_failed';
 }
 
 Future<void> runHeadless({

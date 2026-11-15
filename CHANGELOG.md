@@ -21,6 +21,10 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
   through the tunnel and the refresh failed. Android, Windows and Linux.
 - An address with an IPv6 zone (`fe80::1%eth0`) is classed as a local address in the download
   review, like the same address without the zone.
+- The `elarni-cli` daemon names why it could not start: `storage_corrupt` for a damaged catalog,
+  `keyring_unavailable` for a keyring it cannot open, `socket_unavailable` for a socket it
+  cannot bind, instead of `operation_failed` or `daemon_unavailable` for each. Text that is
+  not a code is still never printed.
 
 ## 0.6.1 - 2026-11-14
 
