@@ -118,6 +118,13 @@ void main() {
           'settings is not supported.',
     ),
     (
+      'unencrypted_server',
+      <SubscriptionNode>[],
+      'Servers without encryption',
+      'Acme VPN sent only servers without TLS, REALITY or VLESS encryption. '
+          'Elarni accepts such a server only on a private network.',
+    ),
+    (
       'hwid_limit',
       [_node],
       'Provider device limit reached',

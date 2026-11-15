@@ -1361,6 +1361,7 @@ final class SubscriptionSafetyWarning {
     required this.subscriptionId,
     required this.risks,
     required this.challenge,
+    this.destinations = const <String>[],
   });
 
   factory SubscriptionSafetyWarning.fromMap(Map<String, Object?> value) {
@@ -1373,12 +1374,18 @@ final class SubscriptionSafetyWarning {
       subscriptionId: value['subscriptionId']! as String,
       risks: risks,
       challenge: value['challenge']! as String,
+      destinations: (value['destinations'] as List<Object?>? ?? const [])
+          .whereType<String>()
+          .toList(growable: false),
     );
   }
 
   final String subscriptionId;
   final List<SubscriptionRisk> risks;
   final String challenge;
+
+  /// Scheme, host and port of each fetch this approval covers.
+  final List<String> destinations;
 }
 
 final class SubscriptionOperationResult {

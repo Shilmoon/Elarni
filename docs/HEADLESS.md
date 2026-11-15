@@ -38,7 +38,8 @@ cannot start prints the same form with its cause, for example `storage_corrupt`
 (the saved catalog cannot be read; it is left untouched), `keyring_unavailable`
 or `socket_unavailable`. Pass credentials
 in files or stdin, not as arguments. A new subscription source returns
-`riskCodes` and a `challenge`; review them, then `refresh <id> <challenge>`.
+`riskCodes`, the `destinations` it downloads from and a `challenge`; review them, then
+`refresh <id> <challenge>`.
 
 ## Endpoint
 

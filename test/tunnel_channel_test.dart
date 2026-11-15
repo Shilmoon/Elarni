@@ -372,6 +372,24 @@ void main() {
     },
   );
 
+  test('a warning carries the destinations its approval covers', () async {
+    reply = {
+      'subscriptions': {'subscriptions': []},
+      'warning': {
+        'subscriptionId': 'group',
+        'challenge': 'token',
+        'riskCodes': ['private_target'],
+        'destinations': ['http://192.168.1.50:8080'],
+      },
+    };
+    final result = await control.addSubscription('http://192.168.1.50:8080/s');
+    expect(result.warning!.destinations, ['http://192.168.1.50:8080']);
+    // A platform that names none still asks for the approval.
+    ((reply! as Map)['warning'] as Map).remove('destinations');
+    final bare = await control.addSubscription('http://192.168.1.50:8080/s');
+    expect(bare.warning!.destinations, isEmpty);
+  });
+
   test(
     'unknown or empty warning risks fail instead of bypassing approval',
     () async {

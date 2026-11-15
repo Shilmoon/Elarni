@@ -259,7 +259,12 @@ final class HeadlessControl {
   CatalogMap approval(CatalogMap result) {
     final warning = catalogMap(result['warning'] ?? {});
     return {
-      for (final key in ['subscriptionId', 'challenge', 'riskCodes'])
+      for (final key in [
+        'subscriptionId',
+        'challenge',
+        'riskCodes',
+        'destinations',
+      ])
         if (warning[key] != null) key: warning[key],
     };
   }

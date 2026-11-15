@@ -1027,9 +1027,16 @@ extension _HomeController on _ElarniHomeState {
           content: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
-            children: warning.risks
-                .map((risk) => Text(_riskMessage(risk)))
-                .toList(growable: false),
+            children: [
+              for (final risk in warning.risks) Text(_riskMessage(risk)),
+              // What the approval is for: each address this download goes to.
+              if (warning.destinations.isNotEmpty)
+                Text(
+                  l10n.subscriptionDestinations(
+                    warning.destinations.join(', '),
+                  ),
+                ),
+            ],
           ),
           actions: <Widget>[
             TextButton(
@@ -1121,8 +1128,9 @@ extension _HomeController on _ElarniHomeState {
         );
         final message = switch (error) {
           // The provider sent what Elarni cannot read: no network problem.
-          PlatformException(code: 'unsupported_profile' || 'unencrypted_server')
-              when added =>
+          PlatformException(code: 'unencrypted_server') when added =>
+            l10n.subscriptionAddedUnencrypted,
+          PlatformException(code: 'unsupported_profile') when added =>
             l10n.subscriptionAddedUnreadable,
           _ when added => l10n.subscriptionAddedFirstDownloadFailed,
           PlatformException(code: 'unsupported_profile') =>

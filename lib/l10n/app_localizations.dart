@@ -2006,6 +2006,12 @@ abstract class AppLocalizations {
   /// **'Subscription added, but the first download failed. Refresh to retry.'**
   String get subscriptionAddedFirstDownloadFailed;
 
+  /// No description provided for @subscriptionAddedUnencrypted.
+  ///
+  /// In en, this message translates to:
+  /// **'Subscription added, but its servers have no encryption: no TLS, REALITY or VLESS encryption. Elarni accepts such a server only on a private network. Ask the provider for a server with encryption.'**
+  String get subscriptionAddedUnencrypted;
+
   /// No description provided for @subscriptionAddedUnreadable.
   ///
   /// In en, this message translates to:
@@ -4082,6 +4088,12 @@ abstract class AppLocalizations {
   /// **'This subscription uses an unencrypted HTTP connection.'**
   String get riskCleartextHttp;
 
+  /// No description provided for @subscriptionDestinations.
+  ///
+  /// In en, this message translates to:
+  /// **'Destinations: {destinations}.'**
+  String subscriptionDestinations(String destinations);
+
   /// No description provided for @connectionNotChecked.
   ///
   /// In en, this message translates to:
@@ -4441,6 +4453,18 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'{provider} sent nothing Elarni can read: the format or one of its settings is not supported.'**
   String failureUnsupportedText(String provider);
+
+  /// No description provided for @failureUnencrypted.
+  ///
+  /// In en, this message translates to:
+  /// **'Servers without encryption'**
+  String get failureUnencrypted;
+
+  /// No description provided for @failureUnencryptedText.
+  ///
+  /// In en, this message translates to:
+  /// **'{provider} sent only servers without TLS, REALITY or VLESS encryption. Elarni accepts such a server only on a private network.'**
+  String failureUnencryptedText(String provider);
 
   /// No description provided for @failureDeviceLimitText.
   ///

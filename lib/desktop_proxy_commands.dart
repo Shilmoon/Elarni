@@ -518,6 +518,7 @@ extension _ProxyCommands on DesktopProxy {
           warning = {
             'subscriptionId': id,
             'riskCodes': pending['riskCodes'],
+            'destinations': pending['destinations'] ?? <Object?>[],
             'challenge': token,
           };
         }

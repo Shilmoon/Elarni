@@ -35,9 +35,13 @@ typedef _CountryGroup = ({
         l10n.failureLinkRemoved,
         l10n.failureLinkRemovedText(provider),
       ),
-      'unsupported_profile' || 'unencrypted_server' => (
+      'unsupported_profile' => (
         l10n.failureUnsupported,
         l10n.failureUnsupportedText(provider),
+      ),
+      'unencrypted_server' => (
+        l10n.failureUnencrypted,
+        l10n.failureUnencryptedText(provider),
       ),
       'hwid_limit' => (
         l10n.statusDeviceLimit,

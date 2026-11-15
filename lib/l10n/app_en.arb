@@ -513,6 +513,7 @@
   "unsupportedProfileTryJson": "This profile uses unsupported settings. Try the provider’s Xray JSON format.",
   "unencryptedServer": "This server has no encryption: no TLS, REALITY or VLESS encryption. Elarni accepts such a server only on a private network.",
   "subscriptionAddedFirstDownloadFailed": "Subscription added, but the first download failed. Refresh to retry.",
+  "subscriptionAddedUnencrypted": "Subscription added, but its servers have no encryption: no TLS, REALITY or VLESS encryption. Elarni accepts such a server only on a private network. Ask the provider for a server with encryption.",
   "subscriptionAddedUnreadable": "Subscription added, but Elarni cannot read what the provider sent: its format or one of its settings is not supported. Try the provider’s Xray JSON link, or ask the provider.",
   "importFileTooLarge": "The file is larger than Elarni can import.",
   "noQrCodeInImage": "No QR code was found in this image.",
@@ -1126,6 +1127,14 @@
   "riskPrivateTarget": "This subscription connects to a private or link-local network.",
   "riskLoopbackTarget": "This subscription connects to this computer.",
   "riskCleartextHttp": "This subscription uses an unencrypted HTTP connection.",
+  "subscriptionDestinations": "Destinations: {destinations}.",
+  "@subscriptionDestinations": {
+    "placeholders": {
+      "destinations": {
+        "type": "String"
+      }
+    }
+  },
   "connectionNotChecked": "Connection has not been checked",
   "trafficPassesThroughServer": "Traffic passes through the server",
   "recoveryInProgress": "Recovery in progress…",
@@ -1330,6 +1339,15 @@
   "failureUnsupported": "Unsupported content",
   "failureUnsupportedText": "{provider} sent nothing Elarni can read: the format or one of its settings is not supported.",
   "@failureUnsupportedText": {
+    "placeholders": {
+      "provider": {
+        "type": "String"
+      }
+    }
+  },
+  "failureUnencrypted": "Servers without encryption",
+  "failureUnencryptedText": "{provider} sent only servers without TLS, REALITY or VLESS encryption. Elarni accepts such a server only on a private network.",
+  "@failureUnencryptedText": {
     "placeholders": {
       "provider": {
         "type": "String"

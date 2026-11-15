@@ -1158,6 +1158,10 @@ class AppLocalizationsRu extends AppLocalizations {
       'Подписка добавлена, но первая загрузка не удалась. Обновите, чтобы повторить.';
 
   @override
+  String get subscriptionAddedUnencrypted =>
+      'Подписка добавлена, но у её серверов нет шифрования: ни TLS, ни REALITY, ни шифрования VLESS. Elarni принимает такой сервер только в частной сети. Попросите у провайдера сервер с шифрованием.';
+
+  @override
   String get subscriptionAddedUnreadable =>
       'Подписка добавлена, но Elarni не может прочитать ответ провайдера: его формат или одна из настроек не поддерживается. Попробуйте ссылку Xray JSON от провайдера или спросите провайдера.';
 
@@ -2342,6 +2346,11 @@ class AppLocalizationsRu extends AppLocalizations {
       'Эта подписка использует незашифрованное HTTP-подключение.';
 
   @override
+  String subscriptionDestinations(String destinations) {
+    return 'Адреса: $destinations.';
+  }
+
+  @override
   String get connectionNotChecked => 'Подключение не проверялось';
 
   @override
@@ -2587,6 +2596,14 @@ class AppLocalizationsRu extends AppLocalizations {
   @override
   String failureUnsupportedText(String provider) {
     return 'Провайдер «$provider» не прислал ничего, что Elarni может прочитать: формат или одна из настроек не поддерживается.';
+  }
+
+  @override
+  String get failureUnencrypted => 'Серверы без шифрования';
+
+  @override
+  String failureUnencryptedText(String provider) {
+    return 'Провайдер «$provider» прислал только серверы без TLS, REALITY и шифрования VLESS. Elarni принимает такой сервер только в частной сети.';
   }
 
   @override

@@ -1146,6 +1146,10 @@ class AppLocalizationsEn extends AppLocalizations {
       'Subscription added, but the first download failed. Refresh to retry.';
 
   @override
+  String get subscriptionAddedUnencrypted =>
+      'Subscription added, but its servers have no encryption: no TLS, REALITY or VLESS encryption. Elarni accepts such a server only on a private network. Ask the provider for a server with encryption.';
+
+  @override
   String get subscriptionAddedUnreadable =>
       'Subscription added, but Elarni cannot read what the provider sent: its format or one of its settings is not supported. Try the provider’s Xray JSON link, or ask the provider.';
 
@@ -2315,6 +2319,11 @@ class AppLocalizationsEn extends AppLocalizations {
       'This subscription uses an unencrypted HTTP connection.';
 
   @override
+  String subscriptionDestinations(String destinations) {
+    return 'Destinations: $destinations.';
+  }
+
+  @override
   String get connectionNotChecked => 'Connection has not been checked';
 
   @override
@@ -2552,6 +2561,14 @@ class AppLocalizationsEn extends AppLocalizations {
   @override
   String failureUnsupportedText(String provider) {
     return '$provider sent nothing Elarni can read: the format or one of its settings is not supported.';
+  }
+
+  @override
+  String get failureUnencrypted => 'Servers without encryption';
+
+  @override
+  String failureUnencryptedText(String provider) {
+    return '$provider sent only servers without TLS, REALITY or VLESS encryption. Elarni accepts such a server only on a private network.';
   }
 
   @override

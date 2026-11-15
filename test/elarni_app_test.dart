@@ -151,6 +151,7 @@ SubscriptionOperationResult warning(String challenge) =>
         subscriptionId: 'group',
         risks: [SubscriptionRisk.loopbackTarget],
         challenge: challenge,
+        destinations: const ['http://127.0.0.1:8080'],
       ),
     );
 
@@ -1532,6 +1533,39 @@ void main() {
     );
   });
 
+  // "Try the provider's Xray JSON link" is no way out: Xray refuses the same
+  // server in that format.
+  testWidgets('a new subscription of unencrypted servers says so', (
+    tester,
+  ) async {
+    final control = FakeTunnelControl();
+    control.onImport = (_, _) async {
+      control.snapshot = SubscriptionSnapshot(
+        selectedNodeId: control.snapshot.selectedNodeId,
+        subscriptions: [
+          ...control.snapshot.subscriptions,
+          const SubscriptionGroup(
+            id: 'added',
+            name: 'provider.example',
+            status: 'refresh_failed',
+            nodes: [],
+          ),
+        ],
+      );
+      throw PlatformException(code: 'unencrypted_server');
+    };
+    await pumpApp(tester, control);
+    await importClipboard(tester, 'https://provider.example/sub');
+    expect(
+      find.text(
+        'Subscription added, but its servers have no encryption: no TLS, '
+        'REALITY or VLESS encryption. Elarni accepts such a server only on a '
+        'private network. Ask the provider for a server with encryption.',
+      ),
+      findsOneWidget,
+    );
+  });
+
   for (final (code, text) in [
     ('import_too_large', 'The file is larger than Elarni can import.'),
     ('input_too_large', 'The file is larger than Elarni can import.'),
@@ -1704,6 +1738,8 @@ void main() {
       await pumpApp(tester, control);
       await addSubscription(tester);
       expect(find.text('Approve unsafe subscription?'), findsOneWidget);
+      // The prompt named the risk and not the address the approval is for.
+      expect(find.text('Destinations: http://127.0.0.1:8080.'), findsOneWidget);
       await tester.tap(find.text('Cancel'));
       await tester.pumpAndSettle();
       expect(control.addedURLs, ['https://fixture.example/feed']);

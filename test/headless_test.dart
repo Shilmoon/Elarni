@@ -254,6 +254,7 @@ echo "/org/freedesktop/login1: org.freedesktop.login1.Manager.PrepareForSleep (f
             'subscriptionId': 'source',
             'challenge': 'approval-token',
             'riskCodes': ['loopback_target'],
+            'destinations': ['http://127.0.0.1:8080'],
             'url': 'secret-url',
           },
         },
@@ -278,6 +279,7 @@ echo "/org/freedesktop/login1: org.freedesktop.login1.Manager.PrepareForSleep (f
       'id': 'source',
     });
     expect(refresh['challenge'], 'approval-token');
+    expect(refresh['destinations'], ['http://127.0.0.1:8080']);
     expect(jsonEncode(refresh), isNot(contains('secret')));
   });
 

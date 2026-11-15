@@ -26,6 +26,7 @@ struct SubscriptionSafetyWarning {
     [
       "subscriptionId": subscriptionID,
       "riskCodes": riskCodes.map(\.rawValue),
+      "destinations": destinations,
       "challenge": challenge,
     ]
   }
