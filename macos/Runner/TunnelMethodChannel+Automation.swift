@@ -420,7 +420,7 @@ extension TunnelMethodChannel {
     let passedBefore = verifiedHealth?.node == context.nodeID && verifiedHealth?.epoch == automation.epoch
     // A server to move to, not only a policy that allows moving: with none allowed now (a list of
     // one, the others cooling down) such a failure stays indeterminate and the connection is kept.
-    // An episode out of attempts moves nowhere either. Asked only when a refused request is classified.
+    // An episode out of attempts moves nowhere either. Computed once per round, at the first failed check.
     lazy var canLeave = !automation.episode.exhausted && !automation.recoveryCandidates(policy: automationConfiguration.policy,
       order: (try? recoveryOrder(current: context.nodeID)) ?? [], current: context.nodeID, now: automationNow()).isEmpty
     for (ordinal, target) in automationConfiguration.targets.prefix(2).enumerated() {

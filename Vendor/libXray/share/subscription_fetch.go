@@ -293,6 +293,9 @@ func localLookup(ctx context.Context, network, host string) ([]netip.Addr, error
 // mdnsGroup is where a .local name is asked (RFC 6762).
 var mdnsGroup = "224.0.0.251:5353"
 
+// mdnsWait is how long a .local name waits for its first answer; tests shorten it.
+var mdnsWait = time.Second
+
 // mdnsLookup asks the local links for the IPv4 addresses of a .local name, once, and waits a
 // second for the first answer. IPv6 answers there are link-local, which a URL cannot dial.
 func mdnsLookup(ctx context.Context, network, host string) []netip.Addr {
@@ -337,7 +340,7 @@ func mdnsLookup(ctx context.Context, network, host string) []netip.Addr {
 			}
 		}
 	}
-	deadline := time.Now().Add(time.Second)
+	deadline := time.Now().Add(mdnsWait)
 	if limit, ok := ctx.Deadline(); ok && limit.Before(deadline) {
 		deadline = limit
 	}

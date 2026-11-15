@@ -79,9 +79,13 @@ final class SubscriptionApprovalChallengeVault {
       riskCodes: requirement.riskCodes,
       challenge: token,
       destinations: requirement.destinations.map { text in
-        guard let url = URLComponents(string: text), let scheme = url.scheme, let host = url.host else { return "Invalid destination" }
+        // The core names the address it connects to after an arrow when that is not the URL's host.
+        let arrow = text.range(of: " → ")
+        let origin = arrow.map { String(text[..<$0.lowerBound]) } ?? text
+        let connect = arrow.map { " → " + String(text[$0.upperBound...]) } ?? ""
+        guard let url = URLComponents(string: origin), let scheme = url.scheme, let host = url.host else { return "Invalid destination" }
         // Foundation keeps an IPv6 literal's brackets in `host`.
-        return "\(scheme)://\(host.contains(":") && !host.hasPrefix("[") ? "[\(host)]" : host)" + (url.port.map { ":\($0)" } ?? "")
+        return "\(scheme)://\(host.contains(":") && !host.hasPrefix("[") ? "[\(host)]" : host)" + (url.port.map { ":\($0)" } ?? "") + connect
       }
     )
   }
