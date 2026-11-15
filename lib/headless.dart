@@ -307,12 +307,13 @@ Future<Process?> watchLinuxSleep(
 /// start names its cause (a damaged catalog, a keyring that does not unlock,
 /// a socket it cannot bind); text that is no code never leaves the process.
 String headlessFailureCode(Object error, {required bool daemon}) {
-  if (error is FormatException) return error.message;
   // A client found no daemon; a daemon could not bind its own socket.
   if (error is SocketException)
     return daemon ? 'socket_unavailable' : 'daemon_unavailable';
   final Object? code = switch (error) {
     PlatformException(:final code) => code,
+    // The transport's own are codes; a decoder's quotes what it read.
+    FormatException(:final message) => message,
     StateError(:final message) => message,
     ArgumentError(:final message) => message,
     _ => null,

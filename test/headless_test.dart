@@ -32,6 +32,10 @@ void main() {
     expect(code(refused, daemon: false), 'daemon_unavailable');
     expect(code(refused), 'socket_unavailable');
     // Text that is no code (a path, a system message) is never printed.
+    expect(
+      code(const FormatException('Unexpected character (at character 3)')),
+      'operation_failed',
+    );
     expect(code(StateError('No element')), 'operation_failed');
     expect(code(PlatformException(code: '/home/user/x')), 'operation_failed');
     expect(code(Exception('x'), daemon: false), 'operation_failed');
