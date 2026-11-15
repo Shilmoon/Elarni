@@ -49,6 +49,12 @@ void main() {
                 catalog.routingSnapshot()['profiles'],
               ).single['managedError']
               as String?;
+      // The interface words the code; the message is for the headless output.
+      String? shownCode() =>
+          catalogList(
+                catalog.routingSnapshot()['profiles'],
+              ).single['managedErrorCode']
+              as String?;
       final kept = {
         'broken': ['full:kept.example'],
         'fresh': ['full:fresh.example'],
@@ -63,6 +69,7 @@ void main() {
         expect(route['managedError'], 'fetch_failed');
         expect(route['nextManagedRefreshAt'], catalog.now + delay);
         expect(shownError(), desktopError('fetch_failed').message);
+        expect(shownCode(), 'fetch_failed');
         now = now.add(Duration(seconds: delay));
       }
       reachable = true;
@@ -75,6 +82,7 @@ void main() {
       expect(route['managedError'], isNull);
       expect(route['nextManagedRefreshAt'], catalog.now + 86400);
       expect(shownError(), isNull);
+      expect(shownCode(), isNull);
       reachable = false;
       await catalog.refreshManaged('route');
       expect(
@@ -163,11 +171,17 @@ void main() {
       'routeModel': <String, Object?>{},
       'geofileStatus': 'ready',
     });
+    final failure = desktopError('fetch_failed');
     for (final delay in [60, 300, 1800, 1800]) {
-      catalog.geofilesFailed('route', 'The download failed.');
+      catalog.geofilesFailed('route', failure);
       final route = catalog.route('route');
       expect(route['geofileStatus'], 'failed');
-      expect(route['geofileError'], 'The download failed.');
+      expect(route['geofileError'], failure.message);
+      // The interface words the code; the message is for the headless output.
+      expect(route['geofileErrorCode'], 'fetch_failed');
+      final shown = catalogList(catalog.routingSnapshot()['profiles']).single;
+      expect(shown['geofileError'], failure.message);
+      expect(shown['geofileErrorCode'], 'fetch_failed');
       expect(route['nextGeoRefreshAt'], catalog.now + delay);
       now = now.add(Duration(seconds: delay));
     }

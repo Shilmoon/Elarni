@@ -38,8 +38,8 @@ final class SystemProxySession {
   Future<String?> _queue = Future.value();
 
   /// Moves the OS setting to [port], or back to the user's when null. Returns
-  /// an error message when it could not; a target that failed is tried again
-  /// only after the target changed.
+  /// a failure code when it could not, which the window words; a target that
+  /// failed is tried again only after the target changed.
   Future<String?> sync(int? port) => _queue = _queue.then((_) => _sync(port));
 
   /// Restores a setting that a crashed run left pointing at its listener. A
@@ -54,8 +54,7 @@ final class SystemProxySession {
     }
   });
 
-  static const _restoreFailed =
-      'The system proxy setting could not be restored. Check it in your system network settings.';
+  static const _restoreFailed = 'system_proxy_restore_failed';
 
   Future<String?> _sync(int? port) async {
     // Only the session that failed waits; the next one tries again.
@@ -94,7 +93,8 @@ final class SystemProxySession {
         // of target (a disconnect, a quit) restores from it.
         _port = port;
       }
-      return 'The system proxy could not be set. Apps can still use the HTTP proxy at 127.0.0.1:$port.';
+      // The port follows the code: the text still names the listener.
+      return 'system_proxy_not_set:$port';
     }
   }
 

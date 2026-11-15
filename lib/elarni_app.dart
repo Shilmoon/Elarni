@@ -340,7 +340,7 @@ class _ElarniHomeState extends State<ElarniHome> {
       if (!mounted) return;
       if (error != null)
         setState(() {
-          _message = error;
+          _message = listenerNotice(error);
         });
       _load();
     });

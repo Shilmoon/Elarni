@@ -180,6 +180,7 @@ extension _ProxyCatalog on DesktopProxy {
       ...route,
       ...assets,
       'geofileError': null,
+      'geofileErrorCode': null,
       'nextGeoRefreshAt': candidate.now + 604800,
       'geoFailures': 0,
     });
@@ -282,7 +283,7 @@ extension _ProxyCatalog on DesktopProxy {
           );
         } on PlatformException catch (error) {
           _checkGeneration(generation);
-          candidate.geofilesFailed(route['id']! as String, error.message);
+          candidate.geofilesFailed(route['id']! as String, error);
         }
       }
       candidate.validate();

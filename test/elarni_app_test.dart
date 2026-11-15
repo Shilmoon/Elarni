@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:elarni/desktop_integration.dart';
 import 'package:elarni/elarni_app.dart';
+import 'package:elarni/strings.dart' show appLocale;
 import 'package:elarni/tunnel_channel.dart';
 import 'support/fake_tunnel_control.dart';
 
@@ -1616,6 +1617,28 @@ void main() {
     },
   );
 
+  // Windows and Linux send a code, which the interface words in its language.
+  testWidgets('a backend notice code shows in the interface language', (
+    tester,
+  ) async {
+    tester.platformDispatcher.localesTestValue = const [Locale('ru', 'RU')];
+    addTearDown(tester.platformDispatcher.clearLocalesTestValue);
+    addTearDown(() => appLocale = const Locale('en'));
+    final control = FakeTunnelControl();
+    await pumpApp(tester, control, windows: true);
+    control.importListener?.call('connection_stopped_repair');
+    await tester.pumpAndSettle();
+    expect(
+      find.text(
+        'Подключение неожиданно прервалось. Переподключитесь, чтобы повторить; '
+        'если сайты останутся недоступны, используйте «Исправить настройку VPN».',
+      ),
+      findsOneWidget,
+    );
+    expect(find.textContaining('connection_stopped'), findsNothing);
+    await tester.pumpWidget(const SizedBox());
+  });
+
   testWidgets(
     'profile group selector sends the node group and selected member',
     (tester) async {
@@ -2030,7 +2053,26 @@ void main() {
     await tester.pumpAndSettle();
     expect(control.vpnServiceChanges, [true, false]);
     expect(checked(), isTrue);
-    expect(find.text('Administrator permission was cancelled.'), findsWidgets);
+    // The code picks the interface's text; the native message is English.
+    expect(
+      find.text(
+        'VPN permission was denied. Retry and allow the system permission request.',
+      ),
+      findsWidgets,
+    );
+    expect(find.text('Administrator permission was cancelled.'), findsNothing);
+    // A code the interface has no text for keeps the native message.
+    control.vpnServiceError = PlatformException(
+      code: 'operation_failed',
+      message: 'The operation failed. Endpoint details were redacted.',
+    );
+    await tester.tap(row);
+    await tester.pumpAndSettle();
+    expect(checked(), isTrue);
+    expect(
+      find.text('The operation failed. Endpoint details were redacted.'),
+      findsWidgets,
+    );
     // The change keeps the rest of the system information.
     control.vpnServiceError = null;
     await tester.tap(row);
@@ -2098,6 +2140,27 @@ void main() {
       ),
       findsOneWidget,
     );
+  });
+
+  testWidgets('an occupied port is worded by its code', (tester) async {
+    final control = FakeTunnelControl()
+      ..onUpdate = (_) async => throw PlatformException(
+        code: 'listener_unavailable',
+        message: 'native text',
+      );
+    await pumpApp(tester, control);
+    await openSettings(tester);
+    await selectCategory(tester, SettingsCategory.advanced);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Enable fragmentation'));
+    await tester.pumpAndSettle();
+    expect(
+      find.text(
+        'A local proxy port is occupied or unavailable. Close the conflicting app or change the listener port in Connection settings.',
+      ),
+      findsOneWidget,
+    );
+    expect(find.textContaining('native text'), findsNothing);
   });
 
   testWidgets(

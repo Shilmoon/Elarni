@@ -109,7 +109,7 @@ void main() {
       final next = SystemProxySession(os, backup);
       expect(
         await next.recover(),
-        contains('could not be restored'),
+        'system_proxy_restore_failed',
         reason: content,
       );
       expect(await backup.exists(), isFalse, reason: content);
@@ -121,8 +121,7 @@ void main() {
 
   test('a failed apply is undone and not retried every second', () async {
     os.pointFailure = const OSError('gsettings failed');
-    final message = await session.sync(10891);
-    expect(message, contains('127.0.0.1:10891'));
+    expect(await session.sync(10891), 'system_proxy_not_set:10891');
     expect(os.current, {'user': 'pac'});
     expect(await backup.exists(), isFalse);
 
@@ -138,7 +137,7 @@ void main() {
     'a failed apply that could not be undone is undone at disconnect',
     () async {
       os.pointFailure = os.writeFailure = const OSError('gsettings failed');
-      expect(await session.sync(10891), contains('127.0.0.1:10891'));
+      expect(await session.sync(10891), 'system_proxy_not_set:10891');
       expect(os.current, {'port': 10891}, reason: 'the undo failed too');
       expect(await backup.exists(), isTrue);
 
@@ -157,7 +156,7 @@ void main() {
   test('an unreadable setting keeps its backup for the next restore', () async {
     await session.sync(10891);
     os.readFailure = const OSError('gsettings failed');
-    expect(await session.sync(null), contains('could not be restored'));
+    expect(await session.sync(null), 'system_proxy_restore_failed');
     expect(await backup.exists(), isTrue);
 
     os.readFailure = null;
@@ -168,7 +167,7 @@ void main() {
   test('a restore that keeps failing is reported once', () async {
     await backup.parent.create(recursive: true);
     await backup.writeAsString('not a backup');
-    expect(await session.sync(10891), contains('could not be restored'));
+    expect(await session.sync(10891), 'system_proxy_restore_failed');
     expect(await session.sync(10891), isNull, reason: 'the failed port waits');
     expect(os.current, {'user': 'pac'});
 
@@ -181,7 +180,7 @@ void main() {
   test('a restore that fails at disconnect is reported once', () async {
     await session.sync(10891);
     os.readFailure = const OSError('gsettings failed');
-    expect(await session.sync(null), contains('could not be restored'));
+    expect(await session.sync(null), 'system_proxy_restore_failed');
     expect(await session.sync(null), isNull, reason: 'the next tick is quiet');
     expect(os.current, {'port': 10891});
 

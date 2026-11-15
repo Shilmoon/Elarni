@@ -81,7 +81,7 @@ extension _ProxyAutomation on DesktopProxy {
         until: now.add(Duration(seconds: DesktopCatalog.retryDelay(failures))),
         failures: failures,
       );
-      _listener?.call('A scheduled subscription or routing refresh failed.');
+      _listener?.call('scheduled_refresh_failed');
     } finally {
       _automationBusy = false;
     }

@@ -103,6 +103,24 @@ void main() {
     expect(loads, 1);
   });
 
+  // The window words the code in its language.
+  test('a client link that cannot be imported is reported by code', () async {
+    final notices = <String?>[];
+    final proxy = DesktopProxy(
+      corePath: 'unused-core',
+      domainPath: 'unused-domain',
+      catalogIO: (_, _) async => throw PlatformException(code: 'storage_busy'),
+      platformIO: (_, _) async => {},
+      confirmLink: (_) async => true,
+    );
+    addTearDown(proxy.dispose);
+    proxy.control.setImportListener(notices.add);
+    await proxy.handleLinks([
+      'vless://00000000-0000-4000-8000-000000000001@127.0.0.1:443#Fixture',
+    ]);
+    expect(notices, ['links_failed']);
+  });
+
   // The proxy setting and its backup belong to the instance that holds the
   // catalog; a second one is refused before it may "recover" them.
   test('a refused second instance leaves the system proxy alone', () async {

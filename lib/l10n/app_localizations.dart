@@ -1958,6 +1958,42 @@ abstract class AppLocalizations {
   /// **'Connection stopped unexpectedly. Reconnect to retry.'**
   String get connectionStoppedUnexpectedly;
 
+  /// No description provided for @connectionStoppedRepair.
+  ///
+  /// In en, this message translates to:
+  /// **'Connection stopped unexpectedly. Reconnect to retry; if sites stay unreachable, use Repair VPN setup.'**
+  String get connectionStoppedRepair;
+
+  /// No description provided for @connectionStoppedBlocked.
+  ///
+  /// In en, this message translates to:
+  /// **'Connection stopped unexpectedly. Block traffic without VPN keeps traffic blocked until you reconnect, or use Repair VPN setup to lift the block.'**
+  String get connectionStoppedBlocked;
+
+  /// No description provided for @windowsDnsNotRestored.
+  ///
+  /// In en, this message translates to:
+  /// **'Disconnected, but Windows DNS could not be restored yet. If sites stay unreachable, use Repair VPN setup.'**
+  String get windowsDnsNotRestored;
+
+  /// No description provided for @systemProxyNotRestored.
+  ///
+  /// In en, this message translates to:
+  /// **'The system proxy setting could not be restored. Check it in your system network settings.'**
+  String get systemProxyNotRestored;
+
+  /// No description provided for @systemProxyNotSet.
+  ///
+  /// In en, this message translates to:
+  /// **'The system proxy could not be set. Apps can still use the HTTP proxy at 127.0.0.1:{port}.'**
+  String systemProxyNotSet(Object port);
+
+  /// No description provided for @scheduledRefreshFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'A scheduled subscription or routing refresh failed.'**
+  String get scheduledRefreshFailed;
+
   /// No description provided for @groupSelectionFailed.
   ///
   /// In en, this message translates to:
@@ -1987,6 +2023,18 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Select a server first. This routing link turns its profile on for the selected server’s subscription.'**
   String get selectServerFirstRoutingLink;
+
+  /// No description provided for @clientLinksNotHandled.
+  ///
+  /// In en, this message translates to:
+  /// **'One or more client links could not be handled.'**
+  String get clientLinksNotHandled;
+
+  /// No description provided for @clientLinkNotImported.
+  ///
+  /// In en, this message translates to:
+  /// **'The client link could not be imported.'**
+  String get clientLinkNotImported;
 
   /// No description provided for @unsupportedProfileTryJson.
   ///

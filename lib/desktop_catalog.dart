@@ -636,6 +636,7 @@ final class DesktopCatalog {
             'enabled',
             'geofileStatus',
             'geofileError',
+            'geofileErrorCode',
             'geofiles',
             'reductionStatus',
             'skippedGeodata',
@@ -643,8 +644,10 @@ final class DesktopCatalog {
           ])
             key: item[key],
           'json': jsonEncode(item['profile']),
-          if (item['managedError'] case final String code)
+          if (item['managedError'] case final String code) ...{
             'managedError': desktopError(code).message,
+            'managedErrorCode': code,
+          },
         },
     ],
   };
@@ -919,9 +922,12 @@ final class DesktopCatalog {
   }
 
   /// Local imports join one group and skip servers it already has; the
-  /// result lists each imported server as it is stored. Hidden imports keep
-  /// their own group so their sharing limit doesn't spread to other servers.
-  Future<List<CatalogMap>> importLocal(String content) async {
+  /// result names the group and the servers this import added to it. Hidden
+  /// imports keep their own group so their sharing limit doesn't spread to
+  /// other servers.
+  Future<({String id, List<CatalogMap> added})> importLocal(
+    String content,
+  ) async {
     final imported = await native('importClientProfiles', {'text': content});
     final group = imported['hideURL'] == true
         ? null
@@ -940,14 +946,11 @@ final class DesktopCatalog {
         '${node['format']}\n${domain('catalogIdentity', catalogMap(node['config']))['identity']}';
     final known = {for (final node in kept) key(node): node};
     final added = <CatalogMap>[];
-    final nodes = <CatalogMap>[];
     for (final node in parseNodes(imported, [])) {
-      nodes.add(
-        known.putIfAbsent(key(node), () {
-          added.add(node..['hideURL'] = imported['hideURL'] == true);
-          return node;
-        }),
-      );
+      known.putIfAbsent(key(node), () {
+        added.add(node..['hideURL'] = imported['hideURL'] == true);
+        return node;
+      });
     }
     putSource({
       ...?group,
@@ -956,6 +959,12 @@ final class DesktopCatalog {
       'status': 'ready',
       'format': 'source',
       'nodes': [...kept, ...added],
+      // As after a refresh, the count is of the latest import.
+      if (group?['metadata'] != null || _skipped(imported).isNotEmpty)
+        'metadata': catalogMap(group?['metadata'] ?? const {})
+          ..remove('skippedServers')
+          ..remove('skippedKinds')
+          ..addAll(_skipped(imported)),
     });
     importProviderRouting(
       addressedRouting([
@@ -966,7 +975,7 @@ final class DesktopCatalog {
       id,
     );
     reconcileSelection();
-    return nodes;
+    return (id: id, added: added);
   }
 
   /// Imports [provider]'s routing links. One that Elarni refuses is left out
@@ -1134,15 +1143,7 @@ final class DesktopCatalog {
       (value) => !isRoutingLink(value as String),
     ))
       metadata['directiveNotice'] = 'Unsupported provider directives';
-    // Servers the import passed over, which the details name by kind.
-    if (imported['skippedCount'] case final int count when count > 0) {
-      metadata['skippedServers'] = count;
-      metadata['skippedKinds'] = [
-        for (final item in imported['skipped'] as List? ?? const [])
-          if (item is Map && item['kind'] is String && item['kind'] != '')
-            item['kind']! as String,
-      ].toSet().take(5).join(', ');
-    }
+    metadata.addAll(_skipped(imported));
     if (imported['systemResolverDNS'] == true)
       metadata['dnsNotice'] =
           "The provider's DNS asks this device's resolver, outside the tunnel. "
@@ -1318,23 +1319,28 @@ final class DesktopCatalog {
             .firstOrNull?['id'];
   }
 
-  /// Takes the servers of [id] that the compiler refuses out of a refresh and
-  /// counts them with those the import passed over. False when none of its
-  /// servers is refused or none would be left: the refresh then fails.
-  bool dropRefused(String id, Set<String> refused) {
+  /// Takes the servers of [id] that the compiler refuses out of a refresh or
+  /// a local import and counts them with those the import passed over. A
+  /// local import names the servers it [added]: only those may go, and one of
+  /// them must stay. False when none is refused or none would be left: the
+  /// refresh or import then fails.
+  bool dropRefused(String id, Set<String> refused, {Set<String>? added}) {
     final current = source(id);
     final nodes = catalogList(current['nodes']);
+    bool mayDrop(CatalogMap node) => added?.contains(node['id']) ?? true;
+    bool dropped(CatalogMap node) =>
+        mayDrop(node) && refused.contains(node['id']);
     final kept = [
       for (final node in nodes)
-        if (!refused.contains(node['id'])) node,
+        if (!dropped(node)) node,
     ];
-    if (kept.isEmpty || kept.length == nodes.length) return false;
+    if (!kept.any(mayDrop) || kept.length == nodes.length) return false;
     final metadata = catalogMap(current['metadata'] ?? const {});
     final kinds = {
       if (metadata['skippedKinds'] case final String kinds)
         ...kinds.split(', '),
       for (final node in nodes)
-        if (refused.contains(node['id']))
+        if (dropped(node))
           catalogList(
             catalogMap(node['config'])['outbounds'],
           ).firstOrNull?['protocol'],
@@ -1351,9 +1357,28 @@ final class DesktopCatalog {
         'skippedKinds': kinds.take(5).join(', '),
       },
     });
-    _selectAfterRefresh(kept);
+    // A refresh moves to a server it kept; an import selects nothing.
+    if (added == null) {
+      _selectAfterRefresh(kept);
+    } else {
+      reconcileSelection();
+    }
     return true;
   }
+
+  // Servers the import passed over, which the details name by kind.
+  static CatalogMap _skipped(CatalogMap imported) =>
+      switch (imported['skippedCount']) {
+        final int count when count > 0 => {
+          'skippedServers': count,
+          'skippedKinds': [
+            for (final item in imported['skipped'] as List? ?? const [])
+              if (item is Map && item['kind'] is String && item['kind'] != '')
+                item['kind']! as String,
+          ].toSet().take(5).join(', '),
+        },
+        _ => {},
+      };
 
   // Whether a scheduled refresh is due. [longest] is the furthest ahead its
   // schedule writes a time; one further away than that (and an hour, for a
@@ -1415,13 +1440,16 @@ final class DesktopCatalog {
     });
   }
 
-  void geofilesFailed(String id, String? message) {
+  // The message is for the headless output and older readers; the window
+  // words the code.
+  void geofilesFailed(String id, PlatformException error) {
     final current = route(id);
     final failures = (current['geoFailures'] as int? ?? 0) + 1;
     putRoute({
       ...current,
       'geofileStatus': 'failed',
-      'geofileError': message,
+      'geofileError': error.message,
+      'geofileErrorCode': error.code,
       'geoFailures': failures,
       'nextGeoRefreshAt': now + retryDelay(failures),
     });

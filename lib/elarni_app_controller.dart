@@ -303,7 +303,11 @@ extension _HomeController on _ElarniHomeState {
     } on PlatformException catch (error) {
       if (mounted)
         _set(() {
-          _systemError = error.message ?? l10n.systemSettingsNotLoaded;
+          // Native messages are English: only a code without text shows one.
+          _systemError =
+              failureText(error.code) ??
+              error.message ??
+              l10n.systemSettingsNotLoaded;
           if (error.details is Map) {
             _systemInfo = Map<String, Object?>.from(error.details as Map);
           }
@@ -715,9 +719,10 @@ extension _HomeController on _ElarniHomeState {
       if (mounted) {
         final issue = ConnectionIssue.from(error);
         _set(
+          // An occupied port says which setting to change on its own.
           () => _message =
               error is PlatformException && error.code == 'listener_unavailable'
-              ? error.message
+              ? issue.description
               : issue.code == 'operation_failed'
               ? l10n.settingNotAppliedCheck
               : l10n.settingNotApplied(issue.description),

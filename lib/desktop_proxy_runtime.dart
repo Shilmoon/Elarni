@@ -32,9 +32,12 @@ extension _ProxyRuntime on DesktopProxy {
       try {
         await _save({'version': 1, 'committed': candidate.data});
       } on Object catch (error) {
+        // A code the window has no text for is still a failed save.
         unsaved =
-            (error is PlatformException ? error.message : null) ??
-            desktopError('storage_unavailable').message;
+            error is PlatformException &&
+                supportIssueCode(error.code) != 'operation_failed'
+            ? error.code
+            : 'storage_unavailable';
       }
       _checkGeneration(generation);
       if (unsaved == null) _catalog = candidate;
@@ -548,15 +551,14 @@ extension _ProxyRuntime on DesktopProxy {
     _state = 'failed';
     if (session && _catalog?.settings.blockWithoutVPN == true)
       _guardKept = true;
-    // The listener shows text; codes are for exceptions.
     // Settings edits reconnect, so the catalog matches the running session.
     _listener?.call(
       !session
-          ? 'Connection stopped unexpectedly. Reconnect to retry.'
+          ? 'connection_stopped'
           : _catalog?.settings.blockWithoutVPN == true
-          ? 'Connection stopped unexpectedly. Block traffic without VPN keeps traffic blocked until you reconnect, or use Repair VPN setup to lift the block.'
+          ? 'connection_stopped_blocked'
           // A killed helper can leave its DNS guard; Repair VPN setup clears it.
-          : 'Connection stopped unexpectedly. Reconnect to retry; if sites stay unreachable, use Repair VPN setup.',
+          : 'connection_stopped_repair',
     );
   }
 
@@ -601,9 +603,7 @@ extension _ProxyRuntime on DesktopProxy {
             _catalog?.settings.blockWithoutVPN == true;
         // The helper keeps retrying the release; until it works, names may not resolve.
         if (stopped['warning'] == 'vpn_dns_release_failed')
-          _listener?.call(
-            'Disconnected, but Windows DNS could not be restored yet. If sites stay unreachable, use Repair VPN setup.',
-          );
+          _listener?.call('vpn_dns_release_failed');
       } on Object {
         // The helper's routes and guards end with its broker. A failed stop
         // must not leave Stop, intent and reconnect stuck behind it.
