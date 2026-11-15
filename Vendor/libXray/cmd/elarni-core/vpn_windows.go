@@ -969,7 +969,7 @@ func runVPNTunnel(pipe io.Writer, parent windows.Handle, request vpnCommand, com
 	// Windows keeps a connection on the network it was opened on: one opened before this tunnel
 	// would run outside it for as long as it lives, and a listed app that was already running
 	// would skip per-app routing until it reconnects.
-	go moveOpenedConnections(routedInto(iface.InterfaceLUID))
+	go moveOpenedConnections(routedInto(iface.InterfaceLUID), nil)
 	sleep := newResumeClock(windowsSuspended)
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
@@ -986,8 +986,9 @@ func runVPNTunnel(pipe io.Writer, parent windows.Handle, request vpnCommand, com
 				if err := reloadVPNTunnel(&request, command, adapter); err != nil {
 					reply.Error = reloadCode(err)
 				} else {
-					// As at the start: an app the change put into the tunnel has connections outside it.
-					go moveOpenedConnections(routedInto(iface.InterfaceLUID))
+					// As at the start, for the apps the change put into the tunnel: they have
+					// connections outside it. The other apps' are left as they are.
+					go moveOpenedConnections(routedInto(iface.InterfaceLUID), xray.ReplacedPerAppGate())
 				}
 				if writeFrame(pipe, reply) != nil {
 					return 1, true, true

@@ -971,7 +971,7 @@ func linuxWorker(ctx context.Context, input io.Reader, output io.Writer) (code i
 		return 1
 	}
 	// A listed app's connections opened before the tunnel are not routed per app.
-	go moveOpenedConnections(nil)
+	go moveOpenedConnections(nil, nil)
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
 	var gate metricsGate
@@ -990,8 +990,9 @@ func linuxWorker(ctx context.Context, input io.Reader, output io.Writer) (code i
 			if err := reloadLinuxTunnel(&command, next); err != nil {
 				reply.Error = reloadCode(err)
 			} else {
-				// As at the start: an app the change put into the tunnel has connections outside it.
-				go moveOpenedConnections(nil)
+				// As at the start, for the apps the change put into the tunnel: they have
+				// connections outside it. The other apps' are left as they are.
+				go moveOpenedConnections(nil, xray.ReplacedPerAppGate())
 			}
 			if linuxWriteFrame(output, reply) != nil {
 				return 1

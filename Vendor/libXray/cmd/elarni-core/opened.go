@@ -22,7 +22,10 @@ const openedSettle = time.Second
 // routed is set on Windows, which keeps every program's connection on the network it was opened
 // on: see xray.MoveOpenedConnections. A second pass then takes those whose handshake ended after
 // the first.
-func moveOpenedConnections(routed func(netip.Addr) bool) {
+//
+// since is set after a reload, to the per-app gate it replaced: only the programs the reload put
+// into the tunnel are looked at, see xray.MoveOpenedConnectionsSince.
+func moveOpenedConnections(routed func(netip.Addr) bool, since *xray.PerAppGate) {
 	tunnel := make([]netip.Prefix, 0, 2)
 	for _, gateway := range []string{share.TunGateway4, share.TunGateway6} {
 		if prefix, err := netip.ParsePrefix(gateway); err == nil {
@@ -37,7 +40,7 @@ func moveOpenedConnections(routed func(netip.Addr) bool) {
 		if pass > 0 {
 			time.Sleep(openedSettle)
 		}
-		reset, kept := xray.MoveOpenedConnections(tunnel, routed)
+		reset, kept := xray.MoveOpenedConnectionsSince(tunnel, routed, since)
 		if flightrecorder.Enabled() && reset+kept > 0 {
 			flightrecorder.Record(flightrecorder.Event{Name: "opened_connections", Values: map[string]int64{"reset": int64(reset), "kept": int64(kept)}})
 		}

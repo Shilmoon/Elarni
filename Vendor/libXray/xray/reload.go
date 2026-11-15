@@ -219,6 +219,7 @@ func ReloadRouting(configJSON string) error {
 		remove(tag)
 	}
 	runningConfig = configJSON
+	replacedGate = &PerAppGate{rules: tunnelRules, rest: tunnelRest}
 	tunnelRules, tunnelRest = perAppGate(configJSON)
 	return nil
 }

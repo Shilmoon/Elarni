@@ -131,6 +131,31 @@ var outsideTunnel = func(connection xnet.TCPConnection, tunnel []netip.Prefix, r
 // one to an excluded route keeps its way. They are not listed unless a listed app owns them, and
 // this program's other processes keep theirs, which they bind to the physical network.
 func MoveOpenedConnections(tunnel []netip.Prefix, routed func(netip.Addr) bool) (reset, kept int) {
+	return MoveOpenedConnectionsSince(tunnel, routed, nil)
+}
+
+// PerAppGate is a core's per-app gate as it was at one moment.
+type PerAppGate struct {
+	rules []perAppRule
+	rest  bool
+}
+
+// replacedGate is the gate the last ReloadRouting replaced.
+var replacedGate *PerAppGate
+
+// ReplacedPerAppGate returns the gate the last ReloadRouting replaced, nil before any.
+func ReplacedPerAppGate() *PerAppGate {
+	coreServerMu.Lock()
+	defer coreServerMu.Unlock()
+	return replacedGate
+}
+
+// MoveOpenedConnectionsSince is MoveOpenedConnections for the programs the tunnel takes now and
+// did not take under the since gate: after a reload, the programs it put into the tunnel. What
+// the others have outside the tunnel was looked at when it started; a connection they have
+// there since, they opened that way on purpose (an excluded route, a socket bound to the
+// physical network), and a reload must not cut it. A nil since takes every program.
+func MoveOpenedConnectionsSince(tunnel []netip.Prefix, routed func(netip.Addr) bool, since *PerAppGate) (reset, kept int) {
 	coreServerMu.Lock()
 	server, rules, rest := coreServer, tunnelRules, tunnelRest
 	coreServerMu.Unlock()
@@ -152,6 +177,11 @@ func MoveOpenedConnections(tunnel []netip.Prefix, routed func(netip.Addr) bool) 
 	}
 	gate := newPerAppTunnel(rules)
 	gate.rest = everyProgram
+	var was *perAppTunnel
+	if since != nil {
+		was = newPerAppTunnel(since.rules)
+		was.rest = routed != nil && since.rest
+	}
 	type decision struct{ tunnel, listed bool }
 	decisions := map[int]decision{}
 	self := os.Getpid()
@@ -177,6 +207,11 @@ func MoveOpenedConnections(tunnel []netip.Prefix, routed func(netip.Addr) bool) 
 			decided.tunnel, decided.listed = gate.decides(process)
 			if !decided.listed && strings.EqualFold(filepath.Base(process.Path), own) {
 				decided.tunnel = false
+			}
+			if was != nil && decided.tunnel {
+				if taken, _ := was.decides(process); taken {
+					decided.tunnel = false
+				}
 			}
 			decisions[connection.PID] = decided
 		}

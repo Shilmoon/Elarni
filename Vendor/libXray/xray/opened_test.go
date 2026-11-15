@@ -194,6 +194,91 @@ func TestMoveOpenedConnectionsResetsTheListedAppsConnections(t *testing.T) {
 	direct.alive(t)
 }
 
+// After a reload only the apps it put into the tunnel are looked at: a connection another listed
+// app has outside the tunnel is one it opened that way since the start, and a change of the
+// rules for one app must not cut it.
+func TestAReloadMovesOnlyTheConnectionsOfTheAppsItPutIntoTheTunnel(t *testing.T) {
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	binary, err := os.ReadFile(self)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := resolvedTempDir(t)
+	suffix := ""
+	if runtime.GOOS == "windows" {
+		suffix = ".exe"
+	}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	accepted := make(chan net.Conn)
+	go func() {
+		for {
+			connection, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			accepted <- connection
+		}
+	}()
+	listed := holdConnection(t, binary, filepath.Join(dir, "listed"+suffix), listener, accepted)
+	added := holdConnection(t, binary, filepath.Join(dir, "added"+suffix), listener, accepted)
+
+	previous := outsideTunnel
+	outsideTunnel = func(connection xnet.TCPConnection, _ []netip.Prefix, _ bool) bool {
+		return connection.Remote == netip.MustParseAddrPort(listener.Addr().String())
+	}
+	t.Cleanup(func() { outsideTunnel = previous })
+
+	config := func(processes ...string) string {
+		rules := []any{}
+		for i, process := range processes {
+			rules = append(rules, map[string]any{"type": "field", "inboundTag": []string{"elarni-tun"}, "process": []string{process},
+				"outboundTag": "elarni-apps-0", "ruleTag": "elarni-per-app-listed-" + strconv.Itoa(i)})
+		}
+		rules = append(rules, map[string]any{"type": "field", "inboundTag": []string{"elarni-tun"}, "outboundTag": "elarni-direct", "ruleTag": "elarni-per-app-other"})
+		raw, _ := json.Marshal(map[string]any{
+			"inbounds": []any{map[string]any{"tag": "elarni-tun", "listen": "127.0.0.1", "port": 0, "protocol": "dokodemo-door",
+				"settings": map[string]any{"network": "tcp", "address": "127.0.0.1", "port": 9}}},
+			"outbounds": []any{
+				map[string]any{"tag": "elarni-direct", "protocol": "freedom"},
+				map[string]any{"tag": "elarni-apps-0", "protocol": "loopback", "settings": map[string]any{"inboundTag": "elarni-apps-0"}},
+			},
+			"routing": map[string]any{"rules": rules},
+		})
+		return string(raw)
+	}
+	if err := RunXrayFromJSON(config(listed.path)); err != nil {
+		t.Fatal(err)
+	}
+	defer StopXray()
+	if ReplacedPerAppGate() != nil {
+		t.Fatal("a gate was replaced before any reload")
+	}
+	if err := ReloadRouting(config(listed.path, added.path)); err != nil {
+		t.Fatal(err)
+	}
+
+	reset, kept := MoveOpenedConnectionsSince(nil, nil, ReplacedPerAppGate())
+	result, err := ReadConnections(0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reset+kept != 1 || len(result.Connections) != 1 || result.Connections[0].PID != added.command.Process.Pid {
+		t.Fatalf("reset %d, kept %d, entries %+v, want the added app's connection alone", reset, kept, result.Connections)
+	}
+	listed.alive(t)
+	// The same pass without the replaced gate takes the other app's connection: it was there to take.
+	if reset, kept := MoveOpenedConnections(nil, nil); reset+kept != 1 {
+		t.Fatalf("the listed app's connection: reset %d, kept %d", reset, kept)
+	}
+}
+
 func TestPerAppRulesKeepTheRoutersOrderAndTargets(t *testing.T) {
 	config := `{"outbounds":[{"tag":"elarni-direct","protocol":"freedom"},{"tag":"elarni-block","protocol":"blackhole"},
 		{"tag":"elarni-apps-0","protocol":"loopback"},{"tag":"elarni-app-0","protocol":"vless"}],
