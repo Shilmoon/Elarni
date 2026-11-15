@@ -1114,6 +1114,31 @@ class AppLocalizationsEn extends AppLocalizations {
       'Connection stopped unexpectedly. Reconnect to retry.';
 
   @override
+  String get connectionStoppedRepair =>
+      'Connection stopped unexpectedly. Reconnect to retry; if sites stay unreachable, use Repair VPN setup.';
+
+  @override
+  String get connectionStoppedBlocked =>
+      'Connection stopped unexpectedly. Block traffic without VPN keeps traffic blocked until you reconnect, or use Repair VPN setup to lift the block.';
+
+  @override
+  String get windowsDnsNotRestored =>
+      'Disconnected, but Windows DNS could not be restored yet. If sites stay unreachable, use Repair VPN setup.';
+
+  @override
+  String get systemProxyNotRestored =>
+      'The system proxy setting could not be restored. Check it in your system network settings.';
+
+  @override
+  String systemProxyNotSet(Object port) {
+    return 'The system proxy could not be set. Apps can still use the HTTP proxy at 127.0.0.1:$port.';
+  }
+
+  @override
+  String get scheduledRefreshFailed =>
+      'A scheduled subscription or routing refresh failed.';
+
+  @override
   String get groupSelectionFailed =>
       'Group selection failed. The saved selection was restored.';
 
@@ -1132,6 +1157,13 @@ class AppLocalizationsEn extends AppLocalizations {
   @override
   String get selectServerFirstRoutingLink =>
       'Select a server first. This routing link turns its profile on for the selected server’s subscription.';
+
+  @override
+  String get clientLinksNotHandled =>
+      'One or more client links could not be handled.';
+
+  @override
+  String get clientLinkNotImported => 'The client link could not be imported.';
 
   @override
   String get unsupportedProfileTryJson =>

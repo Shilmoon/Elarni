@@ -1126,6 +1126,31 @@ class AppLocalizationsRu extends AppLocalizations {
       'Подключение неожиданно прервалось. Переподключитесь, чтобы повторить.';
 
   @override
+  String get connectionStoppedRepair =>
+      'Подключение неожиданно прервалось. Переподключитесь, чтобы повторить; если сайты останутся недоступны, используйте «Исправить настройку VPN».';
+
+  @override
+  String get connectionStoppedBlocked =>
+      'Подключение неожиданно прервалось. «Блокировать трафик без VPN» не пропускает трафик, пока вы не переподключитесь; чтобы снять блокировку, используйте «Исправить настройку VPN».';
+
+  @override
+  String get windowsDnsNotRestored =>
+      'Отключено, но DNS в Windows пока не удалось восстановить. Если сайты останутся недоступны, используйте «Исправить настройку VPN».';
+
+  @override
+  String get systemProxyNotRestored =>
+      'Не удалось восстановить настройку системного прокси. Проверьте её в сетевых настройках системы.';
+
+  @override
+  String systemProxyNotSet(Object port) {
+    return 'Не удалось настроить системный прокси. Приложения по-прежнему могут использовать HTTP-прокси 127.0.0.1:$port.';
+  }
+
+  @override
+  String get scheduledRefreshFailed =>
+      'Не удалось выполнить плановое обновление подписки или маршрутизации.';
+
+  @override
   String get groupSelectionFailed =>
       'Не удалось выбрать сервер в группе. Восстановлен сохранённый выбор.';
 
@@ -1144,6 +1169,14 @@ class AppLocalizationsRu extends AppLocalizations {
   @override
   String get selectServerFirstRoutingLink =>
       'Сначала выберите сервер. Эта ссылка маршрутизации включает свой профиль для подписки выбранного сервера.';
+
+  @override
+  String get clientLinksNotHandled =>
+      'Не удалось обработать одну или несколько клиентских ссылок.';
+
+  @override
+  String get clientLinkNotImported =>
+      'Не удалось импортировать клиентскую ссылку.';
 
   @override
   String get unsupportedProfileTryJson =>

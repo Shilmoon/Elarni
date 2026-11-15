@@ -120,7 +120,13 @@ final class PerAppProfile {
     if (text.length > 512 * 1024 || utf8.encode(text).length > 512 * 1024) {
       throw FormatException(l10n.perAppProfileTooLarge);
     }
-    final value = jsonDecode(text);
+    final Object? value;
+    try {
+      value = jsonDecode(text);
+    } on FormatException {
+      // The parser's message is English and would be shown as it is.
+      throw FormatException(l10n.perAppUnsupportedProfile);
+    }
     final targets = value is Map ? value['targets'] : null;
     if (value is! Map<String, dynamic> ||
         value.length != (value['version'] == 2 ? 6 : 5) ||

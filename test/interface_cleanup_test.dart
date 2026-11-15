@@ -458,6 +458,51 @@ void main() {
       expect(tester.takeException(), isNull);
     });
 
+    // The backend's message is English; its code picks the interface's text.
+    testWidgets('routing words download failures by their code ($windows)', (
+      tester,
+    ) async {
+      final control = FakeTunnelControl()
+        ..routingSnapshot = RoutingSnapshot(
+          profiles: [
+            RoutingProfile.fromMap({
+              'id': 'route',
+              'name': 'Everyday routing',
+              'source': 'subscription',
+              'edited': false,
+              'enabled': true,
+              'geofileStatus': 'failed',
+              'json': routingFixture.profiles.single.json,
+              'geofileError': 'native geofile text',
+              'geofileErrorCode': 'assets_missing',
+              'managedError': 'native list text',
+              'managedErrorCode': 'route_model_too_large',
+            }),
+          ],
+          assignments: const {},
+        );
+      await mount(tester, control);
+      await tester.tap(find.byKey(const Key('nav-routing')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('routing-actions:route')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Profile details'));
+      await tester.pumpAndSettle();
+      expect(
+        find.text(
+          'The routing profile’s geofiles are missing. Open Routing and use Refresh routing data, then connect again.',
+        ),
+        findsOneWidget,
+      );
+      expect(
+        find.text(
+          'Managed lists: The routing profile is too large: its rules and lists exceed 8 MB. Remove some rules or managed lists, then connect again.',
+        ),
+        findsOneWidget,
+      );
+      expect(find.textContaining('native'), findsNothing);
+    });
+
     testWidgets(
       'pending import blocks duplicates and selects newly imported routing ($windows)',
       (tester) async {

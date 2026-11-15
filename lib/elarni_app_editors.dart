@@ -1424,6 +1424,10 @@ extension _HomeEditors on _ElarniHomeState {
                 ),
               ],
             );
+          // The stored message is English; without a known code it is all
+          // there is (macOS, older catalogs).
+          String failure(String? code, String message) =>
+              (code == null ? null : failureText(code)) ?? message;
           return AlertDialog(
             title: Text(profile.name),
             content: SizedBox(
@@ -1451,14 +1455,22 @@ extension _HomeEditors on _ElarniHomeState {
                       ),
                     if (profile.geofileError != null)
                       Text(
-                        profile.geofileError!,
+                        failure(
+                          profile.geofileErrorCode,
+                          profile.geofileError!,
+                        ),
                         style: TextStyle(
                           color: Theme.of(context).colorScheme.error,
                         ),
                       ),
                     if (profile.managedError != null)
                       Text(
-                        l10n.managedListsError(profile.managedError!),
+                        l10n.managedListsError(
+                          failure(
+                            profile.managedErrorCode,
+                            profile.managedError!,
+                          ),
+                        ),
                         style: TextStyle(
                           color: Theme.of(context).colorScheme.error,
                         ),

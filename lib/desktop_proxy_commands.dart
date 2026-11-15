@@ -818,7 +818,7 @@ extension _ProxyCommands on DesktopProxy {
               file: args['file'] as String?,
             );
           } on PlatformException catch (error) {
-            candidate.geofilesFailed(args['id']! as String, error.message);
+            candidate.geofilesFailed(args['id']! as String, error);
             refreshError = error;
           }
       }

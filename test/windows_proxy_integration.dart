@@ -2899,11 +2899,8 @@ for line in sys.stdin:
       [false, true],
     );
     expect(messages, [
-      'Connection stopped unexpectedly. Reconnect to retry; if sites stay '
-          'unreachable, use Repair VPN setup.',
-      'Connection stopped unexpectedly. Block traffic without VPN keeps '
-          'traffic blocked until you reconnect, or use Repair VPN setup to '
-          'lift the block.',
+      'connection_stopped_repair',
+      'connection_stopped_blocked',
     ]);
   });
 
@@ -2959,10 +2956,7 @@ for line in sys.stdin:
       await Future<void>.delayed(const Duration(milliseconds: 20));
     }
     expect(await backend.control.state(), 'failed');
-    expect(messages, [
-      'Connection stopped unexpectedly. Reconnect to retry; if sites stay '
-          'unreachable, use Repair VPN setup.',
-    ]);
+    expect(messages, ['connection_stopped_repair']);
     await expectClosed(settings.socksPort);
     expect(await backend.control.connect(), 'connected');
     await backend.control.disconnect();
@@ -4095,8 +4089,8 @@ for line in sys.stdin:
     await backend.handleLinks([
       'happ://routing/onadd/${base64Encode(utf8.encode(jsonEncode(route)))}',
     ]);
-    expect(messages, [desktopError('no_selected_subscription').message]);
-    expect(messages.single, contains('Select a server'));
+    expect(messages, ['no_selected_subscription']);
+    expect(listenerNotice(messages.single!), contains('Select a server'));
     expect((await backend.control.routingProfiles()).profiles, isEmpty);
   });
 
@@ -7008,6 +7002,7 @@ else:
         'Proxy rules and servers need codes the geofiles lack: geoip:ru. '
         'Fix the profile or its geofile links.',
       );
+      expect(failed.geofileErrorCode, 'missing_geodata');
     },
   );
 
@@ -7548,8 +7543,7 @@ print(json.dumps({'success': False, 'error': 'connection_failed'}), flush=True)
       });
       final failures = StreamController<void>.broadcast();
       backend.control.setImportListener((message) {
-        if (message == 'A scheduled subscription or routing refresh failed.')
-          failures.add(null);
+        if (message == 'scheduled_refresh_failed') failures.add(null);
       });
       try {
         final added = await backend.control.addSubscription(
@@ -7606,8 +7600,7 @@ print(json.dumps({'success': False, 'error': 'connection_failed'}), flush=True)
     });
     final failures = StreamController<void>.broadcast();
     backend.control.setImportListener((message) {
-      if (message == 'A scheduled subscription or routing refresh failed.')
-        failures.add(null);
+      if (message == 'scheduled_refresh_failed') failures.add(null);
     });
     Future<void> scheduled(int wait) async {
       final attempt = failures.stream.first;

@@ -1656,10 +1656,12 @@ final class RoutingProfile {
     required this.json,
     this.geofiles = const [],
     this.geofileError,
+    this.geofileErrorCode,
     this.reductionStatus = 'disabled',
     this.skippedGeodata = const [],
     this.providerSubscriptionId,
     this.managedError,
+    this.managedErrorCode,
   });
 
   // macOS reports a provider's profile as 'subscription', Windows and Linux as 'provider'.
@@ -1677,12 +1679,14 @@ final class RoutingProfile {
         .map((item) => Map<String, Object?>.from(item as Map))
         .toList(),
     geofileError: value['geofileError'] as String?,
+    geofileErrorCode: value['geofileErrorCode'] as String?,
     reductionStatus: value['reductionStatus'] as String? ?? 'disabled',
     skippedGeodata: List<String>.from(
       value['skippedGeodata'] as List? ?? const [],
     ),
     providerSubscriptionId: value['providerSubscriptionId'] as String?,
     managedError: value['managedError'] as String?,
+    managedErrorCode: value['managedErrorCode'] as String?,
   );
 
   final String id;
@@ -1694,10 +1698,14 @@ final class RoutingProfile {
   final String json;
   final List<Map<String, Object?>> geofiles;
   final String? geofileError;
+  // The failures' codes, which the interface words. macOS, and geofile
+  // failures saved by older versions, have the message alone.
+  final String? geofileErrorCode;
   final String reductionStatus;
   // Codes the geofiles lack, which Direct, Block and domestic DNS rules skip.
   final List<String> skippedGeodata;
   final String? providerSubscriptionId;
   // Why the last managed list refresh failed; the lists in use are kept.
   final String? managedError;
+  final String? managedErrorCode;
 }

@@ -636,6 +636,7 @@ final class DesktopCatalog {
             'enabled',
             'geofileStatus',
             'geofileError',
+            'geofileErrorCode',
             'geofiles',
             'reductionStatus',
             'skippedGeodata',
@@ -643,8 +644,10 @@ final class DesktopCatalog {
           ])
             key: item[key],
           'json': jsonEncode(item['profile']),
-          if (item['managedError'] case final String code)
+          if (item['managedError'] case final String code) ...{
             'managedError': desktopError(code).message,
+            'managedErrorCode': code,
+          },
         },
     ],
   };
@@ -1437,13 +1440,16 @@ final class DesktopCatalog {
     });
   }
 
-  void geofilesFailed(String id, String? message) {
+  // The message is for the headless output and older readers; the window
+  // words the code.
+  void geofilesFailed(String id, PlatformException error) {
     final current = route(id);
     final failures = (current['geoFailures'] as int? ?? 0) + 1;
     putRoute({
       ...current,
       'geofileStatus': 'failed',
-      'geofileError': message,
+      'geofileError': error.message,
+      'geofileErrorCode': error.code,
       'geoFailures': failures,
       'nextGeoRefreshAt': now + retryDelay(failures),
     });
