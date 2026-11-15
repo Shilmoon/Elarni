@@ -58,11 +58,24 @@ type skippedMembers struct {
 	list  []SkippedProfile
 	count int
 	first error
+	// How many were left out as unencrypted servers: that reason is the import's only when it is every member's.
+	unencrypted int
+}
+
+// failure is the import's error when nothing is left to import.
+func (s *skippedMembers) failure() error {
+	if errors.Is(s.first, ErrUnencryptedServer) && s.unencrypted < s.count {
+		return fmt.Errorf("unsupported client settings")
+	}
+	return s.first
 }
 
 func (s *skippedMembers) add(name, kind, fallback string, err error) {
 	if s.first == nil {
 		s.first = err
+	}
+	if errors.Is(err, ErrUnencryptedServer) {
+		s.unencrypted++
 	}
 	s.count++
 	if len(s.list) >= maxSkippedListed {
@@ -283,7 +296,7 @@ func importClientProfiles(text string) (*ClientImport, error) {
 		}
 	}
 	if len(result.Profiles) == 0 && skipped.first != nil {
-		return nil, skipped.first
+		return nil, skipped.failure()
 	}
 	if len(result.Profiles) == 0 || len(result.Profiles) > 1024 {
 		return nil, fmt.Errorf("expected 1 to 1024 client profiles")

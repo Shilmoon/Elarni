@@ -100,7 +100,7 @@ func importClashProfiles(text string) (*ClientImport, error) {
 		outbounds = append(outbounds, outbound)
 	}
 	if len(outbounds) == 0 {
-		return nil, skipped.first
+		return nil, skipped.failure()
 	}
 	for name := range names {
 		delete(dropped, name) // a kept proxy of the same name stays reachable
@@ -146,7 +146,7 @@ func importClashProfiles(text string) (*ClientImport, error) {
 		if err != nil {
 			// The route a rule to a skipped proxy meant is gone; the file fails as that proxy did.
 			if parts := strings.Split(rule, ","); dropped[strings.TrimSpace(parts[len(parts)-1])] {
-				return nil, skipped.first
+				return nil, skipped.failure()
 			}
 			return nil, err
 		}

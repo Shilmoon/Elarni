@@ -47,6 +47,14 @@ func TestImportNamesAnUnencryptedPublicServer(t *testing.T) {
 			t.Errorf("%s: %v", link, err)
 		}
 	}
+	// The reason is the import's only when it is every member's: other broken lines are not servers without encryption.
+	plain := "vless://" + id + "@8.8.8.8:443?encryption=none&type=tcp&security=none#Plain"
+	if _, err := ImportClientProfiles(plain + "\n" + strings.Replace(plain, "8.8.8.8", "8.8.4.4", 1)); !errors.Is(err, ErrUnencryptedServer) {
+		t.Errorf("two unencrypted servers: %v", err)
+	}
+	if _, err := ImportClientProfiles(plain + "\nvless://broken\nnot a link"); err == nil || errors.Is(err, ErrUnencryptedServer) {
+		t.Errorf("an unencrypted server among broken lines: %v", err)
+	}
 	// Among servers that import it is skipped like any other.
 	result, err := ImportClientProfiles("trojan://pw@127.0.0.1:443#Kept\ntrojan://pw@8.8.8.8:443?security=none#Plain")
 	if err != nil || len(result.Profiles) != 1 || result.SkippedCount != 1 {
