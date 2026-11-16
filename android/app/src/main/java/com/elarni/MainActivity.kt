@@ -138,6 +138,9 @@ class MainActivity : ComponentActivity() {
         if (savedInstanceState == null) receive(intent)
         repository.scope.launch { repository.awaitReady(); repository.maintenance() }
     }
+    // Home's speed line needs the counters only while the app is in front.
+    override fun onResume() { super.onResume(); repository.inFront = true }
+    override fun onPause() { repository.inFront = false; super.onPause() }
     override fun onSaveInstanceState(outState: Bundle) {
         super.onSaveInstanceState(outState)
         outState.putString("fileAction", interaction.fileAction)

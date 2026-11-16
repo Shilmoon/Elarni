@@ -142,6 +142,22 @@ class WidgetToggle : BroadcastReceiver() {
     }
 }
 
+/** Download and upload speed in bytes per second, which the widget and Home show while connected. */
+data class TrafficRate(val down: Long, val up: Long) {
+    companion object {
+        /** A reading of the core's counters: elapsed milliseconds, downlink bytes, uplink bytes. */
+        fun sample(metrics: JSONObject) = longArrayOf(SystemClock.elapsedRealtime(), metrics.optLong("downlinkBytes"), metrics.optLong("uplinkBytes"))
+        /** The speed between two [sample]s; null with no time between them.
+         *  The core counts from its start, so a lower count is a new start, not negative traffic. */
+        fun between(previous: LongArray, current: LongArray): TrafficRate? {
+            val elapsed = current[0] - previous[0]
+            if (elapsed <= 0) return null
+            fun rate(index: Int) = (current[index] - previous[index]).coerceAtLeast(0) * 1000 / elapsed
+            return TrafficRate(rate(1), rate(2))
+        }
+    }
+}
+
 object Widgets {
     private var sample: LongArray? = null
     private var speed: String? = null
@@ -152,14 +168,10 @@ object Widgets {
     fun shown(context: Context) = (present ?: ids(context).isNotEmpty().also { present = it }) &&
         context.getSystemService(PowerManager::class.java).isInteractive
     @Synchronized fun traffic(app: ElarniApplication, metrics: JSONObject, state: AppState) {
-        val now = longArrayOf(SystemClock.elapsedRealtime(), metrics.optLong("downlinkBytes"), metrics.optLong("uplinkBytes"))
-        sample?.let { last ->
-            // The core counts from its start; a lower count is a new start, not negative traffic.
-            fun rate(index: Int) = bytes((now[index] - last[index]).coerceAtLeast(0) * 1000 / (now[0] - last[0]).coerceAtLeast(1))
-            speed = tr(R.string.traffic_rates, rate(1), rate(2))
-        }
+        val now = TrafficRate.sample(metrics)
+        sample?.let { last -> TrafficRate.between(last, now)?.let { speed = tr(R.string.traffic_rates, bytes(it.down), bytes(it.up)) } }
         sample = now
-        // With monitoring on, the 2 s tick reads the counters for the app too; with the screen off no widget is in view.
+        // The 2 s tick also reads the counters for the app, with monitoring on or the app in front; with the screen off no widget is in view.
         if (app.getSystemService(PowerManager::class.java).isInteractive) refresh(app, state)
     }
     @Synchronized fun refresh(app: ElarniApplication, state: AppState) {

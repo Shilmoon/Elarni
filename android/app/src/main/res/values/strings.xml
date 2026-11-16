@@ -738,4 +738,11 @@
     <string name="reset_elarni_2">Reset Elarni?</string>
     <string name="this_deletes_every_subscription_server_and">This deletes every subscription, server and setting on this device. It cannot be undone.</string>
     <string name="a_chosen_server_has_no_share">A chosen server has no share link that keeps all its settings. Share it from its own page.</string>
+    <string name="russian_sites_direct">Russian sites direct</string>
+    <string name="russian_sites_preset_help">.ru, .рф, .su and these services\' other domains</string>
+    <string name="browsers">Browsers</string>
+    <string name="social_and_video">Social and video</string>
+    <string name="use_last_successful_server">Use last successful server</string>
+    <string name="configuration">Configuration</string>
+    <string name="next_refresh_replaces_your_edits">%1$s’s next refresh replaces your edits.</string>
 </resources>

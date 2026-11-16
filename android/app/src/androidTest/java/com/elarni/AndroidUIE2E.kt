@@ -904,6 +904,31 @@ class AndroidUIE2E {
         } finally { russianApps = RUSSIAN_APPS }
     }
 
+    @Test fun perAppOtherPresetsAddInstalledAppsAndKeepTheMode() {
+        val apps = call("apps").objects("apps").map { it.string("package") }
+        // Installed apps stand in for the browsers, which the emulator may lack.
+        appPresets = listOf("browsers" to listOf(apps[0] to "Preset one", "com.example.missing" to "Preset missing", apps[1] to "Preset listed"))
+        try {
+            call("settings", obj("settings" to obj("xrayTunEnabled" to true, "perAppMode" to "proxyOnly", "perAppProcesses" to JSONArray(listOf(apps[1])))))
+            ui.onNode(hasText("Settings") and hasClickAction()).performClick()
+            click("Apps & routes")
+            click("Per-app routing")
+            ui.waitUntil(10_000) { ui.onAllNodesWithText("Selected apps · 1").fetchSemanticsNodes().isNotEmpty() }
+            // Only listed apps offers no Russian apps, but the presets of apps to send through the tunnel.
+            ui.onNodeWithText("Russian apps").assertDoesNotExist()
+            click("Browsers")
+            ui.onNode(hasTestTag("preset-app-${apps[0]}") and hasText("Installed")).assertExists()
+            ui.onNode(hasTestTag("preset-app-com.example.missing") and hasText("Not installed")).assertIsNotEnabled()
+            ui.onNode(hasTestTag("preset-app-${apps[1]}") and hasText("Added")).assertIsNotEnabled()
+            ui.onNodeWithText("These apps connect directly", substring = true).assertDoesNotExist()
+            click("Add 1 app")
+            ui.onNodeWithText("Only listed apps").assertExists()
+            click("Save changes")
+            ui.waitUntil(10_000) { snapshot().settings.strings("perAppProcesses").toSet() == setOf(apps[0], apps[1]) }
+            assertEquals("proxyOnly", snapshot().settings.string("perAppMode"))
+        } finally { appPresets = APP_PRESETS }
+    }
+
     @Test fun pullToRefreshKeepsTheFirstReview() {
         HTTPFixture().use { one -> HTTPFixture().use { two -> HTTPFixture().use { moved ->
             one.body = "socks://127.0.0.1:18100#One"; two.body = "socks://127.0.0.1:18101#Two"; moved.body = "socks://127.0.0.1:18102#Moved"

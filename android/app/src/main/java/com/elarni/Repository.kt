@@ -48,6 +48,8 @@ data class AppState(
     val liveness: String? = null,
     /** Wall-clock milliseconds when the server started failing that check. */
     val noTrafficSince: Long? = null,
+    /** The speed while connected, from the last two readings of the counters; null before the second. */
+    val rate: TrafficRate? = null,
 )
 
 // Up to two probes share an SNI, so a part takes at most four probe timeouts.
@@ -170,10 +172,15 @@ class Repository(private val app: ElarniApplication) {
     }
     private fun state(value: String) {
         if (value != mutable.value.connection) livenessAt = null
+        // A new start counts from zero again.
+        if (value != "connected" || mutable.value.connection != "connected") trafficSample = null
         mutable.update { val kept = value == "connected" && it.connection == "connected"
-            it.copy(connection = value, liveness = it.liveness.takeIf { kept }, noTrafficSince = it.noTrafficSince.takeIf { kept }) }
+            it.copy(connection = value, liveness = it.liveness.takeIf { kept }, noTrafficSince = it.noTrafficSince.takeIf { kept }, rate = it.rate.takeIf { kept }) }
         publish()
     }
+    /** Whether the app's screen is in front (MainActivity sets it), where Home shows the speed. */
+    @Volatile var inFront = false
+    private var trafficSample: LongArray? = null
     private var livenessAt: Double? = null
     private var livenessUplink = 0L
     // The downlink proves nothing: listener replies and direct routes move it while the server is gone.
@@ -611,6 +618,7 @@ class Repository(private val app: ElarniApplication) {
                 if (fallback.size > 8 || fallback.any { Catalog.safeURL("https://$it/") == null || java.net.URI("https://$it/").host != it }) throw AppFailure("invalid_target")
                 source.put("fallbackHosts", JSONArray(fallback))
             }
+            "updateNodeConfig" -> candidate.replaceNodeConfig(id, args.getString("text"))
             "group" -> candidate.selectGroup(id, args.getString("group"), args.getString("choice"))
             "nodeIP" -> {
                 if (args.getString("value") !in listOf("inherit", "automatic", "ipv4", "ipv6")) throw AppFailure("invalid_settings")
@@ -770,11 +778,22 @@ class Repository(private val app: ElarniApplication) {
             var probed = false
             if (engine.running) {
                 if (!Native.call("getXrayState").optBoolean("running")) { try { engine.stop(releaseTunnel = !wantsRecovery()) } finally { state("failed") } }
-                else if (catalog.settings.optBoolean("monitoringEnabled") && app.getSystemService(android.os.PowerManager::class.java).isInteractive || Widgets.shown(app)) {
-                    // A widget alone reads the counters for its speed line; the app shows them only with monitoring on, and only on screen.
-                    val metrics = Native.call("getRuntimeMetrics")
-                    if (catalog.settings.optBoolean("monitoringEnabled")) mutable.update { it.copy(metrics = metrics) }
-                    Widgets.traffic(app, metrics, mutable.value)
+                else {
+                    val monitoring = catalog.settings.optBoolean("monitoringEnabled")
+                    // A widget alone reads the counters for its speed line; the app reads them only on screen: for Home's speed
+                    // while it is in front, and for the other counters with monitoring on.
+                    if ((monitoring || inFront) && app.getSystemService(android.os.PowerManager::class.java).isInteractive || Widgets.shown(app)) {
+                        val metrics = Native.call("getRuntimeMetrics")
+                        val sample = TrafficRate.sample(metrics)
+                        val rate = trafficSample?.let { TrafficRate.between(it, sample) }
+                        trafficSample = sample
+                        mutable.update { it.copy(metrics = if (monitoring) metrics else it.metrics, rate = rate ?: it.rate) }
+                        Widgets.traffic(app, metrics, mutable.value)
+                    } else {
+                        // Back in front, a speed from before would be stale, and the first reading would average the time away.
+                        trafficSample = null
+                        if (mutable.value.rate != null) mutable.update { it.copy(rate = null) }
+                    }
                 }
                 // With failover on, its health check stands in for liveness after the first check: one probe a tick, none offline.
                 if (engine.running && mutable.value.connection == "connected" && automation.online && (livenessAt == null || !config.optBoolean("enabled")))

@@ -764,4 +764,11 @@
     <string name="reset_elarni_2">Сбросить Elarni?</string>
     <string name="this_deletes_every_subscription_server_and">Все подписки, серверы и настройки на этом устройстве будут удалены. Отменить это нельзя.</string>
     <string name="a_chosen_server_has_no_share">У выбранного сервера нет ссылки, которая сохраняет все его настройки. Поделитесь им с его страницы.</string>
+    <string name="russian_sites_direct">Российские сайты напрямую</string>
+    <string name="russian_sites_preset_help">.ru, .рф, .su и другие домены этих сервисов</string>
+    <string name="browsers">Браузеры</string>
+    <string name="social_and_video">Соцсети и видео</string>
+    <string name="use_last_successful_server">Последний успешный сервер</string>
+    <string name="configuration">Конфигурация</string>
+    <string name="next_refresh_replaces_your_edits">Следующее обновление «%1$s» заменит ваши правки.</string>
 </resources>
