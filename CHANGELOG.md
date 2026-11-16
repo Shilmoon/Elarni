@@ -21,17 +21,21 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
   location menus next to its title and **Use last successful server**. A server's menu shares
   that server as a link or QR code and sets its IP type (before, only the selected server's).
   The routing editor edits the GeoIP and GeoSite addresses, managed domain lists and static
-  DNS hosts, which until now needed the JSON; a routing profile's menu shares it as text.
-  Subscriptions have **Refresh all**, the latency test settings are kept between launches, and
-  Settings › System opens the licenses.
+  DNS hosts, which until now needed the JSON. A routing profile's menu shares it as text and
+  a QR code and exports its JSON to a file, and its details refresh its managed domain lists
+  on demand. The share dialog saves its text and its QR image to a file, and the selected
+  servers of a group without a subscription link are shared as links. A running latency test
+  can be cancelled. Subscriptions have **Refresh all**, the latency test settings are kept
+  between launches, and Settings › System opens the licenses.
 - **macOS: Shortcuts actions** Connect Elarni, Disconnect Elarni and Toggle Elarni, as on
   iPhone. They ask for no confirmation and tell Shortcuts when they fail, for example with no
   server selected.
-- **Android: a server's configuration** can be viewed and replaced from the server's page, as
-  on Windows and Linux; the edit must still be one Xray server, and a provider that hides its
-  servers hides this too. Per-app routing gains presets for Discord, Telegram, Claude, Steam,
-  browsers, and social and video apps next to Russian apps; the routing editor gains the
-  **Russian sites direct** preset; Home offers **Use last successful server**.
+- **Android, iPhone and macOS: a server's configuration** can be viewed and replaced, as on
+  Windows and Linux; the edit must still be one Xray server, and a provider that hides its
+  servers hides this too.
+- **Android:** per-app routing gains presets for Discord, Telegram, Claude, Steam, browsers,
+  and social and video apps next to Russian apps; the routing editor gains the **Russian sites
+  direct** preset; Home offers **Use last successful server**.
 - **iPhone: a widget** for the Home Screen and the Lock Screen shows whether Elarni is
   connected and to which server; the Home Screen one connects and disconnects. **Hide VPN
   icon** is now in Settings, under Advanced network routes, as on macOS and Windows.
