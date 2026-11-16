@@ -511,7 +511,15 @@ pub(crate) fn apply_tls_fingerprint(outbound: &mut Value, runtime: &RuntimeOptio
             .to_ascii_lowercase();
         if !matches!(
             network.as_str(),
-            "tcp" | "raw" | "ws" | "websocket" | "grpc" | "gun" | "httpupgrade" | "xhttp" | "splithttp"
+            "tcp"
+                | "raw"
+                | "ws"
+                | "websocket"
+                | "grpc"
+                | "gun"
+                | "httpupgrade"
+                | "xhttp"
+                | "splithttp"
         ) {
             continue;
         }
