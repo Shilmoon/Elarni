@@ -395,6 +395,7 @@ struct ServerDetailView: View {
   @Environment(\.dismiss) private var dismiss
   let nodeID: String
   @State private var share: SharedText?
+  @State private var config: LoadedConfig?
   @State private var renaming = false
   @State private var deleting = false
   @State private var name = ""
@@ -435,6 +436,11 @@ struct ServerDetailView: View {
           Button("Test server") { model.testServers([node]) }
           if node.format != "telegram" { Button("Check exit") { model.checkExit(node) } }
           Button("Share configuration") { do { share = SharedText(title: node.name, text: try model.share(id: node.id, subscription: false)) } catch { model.show(error) } }
+          // Refused where sharing is: a provider that hides its servers, or one not refreshed since it could say so.
+          if node.format == "xrayProfile" {
+            Button("Configuration") { do { config = LoadedConfig(text: try model.nodeConfig(node)) } catch { model.show(error) } }
+              .accessibilityIdentifier("server-config")
+          }
           Button("Rename") { name = node.name; renaming = true }
           // The selected server and a subscription's last one stay, as the store requires.
           if model.selectedID != node.id, (model.subscriptions.first { $0.id == node.subscriptionID }?.nodes.count ?? 0) > 1 {
@@ -457,6 +463,44 @@ struct ServerDetailView: View {
     }
     .navigationTitle(model.nodes.first(where: { $0.id == nodeID })?.name ?? String(localized: "Server")).navigationBarTitleDisplayMode(.inline)
     .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
-    .sheet(item: $share) { ShareView(item: $0) }.appErrors()
+    .sheet(item: $share) { ShareView(item: $0) }
+    .sheet(item: $config) { ServerConfigView(nodeID: nodeID, original: $0.text) }.appErrors()
+  }
+}
+
+private struct LoadedConfig: Identifiable { let id = UUID(); let text: String }
+
+/// A server's stored Xray JSON, as on desktop and Android. Save checks that it is still one Xray server.
+struct ServerConfigView: View {
+  @Environment(IOSAppModel.self) private var model
+  @Environment(\.dismiss) private var dismiss
+  let nodeID: String
+  let original: String
+  @State private var text: String
+  init(nodeID: String, original: String) { self.nodeID = nodeID; self.original = original; _text = State(initialValue: original) }
+  private var node: ServerNode? { model.nodes.first { $0.id == nodeID } }
+  // A local group has no refresh to replace the edit.
+  private var footer: String {
+    let rule = String(localized: "The configuration must be one Xray server.")
+    guard let source = model.subscriptions.first(where: { $0.id == node?.subscriptionID }), !source.local else { return rule }
+    return rule + " " + String(localized: "\(source.name)’s next refresh replaces your edits.")
+  }
+  var body: some View {
+    NavigationStack {
+      VStack(alignment: .leading, spacing: 8) {
+        // The ASCII keyboard also turns off smart quotes and dashes, which would break the JSON.
+        TextEditor(text: $text).font(.body.monospaced()).textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.asciiCapable)
+          .accessibilityLabel("Configuration").accessibilityIdentifier("server-config-editor")
+        Text(footer).font(.footnote).foregroundStyle(AppPalette.secondary).fixedSize(horizontal: false, vertical: true)
+      }.padding()
+        .navigationTitle("Configuration").navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+          ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+          ToolbarItem(placement: .confirmationAction) {
+            Button("Save") { if let node { model.launch { try await model.replaceNodeConfig(node, text: text); dismiss() } } }
+              .disabled(text == original || model.busy || node == nil).accessibilityIdentifier("server-config-save")
+          }
+        }.interactiveDismissDisabled(model.busy).appErrors()
+    }
   }
 }

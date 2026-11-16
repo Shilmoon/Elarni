@@ -1593,6 +1593,81 @@ final class ElarniTests: XCTestCase {
     try await model.delete(user)
   }
 
+  // A hand edit of a server's Xray JSON replaces its stored config under the same id and name,
+  // and the connected tunnel takes it, as after a group choice.
+  func testServerConfigEditIsStoredAndReachesTheTunnel() async throws {
+    let model = IOSAppModel()
+    await model.start()
+    let source = try await importLocal(model, "socks://127.0.0.1:1080#Config%20fixture")
+    let node = try XCTUnwrap(source.nodes.first)
+    XCTAssertEqual(node.format, "xrayProfile")
+    try await model.select(node)
+    let original = try model.nodeConfig(node)
+    let edited = original.replacingOccurrences(of: "1080", with: "1081")
+    XCTAssertNotEqual(edited, original, "the fixture's port is not in its config")
+    let before = try await model.makePlan(nodeID: node.id)
+    model.vpn.manager = FixtureTunnel(plan: before)
+    try await model.vpn.refreshProvider()
+    try await model.replaceNodeConfig(node, text: edited)
+    model.reload()
+    let saved = try XCTUnwrap(model.nodes.first { $0.id == node.id }, "the edit changed the server's id")
+    XCTAssertEqual(saved.name, "Config fixture")
+    func object(_ text: String) throws -> NSDictionary { try XCTUnwrap(JSONSerialization.jsonObject(with: Data(text.utf8)) as? NSDictionary) }
+    XCTAssertEqual(try object(model.nodeConfig(saved)), try object(edited))
+    XCTAssertEqual(model.selectedID, node.id)
+    let after = try await model.makePlan(nodeID: node.id)
+    XCTAssertNotEqual(after, before)
+    XCTAssertEqual(model.vpn.savedPlan, after, "the connected tunnel kept the old config")
+    await model.disconnect()
+    model.vpn.manager = nil
+    try await model.delete(source)
+  }
+
+  // An edit must stay one Xray server: two servers, or JSON that is no server, are refused and change nothing.
+  func testServerConfigEditThatIsNotOneServerIsRefused() async throws {
+    let model = IOSAppModel()
+    await model.start()
+    let source = try await importLocal(model, "socks://127.0.0.1:1080#Config%20fixture")
+    let node = try XCTUnwrap(source.nodes.first)
+    let original = try model.nodeConfig(node)
+    let revision = node.revision
+    for edit in ["[\(original),\(original.replacingOccurrences(of: "1080", with: "1081"))]", #"{"log":{"loglevel":"warning"}}"#] {
+      do { try await model.replaceNodeConfig(node, text: edit); XCTFail("an edit that is not one server was saved: \(edit)") }
+      catch {
+        XCTAssertEqual(error as? NodeConfigRefusal, .unsupportedProfile, "\(error)")
+        model.show(error)
+        XCTAssertEqual(model.errorMessage, "The configuration must be one Xray server.")
+        model.errorMessage = nil
+      }
+      model.reload()
+      let kept = try XCTUnwrap(model.nodes.first { $0.id == node.id })
+      XCTAssertEqual(try model.nodeConfig(kept), original)
+      XCTAssertEqual(kept.revision, revision)
+    }
+    try await model.delete(source)
+  }
+
+  // A provider that hides its servers hides their configs too, for viewing and for editing.
+  func testServerConfigOfAHidingProviderIsRefused() async throws {
+    let model = IOSAppModel()
+    await model.start()
+    let existing = Set(model.subscriptions.map(\.id))
+    try await model.importInput("#hide-url: yes\nsocks://127.0.0.1:1081#Hidden%20config")
+    let source = try XCTUnwrap(model.subscriptions.first { !existing.contains($0.id) })
+    let node = try XCTUnwrap(source.nodes.first)
+    do { _ = try model.nodeConfig(node); XCTFail("a hiding provider's server config was shown") }
+    catch {
+      XCTAssertEqual(error as? NodeConfigRefusal, .sharingDisabled, "\(error)")
+      model.show(error)
+      XCTAssertEqual(model.errorMessage, "The provider does not allow viewing this server’s configuration.")
+      model.errorMessage = nil
+    }
+    let edit = #"{"outbounds":[{"protocol":"socks","settings":{"servers":[{"address":"127.0.0.1","port":1082}]},"tag":"proxy"}]}"#
+    do { try await model.replaceNodeConfig(node, text: edit); XCTFail("a hiding provider's server was edited") }
+    catch { XCTAssertEqual(error as? NodeConfigRefusal, .sharingDisabled, "\(error)") }
+    try await model.delete(source)
+  }
+
   // Local imports join one local group, which an earlier run may have left behind.
   // Starting without it gives the test a group that holds only its own servers.
   private func importLocal(_ model: IOSAppModel, _ input: String) async throws -> ServerSubscription {

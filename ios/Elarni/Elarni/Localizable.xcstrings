@@ -153,6 +153,16 @@
         }
       }
     },
+    "%@’s next refresh replaces your edits." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Следующее обновление «%@» заменит ваши правки."
+          }
+        }
+      }
+    },
     "%@’s server did not answer. Your network may block it, or it is down. Retry later or ask the provider for a mirror." : {
       "localizations" : {
         "ru" : {
@@ -951,6 +961,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Сравнение разрешённых серверов"
+          }
+        }
+      }
+    },
+    "Configuration" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Конфигурация"
           }
         }
       }
@@ -4484,6 +4504,16 @@
         }
       }
     },
+    "Refresh the subscription once before viewing this server’s configuration." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Чтобы увидеть конфигурацию этого сервера, один раз обновите подписку."
+          }
+        }
+      }
+    },
     "Refreshes" : {
       "localizations" : {
         "ru" : {
@@ -5779,6 +5809,16 @@
         }
       }
     },
+    "The configuration must be one Xray server." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Конфигурация должна описывать один сервер Xray."
+          }
+        }
+      }
+    },
     "The connection could not be restored. Disconnect before trying again." : {
       "localizations" : {
         "ru" : {
@@ -5865,6 +5905,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Провайдер"
+          }
+        }
+      }
+    },
+    "The provider does not allow viewing this server’s configuration." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Провайдер не разрешает просматривать конфигурацию этого сервера."
           }
         }
       }

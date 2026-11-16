@@ -496,6 +496,17 @@ final class IOSAppModel {
   func selectGroup(_ node: ServerNode, group: String, value: String) async throws {
     _ = try await catalog().selectProfileGroup(nodeID: node.id, group: group, choice: value)
   }
+  /// A server's stored Xray JSON, refused where sharing it would be.
+  func nodeConfig(_ node: ServerNode) throws -> String {
+    let config = try catalog().nodeConfig(nodeID: node.id)
+    return String(decoding: try JSONSerialization.data(withJSONObject: config, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]), as: UTF8.self)
+  }
+  /// A hand edit, published like a group choice; the provider's next refresh replaces it.
+  func replaceNodeConfig(_ node: ServerNode, text: String) async throws {
+    do { _ = try await catalog().replaceNodeConfig(nodeID: node.id, content: text) }
+    // Text the importer refuses is not one Xray server either; macOS reports both as unsupported_profile.
+    catch SubscriptionError.incompatibleProfile { throw NodeConfigRefusal.unsupportedProfile }
+  }
   func updateFetch(_ id: String, options: [String: Any]) throws { _ = try catalog().updateFetchOptions(id: id, options: options) }
   func share(id: String, subscription: Bool) throws -> String { try catalog().sharingText(id: id, subscription: subscription) }
   func shareLinks(_ group: ServerSubscription, nodeIDs: [String]) throws -> String { try catalog().shareLinks(subscriptionID: group.id, nodeIDs: nodeIDs) }
@@ -1443,6 +1454,12 @@ final class IOSAppModel {
       case .fetchClass: return String(localized: "The subscription could not be downloaded. Check the provider address and try again.")
       default: return String(localized: "The catalog changed or could not be read. Refresh the screen and retry.")
       }
+    }
+    switch error as? NodeConfigRefusal {
+    case .sharingDisabled?: return String(localized: "The provider does not allow viewing this server’s configuration.")
+    case .refreshRequired?: return String(localized: "Refresh the subscription once before viewing this server’s configuration.")
+    case .unsupportedProfile?: return String(localized: "The configuration must be one Xray server.")
+    case nil: break
     }
     switch error as? RoutingStoreError {
     case .noSelectedSubscription?:
