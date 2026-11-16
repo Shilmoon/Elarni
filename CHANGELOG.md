@@ -13,9 +13,41 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
   one browser's hello, a server from a provider could not be switched to another. The choice
   applies to TLS and Reality servers over TCP, to a provider profile's backup servers and to a
   per-app server; Hysteria2, TUIC and WireGuard servers have no such fingerprint. All platforms.
+- **Live speed.** Home shows the download and upload speed under the Connect button while
+  connected, whatever the Monitoring setting. The counters are read only while the app is on
+  screen. All platforms; on iPhone the speed is that of the tunnel interface, packet headers
+  and directly routed traffic included.
+- **Windows, Linux and macOS: what the phone apps already had.** The server list has sort and
+  location menus next to its title and **Use last successful server**. A server's menu shares
+  that server as a link or QR code and sets its IP type (before, only the selected server's).
+  The routing editor edits the GeoIP and GeoSite addresses, managed domain lists and static
+  DNS hosts, which until now needed the JSON; a routing profile's menu shares it as text.
+  Subscriptions have **Refresh all**, the latency test settings are kept between launches, and
+  Settings › System opens the licenses.
+- **macOS: Shortcuts actions** Connect Elarni, Disconnect Elarni and Toggle Elarni, as on
+  iPhone. They ask for no confirmation and tell Shortcuts when they fail, for example with no
+  server selected.
+- **Android: a server's configuration** can be viewed and replaced from the server's page, as
+  on Windows and Linux; the edit must still be one Xray server, and a provider that hides its
+  servers hides this too. Per-app routing gains presets for Discord, Telegram, Claude, Steam,
+  browsers, and social and video apps next to Russian apps; the routing editor gains the
+  **Russian sites direct** preset; Home offers **Use last successful server**.
+- **iPhone: a widget** for the Home Screen and the Lock Screen shows whether Elarni is
+  connected and to which server; the Home Screen one connects and disconnects. **Hide VPN
+  icon** is now in Settings, under Advanced network routes, as on macOS and Windows.
+
+### Changed
+
+- **iPhone:** a new install requires a generated login on its local SOCKS and HTTP listeners,
+  as the other platforms do, so other apps on the phone cannot use them unasked. An install
+  that never saved its settings counts as new. Set your own login, or turn it off, in
+  Settings › Connection.
 
 ### Fixed
 
+- **Android, app in Russian:** the routing editor showed the domain and address lists of
+  Direct, Proxy and Block as empty and lost what was typed into them, because it looked the
+  lists up by the translated name. They show and save now.
 - A change of per-app routing while connected no longer restarts the tunnel on Windows and
   Linux. Before, adding or removing an app, changing its target or switching the mode stopped
   the tunnel and started it again, which cut every connection of every app for about two
