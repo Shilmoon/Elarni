@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import 'package:elarni/tunnel_channel.dart';
 
 const fixtureSubscriptions = SubscriptionSnapshot(
@@ -205,6 +207,19 @@ class FakeTunnelControl implements TunnelControl {
     };
   }
 
+  // The texts given a QR code, and the reply: an error is thrown.
+  final qrTexts = <String>[];
+  Object? qrReply;
+  @override
+  Future<Map<String, Object?>> qrCode(String text) async {
+    qrTexts.add(text);
+    return switch (qrReply) {
+      final String png => {'png': png},
+      null => {},
+      final Object error => throw error,
+    };
+  }
+
   String nodeConfigText = '{\n  "outbounds": []\n}';
   Object? nodeConfigError;
   final nodeConfigEdits = <(String, String)>[];
@@ -323,6 +338,17 @@ class FakeTunnelControl implements TunnelControl {
     return routingSnapshot;
   }
 
+  Object? managedRefreshError;
+  @override
+  Future<RoutingSnapshot> refreshManagedLists(
+    String id, {
+    String? sourceId,
+  }) async {
+    routingActions.add('lists:$id:${sourceId ?? 'all'}');
+    if (managedRefreshError case final error?) throw error;
+    return routingSnapshot;
+  }
+
   Map<String, Object?> systemInfoValue = {};
   @override
   Future<Map<String, Object?>> systemInfo() async => systemInfoValue;
@@ -391,6 +417,15 @@ class FakeTunnelControl implements TunnelControl {
 
   @override
   Future<void> saveLogs(String text) async => savedLogs.add(text);
+
+  // Each saved file's kind and bytes; false answers as a cancelled panel.
+  final savedFiles = <(String, Uint8List)>[];
+  Future<bool> Function(String kind)? onSaveFile;
+  @override
+  Future<bool> saveFile(String kind, Uint8List bytes) async {
+    savedFiles.add((kind, bytes));
+    return onSaveFile?.call(kind) ?? Future.value(true);
+  }
 
   @override
   Future<String> connect() {

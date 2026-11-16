@@ -284,6 +284,10 @@ class _ElarniHomeState extends State<ElarniHome> {
   final Map<String, String> _failedRefreshes = <String, String>{};
   bool _refreshingAll = false;
   bool _pinging = false;
+  // A cancelled test whose calls have not returned yet. Until they do, no
+  // other test starts: probes on top of them would pass the per-SNI limit and
+  // queue behind them on the Linux probe service.
+  bool _pingCancelled = false;
   int _pingRun = 0;
   String _pingProtocol = 'tcp';
   String _pingMethod = 'GET';
@@ -341,7 +345,7 @@ class _ElarniHomeState extends State<ElarniHome> {
     }
   }
 
-  bool get _pingControlsDisabled => _busy || _pinging;
+  bool get _pingControlsDisabled => _busy || _pinging || _pingCancelled;
   bool get _profileEditsDisabled => _busy;
   String _search = '';
   // Each subscription's servers as shown, for the frame being built: several

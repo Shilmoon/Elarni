@@ -94,6 +94,10 @@ final class TunnelMethodChannel {
           if call.method == "exportRecording" {
             return result(try await self.exportRecording(headless: (call.arguments as? [String: Any])?["headless"] as? Bool == true))
           }
+          // Bytes the app made, such as share text or a QR image, need no catalog.
+          if call.method == "saveFile" {
+            return result(try self.saveFile(Self.arguments(call)))
+          }
           // Stop must remain available even if the catalog cannot be opened.
           let stopping = ["disconnect", "repairTunnel"].contains(call.method)
           let store = stopping ? try? self.subscriptionStore() : try self.subscriptionStore()
@@ -117,6 +121,15 @@ final class TunnelMethodChannel {
             guard let nodeID = arguments["nodeId"] as? String, let group = arguments["group"] as? String,
                   let choice = arguments["choice"] as? String else { throw SubscriptionError.invalidFeed }
             result(try await self.subscriptionStore().selectProfileGroup(nodeID: nodeID, group: group, choice: choice).channelMap)
+            return
+          }
+          // Published like a group choice, which takes the command owner itself.
+          if call.method == "updateNodeConfig" {
+            let arguments = try Self.arguments(call)
+            guard let nodeID = arguments["nodeId"] as? String, let content = arguments["content"] as? String else {
+              throw SubscriptionError.invalidFeed
+            }
+            result(try await self.subscriptionStore().replaceNodeConfig(nodeID: nodeID, content: content))
             return
           }
           if call.method == "importClientProfiles" {
@@ -143,7 +156,7 @@ final class TunnelMethodChannel {
             return
           }
           // Downloads must not occupy the connection command owner.
-          if ["refreshSubscription", "addSubscription", "refreshRoutingGeofiles"].contains(call.method) {
+          if ["refreshSubscription", "addSubscription", "refreshRoutingGeofiles", "refreshManagedLists"].contains(call.method) {
             let arguments = try Self.arguments(call)
             let store = try self.subscriptionStore()
             if call.method == "addSubscription" {
@@ -155,6 +168,19 @@ final class TunnelMethodChannel {
               guard let id = arguments["id"] as? String else { throw SubscriptionError.notFound }
               if call.method == "refreshSubscription" {
                 result(try await store.refresh(id: id, challenge: arguments["challenge"] as? String, format: arguments["format"] as? String).channelMap)
+              } else if call.method == "refreshManagedLists" {
+                // Each list downloads on its own, as the schedule does. Like a geofile refresh, a failed
+                // download is recorded on the profile, which keeps the list's last good copy, and reported.
+                let sources = try (arguments["sourceId"] as? String).map { [$0] } ?? store.routing.managedSourceIDs(profileID: id)
+                var failure: Error?
+                for source in sources {
+                  do { try await store.routing.refreshManaged(id: id, sourceID: source) }
+                  catch is CancellationError { throw CancellationError() }
+                  catch { failure = failure ?? error }
+                }
+                try await self.commands.perform { await self.reclaimRoutingFiles() }
+                if let failure { throw failure }
+                result(store.routing.snapshot())
               } else {
                 let refreshed = try await store.routing.refreshGeofiles(id: id, force: true, file: arguments["file"] as? String)
                 try await self.commands.perform { await self.reclaimRoutingFiles() }
@@ -168,7 +194,8 @@ final class TunnelMethodChannel {
           let concurrentProbe = call.method == "pingNode" &&
             (call.arguments as? [String: Any])?["protocol"] as? String != "icmp"
           let readOnly = ["state", "subscriptions", "routingProfiles", "tunnelSettings", "inboundCredentials",
-                          "automationStatus", "runtimeMetrics", "readLogs", "readConnections", "systemInfo", "routeTable"].contains(call.method)
+                          "automationStatus", "runtimeMetrics", "readLogs", "readConnections", "systemInfo", "routeTable",
+                          "nodeConfig", "qrCode"].contains(call.method)
           try await self.commands.perform(intent: intent, concurrent: concurrentProbe, readOnly: readOnly) {
             if !["disconnect", "restoreCatalogBackup", "repairTunnel"].contains(call.method) { try await self.reconcileDisconnectedIntent() }
             switch call.method {
@@ -405,6 +432,13 @@ final class TunnelMethodChannel {
               var shared = try Self.invokeLibXray(method: "clientQR", payload: ["text": text])
               shared["text"] = text
               result(shared)
+            case "qrCode":
+              guard let text = try Self.arguments(call)["text"] as? String, !text.isEmpty else { throw SubscriptionError.invalidFeed }
+              result(try Self.invokeLibXray(method: "clientQR", payload: ["text": text]))
+            // Showing a server's config is subject to the same provider limits as sharing it.
+            case "nodeConfig":
+              guard let id = try Self.arguments(call)["id"] as? String else { throw SubscriptionError.notFound }
+              result(["config": try self.subscriptionStore().nodeConfig(nodeID: id)])
             case "openTelegramProxy":
               guard let id = try Self.arguments(call)["id"] as? String else { throw SubscriptionError.notFound }
               let url = try self.subscriptionStore().telegramURL(nodeID: id)
@@ -586,6 +620,12 @@ final class TunnelMethodChannel {
           result(FlutterError(code: "input_too_large", message: RoutingStore.geofileTooLargeMessage, details: nil))
         } catch RoutingStoreError.missingGeodata(let missing) {
           result(FlutterError(code: "missing_geodata", message: "Proxy rules and servers need codes the geofiles lack: \(missing.joined(separator: ", ")). Fix the profile or its geofile links.", details: nil))
+        } catch let refusal as NodeConfigRefusal {
+          result(Self.flutterError(refusal.rawValue))
+        } catch FileSaveFailure.invalidRequest {
+          result(Self.flutterError("invalid_request"))
+        } catch FileSaveFailure.saveFailed {
+          result(Self.flutterError("save_failed"))
         } catch SubscriptionError.incompatibleProfile(let message) {
           result(FlutterError(code: "unsupported_profile", message: message, details: nil))
         } catch SubscriptionError.unencryptedServer {
@@ -797,6 +837,25 @@ final class TunnelMethodChannel {
       throw RunnerTunnelError.invalidState
     }
     return object
+  }
+
+  /// Saves share text, a QR image or routing JSON where the user chooses; a cancelled panel saves nothing.
+  @MainActor
+  func saveFile(_ arguments: [String: Any]) throws -> [String: Any] {
+    let files: [String: (name: String, title: String)] = [
+      "text": ("elarni-share.txt", String(localized: "Save shared text")),
+      "png": ("elarni-qr.png", String(localized: "Save the QR image")),
+      "json": ("elarni-routing.json", String(localized: "Save the routing profile")),
+    ]
+    guard let kind = arguments["kind"] as? String, let file = files[kind],
+          let bytes = (arguments["bytes"] as? FlutterStandardTypedData)?.data,
+          !bytes.isEmpty, bytes.count <= 16 * 1024 * 1024 else { throw FileSaveFailure.invalidRequest }
+    let panel = NSSavePanel()
+    panel.nameFieldStringValue = file.name
+    panel.title = file.title
+    guard panel.runModal() == .OK, let url = panel.url else { return ["saved": false] }
+    do { try bytes.write(to: url, options: [.atomic]) } catch { throw FileSaveFailure.saveFailed }
+    return ["saved": true]
   }
 
   @MainActor
@@ -1360,6 +1419,12 @@ final class TunnelMethodChannel {
   nonisolated private static func flutterError(_ code: String) -> FlutterError {
     FlutterError(code: code, message: "Elarni operation failed.", details: nil)
   }
+}
+
+/// A save request with a kind or bytes the app never sends, or a chosen place that took no file.
+enum FileSaveFailure: Error {
+  case invalidRequest
+  case saveFailed
 }
 
 enum RunnerTunnelError: Error {

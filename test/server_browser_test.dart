@@ -665,12 +665,9 @@ void main() {
           find.byKey(const ValueKey('country-ping:daily:NL')),
           findsNothing,
         );
-        expect(
-          tester
-              .widget<IconButton>(find.byKey(const Key('ping-all')))
-              .onPressed,
-          isNull,
-        );
+        // While the launch test runs, the button cancels it instead of starting one.
+        expect(find.byKey(const Key('ping-all')), findsNothing);
+        expect(find.byKey(const Key('ping-cancel')), findsOneWidget);
         expect(
           tester
               .widget<FilledButton>(find.byKey(const Key('connection-toggle')))
@@ -1075,13 +1072,8 @@ void main() {
           find.byKey(const ValueKey('node-config:nl-vmess')),
           findsNothing,
         );
+        // macOS shows and replaces a config as Windows and Linux do.
         final button = find.byKey(const ValueKey('node-config:de'));
-        if (!windows) {
-          expect(find.byKey(const ValueKey('node:de')), findsOneWidget);
-          expect(button, findsNothing);
-          await tester.pumpWidget(const SizedBox());
-          return;
-        }
         await reveal(tester, button);
         await tester.tap(button);
         await tester.pumpAndSettle();

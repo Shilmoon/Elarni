@@ -209,6 +209,7 @@ struct NativeControlChecks {
     await record { try await crossSubscriptionRecoveryCheck(defaults: defaults) }
     await record { try await perAppTargetCheck(defaults: defaults) }
     await record { try await coreLogCheck(defaults: defaults) }
+    await record { try await nodeConfigCheck(defaults: defaults) }
     await record { try versionsFolderCheck() }
 
     // Call the actual socket probe without measureICMP, which requires an OS
@@ -228,7 +229,7 @@ struct NativeControlChecks {
     print("PASS production ICMP probe supports Automatic IPv4/IPv6, address fallback and explicit family")
     guard keychainCalls == 0 else { throw Failure(message: "fixture unexpectedly needed credentials") }
     guard selectionFailures.isEmpty else { throw Failure(message: selectionFailures.joined(separator: "; ")) }
-    print("22 native control checks passed; no VPN preferences or credentials used; ICMP uses loopback only")
+    print("23 native control checks passed; no VPN preferences or credentials used; ICMP uses loopback only")
   }
 
   // Claude Code as the Claude app installs it, claude-code/<version>/<build>/claude.app, gets a new
@@ -622,8 +623,9 @@ struct NativeControlChecks {
     print("PASS while connected with Include all networks, Direct TCP and other servers' proxy tests ask for a disconnect")
   }
 
-  // Two servers in separate subscriptions, kept in an in-memory keychain; the first is selected.
-  static func twoSubscriptions(_ directory: URL) async throws
+  // Two servers in separate subscriptions, kept in an in-memory keychain; the first is selected unless
+  // [selecting] is false.
+  static func twoSubscriptions(_ directory: URL, selecting: Bool = true) async throws
     -> (store: SubscriptionStore, selected: (subscription: String, node: String), other: (subscription: String, node: String)) {
     var values: [String: Data] = [:]
     func key(_ query: CFDictionary) -> String { (query as NSDictionary)[kSecAttrAccount] as! String }
@@ -654,8 +656,70 @@ struct NativeControlChecks {
     let selected = try await importNode("socks://127.0.0.1:1080#Selected")
     // A hidden import keeps its own group, so this server is in another subscription.
     let other = try await importNode("#hide-url: yes\nsocks://127.0.0.1:1081#Other")
-    try store.commitSelection(nodeID: selected.node)
+    if selecting { try store.commitSelection(nodeID: selected.node) }
     return (store, selected, other)
+  }
+
+  // A server's Xray JSON shows and takes a hand edit under the rules sharing follows, with the
+  // Windows and Linux codes. No server is selected: a selected one's new plan needs the core helper.
+  static func nodeConfigCheck(defaults: UserDefaults) async throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent("elarni-node-config-\(UUID())")
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let (store, local, hidden) = try await twoSubscriptions(directory, selecting: false)
+    try TunnelCommandCoordinator(defaults: defaults).persist(.disconnected)
+    let messenger = ControlMessenger()
+    let controller = TunnelMethodChannel(messenger: messenger, defaults: defaults, observesSystem: false,
+      makeSubscriptions: { store }, loadPreferences: { [] })
+    defer { withExtendedLifetime(controller) {} }
+    func shown() async throws -> String {
+      guard let config = try await messenger.call("nodeConfig", arguments: ["id": local.node])["config"] as? [String: Any],
+            config["outbounds"] is [[String: Any]] else { throw Failure(message: "nodeConfig did not return the stored Xray JSON") }
+      return String(decoding: try JSONSerialization.data(withJSONObject: config, options: [.sortedKeys]), as: UTF8.self)
+    }
+    let stored = try await shown()
+    guard stored.contains("1080") else { throw Failure(message: "the shown config is not the imported server's: \(stored)") }
+    for (method, arguments) in [("nodeConfig", ["id": hidden.node]),
+                                ("updateNodeConfig", ["nodeId": hidden.node, "content": stored])] {
+      do { _ = try await messenger.call(method, arguments: arguments); throw Failure(message: "\(method) ignored a provider that hides configs") }
+      catch let failure as Failure where failure.message == "\(method): sharing_disabled" {}
+    }
+    let ref = try store.outboundRef(nodeID: local.node), revision = try store.configurationRevision(nodeID: local.node)
+    // Two servers, a Telegram proxy and text that is no server are not one Xray server.
+    for content in ["socks://127.0.0.1:1090#One\nsocks://127.0.0.1:1091#Two",
+                    "tg://proxy?server=127.0.0.1&port=443&secret=0123456789abcdef0123456789abcdef", "not a server"] {
+      do {
+        _ = try await messenger.call("updateNodeConfig", arguments: ["nodeId": local.node, "content": content])
+        throw Failure(message: "an edit that is not one Xray server was saved: \(content)")
+      } catch let failure as Failure where failure.message == "updateNodeConfig: unsupported_profile" {}
+      guard try store.outboundRef(nodeID: local.node) == ref, try await shown() == stored else {
+        throw Failure(message: "a refused edit changed the server")
+      }
+    }
+    // An edit that changes nothing keeps the server's secret and revision.
+    _ = try await messenger.call("updateNodeConfig", arguments: ["nodeId": local.node, "content": stored])
+    guard try store.outboundRef(nodeID: local.node) == ref else { throw Failure(message: "an unchanged edit replaced the secret") }
+    let edit = stored.replacingOccurrences(of: "1080", with: "1090")
+    let reply = try await messenger.call("updateNodeConfig", arguments: ["nodeId": local.node, "content": edit])
+    let saved = try await shown()
+    let catalog = try JSONSerialization.jsonObject(with: Data(contentsOf: directory.appendingPathComponent("subscriptions-v1.json"))) as? [String: Any]
+    let persisted = (catalog?["subscriptions"] as? [[String: Any]])?.flatMap { $0["nodes"] as? [[String: Any]] ?? [] }
+      .first { $0["id"] as? String == local.node }
+    let newRef = try store.outboundRef(nodeID: local.node)
+    guard reply["subscriptions"] is [[String: Any]], saved.contains("1090"), !saved.contains("1080"),
+          newRef != ref, persisted?["outboundRef"] as? String == newRef,
+          try store.configurationRevision(nodeID: local.node) != revision else {
+      throw Failure(message: "a valid edit was not saved as the server's config with a new revision: \(saved)")
+    }
+    print("PASS a server's config shows and takes one Xray server; hidden providers and other edits are refused")
+
+    guard try await messenger.call("qrCode", arguments: ["text": "elarni-check"])["png"] is String else {
+      throw Failure(message: "qrCode returned no image")
+    }
+    do {
+      _ = try await messenger.call("saveFile", arguments: ["kind": "zip", "bytes": FlutterStandardTypedData(bytes: Data([1]))])
+      throw Failure(message: "saveFile accepted a kind the app never saves")
+    } catch let failure as Failure where failure.message == "saveFile: invalid_request" {}
+    print("PASS qrCode draws any text, and saveFile refuses an unknown kind before a panel opens")
   }
 
   // Recovery may list servers of any subscription, and a manual choice keeps them as backups.

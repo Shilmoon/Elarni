@@ -5755,6 +5755,48 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Licenses and notices'**
   String get licensesAndNotices;
+
+  /// No description provided for @cancelTests.
+  ///
+  /// In en, this message translates to:
+  /// **'Cancel tests'**
+  String get cancelTests;
+
+  /// No description provided for @refreshLists.
+  ///
+  /// In en, this message translates to:
+  /// **'Refresh lists'**
+  String get refreshLists;
+
+  /// No description provided for @saveToFile.
+  ///
+  /// In en, this message translates to:
+  /// **'Save to file…'**
+  String get saveToFile;
+
+  /// No description provided for @saveQrImage.
+  ///
+  /// In en, this message translates to:
+  /// **'Save QR image…'**
+  String get saveQrImage;
+
+  /// No description provided for @exportJson.
+  ///
+  /// In en, this message translates to:
+  /// **'Export JSON…'**
+  String get exportJson;
+
+  /// No description provided for @fileSaved.
+  ///
+  /// In en, this message translates to:
+  /// **'File saved.'**
+  String get fileSaved;
+
+  /// No description provided for @fileNotSaved.
+  ///
+  /// In en, this message translates to:
+  /// **'The file could not be saved. Choose a writable location and retry.'**
+  String get fileNotSaved;
 }
 
 class _AppLocalizationsDelegate

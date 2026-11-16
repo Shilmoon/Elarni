@@ -1790,5 +1790,12 @@
   "allLocations": "All locations",
   "shareRoutingProfile": "Share routing profile",
   "useLastSuccessfulServer": "Use last successful server",
-  "licensesAndNotices": "Licenses and notices"
+  "licensesAndNotices": "Licenses and notices",
+  "cancelTests": "Cancel tests",
+  "refreshLists": "Refresh lists",
+  "saveToFile": "Save to file…",
+  "saveQrImage": "Save QR image…",
+  "exportJson": "Export JSON…",
+  "fileSaved": "File saved.",
+  "fileNotSaved": "The file could not be saved. Choose a writable location and retry."
 }

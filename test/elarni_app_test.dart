@@ -754,6 +754,96 @@ void main() {
     );
 
     testWidgets(
+      'Cancel tests ends a bulk test and ignores its late results on ${platform.name}',
+      (tester) async {
+        final pending = List.generate(6, (_) => Completer<PingResult>());
+        final control = FakeTunnelControl()
+          ..snapshot = SubscriptionSnapshot(
+            subscriptions: [
+              SubscriptionGroup(
+                id: 'group',
+                name: 'Fixture',
+                status: 'ready',
+                nodes: [
+                  for (var i = 0; i < 6; i++)
+                    SubscriptionNode(
+                      id: '$i',
+                      name: 'Node $i',
+                      protocol: 'VLESS',
+                      transport: 'tcp',
+                      security: 'reality',
+                      selected: false,
+                      probeKey: 'shared.example',
+                    ),
+                ],
+              ),
+            ],
+          );
+        await tester.binding.setSurfaceSize(const Size(1200, 900));
+        addTearDown(() => tester.binding.setSurfaceSize(null));
+        await tester.pumpWidget(
+          ElarniApp(
+            tunnelControl: control,
+            windows: platform == TargetPlatform.windows,
+          ),
+        );
+        await tester.pumpAndSettle();
+        control.pingCalls.clear();
+        control.onPing = (id) => pending[int.parse(id)].future;
+        List<String> called() => [
+          for (final call in control.pingCalls) call.nodeId,
+        ];
+        PingResult passed(int i) => PingResult(
+          nodeId: '$i',
+          status: 'success',
+          latencyMs: 41,
+          timestamp: DateTime.now().millisecondsSinceEpoch / 1000,
+        );
+        await reveal(tester, find.byKey(const Key('ping-all')));
+        await tester.tap(find.byKey(const Key('ping-all')));
+        await tester.pump();
+        // Two probes share the SNI; the rest wait for them.
+        expect(called(), ['0', '1']);
+        expect(find.text('Testing…'), findsWidgets);
+        final cancel = find.byKey(const Key('ping-cancel'));
+        expect(find.byKey(const Key('ping-all')), findsNothing);
+        expect(tester.widget<IconButton>(cancel).tooltip, 'Cancel tests');
+        await tester.tap(cancel);
+        await tester.pump();
+        expect(find.text('Testing…'), findsNothing);
+        expect(cancel, findsNothing);
+        // A new test would run beside the two still out, so it waits for them.
+        IconButton testAll() =>
+            tester.widget<IconButton>(find.byKey(const Key('ping-all')));
+        expect(testAll().onPressed, isNull);
+        pending[0].complete(passed(0));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 16));
+        expect(called(), ['0', '1'], reason: 'nothing more is tested');
+        expect(find.text('41 ms'), findsNothing, reason: 'a late result');
+        expect(testAll().onPressed, isNull);
+        pending[1].complete(passed(1));
+        await tester.pumpAndSettle();
+        expect(called(), ['0', '1']);
+        expect(find.text('41 ms'), findsNothing);
+        expect(find.text('Unavailable'), findsNothing);
+        expect(find.textContaining('Tested '), findsNothing);
+        expect(testAll().onPressed, isNotNull);
+        // The next test runs from the start.
+        for (var i = 2; i < 6; i++) {
+          pending[i].complete(passed(i));
+        }
+        await tester.tap(find.byKey(const Key('ping-all')));
+        await tester.pumpAndSettle();
+        expect(called().toSet(), {'0', '1', '2', '3', '4', '5'});
+        expect(find.text('41 ms'), findsWidgets);
+        expect(tester.takeException(), isNull);
+        await tester.pumpWidget(const SizedBox());
+      },
+      variant: TargetPlatformVariant.only(platform),
+    );
+
+    testWidgets(
       'bulk ping limits concurrent work and gives queued nodes their own deadline on ${platform.name}',
       (tester) async {
         final pending = List.generate(34, (_) => Completer<PingResult>());
@@ -1281,12 +1371,9 @@ void main() {
         await tester.pump();
         expect(calls, ['a', 'b']);
         await tester.pump(const Duration(seconds: 6));
-        expect(
-          tester
-              .widget<IconButton>(find.byKey(const Key('ping-all')))
-              .onPressed,
-          isNull,
-        );
+        // Still running: the button cancels the test instead of starting one.
+        expect(find.byKey(const Key('ping-all')), findsNothing);
+        expect(find.byKey(const Key('ping-cancel')), findsOneWidget);
         await tester.pump(const Duration(seconds: 1));
         await tester.pumpAndSettle();
         expect(
@@ -2616,7 +2703,7 @@ void main() {
         elapsed: Duration.zero,
       );
       expect(shown(), isNull);
-      // A backend without these counters, such as the macOS packet tunnel.
+      // A backend without byte counters.
       await read({
         'backend': 'nativeTun2Proxy',
         'counters': {'packetsIn': 4, 'packetsOut': 2},
@@ -2655,6 +2742,42 @@ void main() {
       final disconnectedReads = control.metricsReads;
       await tester.pump(const Duration(seconds: 10));
       expect(control.metricsReads, disconnectedReads);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
+
+  testWidgets(
+    'Home rates the macOS packet tunnel counters, its bytes out as the download',
+    (tester) async {
+      var now = DateTime.utc(2026, 11, 16);
+      Map<String, Object?> counters(int bytesIn, int bytesOut) => {
+        'backend': 'nativeTun2Proxy',
+        'counters': {
+          'packetsIn': 1,
+          'bytesIn': bytesIn,
+          'packetsOut': 1,
+          'bytesOut': bytesOut,
+        },
+      };
+      var metrics = counters(0, 0);
+      final control = FakeTunnelControl()
+        ..phase = 'connected'
+        ..onMetrics = () => metrics;
+      await tester.binding.setSurfaceSize(const Size(1200, 900));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      await tester.pumpWidget(
+        ElarniApp(tunnelControl: control, clock: () => now),
+      );
+      await tester.pumpAndSettle();
+      final rates = find.byKey(const Key('traffic-rates'));
+      expect(rates, findsNothing);
+      now = now.add(const Duration(seconds: 2));
+      // Into the TUN device is the upload, out of it the download.
+      metrics = counters(1024, 8192);
+      await tester.pump(const Duration(seconds: 2));
+      await tester.pump();
+      expect(tester.widget<Text>(rates).data, '↓ 4.0 KB/s · ↑ 512 B/s');
       expect(tester.takeException(), isNull);
       await tester.pumpWidget(const SizedBox());
     },

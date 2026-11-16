@@ -15,7 +15,7 @@ extension TunnelMethodChannel {
     "selectNode", "refreshSubscription", "deleteSubscription", "deleteNode", "importClientProfiles", "selectProfileGroup", "setNodeIPPreference",
     "updateTunnelSettings", "updateInboundCredentials", "updateRoutingProfile",
     "assignRoutingProfile", "setRoutingProfileEnabled", "resetRoutingProfile", "deleteRoutingProfile",
-    "refreshRoutingGeofiles", "importRouting", "configureAutomation",
+    "refreshRoutingGeofiles", "importRouting", "configureAutomation", "updateNodeConfig", "refreshManagedLists",
   ]
 
   @MainActor

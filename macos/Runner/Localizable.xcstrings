@@ -235,12 +235,42 @@
         }
       }
     },
+    "Save shared text" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Сохранить текст для отправки"
+          }
+        }
+      }
+    },
     "Save the Elarni log" : {
       "localizations" : {
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Сохранить журнал Elarni"
+          }
+        }
+      }
+    },
+    "Save the QR image" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Сохранить изображение QR-кода"
+          }
+        }
+      }
+    },
+    "Save the routing profile" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Сохранить профиль маршрутизации"
           }
         }
       }

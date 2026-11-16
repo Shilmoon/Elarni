@@ -648,6 +648,10 @@ extension _HomePages on _ElarniHomeState {
                             child: Text(l10n.shareRoutingProfile),
                           ),
                           PopupMenuItem(
+                            value: 'export',
+                            child: Text(l10n.exportJson),
+                          ),
+                          PopupMenuItem(
                             value: 'duplicate',
                             child: Text(l10n.duplicate),
                           ),
@@ -672,6 +676,8 @@ extension _HomePages on _ElarniHomeState {
                               _editRouting(profile);
                             case 'share':
                               _shareRouting(profile);
+                            case 'export':
+                              _saveFile('json', utf8.encode(profile.json));
                             case 'refresh':
                               _runRouting(
                                 () => widget.tunnelControl
@@ -1298,9 +1304,9 @@ extension _HomePages on _ElarniHomeState {
                       trailing: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          // Only the Windows and Linux backends can show and replace a config.
+                          // The backend refuses what a provider hides and
+                          // configs that are not Xray JSON.
                           if (subscriptionView &&
-                              widget.desktopCore &&
                               node.isVPN &&
                               group.metadata['hideURL'] != true)
                             IconButton(
@@ -1344,7 +1350,10 @@ extension _HomePages on _ElarniHomeState {
                                 : l10n.openInTelegram,
                             child: TextButton(
                               key: ValueKey('ping:${node.id}'),
-                              onPressed: (_busy || node.isVPN && _pinging)
+                              onPressed:
+                                  (_busy ||
+                                      node.isVPN &&
+                                          (_pinging || _pingCancelled))
                                   ? null
                                   : node.isVPN
                                   ? () => _pingNode(node.id)
@@ -1782,29 +1791,38 @@ extension _HomePages on _ElarniHomeState {
     );
   }
 
-  Widget _pingAllButton({String? subscriptionId}) => IconButton(
-    key: subscriptionId == null
-        ? const Key('ping-all')
-        : ValueKey('subscription-ping-all:$subscriptionId'),
-    tooltip: _pinging
-        ? l10n.testing
-        : _pingProtocol == 'icmp'
-        ? l10n.useNodePingForIcmp
-        : subscriptionId == null
-        ? l10n.testAllNodes
-        : l10n.testSubscriptionNodes,
-    onPressed:
-        _pingControlsDisabled ||
-            _pingProtocol == 'icmp' ||
-            !_subscriptions.subscriptions.any(
-              (group) =>
-                  (subscriptionId == null || group.id == subscriptionId) &&
-                  group.nodes.any((node) => node.isVPN),
-            )
-        ? null
-        : () => _pingAllNodes(subscriptionId: subscriptionId),
-    icon: const Icon(CupertinoIcons.gauge, size: 20),
-  );
+  // A running test turns the button into one that cancels it.
+  Widget _pingAllButton({String? subscriptionId}) => _pinging
+      ? IconButton(
+          key: subscriptionId == null
+              ? const Key('ping-cancel')
+              : ValueKey('subscription-ping-cancel:$subscriptionId'),
+          tooltip: l10n.cancelTests,
+          onPressed: _busy ? null : _cancelPings,
+          icon: const Icon(CupertinoIcons.stop_fill, size: 20),
+        )
+      : IconButton(
+          key: subscriptionId == null
+              ? const Key('ping-all')
+              : ValueKey('subscription-ping-all:$subscriptionId'),
+          tooltip: _pingProtocol == 'icmp'
+              ? l10n.useNodePingForIcmp
+              : subscriptionId == null
+              ? l10n.testAllNodes
+              : l10n.testSubscriptionNodes,
+          onPressed:
+              _pingControlsDisabled ||
+                  _pingProtocol == 'icmp' ||
+                  !_subscriptions.subscriptions.any(
+                    (group) =>
+                        (subscriptionId == null ||
+                            group.id == subscriptionId) &&
+                        group.nodes.any((node) => node.isVPN),
+                  )
+              ? null
+              : () => _pingAllNodes(subscriptionId: subscriptionId),
+          icon: const Icon(CupertinoIcons.gauge, size: 20),
+        );
 
   Widget _subscriptionActions(
     SubscriptionGroup group,

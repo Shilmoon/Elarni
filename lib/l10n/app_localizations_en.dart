@@ -3340,4 +3340,26 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get licensesAndNotices => 'Licenses and notices';
+
+  @override
+  String get cancelTests => 'Cancel tests';
+
+  @override
+  String get refreshLists => 'Refresh lists';
+
+  @override
+  String get saveToFile => 'Save to file…';
+
+  @override
+  String get saveQrImage => 'Save QR image…';
+
+  @override
+  String get exportJson => 'Export JSON…';
+
+  @override
+  String get fileSaved => 'File saved.';
+
+  @override
+  String get fileNotSaved =>
+      'The file could not be saved. Choose a writable location and retry.';
 }

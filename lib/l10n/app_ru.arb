@@ -942,5 +942,12 @@
   "allLocations": "Все местоположения",
   "shareRoutingProfile": "Поделиться профилем маршрутизации",
   "useLastSuccessfulServer": "Последний успешный сервер",
-  "licensesAndNotices": "Лицензии и уведомления"
+  "licensesAndNotices": "Лицензии и уведомления",
+  "cancelTests": "Отменить проверки",
+  "refreshLists": "Обновить списки",
+  "saveToFile": "Сохранить в файл…",
+  "saveQrImage": "Сохранить QR-код…",
+  "exportJson": "Экспорт JSON…",
+  "fileSaved": "Файл сохранён.",
+  "fileNotSaved": "Не удалось сохранить файл. Выберите место, доступное для записи, и повторите."
 }

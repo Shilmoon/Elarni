@@ -313,6 +313,64 @@ void main() {
     expect(timers.where((timer) => timer.isActive), isEmpty);
   });
 
+  // The host picks the path; Dart writes the bytes, as it copies a recording.
+  test('a saved file gets its bytes at the picked path', () async {
+    final temporary = await Directory.systemTemp.createTemp('elarni-save-');
+    addTearDown(() => temporary.delete(recursive: true));
+    final target = File('${temporary.path}/elarni-qr.png');
+    final picks = <Object?>[];
+    String? picked = target.path;
+    final proxy = DesktopProxy(
+      corePath: 'unused-core',
+      domainPath: 'unused-domain',
+      catalogIO: (_, _) async => {
+        'revision': 'r',
+        'catalog': {'version': 1, 'committed': DesktopCatalog.empty()},
+      },
+      platformIO: (method, payload) async {
+        expect(method, 'pickSavePath');
+        picks.add(payload['kind']);
+        if (picked == null) throw desktopError('cancelled');
+        return {'path': picked};
+      },
+    );
+    addTearDown(proxy.dispose);
+    final bytes = Uint8List.fromList([0x89, 0x50, 0x4e, 0x47, 0, 255]);
+    expect(await proxy.control.saveFile('png', bytes), isTrue);
+    expect(await target.readAsBytes(), bytes);
+    // A cancelled panel writes nothing and is no failure.
+    picked = null;
+    expect(
+      await proxy.control.saveFile('json', Uint8List.fromList([1])),
+      isFalse,
+    );
+    expect(await target.readAsBytes(), bytes);
+    // A path that cannot be written is a failure.
+    picked = '${temporary.path}/missing/elarni-share.txt';
+    await expectLater(
+      proxy.control.saveFile('text', Uint8List.fromList([1])),
+      throwsA(
+        isA<PlatformException>().having(
+          (error) => error.code,
+          'code',
+          'save_failed',
+        ),
+      ),
+    );
+    // A kind the hosts do not name is refused before any panel opens.
+    await expectLater(
+      proxy.control.saveFile('zip', Uint8List.fromList([1])),
+      throwsA(
+        isA<PlatformException>().having(
+          (error) => error.code,
+          'code',
+          'invalid_request',
+        ),
+      ),
+    );
+    expect(picks, ['png', 'json', 'text']);
+  });
+
   // The old 256 TCP / 128 UDP defaults refused new TUN flows and DNS under
   // daily load. Loading raises them once; later choices survive reloads.
   test('loading a catalog raises old default session limits once', () async {

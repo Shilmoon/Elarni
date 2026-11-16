@@ -3387,4 +3387,26 @@ class AppLocalizationsRu extends AppLocalizations {
 
   @override
   String get licensesAndNotices => 'Лицензии и уведомления';
+
+  @override
+  String get cancelTests => 'Отменить проверки';
+
+  @override
+  String get refreshLists => 'Обновить списки';
+
+  @override
+  String get saveToFile => 'Сохранить в файл…';
+
+  @override
+  String get saveQrImage => 'Сохранить QR-код…';
+
+  @override
+  String get exportJson => 'Экспорт JSON…';
+
+  @override
+  String get fileSaved => 'Файл сохранён.';
+
+  @override
+  String get fileNotSaved =>
+      'Не удалось сохранить файл. Выберите место, доступное для записи, и повторите.';
 }

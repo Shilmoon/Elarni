@@ -412,12 +412,25 @@ extension _HomeController on _ElarniHomeState {
       if (mounted) {
         _set(() {
           _pingPending.remove(nodeId);
-          _pinging = false;
+          _pinging = _pingCancelled = false;
           if (exclusive) _busy = false;
         });
         _pingQueuedServers();
       }
     }
+  }
+
+  /// Ends the running test without asking the backend: its late results are
+  /// ignored, and no server is shown as being tested.
+  void _cancelPings() {
+    if (!_pinging || _busy) return;
+    _set(() {
+      _pingRun++;
+      _pinging = false;
+      _pingCancelled = true;
+      _pingPending.clear();
+      _pingQueued.clear();
+    });
   }
 
   // macOS refuses what its tunnel would answer itself while connected.
@@ -645,7 +658,7 @@ extension _HomeController on _ElarniHomeState {
       }
     } finally {
       if (mounted) {
-        _set(() => _pinging = false);
+        _set(() => _pinging = _pingCancelled = false);
         _pingQueuedServers();
       }
     }
@@ -782,11 +795,17 @@ extension _HomeController on _ElarniHomeState {
 
   /// Turns the traffic counters of two reads into rates. A missing counter,
   /// one that went down as after a restart of the core, or no time between
-  /// the reads gives no rate.
+  /// the reads gives no rate. The macOS tunnel counts packets as its TUN
+  /// device sees them: bytes out of it are the download, bytes into it the
+  /// upload.
   void _recordTraffic(Map<String, Object?> metrics) {
     final counters = metrics['counters'];
-    final down = counters is Map ? counters['downlinkBytes'] : null;
-    final up = counters is Map ? counters['uplinkBytes'] : null;
+    final down = counters is Map
+        ? counters['downlinkBytes'] ?? counters['bytesOut']
+        : null;
+    final up = counters is Map
+        ? counters['uplinkBytes'] ?? counters['bytesIn']
+        : null;
     if (!_ratesWanted || down is! num || up is! num) {
       _forgetTraffic();
       return;
