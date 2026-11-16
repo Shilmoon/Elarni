@@ -1125,6 +1125,16 @@
         }
       }
     },
+    "Connecting…" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Подключение…"
+          }
+        }
+      }
+    },
     "Connection" : {
       "localizations" : {
         "ru" : {
@@ -1825,6 +1835,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Двойной"
+          }
+        }
+      }
+    },
+    "Download %@/s, upload %@/s" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Скачивание: %1$@/с, отдача: %2$@/с"
           }
         }
       }
@@ -2617,6 +2637,26 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Скрыть %@?"
+          }
+        }
+      }
+    },
+    "Hide VPN icon" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Скрыть значок VPN"
+          }
+        }
+      }
+    },
+    "Hide VPN icon adds the route exclusions of the hide-icon workaround: it changes excluded network routes, not only the icon. Hiding the VPN icon is not verified." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "«Скрыть значок VPN» добавляет исключения маршрутов, которые использует обходной способ скрытия значка: меняются исключённые сетевые маршруты, а не только значок. Скрытие значка VPN не проверено."
           }
         }
       }
@@ -6873,6 +6913,16 @@
                 }
               }
             }
+          }
+        }
+      }
+    },
+    "↓ %@/s   ↑ %@/s" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "↓ %1$@/с   ↑ %2$@/с"
           }
         }
       }

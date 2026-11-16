@@ -205,6 +205,26 @@ struct ExitResult {
   }
 }
 
+/// Download and upload speed from two growing byte counters, sampled at times the caller supplies.
+struct TrafficRate: Equatable {
+  struct Speed: Equatable { let down: Double; let up: Double }
+  private struct Sample: Equatable { let down: UInt64; let up: UInt64; let time: TimeInterval }
+  private var last: Sample?
+  /// Bytes per second between the last two samples; nil until there are two.
+  private(set) var speed: Speed?
+
+  /// A counter that went back (the core restarted), a missing one or no time passed gives no speed.
+  mutating func record(down: UInt64?, up: UInt64?, at time: TimeInterval) {
+    guard let down, let up else { reset(); return }
+    defer { last = Sample(down: down, up: up, time: time) }
+    guard let previous = last, time > previous.time, down >= previous.down, up >= previous.up else { speed = nil; return }
+    let elapsed = time - previous.time
+    speed = Speed(down: Double(down - previous.down) / elapsed, up: Double(up - previous.up) / elapsed)
+  }
+
+  mutating func reset() { last = nil; speed = nil }
+}
+
 struct IOSPreferences: Codable, Equatable {
   var version = 1
   var theme = "system"
@@ -240,6 +260,8 @@ struct IOSTunnelSettings: Codable, Equatable {
   var trustedWiFiNetworks: [String]?
   var includeAllNetworks = false
   var enforceRoutes = false
+  /// The route exclusions of the hide-icon workaround; nil is off. Optional: older saved settings lack it.
+  var hideVPNIcon: Bool?
   var disconnectOnSleep = false
   var preferredIP = "ipv4"
   var profilePreferredIP = "inherit"

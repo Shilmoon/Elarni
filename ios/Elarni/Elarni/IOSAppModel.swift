@@ -31,6 +31,8 @@ final class IOSAppModel {
   private(set) var testingIDs = Set<String>()
   private(set) var probeQuarantined = false
   private(set) var networkInfo: [String: String] = [:]
+  /// Home's speed line, from the provider's tunnel byte counters while the app is open and connected.
+  private(set) var traffic = TrafficRate()
   var errorMessage: String?
   private(set) var recentIssues: [RecentIssue] = []
   var errorPresenters: [UUID] = []
@@ -48,6 +50,7 @@ final class IOSAppModel {
   @ObservationIgnored private var commands: TunnelCommandCoordinator
   @ObservationIgnored private let defaults: UserDefaults
   @ObservationIgnored private var maintenance: Task<Void, Never>?
+  @ObservationIgnored private var trafficTask: Task<Void, Never>?
   @ObservationIgnored private var probeTask: Task<Void, Never>?
   @ObservationIgnored private var foreground = false
   @ObservationIgnored private var recovery = AutomationPolicy()
@@ -102,7 +105,8 @@ final class IOSAppModel {
       directory = root
       preferences = try read(IOSPreferences.self, name: "ios-preferences.json") ?? IOSPreferences()
       recovery = AutomationPolicy(savedEpisode: try read(AutomationPolicy.Episode.self, name: "ios-recovery.json"))
-      settings = try read(IOSTunnelSettings.self, name: "ios-settings.json") ?? IOSTunnelSettings()
+      let savedSettings = try read(IOSTunnelSettings.self, name: "ios-settings.json")
+      settings = savedSettings ?? IOSTunnelSettings()
       try settings.validate()
       // The old 256 TCP / 128 UDP defaults refuse new flows, DNS queries first, under daily load.
       // Raise them once; a value the user picks afterwards is kept.
@@ -131,6 +135,15 @@ final class IOSAppModel {
 #endif
       let catalog = try SubscriptionStore(directory: root, routing: routing, secretAccess: access)
       store = catalog
+      // As on macOS: other local apps must not reach a fresh install's listeners without a login (v2rayNG #5457).
+      // Without a keychain the install keeps unauthenticated listeners rather than failing to open.
+      if savedSettings == nil, settings.inboundCredentialRef == nil {
+        let token = { (0..<16).map { _ in String(format: "%02x", UInt8.random(in: 0...255)) }.joined() }
+        if let reference = try? catalog.storeInboundCredentials(username: token(), password: token()) {
+          var next = settings; next.inboundCredentialRef = reference; next.inboundAuthEnabled = true
+          do { try write(next, name: "ios-settings.json"); settings = next } catch { catalog.removeInboundCredentials(ref: reference) }
+        }
+      }
       catalog.autoUpdateInterval = { [weak self] in Double(self?.preferences.autoUpdateHours ?? 4) * 3600 }
       catalog.previewContext = { [weak self] in
         guard let self else { return "" }
@@ -178,6 +191,7 @@ final class IOSAppModel {
   func setForeground(_ active: Bool) {
     foreground = active
     maintenance?.cancel(); maintenance = nil
+    trafficTask?.cancel(); trafficTask = nil; traffic.reset()
     guard active else {
       store?.cancelRefreshes(); store?.routing.cancelManagedRefreshes(); probeTask?.cancel()
       commands.invalidateAutomatic()
@@ -192,6 +206,24 @@ final class IOSAppModel {
         do { try await Task.sleep(for: .seconds(2)) } catch { break }
       }
     }
+    // Its own loop, whatever Monitoring shows: a long tick (a refresh, a health check) must not stall the speed.
+    trafficTask = Task { [weak self] in
+      guard let self else { return }
+      while !Task.isCancelled {
+        await self.sampleTraffic()
+        do { try await Task.sleep(for: .seconds(2)) } catch { break }
+      }
+    }
+  }
+
+  /// Down is what the tunnel hands back to iPhone, up what it takes from it, IP headers included.
+  private func sampleTraffic() async {
+    // Writes notify Home even when equal; a reset happens once per disconnect.
+    guard loaded, vpn.connected else { if traffic != TrafficRate() { traffic.reset() }; return }
+    try? await vpn.refreshProvider()
+    let counters = vpn.provider["counters"] as? [String: Any]
+    traffic.record(down: (counters?["bytesOut"] as? NSNumber)?.uint64Value, up: (counters?["bytesIn"] as? NSNumber)?.uint64Value,
+                   at: ProcessInfo.processInfo.systemUptime)
   }
 
   private func tick() async {
@@ -331,6 +363,8 @@ final class IOSAppModel {
     subscriptions = (snapshot["subscriptions"] as? [[String: Any]] ?? []).map(ServerSubscription.init(raw:))
     catalogRevision &+= 1
     selectedID = snapshot["selectedNodeId"] as? String
+    // At launch and after each catalog change: a new selection or a renamed server.
+    ConnectionWidgetStatus.publish(serverName: selected?.name)
     let routes = store.routing.snapshot()
     routingProfiles = (routes["profiles"] as? [[String: Any]] ?? []).map(RoutingProfile.init(raw:))
     assignments = routes["assignments"] as? [String: String] ?? [:]

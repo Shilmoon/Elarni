@@ -174,7 +174,7 @@ struct TunnelRuntimeSettings: Codable, Sendable, Equatable {
   func validate() throws {
 #if os(iOS)
     guard (perAppMode ?? "off") == "off", (perAppProcesses ?? []).isEmpty, (perAppTargets ?? [:]).isEmpty,
-          !xrayTunEnabled, !hideVPNIcon, memoryLimitMB == 0 else {
+          !xrayTunEnabled, memoryLimitMB == 0 else {
       throw TunnelPlanError.invalidBounds
     }
 #endif

@@ -159,6 +159,11 @@ struct HomeView: View {
               .font(.headline).frame(maxWidth: .infinity, minHeight: 44)
           }.buttonStyle(AppPrimaryButtonStyle()).frame(maxWidth: 300)
             .disabled(!model.loaded || (!model.vpn.active && !model.busy && model.selected == nil)).accessibilityIdentifier("connect")
+          if model.vpn.connected, let speed = model.traffic.speed {
+            let down = Self.perSecond(speed.down), up = Self.perSecond(speed.up)
+            Text("↓ \(down)/s   ↑ \(up)/s").font(.callout.monospacedDigit()).foregroundStyle(AppPalette.secondary)
+              .accessibilityLabel(Text("Download \(down)/s, upload \(up)/s")).accessibilityIdentifier("trafficSpeed")
+          }
           if model.busy { ProgressView().accessibilityLabel("Operation in progress") }
           // As on Android: stops tests and downloads, never the connection.
           if model.busy && model.vpn.connected { Button("Cancel") { model.cancelOperations() }.buttonStyle(.plain).frame(minHeight: 44) }
@@ -166,6 +171,15 @@ struct HomeView: View {
           .listRowBackground(Color.clear)
     }
   }
+  // The traffic formatter, from KB up so that an idle tunnel reads "0 KB" rather than "Zero KB".
+  private static let speedFormatter: ByteCountFormatter = {
+    let formatter = ByteCountFormatter()
+    formatter.countStyle = .binary
+    formatter.allowedUnits = [.useKB, .useMB, .useGB, .useTB]
+    formatter.allowsNonnumericFormatting = false
+    return formatter
+  }()
+  private static func perSecond(_ bytes: Double) -> String { speedFormatter.string(fromByteCount: Int64(min(bytes, 1e15).rounded())) }
   // Body passes are many; the grouping runs only when what it shows changes.
   private var serverList: ServerListCache {
     let order = model.preferences.serverOrder

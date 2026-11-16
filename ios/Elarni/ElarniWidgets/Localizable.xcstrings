@@ -1,6 +1,16 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "Connect" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Подключить"
+          }
+        }
+      }
+    },
     "Connected" : {
       "localizations" : {
         "ru" : {
@@ -11,12 +21,32 @@
         }
       }
     },
+    "Connecting…" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Подключение…"
+          }
+        }
+      }
+    },
     "Connects to the server selected in Elarni, or disconnects." : {
       "localizations" : {
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Подключается к серверу, выбранному в Elarni, или отключается."
+          }
+        }
+      }
+    },
+    "Disconnect" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Отключить"
           }
         }
       }
@@ -36,6 +66,26 @@
     },
     "Elarni VPN" : {
       "shouldTranslate" : false
+    },
+    "No server selected" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Сервер не выбран"
+          }
+        }
+      }
+    },
+    "Shows whether Elarni is connected and to which server." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Показывает, подключён ли Elarni и к какому серверу."
+          }
+        }
+      }
     }
   },
   "version" : "1.0"

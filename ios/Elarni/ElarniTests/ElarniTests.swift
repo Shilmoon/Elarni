@@ -270,6 +270,35 @@ final class ElarniTests: XCTestCase {
     XCTAssertThrowsError(try settings.runtime().validate())
   }
 
+  // Hide VPN icon reaches the plan the extension validates and its route exclusions; settings saved before it existed load with it off.
+  func testHideVPNIconReachesThePlanAndOlderSettingsLoadWithItOff() throws {
+    func network(_ settings: IOSTunnelSettings) throws -> NEPacketTunnelNetworkSettings {
+      let payload = try JSONEncoder().encode(TunnelPlan(schemaVersion: 1, secretRef: "fixture", socksPort: 10890, mtu: 1500,
+        dnsServers: ["198.18.0.1"], controlledRoutes: [], staticHosts: [:], outboundFormat: .xrayOutbound,
+        fallbackAction: .proxy, routingRevision: nil, routingDigest: nil, assetRevision: nil,
+        backend: .nativeTun2Proxy, settings: try settings.runtime()))
+      let plan = try TunnelPlanEnvelope(payload: payload, digest: Data(SHA256.hash(data: payload))).validatedPlan()
+      return try TunnelSettingsFactory.make(plan: plan, excludedEndpointAddresses: ["192.0.2.10"])
+    }
+    func hidesIcon(_ network: NEPacketTunnelNetworkSettings) -> [Bool] {
+      [network.ipv4Settings?.excludedRoutes?.contains { $0.destinationAddress == "0.0.0.0" && $0.destinationSubnetMask == "255.0.0.0" } == true,
+       network.ipv6Settings?.excludedRoutes?.contains { $0.destinationAddress == "::" && $0.destinationNetworkPrefixLength == 128 } == true]
+    }
+    var settings = IOSTunnelSettings()
+    XCTAssertFalse(try settings.runtime().hideVPNIcon)
+    XCTAssertEqual(hidesIcon(try network(settings)), [false, false])
+    settings.hideVPNIcon = true
+    try settings.validate()
+    XCTAssertTrue(try settings.runtime().hideVPNIcon)
+    XCTAssertEqual(hidesIcon(try network(settings)), [true, true], "the extension did not apply Hide VPN icon")
+    // Settings saved before the switch existed lack its key.
+    var json = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(IOSTunnelSettings())) as? [String: Any])
+    json.removeValue(forKey: "hideVPNIcon")
+    let old = try JSONDecoder().decode(IOSTunnelSettings.self, from: JSONSerialization.data(withJSONObject: json))
+    XCTAssertNil(old.hideVPNIcon)
+    XCTAssertFalse(try old.runtime().hideVPNIcon)
+  }
+
   func testChangedIPPreferenceRequiresProviderRestart() throws {
     func plan(_ settings: TunnelRuntimeSettings, secret: String) throws -> Data {
       try JSONEncoder().encode(TunnelPlan(schemaVersion: 1, secretRef: secret, socksPort: 10890, mtu: 1500,
@@ -296,6 +325,50 @@ final class ElarniTests: XCTestCase {
     tunnel.session.liveness = "ok"
     try await vpn.refreshProvider()
     XCTAssertEqual(vpn.stateLabel, "Connected")
+  }
+
+  // Home's speed line: the bytes between two samples over the time between them, none across a restarted core.
+  func testTrafficRateComesFromTwoSamplesAndStartsAgainAfterACounterReset() {
+    var rate = TrafficRate()
+    rate.record(down: 1_000, up: 500, at: 10)
+    XCTAssertNil(rate.speed, "one sample has no speed")
+    rate.record(down: 5_000_000, up: 620_500, at: 12)
+    XCTAssertEqual(rate.speed, TrafficRate.Speed(down: 2_499_500, up: 310_000))
+    // The core restarted, so its counters start again from zero.
+    rate.record(down: 100, up: 50, at: 14)
+    XCTAssertNil(rate.speed, "a counter that went back gave a speed")
+    rate.record(down: 4_100, up: 2_050, at: 16)
+    XCTAssertEqual(rate.speed, TrafficRate.Speed(down: 2_000, up: 1_000))
+    rate.record(down: nil, up: 3_000, at: 18)
+    XCTAssertNil(rate.speed, "a missing counter gave a speed")
+    rate.record(down: 5_000, up: 3_000, at: 20)
+    XCTAssertNil(rate.speed, "the sample before a missing counter still counted")
+    rate.record(down: 6_000, up: 4_000, at: 20)
+    XCTAssertNil(rate.speed, "no time passed, yet there was a speed")
+    rate.reset()
+    XCTAssertEqual(rate, TrafficRate())
+    rate.record(down: 7_000, up: 5_000, at: 22)
+    XCTAssertNil(rate.speed, "a disconnect kept the previous connection's sample")
+  }
+
+  // The widget reads the VPN as the Control Center toggle does and names the server the app selected.
+  func testConnectionWidgetShowsTheStateTheServerAndTheMatchingButton() async throws {
+    let statuses: [[NEVPNStatus]] = [[], [.disconnected, .connected], [.connecting], [.reasserting], [.disconnecting], [.invalid]]
+    XCTAssertEqual(statuses.map(ConnectionWidgetStatus.state), [.disconnected, .connected, .connecting, .connecting, .disconnected, .disconnected])
+    XCTAssertEqual(ConnectionWidgetStatus.presentation(state: .connected, server: "DE Berlin"),
+                   .init(status: "Connected", server: "DE Berlin", action: "Disconnect", connects: false))
+    XCTAssertEqual(ConnectionWidgetStatus.presentation(state: .connecting, server: "DE Berlin"),
+                   .init(status: "Connecting…", server: "DE Berlin", action: "Disconnect", connects: false))
+    XCTAssertEqual(ConnectionWidgetStatus.presentation(state: .disconnected, server: nil),
+                   .init(status: "Disconnected", server: "No server selected", action: "Connect", connects: true))
+    XCTAssertEqual(ConnectionWidgetStatus.presentation(state: .disconnected, server: "").server, "No server selected")
+    let model = IOSAppModel()
+    await model.start()
+    let group = try await importLocal(model, "socks://127.0.0.1:1080#Widget%20Server")
+    try await model.select(try XCTUnwrap(group.nodes.first))
+    XCTAssertEqual(ConnectionWidgetStatus.serverName, "Widget Server", "the widget names another server")
+    try await model.delete(group)
+    XCTAssertEqual(ConnectionWidgetStatus.serverName, model.selected?.name, "the widget names a deleted server")
   }
 
   // A full-profile override must not alter ordinary outbound preferences.
@@ -820,6 +893,49 @@ final class ElarniTests: XCTestCase {
     var off = IOSTunnelSettings(); off.onDemandEnabled = false
     XCTAssertFalse(try JSONDecoder().decode(IOSTunnelSettings.self, from: JSONEncoder().encode(off)).onDemandEnabled,
       "a saved choice to keep On Demand off was overridden")
+  }
+
+  // As on macOS: other local apps must not reach a fresh install's listeners without a login (v2rayNG #5457).
+  // Settings saved before keep their listeners as they were.
+  func testFreshInstallListenersRequireAGeneratedLogin() async throws {
+    let file = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
+      .appendingPathComponent("Elarni/ios-settings.json")
+    let saved = try? Data(contentsOf: file)
+    var generated: String?
+    defer {
+      if let saved { try? saved.write(to: file) } else { try? FileManager.default.removeItem(at: file) }
+      // The simulator's app-only Keychain, as the model uses it there.
+      if let generated {
+        SecItemDelete([kSecClass: kSecClassGenericPassword, kSecAttrService: "com.elarni.ios.endpoint", kSecAttrAccount: generated] as CFDictionary)
+      }
+    }
+    try? FileManager.default.removeItem(at: file)
+    let fresh = IOSAppModel()
+    await fresh.start()
+    XCTAssertNil(fresh.errorMessage)
+    XCTAssertTrue(fresh.settings.inboundAuthEnabled, "a fresh install's listeners take no login")
+    let ref = try XCTUnwrap(fresh.settings.inboundCredentialRef)
+    generated = ref
+    let runtime = try fresh.settings.runtime()
+    XCTAssertEqual(runtime.inboundAuthEnabled, true)
+    XCTAssertEqual(runtime.inboundCredentialRef, ref)
+    let outbound: [String: Any] = ["protocol": "socks", "settings": ["servers": [["address": "example.invalid", "port": 1080]]]]
+    let compiled = try fresh.compile(outbound, routes: nil, preference: nil, port: 10890)
+    let socks = try XCTUnwrap((compiled["inbounds"] as? [[String: Any]])?.first { $0["tag"] as? String == "elarni-socks" }?["settings"] as? [String: Any])
+    XCTAssertEqual(socks["auth"] as? String, "password")
+    let account = try XCTUnwrap((socks["accounts"] as? [[String: Any]])?.first)
+    XCTAssertTrue([account["user"], account["pass"]].allSatisfy { ($0 as? String)?.range(of: "^[0-9a-f]{32}$", options: .regularExpression) != nil },
+                  "a fresh install's generated login")
+    // The next start reads the saved login instead of making another.
+    let reopened = IOSAppModel()
+    await reopened.start()
+    XCTAssertEqual(reopened.settings, fresh.settings)
+    // Settings saved by an earlier version, here with open listeners.
+    let earlier = IOSTunnelSettings()
+    try JSONEncoder().encode(earlier).write(to: file)
+    let upgraded = IOSAppModel()
+    await upgraded.start()
+    XCTAssertEqual(upgraded.settings, earlier, "an upgraded install's listeners changed")
   }
 
   // The extension has about 50 MB and copies the route model several times, so a

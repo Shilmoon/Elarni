@@ -61,12 +61,16 @@ final class IOSVPNController {
   }
 
   private func updateStatus() {
-    let wasActive = active
+    let wasActive = active, wasStatus = status
     status = manager?.connection.status ?? .disconnected
     connectedAt = manager?.connection.connectedDate
     if !active { provider = [:] }
     // Control Center shows the toggle's last value until the app reloads it.
     if active != wasActive { ControlCenter.shared.reloadControls(ofKind: ConnectionControlIntent.kind) }
+    // The widget also tells connecting from connected.
+    if ConnectionWidgetStatus.state([status]) != ConnectionWidgetStatus.state([wasStatus]) {
+      WidgetCenter.shared.reloadTimelines(ofKind: ConnectionWidgetStatus.kind)
+    }
   }
 
   func persist(_ data: Data, settings: IOSTunnelSettings, allowOnDemand: Bool) async throws {
