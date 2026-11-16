@@ -723,41 +723,72 @@ extension _HomeEditors on _ElarniHomeState {
     }
   }
 
-  Future<void> _shareSubscription(String id) async {
+  /// Shows the share link of a subscription, or of one server, as a QR code
+  /// to scan and text to copy.
+  Future<void> _shareSubscription(String id, {bool subscription = true}) async {
     _set(() => _busy = true);
     try {
       final shared = await widget.tunnelControl.shareClient(
         id,
-        subscription: true,
+        subscription: subscription,
       );
       final text = shared['text'] as String;
       final png = shared['png'] is String
           ? base64Decode(shared['png']! as String)
           : null;
       if (!mounted) return;
-      await showDialog<void>(
+      await _showShared(
+        subscription ? l10n.shareSubscription : l10n.shareServer,
+        text,
+        [
+          if (png != null)
+            Image.memory(
+              png,
+              width: 384,
+              height: 384,
+              semanticLabel: l10n.connectionQrCode,
+            )
+          else
+            Text(l10n.configTooLargeForQr),
+          const SizedBox(height: 12),
+          Text(l10n.anyoneCanUseDetails),
+        ],
+      );
+    } on Object {
+      if (mounted) _set(() => _message = l10n.sharingUnavailable);
+    } finally {
+      if (mounted) _set(() => _busy = false);
+    }
+  }
+
+  /// Shows a routing profile's JSON to copy, the text Android and iOS share.
+  Future<void> _shareRouting(RoutingProfile profile) =>
+      _showShared(l10n.shareRoutingProfile, profile.json, [
+        Align(
+          alignment: AlignmentDirectional.centerStart,
+          child: Text(
+            profile.name,
+            style: Theme.of(context).textTheme.titleSmall,
+          ),
+        ),
+        const SizedBox(height: 8),
+        SelectableText(
+          profile.json,
+          key: const Key('shared-routing-json'),
+          style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
+        ),
+      ]);
+
+  /// The share dialog: [content] above Close and a button copying [text].
+  Future<void> _showShared(String title, String text, List<Widget> content) =>
+      showDialog<void>(
         context: context,
         builder: (context) => AlertDialog(
-          title: Text(l10n.shareSubscription),
+          title: Text(title),
           scrollable: true,
           content: SizedBox(
             width: 384,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                if (png != null)
-                  Image.memory(
-                    png,
-                    width: 384,
-                    height: 384,
-                    semanticLabel: l10n.connectionQrCode,
-                  )
-                else
-                  Text(l10n.configTooLargeForQr),
-                const SizedBox(height: 12),
-                Text(l10n.anyoneCanUseDetails),
-              ],
-            ),
+            child: Column(mainAxisSize: MainAxisSize.min, children: content),
           ),
           actions: [
             TextButton(
@@ -779,11 +810,52 @@ extension _HomeEditors on _ElarniHomeState {
           ],
         ),
       );
-    } on Object {
-      if (mounted) _set(() => _message = l10n.sharingUnavailable);
-    } finally {
-      if (mounted) _set(() => _busy = false);
-    }
+
+  /// Opens Flutter's license page, with the notices desktop packages ship.
+  void _openLicenses() {
+    registerShippedNotices();
+    final version = _systemInfo['appVersion'];
+    showLicensePage(
+      context: context,
+      applicationName: 'Elarni',
+      applicationVersion: version is String ? version : null,
+    );
+  }
+
+  /// Asks for one server's IP type, with the choices Settings offers for the
+  /// selected server.
+  Future<void> _chooseNodeIPPreference(SubscriptionNode node) async {
+    final current = node.ipPreference ?? 'default';
+    final choice = await showDialog<String>(
+      context: context,
+      builder: (context) => SimpleDialog(
+        title: Text(l10n.serverIpType),
+        children: [
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 24),
+            child: Text(ServerLocation.displayName(node.name)),
+          ),
+          const SizedBox(height: 8),
+          for (final (value, label) in [
+            ('default', l10n.useAppDefault),
+            ('automatic', l10n.automatic),
+            ('ipv4', 'IPv4'),
+            ('ipv6', 'IPv6'),
+          ])
+            ListTile(
+              key: ValueKey('server-ip-choice:$value'),
+              title: Text(label),
+              trailing: value == current
+                  ? const Icon(CupertinoIcons.checkmark_alt)
+                  : null,
+              selected: value == current,
+              onTap: () => Navigator.pop(context, value),
+            ),
+        ],
+      ),
+    );
+    if (!mounted || choice == null || choice == current || _busy) return;
+    await _setNodeIPPreference(node.id, choice == 'default' ? null : choice);
   }
 
   Future<void> _editSubscriptionFetch(SubscriptionGroup group) async {

@@ -113,6 +113,8 @@ class FakeTunnelControl implements TunnelControl {
   int routingReads = 0;
   Future<SubscriptionOperationResult> Function(String, String?)? onImport;
   final sharedIDs = <String>[];
+  // Whether each share asked for the subscription link or the server's.
+  final sharedSubscription = <bool>[];
   final savedFetchOptions = <Map<String, Object?>>[];
   final exportedPasswords = <String>[];
   final restoredPasswords = <String>[];
@@ -196,6 +198,7 @@ class FakeTunnelControl implements TunnelControl {
     bool subscription = false,
   }) async {
     sharedIDs.add(id);
+    sharedSubscription.add(subscription);
     return {
       'text': 'https://sub.example.com/test-vector',
       if (sharingPNG != null) 'png': sharingPNG,
@@ -338,10 +341,12 @@ class FakeTunnelControl implements TunnelControl {
     return onSettings?.call() ?? settings;
   }
 
+  /// What runtimeMetrics returns; nothing when null.
+  Map<String, Object?> Function()? onMetrics;
   @override
   Future<Map<String, Object?>> runtimeMetrics() async {
     metricsReads++;
-    return {};
+    return onMetrics?.call() ?? {};
   }
 
   /// The core's list: entries with a seq after the read's are returned.

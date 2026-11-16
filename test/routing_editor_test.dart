@@ -312,4 +312,239 @@ void main() {
     expect(find.text('https://8.8.8.8/dns-query'), findsOneWidget);
     expect(find.byType(ErrorWidget), findsNothing);
   });
+
+  Future<void> section(WidgetTester tester, String tab) async {
+    await tester.tap(find.widgetWithText(Tab, tab));
+    await tester.pumpAndSettle();
+  }
+
+  Future<void> tapShown(WidgetTester tester, Finder finder) async {
+    await tester.ensureVisible(finder);
+    await tester.pumpAndSettle();
+    await tester.tap(finder);
+    await tester.pumpAndSettle();
+  }
+
+  Future<void> choose(WidgetTester tester, String select, String label) async {
+    await tapShown(tester, find.byKey(ValueKey(select)));
+    await tester.tap(find.widgetWithText(MenuItemButton, label));
+    await tester.pumpAndSettle();
+  }
+
+  Future<void> type(WidgetTester tester, String key, String text) async {
+    final field = find.byKey(ValueKey(key));
+    await tester.ensureVisible(field);
+    await tester.pumpAndSettle();
+    await tester.enterText(field, text);
+    await tester.pumpAndSettle();
+  }
+
+  testWidgets(
+    'geofile URLs, managed domain lists and DNS hosts round-trip through a save',
+    (tester) async {
+      String? saved;
+      await openEditor(
+        tester,
+        profile()..addAll({
+          'GeoipUrl': 'https://old.example/geoip.dat',
+          'ManagedSources': [
+            {
+              'id': 'keep',
+              'url': 'https://lists.example/a.txt',
+              'destination': 'direct',
+              'matchMode': 'subdomains',
+            },
+            {
+              'id': 'drop',
+              'url': 'https://lists.example/old.txt',
+              'destination': 'block',
+              'matchMode': 'exact',
+            },
+          ],
+          'DnsHosts': {'a.example': '192.0.2.1'},
+        }),
+        (result) => saved = result,
+      );
+      await section(tester, 'Advanced');
+      // The decoder's alias shows in the field until the URL is changed.
+      expect(find.text('https://old.example/geoip.dat'), findsOneWidget);
+      await type(
+        tester,
+        'routing-field:Geoipurl',
+        'https://new.example/geoip.dat',
+      );
+      await type(
+        tester,
+        'routing-field:Geositeurl',
+        ' https://new.example/geosite.dat ',
+      );
+      await choose(tester, 'routing-source-destination:0', 'Proxy');
+      await tapShown(
+        tester,
+        find.byKey(const ValueKey('routing-source-remove:1')),
+      );
+      expect(find.text('https://lists.example/old.txt'), findsNothing);
+      await tapShown(tester, find.byKey(const Key('routing-source-add')));
+      await type(tester, 'routing-source-url:1', 'https://lists.example/b.txt');
+      await choose(tester, 'routing-source-matchMode:1', 'Exact domains');
+      await section(tester, 'DNS');
+      // A profile with hosts opens with them shown.
+      await type(tester, 'routing-host-address:0', '192.0.2.10');
+      await tapShown(tester, find.byKey(const Key('routing-host-add')));
+      await type(tester, 'routing-host:1', ' B.example ');
+      await type(tester, 'routing-host-address:1', '2001:db8::2');
+      await tester.tap(find.text('Validate and save'));
+      await tester.pumpAndSettle();
+      final result = jsonDecode(saved!) as Map;
+      expect(result['Geoipurl'], 'https://new.example/geoip.dat');
+      expect(result.containsKey('GeoipUrl'), isFalse);
+      expect(result['Geositeurl'], 'https://new.example/geosite.dat');
+      final sources = (result['ManagedSources'] as List).cast<Map>();
+      expect(sources, hasLength(2));
+      expect(sources.first, {
+        'id': 'keep',
+        'url': 'https://lists.example/a.txt',
+        'destination': 'proxy',
+        'matchMode': 'subdomains',
+      });
+      // A new list as Android adds one, with the URL and match chosen here.
+      expect(sources.last['id'], matches(RegExp(r'^[0-9a-f]{64}$')));
+      expect({...sources.last}..remove('id'), {
+        'url': 'https://lists.example/b.txt',
+        'destination': 'block',
+        'matchMode': 'exact',
+      });
+      expect(result['DnsHosts'], {
+        'a.example': '192.0.2.10',
+        'B.example': '2001:db8::2',
+      });
+    },
+  );
+
+  testWidgets('removing every list and host saves them empty', (tester) async {
+    String? saved;
+    await openEditor(
+      tester,
+      profile()..addAll({
+        'ManagedSources': [
+          {
+            'id': 'drop',
+            'url': 'https://lists.example/a.txt',
+            'destination': 'dns',
+            'matchMode': 'exact',
+          },
+        ],
+        'DnsHosts': {'a.example': '192.0.2.1'},
+      }),
+      (result) => saved = result,
+    );
+    await section(tester, 'Advanced');
+    await tapShown(
+      tester,
+      find.byKey(const ValueKey('routing-source-remove:0')),
+    );
+    await section(tester, 'DNS');
+    await tapShown(tester, find.byKey(const ValueKey('routing-host-remove:0')));
+    expect(find.byKey(const ValueKey('routing-host:0')), findsNothing);
+    await tester.tap(find.text('Validate and save'));
+    await tester.pumpAndSettle();
+    final result = jsonDecode(saved!) as Map;
+    expect(result['ManagedSources'], isEmpty);
+    expect(result['DnsHosts'], isEmpty);
+    expect(tester.takeException(), isNull);
+  });
+
+  for (final (name, host, address) in [
+    ('a repeated hostname in other case', 'A.EXAMPLE', '192.0.2.2'),
+    ('a blank hostname', ' ', '192.0.2.2'),
+    ('a blank address', 'b.example', ''),
+    ('an address that is not an IP', 'b.example', 'gateway.example'),
+    ('a network instead of an address', 'b.example', '192.0.2.0/24'),
+  ]) {
+    testWidgets('$name keeps the DNS hosts editor open', (tester) async {
+      String? saved;
+      await openEditor(
+        tester,
+        profile()..['DnsHosts'] = {'a.example': '192.0.2.1'},
+        (result) => saved = result,
+      );
+      await section(tester, 'DNS');
+      await tapShown(tester, find.byKey(const Key('routing-host-add')));
+      await type(tester, 'routing-host:1', host);
+      await type(tester, 'routing-host-address:1', address);
+      await tester.tap(find.text('Validate and save'));
+      await tester.pumpAndSettle();
+      expect(saved, isNull);
+      expect(
+        find.text(
+          'Enter a unique hostname and an IP address for each DNS host.',
+        ),
+        findsOneWidget,
+      );
+      expect(find.byType(RoutingEditor), findsOneWidget);
+    });
+  }
+
+  testWidgets(
+    'an untouched profile saves byte for byte, and gains no empty fields',
+    (tester) async {
+      // A profile already in the form a save writes, with the new fields set
+      // and keys this editor does not know.
+      final value = <String, Object?>{
+        'Name': 'Fixture',
+        'RemoteDNSType': 'DoU',
+        'RemoteDNSDomain': '',
+        'RemoteDNSIP': '1.1.1.1',
+        'DomesticDNSType': 'DoU',
+        'DomesticDNSDomain': '',
+        'DomesticDNSIP': '8.8.8.8',
+        'DirectSites': <String>[],
+        'DirectIp': <String>[],
+        'ProxySites': <String>[],
+        'ProxyIp': <String>[],
+        'BlockSites': <String>[],
+        'BlockIp': <String>[],
+        'FakeDNS': 'false',
+        'UseChunkFiles': 'true',
+        'Geoipurl': 'https://example.com/geoip.dat',
+        'GeositeUrl': 'https://example.com/geosite.dat',
+        'ManagedSources': [
+          {
+            'matchMode': 'exact',
+            'id': 'ads',
+            'url': 'https://lists.example/ads.txt',
+            'destination': 'block',
+          },
+        ],
+        'DnsHosts': {'router.lan': '192.168.1.1', 'Example.com': '2001:db8::1'},
+        'LastUpdated': {'geoip': 1700000000},
+      };
+      String? saved;
+      await openEditor(tester, value, (result) => saved = result);
+      // Every section built once, as when a user looks through them.
+      await section(tester, 'DNS');
+      await section(tester, 'Advanced');
+      await tester.tap(find.text('Validate and save'));
+      await tester.pumpAndSettle();
+      expect(saved, jsonEncode(value));
+
+      saved = null;
+      await openEditor(tester, profile(), (result) => saved = result);
+      await section(tester, 'DNS');
+      await section(tester, 'Advanced');
+      await tester.tap(find.text('Validate and save'));
+      await tester.pumpAndSettle();
+      final result = jsonDecode(saved!) as Map;
+      for (final key in [
+        'Geoipurl',
+        'Geositeurl',
+        'GeoipUrl',
+        'GeositeUrl',
+        'ManagedSources',
+        'DnsHosts',
+      ]) {
+        expect(result.containsKey(key), isFalse, reason: key);
+      }
+    },
+  );
 }

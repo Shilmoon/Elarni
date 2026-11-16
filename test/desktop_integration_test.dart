@@ -459,6 +459,75 @@ void main() {
     },
   );
 
+  test(
+    'server test settings survive relaunch, and an unreadable one falls back alone',
+    () async {
+      var stored = '{}';
+      messenger.setMockMethodCallHandler(channel, (call) async {
+        if (call.method == 'getPreferences') return stored;
+        stored = (call.arguments as Map)['json'] as String;
+        return null;
+      });
+      addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
+      final first = DesktopIntegration();
+      await first.load();
+      expect(
+        (first.pingProtocol, first.pingMethod, first.pingMode),
+        ('tcp', 'GET', 'default'),
+      );
+      expect(first.pingTimeout, 7);
+      expect(first.pingURL, DesktopIntegration.defaultPingURL);
+      expect(first.pingExpectedStatus, 204);
+      expect(first.pingExpectedBody, '');
+      await first.update(
+        pingProtocol: 'proxy',
+        pingMethod: 'HEAD',
+        pingMode: 'keepalive',
+        pingTimeout: 15,
+        pingURL: 'https://probe.example/204',
+        pingExpectedStatus: 200,
+        pingExpectedBody: 'ok',
+      );
+      first.dispose();
+      final reopened = DesktopIntegration();
+      await reopened.load();
+      expect(
+        (reopened.pingProtocol, reopened.pingMethod, reopened.pingMode),
+        ('proxy', 'HEAD', 'keepalive'),
+      );
+      expect(reopened.pingTimeout, 15);
+      expect(reopened.pingURL, 'https://probe.example/204');
+      expect(reopened.pingExpectedStatus, 200);
+      expect(reopened.pingExpectedBody, 'ok');
+      reopened.dispose();
+
+      // Each unreadable field takes its default; the rest and the other
+      // preferences still load.
+      stored = jsonEncode({
+        ...jsonDecode(stored) as Map,
+        'theme': 'dark',
+        'pingProtocol': 'udp',
+        'pingMethod': 7,
+        'pingTimeout': 8,
+        'pingExpectedStatus': 404,
+        'pingURL': 'x' * (DesktopIntegration.maxPingText + 1),
+      });
+      final mixed = DesktopIntegration();
+      await mixed.load();
+      expect(mixed.available, isTrue);
+      expect(mixed.error, isNull);
+      expect(mixed.theme, ThemeMode.dark);
+      expect(mixed.pingProtocol, 'tcp');
+      expect(mixed.pingMethod, 'GET');
+      expect(mixed.pingMode, 'keepalive');
+      expect(mixed.pingTimeout, 7);
+      expect(mixed.pingExpectedStatus, 204);
+      expect(mixed.pingURL, DesktopIntegration.defaultPingURL);
+      expect(mixed.pingExpectedBody, 'ok');
+      mixed.dispose();
+    },
+  );
+
   for (final windows in [false, true]) {
     // Native traffic checks cannot expose lost keyboard focus, unchecked saved
     // choices or a selector remaining interactive while preferences are saving.

@@ -160,6 +160,10 @@ extension _HomePages on _ElarniHomeState {
         )
         .where(
           (node) =>
+              _locationFilter == null || _locationKey(node) == _locationFilter,
+        )
+        .where(
+          (node) =>
               _search.isEmpty ||
               group.name.toLowerCase().contains(_search) ||
               '${node.name} ${ServerLocation.fromName(node.name)?.name ?? ''} ${node.protocol} ${node.transport} ${node.security}'
@@ -640,6 +644,10 @@ extension _HomePages on _ElarniHomeState {
                             child: Text(l10n.editJson),
                           ),
                           PopupMenuItem(
+                            value: 'share',
+                            child: Text(l10n.shareRoutingProfile),
+                          ),
+                          PopupMenuItem(
                             value: 'duplicate',
                             child: Text(l10n.duplicate),
                           ),
@@ -662,6 +670,8 @@ extension _HomePages on _ElarniHomeState {
                               _showRoutingDetails(profile.id);
                             case 'json':
                               _editRouting(profile);
+                            case 'share':
+                              _shareRouting(profile);
                             case 'refresh':
                               _runRouting(
                                 () => widget.tunnelControl
@@ -1024,6 +1034,26 @@ extension _HomePages on _ElarniHomeState {
               child: Text(label, style: const TextStyle(fontSize: 16)),
             ),
           ),
+          if (_stateAvailable && _state == TunnelState.connected)
+            ValueListenableBuilder(
+              valueListenable: _trafficRate,
+              builder: (context, rate, _) => rate == null
+                  ? const SizedBox.shrink()
+                  : Padding(
+                      padding: const EdgeInsets.only(top: 10),
+                      child: Text(
+                        l10n.trafficRates(
+                          byteSize(rate.down),
+                          byteSize(rate.up),
+                        ),
+                        key: const Key('traffic-rates'),
+                        style: TextStyle(
+                          color: scheme.onSurfaceVariant,
+                          fontFeatures: const [FontFeature.tabularFigures()],
+                        ),
+                      ),
+                    ),
+            ),
           if (group != null) ...[
             const SizedBox(height: 24),
             SubscriptionSummary(
@@ -1086,6 +1116,11 @@ extension _HomePages on _ElarniHomeState {
         ),
         items: [
           PopupMenuItem(value: 'rename', child: Text(l10n.renameServer)),
+          // A provider that hides its link hides its servers' links too.
+          if (group.metadata['hideURL'] != true)
+            PopupMenuItem(value: 'share', child: Text(l10n.shareServer)),
+          if (node.isVPN)
+            PopupMenuItem(value: 'ip', child: Text(l10n.serverIpType)),
           if (node.isVPN)
             PopupMenuItem(value: 'exit', child: Text(l10n.checkExit)),
           if (!node.selected && group.nodes.length > 1)
@@ -1097,6 +1132,9 @@ extension _HomePages on _ElarniHomeState {
       );
       if (!mounted || _busy) return;
       if (action == 'rename') await _renameNode(node);
+      if (action == 'share')
+        await _shareSubscription(node.id, subscription: false);
+      if (action == 'ip') await _chooseNodeIPPreference(node);
       if (action == 'exit') await _checkExit(node);
       if (action == 'delete') await _deleteNode(node, group);
     }
@@ -1586,7 +1624,9 @@ extension _HomePages on _ElarniHomeState {
           .where(
             (group) =>
                 _displayNodes(group).isNotEmpty ||
-                (_nodeFilter == 'all' && _search.isEmpty),
+                (_nodeFilter == 'all' &&
+                    _search.isEmpty &&
+                    _locationFilter == null),
           )
           .toList();
       if (groups.isEmpty)
@@ -1607,6 +1647,7 @@ extension _HomePages on _ElarniHomeState {
                     _search = '';
                     _nodeSearch.clear();
                     _nodeFilter = 'all';
+                    _locationFilter = null;
                   }),
                   child: Text(l10n.showAllServers),
                 ),
@@ -2237,6 +2278,112 @@ extension _HomePages on _ElarniHomeState {
     );
   }
 
+  /// The country a server's name names, or 'other' for none.
+  static String _locationKey(SubscriptionNode node) =>
+      ServerLocation.fromName(node.name)?.code ?? 'other';
+
+  /// The countries of all servers by name, with servers without one last.
+  List<String> _serverLocations() {
+    final codes = {
+      for (final group in _subscriptions.subscriptions)
+        for (final node in group.nodes) _locationKey(node),
+    }.toList();
+    String name(String code) => ServerLocation.fromCode(code)?.name ?? code;
+    return codes..sort((a, b) {
+      if (a == 'other') return 1;
+      if (b == 'other') return -1;
+      return name(a).compareTo(name(b));
+    });
+  }
+
+  /// The server Home last connected through, as iOS offers it: one whose
+  /// configuration has not changed since, other than the selected one.
+  SubscriptionNode? get _lastSuccessfulNode {
+    SubscriptionNode? last;
+    for (final group in _subscriptions.subscriptions) {
+      for (final node in group.nodes) {
+        final at = node.lastSuccessAt;
+        if (at != null &&
+            node.lastSuccessCurrent &&
+            node.isVPN &&
+            (last == null || at > last.lastSuccessAt!))
+          last = node;
+      }
+    }
+    return last == null || last.id == _subscriptions.selectedNodeId
+        ? null
+        : last;
+  }
+
+  Widget _serverSortMenu() => PopupMenuButton<String>(
+    key: const Key('server-sort'),
+    tooltip: l10n.sortServers,
+    enabled: !widget.desktop.saving,
+    icon: const Icon(CupertinoIcons.arrow_up_arrow_down, size: 20),
+    onSelected: (value) {
+      // The menu was built from the preferences of the moment it opened.
+      if (!widget.desktop.available || widget.desktop.saving) return;
+      if (value == 'favoritesFirst') {
+        _saveDesktop(favoritesFirst: !widget.desktop.favoritesFirst);
+      } else if (value != widget.desktop.sort) {
+        _saveDesktop(sort: value);
+      }
+    },
+    itemBuilder: (context) => [
+      // The orders Settings > General offers.
+      for (final (value, label) in [
+        ('provider', l10n.providerOrder),
+        ('alphabet', l10n.alphabetical),
+        ('latency', l10n.lowestLatency),
+      ])
+        CheckedPopupMenuItem(
+          value: value,
+          checked: widget.desktop.sort == value,
+          child: Text(label),
+        ),
+      const PopupMenuDivider(),
+      CheckedPopupMenuItem(
+        value: 'favoritesFirst',
+        checked: widget.desktop.favoritesFirst,
+        child: Text(l10n.favoritesFirst),
+      ),
+    ],
+  );
+
+  Widget _serverLocationMenu() => PopupMenuButton<String>(
+    key: const Key('server-location'),
+    tooltip: l10n.serverLocation,
+    icon: const Icon(CupertinoIcons.globe, size: 20),
+    onSelected: (value) =>
+        _set(() => _locationFilter = value == 'all' ? null : value),
+    // Built when the menu opens: it reads every server's name.
+    itemBuilder: (context) => [
+      CheckedPopupMenuItem(
+        value: 'all',
+        checked: _locationFilter == null,
+        child: Text(l10n.allLocations),
+      ),
+      const PopupMenuDivider(),
+      for (final code in _serverLocations())
+        CheckedPopupMenuItem(
+          key: ValueKey('server-location:$code'),
+          value: code,
+          checked: _locationFilter == code,
+          child: Row(
+            children: [
+              LocationFlag(location: ServerLocation.fromCode(code)),
+              const SizedBox(width: 10),
+              Flexible(
+                child: Text(
+                  ServerLocation.fromCode(code)?.name ?? l10n.otherLocations,
+                ),
+              ),
+            ],
+          ),
+        ),
+    ],
+  );
+
   Widget _serverHeader() => Padding(
     padding: const EdgeInsets.fromLTRB(20, 20, 20, 12),
     child: Column(
@@ -2250,6 +2397,8 @@ extension _HomePages on _ElarniHomeState {
                 style: Theme.of(context).textTheme.titleLarge,
               ),
             ),
+            if (widget.desktop.available) _serverSortMenu(),
+            _serverLocationMenu(),
           ],
         ),
         const SizedBox(height: 16),
@@ -2266,6 +2415,18 @@ extension _HomePages on _ElarniHomeState {
                 label: Text(entry.value),
                 selected: _nodeFilter == entry.key,
                 onSelected: (_) => _set(() => _nodeFilter = entry.key),
+              ),
+            if (_locationFilter case final location?)
+              InputChip(
+                key: const Key('server-location-chip'),
+                avatar: LocationFlag(
+                  location: ServerLocation.fromCode(location),
+                ),
+                label: Text(
+                  ServerLocation.fromCode(location)?.name ??
+                      l10n.otherLocations,
+                ),
+                onDeleted: () => _set(() => _locationFilter = null),
               ),
           ],
         ),
@@ -2288,6 +2449,21 @@ extension _HomePages on _ElarniHomeState {
             _pingAllButton(),
           ],
         ),
+        if (_lastSuccessfulNode case final last?)
+          Padding(
+            padding: const EdgeInsets.only(top: 8),
+            child: Tooltip(
+              message: ServerLocation.displayName(last.name),
+              child: TextButton.icon(
+                key: const Key('use-last-successful'),
+                onPressed: _profileEditsDisabled
+                    ? null
+                    : () => _selectNode(last.id),
+                icon: const Icon(CupertinoIcons.clock, size: 18),
+                label: Text(l10n.useLastSuccessfulServer),
+              ),
+            ),
+          ),
       ],
     ),
   );

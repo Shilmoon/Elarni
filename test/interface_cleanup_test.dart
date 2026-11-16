@@ -367,6 +367,56 @@ void main() {
     );
 
     // Windows and Linux report a provider's profile as 'provider', macOS as 'subscription'.
+    testWidgets(
+      'Share routing profile shows and copies the profile JSON ($windows)',
+      (tester) async {
+        final copied = <String>[];
+        final messenger = tester.binding.defaultBinaryMessenger;
+        messenger.setMockMethodCallHandler(SystemChannels.platform, (
+          call,
+        ) async {
+          if (call.method == 'Clipboard.setData')
+            copied.add((call.arguments as Map)['text'] as String);
+          return null;
+        });
+        addTearDown(
+          () =>
+              messenger.setMockMethodCallHandler(SystemChannels.platform, null),
+        );
+        final control = FakeTunnelControl()..routingSnapshot = routingFixture;
+        await mount(tester, control);
+        await tester.tap(find.byKey(const Key('nav-routing')));
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(const ValueKey('routing-actions:route')));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Share routing profile'));
+        await tester.pumpAndSettle();
+        final json = routingFixture.profiles.single.json;
+        final dialog = find.byType(AlertDialog);
+        expect(
+          find.descendant(of: dialog, matching: find.text('Everyday routing')),
+          findsOneWidget,
+        );
+        expect(
+          tester
+              .widget<SelectableText>(
+                find.byKey(const Key('shared-routing-json')),
+              )
+              .data,
+          json,
+        );
+        await tester.tap(find.widgetWithText(TextButton, 'Copy'));
+        await tester.pumpAndSettle();
+        // The same text Android and iOS share: the profile as JSON.
+        expect(copied, [json]);
+        expect(jsonDecode(copied.single), isA<Map>());
+        expect(dialog, findsNothing);
+        expect(control.routingActions, isEmpty);
+        expect(tester.takeException(), isNull);
+        await tester.pumpWidget(const SizedBox());
+      },
+    );
+
     testWidgets('a provider routing profile can be reset ($windows)', (
       tester,
     ) async {

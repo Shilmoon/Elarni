@@ -108,6 +108,22 @@ class FailedRefreshControl extends NoticeControl {
   }
 }
 
+/// Holds each refresh until the test completes its gate.
+class GatedRefreshControl extends NoticeControl {
+  final gates = <Completer<void>>[];
+  @override
+  Future<SubscriptionOperationResult> refreshSubscription(
+    String id, {
+    String? challenge,
+    String? format,
+  }) async {
+    final gate = Completer<void>();
+    gates.add(gate);
+    await gate.future;
+    return super.refreshSubscription(id, challenge: challenge, format: format);
+  }
+}
+
 class MetricsControl extends NoticeControl {
   int packets = 0;
   int stateReads = 0;
@@ -1103,4 +1119,220 @@ void main() {
       },
     );
   }
+
+  testWidgets(
+    'Refresh all refreshes each subscription in turn and goes on past a failure',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1280, 900));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final failing = FailedRefreshControl()..snapshot = countryFixture();
+      await tester.pumpWidget(ElarniApp(tunnelControl: failing));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('nav-subscriptions')));
+      await tester.pumpAndSettle();
+      final button = find.byKey(const Key('refresh-all-subscriptions'));
+      expect(find.byTooltip('Refresh all subscriptions'), findsOneWidget);
+      await tester.tap(button);
+      await tester.pumpAndSettle();
+      // boVPN's failure does not keep Travel from refreshing.
+      expect(failing.refreshes, ['daily', 'travel']);
+      expect(tester.widget<IconButton>(button).onPressed, isNotNull);
+      await tester.pumpWidget(const SizedBox());
+
+      final control = GatedRefreshControl()..snapshot = countryFixture();
+      await tester.pumpWidget(ElarniApp(tunnelControl: control));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('nav-subscriptions')));
+      await tester.pumpAndSettle();
+      await tester.tap(button);
+      await tester.pump();
+      expect(control.gates, hasLength(1));
+      expect(tester.widget<IconButton>(button).onPressed, isNull);
+      control.gates.single.complete();
+      await tester.pump();
+      await tester.pump();
+      // The next one starts only after the first has finished.
+      expect(control.refreshes, ['daily']);
+      expect(control.gates, hasLength(2));
+      expect(tester.widget<IconButton>(button).onPressed, isNull);
+      control.gates.last.complete();
+      await tester.pumpAndSettle();
+      expect(control.refreshes, ['daily', 'travel']);
+      expect(tester.widget<IconButton>(button).onPressed, isNotNull);
+      await tester.pumpWidget(const SizedBox());
+
+      // Subscriptions without a link have nothing to refresh.
+      final local = NoticeControl()
+        ..snapshot = SubscriptionSnapshot(
+          selectedNodeId: 'de',
+          subscriptions: [
+            SubscriptionGroup(
+              id: 'local',
+              name: 'My servers',
+              status: 'ready',
+              isLocal: true,
+              nodes: [server('de', '🇩🇪 Frankfurt', 'VLESS', selected: true)],
+            ),
+          ],
+        );
+      await tester.pumpWidget(ElarniApp(tunnelControl: local));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('nav-subscriptions')));
+      await tester.pumpAndSettle();
+      expect(button, findsNothing);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
+
+  testWidgets(
+    'a chosen location narrows Home until it is removed or its servers are gone',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1280, 1200));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final control = NoticeControl()..snapshot = countryFixture();
+      await tester.pumpWidget(ElarniApp(tunnelControl: control));
+      await tester.pumpAndSettle();
+      Finder country(String id) => find.byKey(ValueKey('country:$id::all'));
+      final chip = find.byKey(const Key('server-location-chip'));
+      const all = ['daily:DE', 'daily:NL', 'daily:other', 'travel:NL'];
+      for (final id in all) {
+        expect(country(id), findsOneWidget);
+      }
+      Future<void> choose(String code) async {
+        await tester.tap(find.byKey(const Key('server-location')));
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(ValueKey('server-location:$code')));
+        await tester.pumpAndSettle();
+      }
+
+      await tester.tap(find.byKey(const Key('server-location')));
+      await tester.pumpAndSettle();
+      // Every server's country by name, then the servers without one.
+      double top(String code) =>
+          tester.getTopLeft(find.byKey(ValueKey('server-location:$code'))).dy;
+      expect(find.text('All locations'), findsOneWidget);
+      expect(top('DE'), lessThan(top('NL')));
+      expect(top('NL'), lessThan(top('other')));
+      expect(
+        find.descendant(
+          of: find.byKey(const ValueKey('server-location:other')),
+          matching: find.text('Other locations'),
+        ),
+        findsOneWidget,
+      );
+      await tester.tapAt(Offset.zero);
+      await tester.pumpAndSettle();
+
+      await choose('NL');
+      expect(chip, findsOneWidget);
+      expect(
+        find.descendant(of: chip, matching: find.text('Netherlands')),
+        findsOneWidget,
+      );
+      expect(country('daily:NL'), findsOneWidget);
+      expect(country('travel:NL'), findsOneWidget);
+      expect(country('daily:DE'), findsNothing);
+      expect(country('daily:other'), findsNothing);
+      await tester.tap(
+        find.descendant(of: chip, matching: find.byTooltip('Delete')),
+      );
+      await tester.pumpAndSettle();
+      expect(chip, findsNothing);
+      for (final id in all) {
+        expect(country(id), findsOneWidget);
+      }
+
+      // A subscription without servers there is left out.
+      await choose('DE');
+      expect(country('daily:DE'), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('server-subscription:travel')),
+        findsNothing,
+      );
+      expect(country('daily:NL'), findsNothing);
+      // The country's servers go away, and so does the choice.
+      final fixture = countryFixture();
+      control.snapshot = SubscriptionSnapshot(
+        selectedNodeId: 'nl-vless',
+        subscriptions: [
+          SubscriptionGroup(
+            id: 'daily',
+            name: 'boVPN',
+            status: 'ready',
+            nodes: [
+              for (final node in fixture.subscriptions.first.nodes)
+                if (node.id != 'de') node,
+            ],
+          ),
+          fixture.subscriptions.last,
+        ],
+      );
+      control.importListener!(null);
+      await tester.pumpAndSettle();
+      expect(chip, findsNothing);
+      expect(country('daily:NL'), findsOneWidget);
+      expect(country('travel:NL'), findsOneWidget);
+      expect(control.selectedIDs, isEmpty);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
+
+  testWidgets('the sort menu saves the server order and favorites first', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1280, 900));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final sort = find.byKey(const Key('server-sort'));
+    // Without the desktop preferences there is nowhere to keep the order.
+    await tester.pumpWidget(
+      ElarniApp(tunnelControl: NoticeControl()..snapshot = countryFixture()),
+    );
+    await tester.pumpAndSettle();
+    expect(sort, findsNothing);
+    await tester.pumpWidget(const SizedBox());
+
+    var stored = '{}';
+    final messenger = tester.binding.defaultBinaryMessenger;
+    messenger.setMockMethodCallHandler(DesktopIntegration.channel, (
+      call,
+    ) async {
+      if (call.method == 'getPreferences') return stored;
+      if (call.method == 'setPreferences') {
+        stored = (call.arguments as Map)['json'] as String;
+      }
+      return null;
+    });
+    addTearDown(
+      () =>
+          messenger.setMockMethodCallHandler(DesktopIntegration.channel, null),
+    );
+    await tester.pumpWidget(
+      ElarniApp(tunnelControl: NoticeControl()..snapshot = countryFixture()),
+    );
+    await tester.pumpAndSettle();
+    expect(find.byTooltip('Sort'), findsOneWidget);
+    await tester.tap(sort);
+    await tester.pumpAndSettle();
+    Finder item(String label) =>
+        find.widgetWithText(CheckedPopupMenuItem<String>, label);
+    bool checked(String label) =>
+        tester.widget<CheckedPopupMenuItem<String>>(item(label)).checked;
+    expect(checked('Provider order'), isTrue);
+    expect(checked('Alphabetical'), isFalse);
+    expect(checked('Favorites first'), isTrue);
+    await tester.tap(item('Alphabetical'));
+    await tester.pumpAndSettle();
+    expect(jsonDecode(stored)['sort'], 'alphabet');
+    await tester.tap(sort);
+    await tester.pumpAndSettle();
+    expect(checked('Alphabetical'), isTrue);
+    await tester.tap(item('Favorites first'));
+    await tester.pumpAndSettle();
+    expect(jsonDecode(stored)['favoritesFirst'], isFalse);
+    expect(jsonDecode(stored)['sort'], 'alphabet');
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox());
+  });
 }

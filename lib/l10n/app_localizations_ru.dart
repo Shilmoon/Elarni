@@ -3295,4 +3295,96 @@ class AppLocalizationsRu extends AppLocalizations {
   String perAppConnectionsRestart(String apps) {
     return 'Перезапустите $apps: их подключения, открытые до подключения Elarni, идут мимо правил приложений, пока они не переподключатся.';
   }
+
+  @override
+  String trafficRates(String download, String upload) {
+    return '↓ $download/с · ↑ $upload/с';
+  }
+
+  @override
+  String kilobytesValue(String value) {
+    return '$value КБ';
+  }
+
+  @override
+  String bytesValue(String value) {
+    return '$value Б';
+  }
+
+  @override
+  String get geoipUrl => 'Адрес GeoIP';
+
+  @override
+  String get geositeUrl => 'Адрес GeoSite';
+
+  @override
+  String get managedDomainLists => 'Управляемые списки доменов';
+
+  @override
+  String get managedDomainListsHelp =>
+      'Используйте надёжный публичный HTTPS-источник: по одному домену на строку, файл hosts или поддерживаемые правила доменов. Список для DNS выбирает домены для прямого DNS. Адреса из частных сетей отклоняются.';
+
+  @override
+  String get listUrl => 'Адрес списка';
+
+  @override
+  String get useDomainsFor => 'Использовать домены для';
+
+  @override
+  String get managedMatch => 'Совпадение';
+
+  @override
+  String get exactDomains => 'Точные домены';
+
+  @override
+  String get includeSubdomains => 'С поддоменами';
+
+  @override
+  String get removeList => 'Удалить список';
+
+  @override
+  String get addDomainList => 'Добавить список доменов';
+
+  @override
+  String get staticDnsHosts => 'Статические DNS-хосты';
+
+  @override
+  String get hostname => 'Имя хоста';
+
+  @override
+  String get ipv4OrIpv6Address => 'Адрес IPv4 или IPv6';
+
+  @override
+  String get removeHost => 'Удалить хост';
+
+  @override
+  String get addDnsHost => 'Добавить DNS-хост';
+
+  @override
+  String get dnsHostsInvalid =>
+      'Укажите для каждого DNS-хоста уникальное имя и IP-адрес.';
+
+  @override
+  String get shareServer => 'Поделиться сервером';
+
+  @override
+  String get refreshAllSubscriptions => 'Обновить все подписки';
+
+  @override
+  String get sortServers => 'Сортировка';
+
+  @override
+  String get serverLocation => 'Местоположение';
+
+  @override
+  String get allLocations => 'Все местоположения';
+
+  @override
+  String get shareRoutingProfile => 'Поделиться профилем маршрутизации';
+
+  @override
+  String get useLastSuccessfulServer => 'Последний успешный сервер';
+
+  @override
+  String get licensesAndNotices => 'Лицензии и уведомления';
 }

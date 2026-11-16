@@ -28,6 +28,35 @@ part 'elarni_app_pages.dart';
 /// flipped in a row make one save.
 const settingsAutoApplyDelay = Duration(seconds: 1);
 
+/// A byte count as Android words it: 1024-based, with one decimal from
+/// kilobytes up.
+String byteSize(num bytes) {
+  const kilobyte = 1024.0,
+      megabyte = kilobyte * 1024,
+      gigabyte = megabyte * 1024;
+  if (bytes >= gigabyte)
+    return l10n.gigabytesValue((bytes / gigabyte).toStringAsFixed(1));
+  if (bytes >= megabyte)
+    return l10n.megabytesValue((bytes / megabyte).toStringAsFixed(1));
+  if (bytes >= kilobyte)
+    return l10n.kilobytesValue((bytes / kilobyte).toStringAsFixed(1));
+  return l10n.bytesValue('${bytes.round()}');
+}
+
+bool _noticesRegistered = false;
+
+/// Adds the third-party notices desktop packages ship beside the app to
+/// Flutter's license page, once.
+void registerShippedNotices() {
+  if (_noticesRegistered) return;
+  _noticesRegistered = true;
+  LicenseRegistry.addLicense(() async* {
+    yield LicenseEntryWithLineBreaks(const [
+      'Elarni',
+    ], await rootBundle.loadString('THIRD_PARTY_NOTICES'));
+  });
+}
+
 bool _sameJson(Object? a, Object? b) {
   try {
     return jsonEncode(a) == jsonEncode(b);
@@ -95,6 +124,7 @@ class ElarniApp extends StatefulWidget {
     this.linux = false,
     this.onDispose,
     this.navigatorKey,
+    this.clock,
   });
 
   final TunnelControl? tunnelControl;
@@ -107,6 +137,9 @@ class ElarniApp extends StatefulWidget {
       : 'macOS';
   final Future<void> Function()? onDispose;
   final GlobalKey<NavigatorState>? navigatorKey;
+
+  /// Times the traffic rates on Home; tests pass their own.
+  final DateTime Function()? clock;
 
   @override
   State<ElarniApp> createState() => _ElarniAppState();
@@ -159,6 +192,7 @@ class _ElarniAppState extends State<ElarniApp> {
         linux: widget.linux,
         onDispose: widget.onDispose,
         desktop: desktop,
+        clock: widget.clock,
       ),
     );
   }
@@ -178,6 +212,7 @@ class ElarniHome extends StatefulWidget {
     this.windows = false,
     this.linux = false,
     this.onDispose,
+    this.clock,
     super.key,
   });
 
@@ -192,6 +227,9 @@ class ElarniHome extends StatefulWidget {
       : 'macOS';
   final Future<void> Function()? onDispose;
 
+  /// Times the traffic rates; [DateTime.now] when null.
+  final DateTime Function()? clock;
+
   @override
   State<ElarniHome> createState() => _ElarniHomeState();
 }
@@ -200,7 +238,7 @@ class _ElarniHomeState extends State<ElarniHome> {
   final _editorSaving = ValueNotifier<bool>(false);
   final TextEditingController _nodeSearch = TextEditingController();
   final TextEditingController _pingURL = TextEditingController(
-    text: 'https://www.gstatic.com/generate_204',
+    text: DesktopIntegration.defaultPingURL,
   );
   final TextEditingController _pingExpectedStatus = TextEditingController(
     text: '204',
@@ -244,13 +282,24 @@ class _ElarniHomeState extends State<ElarniHome> {
 
   /// The failure code of each subscription whose last refresh in this session failed.
   final Map<String, String> _failedRefreshes = <String, String>{};
+  bool _refreshingAll = false;
   bool _pinging = false;
   int _pingRun = 0;
   String _pingProtocol = 'tcp';
   String _pingMethod = 'GET';
   String _pingMode = 'default';
   int _pingTimeout = 7;
+  // The test settings come from the desktop preferences once they load, and
+  // go back to them after each change.
+  bool _pingRestored = false, _pingUnsaved = false;
+  Timer? _pingSaveTimer;
   Timer? _monitorTimer;
+  // The last traffic counters read while connected, and the rates in bytes
+  // per second the two latest reads gave.
+  ({num down, num up, DateTime at})? _trafficSample;
+  // Only the rate line listens, so a new rate does not rebuild Home.
+  final _trafficRate = ValueNotifier<({double down, double up})?>(null);
+  AppLifecycleListener? _lifecycle;
   Timer? _localStateTimer;
   Timer? _routeToggleTimer;
   // Bumped when a tab change is refused, so the tab bar shows the open tab again.
@@ -302,6 +351,9 @@ class _ElarniHomeState extends State<ElarniHome> {
   // Loaded when a subscription's details open; the HTTP host is part of the ID.
   final Map<String, Future<String>> _deviceIDs = {};
   String _nodeFilter = 'all';
+  // The country Home's server list is narrowed to, for this session: a
+  // country code, 'other' for servers without one, or null for all.
+  String? _locationFilter;
   String? _healthRevision;
   DesktopPage _page = DesktopPage.home;
   String? _expandedSubscription;
@@ -336,6 +388,14 @@ class _ElarniHomeState extends State<ElarniHome> {
       if (action == 'connect' && _canConnect) unawaited(_connect());
       if (action == 'disconnect' && _canDisconnect) unawaited(_disconnect());
     };
+    widget.desktop.addListener(_restorePingSettings);
+    _adoptPingSettings();
+    // The rates are read only while the window is shown.
+    _lifecycle = AppLifecycleListener(
+      onStateChange: (_) {
+        if (mounted) _followMonitoring();
+      },
+    );
     widget.tunnelControl.setImportListener((error) {
       if (!mounted) return;
       if (error != null)
@@ -370,6 +430,10 @@ class _ElarniHomeState extends State<ElarniHome> {
   @override
   void dispose() {
     widget.desktop.onAction = null;
+    widget.desktop.removeListener(_restorePingSettings);
+    _lifecycle?.dispose();
+    _trafficRate.dispose();
+    _pingSaveTimer?.cancel();
     _editorSaving.dispose();
     _nodeSearch.dispose();
     widget.tunnelControl.setImportListener(null);
@@ -397,6 +461,69 @@ class _ElarniHomeState extends State<ElarniHome> {
     _troubleshootRefresh?.call(() {});
   }
 
+  // An instance method, so removeListener finds the listener addListener got.
+  void _restorePingSettings() {
+    if (mounted && _adoptPingSettings()) setState(() {});
+  }
+
+  /// Takes the stored test settings once the desktop preferences load; a
+  /// change made before then is saved over them instead.
+  bool _adoptPingSettings() {
+    final desktop = widget.desktop;
+    if (_pingRestored || !desktop.available) return false;
+    _pingRestored = true;
+    if (_pingUnsaved) {
+      _savePingSettings();
+      return false;
+    }
+    _pingProtocol = desktop.pingProtocol;
+    _pingMethod = desktop.pingMethod;
+    _pingMode = desktop.pingMode;
+    _pingTimeout = desktop.pingTimeout;
+    _pingURL.text = desktop.pingURL;
+    _pingExpectedStatus.text = '${desktop.pingExpectedStatus}';
+    _pingExpectedBody.text = desktop.pingExpectedBody;
+    return true;
+  }
+
+  /// Saves the test settings a second after the last change, so typing a
+  /// URL writes the preferences once.
+  void _savePingSettings() {
+    _pingUnsaved = true;
+    _pingSaveTimer?.cancel();
+    _pingSaveTimer = Timer(
+      settingsAutoApplyDelay,
+      () => unawaited(_writePingSettings()),
+    );
+  }
+
+  Future<void> _writePingSettings() async {
+    final desktop = widget.desktop;
+    // Before the preferences load, loading them saves this change.
+    if (!mounted || !_pingUnsaved || !desktop.available) return;
+    if (desktop.saving) {
+      _savePingSettings();
+      return;
+    }
+    _pingUnsaved = false;
+    String? text(String value) =>
+        value.length <= DesktopIntegration.maxPingText ? value : null;
+    try {
+      await desktop.update(
+        pingProtocol: _pingProtocol,
+        pingMethod: _pingMethod,
+        pingMode: _pingMode,
+        pingTimeout: _pingTimeout,
+        pingURL: text(_pingURL.text.trim()),
+        pingExpectedStatus: _expectedStatus,
+        pingExpectedBody: text(_pingExpectedBody.text),
+      );
+    } on Object {
+      // The desktop integration reports preferences it could not save; the
+      // settings stay in effect for this session.
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     _displayNodesMemo.clear();
@@ -404,12 +531,14 @@ class _ElarniHomeState extends State<ElarniHome> {
     // one, so [appLocale] follows the Localizations scope, rebuilding with it.
     appLocale = Localizations.localeOf(context);
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted)
-        widget.desktop.status(
-          _noTraffic ? 'connected, no traffic' : _state.name,
-          canConnect: _canConnect,
-          canDisconnect: _canDisconnect,
-        );
+      if (!mounted) return;
+      widget.desktop.status(
+        _noTraffic ? 'connected, no traffic' : _state.name,
+        canConnect: _canConnect,
+        canDisconnect: _canDisconnect,
+      );
+      // Every change of the connection state rebuilds; the counter reads follow it.
+      _followMonitoring();
     });
     final counters = Map<String, Object?>.from(
       _metrics['counters'] as Map? ?? const <String, Object?>{},
@@ -1320,6 +1449,12 @@ class _ElarniHomeState extends State<ElarniHome> {
             title: Text(l10n.versions),
             subtitle: Text(versions.join(' · ')),
           ),
+        ListTile(
+          key: const Key('licenses'),
+          title: Text(l10n.licensesAndNotices),
+          trailing: const Icon(CupertinoIcons.chevron_right),
+          onTap: _openLicenses,
+        ),
         if (_systemError != null) ListTile(subtitle: Text(_systemError!)),
         Padding(
           padding: const EdgeInsets.all(16),
@@ -1391,7 +1526,10 @@ class _ElarniHomeState extends State<ElarniHome> {
               ],
               onChanged: _pingControlsDisabled
                   ? null
-                  : (value) => setState(() => _pingProtocol = value!),
+                  : (value) {
+                      setState(() => _pingProtocol = value!);
+                      _savePingSettings();
+                    },
             ),
             const SizedBox(height: 12),
             if (const {'proxy', 'activeProxy'}.contains(_pingProtocol)) ...[
@@ -1407,7 +1545,10 @@ class _ElarniHomeState extends State<ElarniHome> {
                     _pingControlsDisabled ||
                         !const {'proxy', 'activeProxy'}.contains(_pingProtocol)
                     ? null
-                    : (value) => setState(() => _pingMethod = value!),
+                    : (value) {
+                        setState(() => _pingMethod = value!);
+                        _savePingSettings();
+                      },
               ),
               const SizedBox(height: 12),
               ElarniSelect<String>(
@@ -1432,7 +1573,10 @@ class _ElarniHomeState extends State<ElarniHome> {
                     _pingControlsDisabled ||
                         !const {'proxy', 'activeProxy'}.contains(_pingProtocol)
                     ? null
-                    : (value) => setState(() => _pingMode = value!),
+                    : (value) {
+                        setState(() => _pingMode = value!);
+                        _savePingSettings();
+                      },
               ),
               const SizedBox(height: 12),
             ],
@@ -1440,7 +1584,7 @@ class _ElarniHomeState extends State<ElarniHome> {
               isExpanded: true,
               label: l10n.timeout,
               value: _pingTimeout,
-              items: <int>[5, 7, 9, 12, 15]
+              items: DesktopIntegration.pingTimeouts
                   .map(
                     (value) => DropdownMenuItem<int>(
                       value: value,
@@ -1450,7 +1594,10 @@ class _ElarniHomeState extends State<ElarniHome> {
                   .toList(growable: false),
               onChanged: _pingControlsDisabled
                   ? null
-                  : (value) => setState(() => _pingTimeout = value!),
+                  : (value) {
+                      setState(() => _pingTimeout = value!);
+                      _savePingSettings();
+                    },
             ),
           ],
         ),
@@ -1460,6 +1607,7 @@ class _ElarniHomeState extends State<ElarniHome> {
             key: const Key('ping-url'),
             controller: _pingURL,
             enabled: !_pingControlsDisabled,
+            onChanged: (_) => _savePingSettings(),
             decoration: InputDecoration(
               labelText: l10n.testUrl,
               hintText: 'https://www.gstatic.com/generate_204',
@@ -1470,6 +1618,7 @@ class _ElarniHomeState extends State<ElarniHome> {
             key: const Key('ping-expected-status'),
             controller: _pingExpectedStatus,
             enabled: !_pingControlsDisabled,
+            onChanged: (_) => _savePingSettings(),
             keyboardType: TextInputType.number,
             decoration: InputDecoration(labelText: l10n.expectedHttpStatus),
           ),
@@ -1477,6 +1626,7 @@ class _ElarniHomeState extends State<ElarniHome> {
           TextField(
             controller: _pingExpectedBody,
             enabled: !_pingControlsDisabled,
+            onChanged: (_) => _savePingSettings(),
             decoration: InputDecoration(
               labelText: l10n.expectedResponseBody,
               helperText: l10n.expectedBodyHelp,
@@ -1619,6 +1769,19 @@ class _ElarniHomeState extends State<ElarniHome> {
                     for (final group in _subscriptions.subscriptions)
                       _subscriptionCard(group),
                   ],
+                  action:
+                      _subscriptions.subscriptions.any(
+                        (group) => !group.isLocal,
+                      )
+                      ? IconButton(
+                          key: const Key('refresh-all-subscriptions'),
+                          tooltip: l10n.refreshAllSubscriptions,
+                          onPressed: _busy || _refreshingAll
+                              ? null
+                              : _refreshAllSubscriptions,
+                          icon: const Icon(CupertinoIcons.arrow_clockwise),
+                        )
+                      : null,
                 ),
                 DesktopPage.home => _homeContent(
                   memorySummary,

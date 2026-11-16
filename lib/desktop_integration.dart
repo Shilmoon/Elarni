@@ -22,6 +22,17 @@ final class DesktopIntegration extends ChangeNotifier {
     'system',
     for (final locale in AppLocalizations.supportedLocales) locale.languageCode,
   ];
+
+  /// The choices Settings > Server tests offers; a stored value outside them
+  /// is replaced by the default.
+  static const pingProtocols = ['proxy', 'activeProxy', 'tcp', 'icmp'],
+      pingMethods = ['GET', 'HEAD'],
+      pingModes = ['default', 'double', 'keepalive'],
+      pingTimeouts = [5, 7, 9, 12, 15];
+  static const defaultPingURL = 'https://www.gstatic.com/generate_204';
+
+  /// The longest test URL and expected body kept; the host stores 32 KB in all.
+  static const maxPingText = 2048;
   ThemeMode theme = ThemeMode.system;
   // 'system' or the language code of one of the app's locales.
   String language = 'system';
@@ -33,6 +44,10 @@ final class DesktopIntegration extends ChangeNotifier {
   bool loginWarningDismissed = false;
   // An empty feed keeps the update check off; Not now stores the version it hid.
   String updateFeedURL = '', dismissedUpdate = '';
+  // The latency test, as Settings > Server tests last left it.
+  String pingProtocol = 'tcp', pingMethod = 'GET', pingMode = 'default';
+  int pingTimeout = 7, pingExpectedStatus = 204;
+  String pingURL = defaultPingURL, pingExpectedBody = '';
   AvailableUpdate? availableUpdate;
 
   /// The last check of this feed and version, and whether it read the feed.
@@ -108,6 +123,27 @@ final class DesktopIntegration extends ChangeNotifier {
       loginWarningDismissed = value['loginWarningDismissed'] == true;
       updateFeedURL = nextFeed;
       dismissedUpdate = nextDismissed;
+      // Test settings an older or another version left unreadable keep their
+      // defaults; they do not make the other preferences unusable.
+      T choice<T>(String key, List<T> choices, T fallback) =>
+          switch (value[key]) {
+            final T stored when choices.contains(stored) => stored,
+            _ => fallback,
+          };
+      String text(String key, String fallback) => switch (value[key]) {
+        final String stored when stored.length <= maxPingText => stored,
+        _ => fallback,
+      };
+      pingProtocol = choice('pingProtocol', pingProtocols, 'tcp');
+      pingMethod = choice('pingMethod', pingMethods, 'GET');
+      pingMode = choice('pingMode', pingModes, 'default');
+      pingTimeout = choice('pingTimeout', pingTimeouts, 7);
+      pingExpectedStatus = switch (value['pingExpectedStatus']) {
+        final int status when status >= 200 && status <= 299 => status,
+        _ => 204,
+      };
+      pingURL = text('pingURL', defaultPingURL);
+      pingExpectedBody = text('pingExpectedBody', '');
       available = true;
     } on MissingPluginException {
       // Native desktop integration is absent in the headless widget host.
@@ -131,6 +167,13 @@ final class DesktopIntegration extends ChangeNotifier {
     bool? loginWarningDismissed,
     String? updateFeedURL,
     String? dismissedUpdate,
+    String? pingProtocol,
+    String? pingMethod,
+    String? pingMode,
+    int? pingTimeout,
+    String? pingURL,
+    int? pingExpectedStatus,
+    String? pingExpectedBody,
   }) async {
     if (_closed || saving || !available)
       throw StateError('Desktop preferences unavailable');
@@ -163,6 +206,13 @@ final class DesktopIntegration extends ChangeNotifier {
             loginWarningDismissed ?? this.loginWarningDismissed,
         'updateFeedURL': updateFeedURL ?? this.updateFeedURL,
         'dismissedUpdate': dismissedUpdate ?? this.dismissedUpdate,
+        'pingProtocol': pingProtocol ?? this.pingProtocol,
+        'pingMethod': pingMethod ?? this.pingMethod,
+        'pingMode': pingMode ?? this.pingMode,
+        'pingTimeout': pingTimeout ?? this.pingTimeout,
+        'pingURL': pingURL ?? this.pingURL,
+        'pingExpectedStatus': pingExpectedStatus ?? this.pingExpectedStatus,
+        'pingExpectedBody': pingExpectedBody ?? this.pingExpectedBody,
       };
       await channel.invokeMethod<void>('setPreferences', {
         'json': jsonEncode(next),
@@ -180,6 +230,13 @@ final class DesktopIntegration extends ChangeNotifier {
       this.loginWarningDismissed =
           loginWarningDismissed ?? this.loginWarningDismissed;
       this.dismissedUpdate = dismissedUpdate ?? this.dismissedUpdate;
+      this.pingProtocol = pingProtocol ?? this.pingProtocol;
+      this.pingMethod = pingMethod ?? this.pingMethod;
+      this.pingMode = pingMode ?? this.pingMode;
+      this.pingTimeout = pingTimeout ?? this.pingTimeout;
+      this.pingURL = pingURL ?? this.pingURL;
+      this.pingExpectedStatus = pingExpectedStatus ?? this.pingExpectedStatus;
+      this.pingExpectedBody = pingExpectedBody ?? this.pingExpectedBody;
       if (updateFeedURL != null) {
         // Saving the feed, even unchanged, checks it again now.
         this.updateFeedURL = updateFeedURL;

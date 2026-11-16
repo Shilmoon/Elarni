@@ -739,17 +739,69 @@ extension _HomeController on _ElarniHomeState {
     }
   }
 
+  /// Whether Home shows the traffic rates: connected, with the window shown.
+  /// A shown window that lost the focus still counts; a hidden or minimized
+  /// one does not.
+  bool get _ratesWanted =>
+      _stateAvailable &&
+      _state == TunnelState.connected &&
+      switch (WidgetsBinding.instance.lifecycleState) {
+        null || AppLifecycleState.resumed || AppLifecycleState.inactive => true,
+        _ => false,
+      };
+
   void _configureMonitoring() {
     _monitorTimer?.cancel();
-    if (!_settings.monitoringEnabled) {
+    _monitorTimer = null;
+    if (!_ratesWanted) _forgetTraffic();
+    if (!_settings.monitoringEnabled)
       _set(() => _metrics = const <String, Object?>{});
-      return;
-    }
+    if (!_settings.monitoringEnabled && !_ratesWanted) return;
     _refreshMetrics();
     _monitorTimer = Timer.periodic(
       const Duration(seconds: 2),
       (_) => _refreshMetrics(),
     );
+  }
+
+  /// Starts or stops the counter reads when the connection or the window
+  /// changes whether the rates are shown.
+  void _followMonitoring() {
+    final wanted = _settings.monitoringEnabled || _ratesWanted;
+    if (wanted != (_monitorTimer != null)) {
+      _configureMonitoring();
+    } else if (!_ratesWanted) {
+      _forgetTraffic();
+    }
+  }
+
+  void _forgetTraffic() {
+    _trafficSample = null;
+    _trafficRate.value = null;
+  }
+
+  /// Turns the traffic counters of two reads into rates. A missing counter,
+  /// one that went down as after a restart of the core, or no time between
+  /// the reads gives no rate.
+  void _recordTraffic(Map<String, Object?> metrics) {
+    final counters = metrics['counters'];
+    final down = counters is Map ? counters['downlinkBytes'] : null;
+    final up = counters is Map ? counters['uplinkBytes'] : null;
+    if (!_ratesWanted || down is! num || up is! num) {
+      _forgetTraffic();
+      return;
+    }
+    final at = (widget.clock ?? DateTime.now)();
+    final last = _trafficSample;
+    _trafficSample = (down: down, up: up, at: at);
+    final seconds = last == null
+        ? 0
+        : at.difference(last.at).inMicroseconds /
+              Duration.microsecondsPerSecond;
+    _trafficRate.value =
+        last != null && seconds > 0 && down >= last.down && up >= last.up
+        ? (down: (down - last.down) / seconds, up: (up - last.up) / seconds)
+        : null;
   }
 
   Future<void> _refreshMetrics() async {
@@ -763,7 +815,9 @@ extension _HomeController on _ElarniHomeState {
     } finally {
       _metricsLoading = false;
     }
-    if (!mounted || !_settings.monitoringEnabled) return;
+    if (!mounted) return;
+    _recordTraffic(value);
+    if (!_settings.monitoringEnabled) return;
     if (!mapEquals(_metrics['counters'] as Map?, value['counters'] as Map?) ||
         !mapEquals(
           {..._metrics}..remove('counters'),
@@ -918,6 +972,15 @@ extension _HomeController on _ElarniHomeState {
           (group.lastSuccessfulFetch ?? 0) > (fetched[id] ?? 0);
     });
     _subscriptions = value;
+    // The chosen country stays only while a server is in it.
+    final location = _locationFilter;
+    if (location != null &&
+        !value.subscriptions.any(
+          (group) => group.nodes.any(
+            (node) => _HomePages._locationKey(node) == location,
+          ),
+        ))
+      _locationFilter = null;
     if (_healthRevision != _selectedNode?.revision) {
       _healthRun++;
       _health = 'unknown';
@@ -1016,6 +1079,28 @@ extension _HomeController on _ElarniHomeState {
       }
     } finally {
       if (mounted) _set(() => _busy = false);
+    }
+  }
+
+  /// Refreshes each subscription that has a URL, one after another; one that
+  /// fails keeps its notice and the rest still refresh.
+  Future<void> _refreshAllSubscriptions() async {
+    if (_busy || _refreshingAll) return;
+    _set(() => _refreshingAll = true);
+    try {
+      final ids = [
+        for (final group in _subscriptions.subscriptions)
+          if (!group.isLocal) group.id,
+      ];
+      for (final id in ids) {
+        // Another operation took over, or the subscription was deleted.
+        if (!mounted || _busy) return;
+        if (!_subscriptions.subscriptions.any((group) => group.id == id))
+          continue;
+        await _refreshSubscription(id);
+      }
+    } finally {
+      if (mounted) _set(() => _refreshingAll = false);
     }
   }
 

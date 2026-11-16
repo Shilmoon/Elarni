@@ -1738,5 +1738,57 @@
         "type": "String"
       }
     }
-  }
+  },
+  "trafficRates": "↓ {download}/s · ↑ {upload}/s",
+  "@trafficRates": {
+    "placeholders": {
+      "download": {
+        "type": "String"
+      },
+      "upload": {
+        "type": "String"
+      }
+    }
+  },
+  "kilobytesValue": "{value} KB",
+  "@kilobytesValue": {
+    "placeholders": {
+      "value": {
+        "type": "String"
+      }
+    }
+  },
+  "bytesValue": "{value} B",
+  "@bytesValue": {
+    "placeholders": {
+      "value": {
+        "type": "String"
+      }
+    }
+  },
+  "geoipUrl": "GeoIP URL",
+  "geositeUrl": "GeoSite URL",
+  "managedDomainLists": "Managed domain lists",
+  "managedDomainListsHelp": "Use a trusted public HTTPS source with one domain per line, a hosts file, or supported domain rules. A DNS list chooses domains for direct DNS. Private-network URLs are rejected.",
+  "listUrl": "List URL",
+  "useDomainsFor": "Use domains for",
+  "managedMatch": "Match",
+  "exactDomains": "Exact domains",
+  "includeSubdomains": "Include subdomains",
+  "removeList": "Remove list",
+  "addDomainList": "Add domain list",
+  "staticDnsHosts": "Static DNS hosts",
+  "hostname": "Hostname",
+  "ipv4OrIpv6Address": "IPv4 or IPv6 address",
+  "removeHost": "Remove host",
+  "addDnsHost": "Add DNS host",
+  "dnsHostsInvalid": "Enter a unique hostname and an IP address for each DNS host.",
+  "shareServer": "Share server",
+  "refreshAllSubscriptions": "Refresh all subscriptions",
+  "sortServers": "Sort",
+  "serverLocation": "Location",
+  "allLocations": "All locations",
+  "shareRoutingProfile": "Share routing profile",
+  "useLastSuccessfulServer": "Use last successful server",
+  "licensesAndNotices": "Licenses and notices"
 }

@@ -3248,4 +3248,96 @@ class AppLocalizationsEn extends AppLocalizations {
   String perAppConnectionsRestart(String apps) {
     return 'Restart $apps: their connections opened before Elarni connected skip per-app routing until they reconnect.';
   }
+
+  @override
+  String trafficRates(String download, String upload) {
+    return '↓ $download/s · ↑ $upload/s';
+  }
+
+  @override
+  String kilobytesValue(String value) {
+    return '$value KB';
+  }
+
+  @override
+  String bytesValue(String value) {
+    return '$value B';
+  }
+
+  @override
+  String get geoipUrl => 'GeoIP URL';
+
+  @override
+  String get geositeUrl => 'GeoSite URL';
+
+  @override
+  String get managedDomainLists => 'Managed domain lists';
+
+  @override
+  String get managedDomainListsHelp =>
+      'Use a trusted public HTTPS source with one domain per line, a hosts file, or supported domain rules. A DNS list chooses domains for direct DNS. Private-network URLs are rejected.';
+
+  @override
+  String get listUrl => 'List URL';
+
+  @override
+  String get useDomainsFor => 'Use domains for';
+
+  @override
+  String get managedMatch => 'Match';
+
+  @override
+  String get exactDomains => 'Exact domains';
+
+  @override
+  String get includeSubdomains => 'Include subdomains';
+
+  @override
+  String get removeList => 'Remove list';
+
+  @override
+  String get addDomainList => 'Add domain list';
+
+  @override
+  String get staticDnsHosts => 'Static DNS hosts';
+
+  @override
+  String get hostname => 'Hostname';
+
+  @override
+  String get ipv4OrIpv6Address => 'IPv4 or IPv6 address';
+
+  @override
+  String get removeHost => 'Remove host';
+
+  @override
+  String get addDnsHost => 'Add DNS host';
+
+  @override
+  String get dnsHostsInvalid =>
+      'Enter a unique hostname and an IP address for each DNS host.';
+
+  @override
+  String get shareServer => 'Share server';
+
+  @override
+  String get refreshAllSubscriptions => 'Refresh all subscriptions';
+
+  @override
+  String get sortServers => 'Sort';
+
+  @override
+  String get serverLocation => 'Location';
+
+  @override
+  String get allLocations => 'All locations';
+
+  @override
+  String get shareRoutingProfile => 'Share routing profile';
+
+  @override
+  String get useLastSuccessfulServer => 'Use last successful server';
+
+  @override
+  String get licensesAndNotices => 'Licenses and notices';
 }

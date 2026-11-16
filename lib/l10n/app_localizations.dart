@@ -5587,6 +5587,174 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Restart {apps}: their connections opened before Elarni connected skip per-app routing until they reconnect.'**
   String perAppConnectionsRestart(String apps);
+
+  /// No description provided for @trafficRates.
+  ///
+  /// In en, this message translates to:
+  /// **'↓ {download}/s · ↑ {upload}/s'**
+  String trafficRates(String download, String upload);
+
+  /// No description provided for @kilobytesValue.
+  ///
+  /// In en, this message translates to:
+  /// **'{value} KB'**
+  String kilobytesValue(String value);
+
+  /// No description provided for @bytesValue.
+  ///
+  /// In en, this message translates to:
+  /// **'{value} B'**
+  String bytesValue(String value);
+
+  /// No description provided for @geoipUrl.
+  ///
+  /// In en, this message translates to:
+  /// **'GeoIP URL'**
+  String get geoipUrl;
+
+  /// No description provided for @geositeUrl.
+  ///
+  /// In en, this message translates to:
+  /// **'GeoSite URL'**
+  String get geositeUrl;
+
+  /// No description provided for @managedDomainLists.
+  ///
+  /// In en, this message translates to:
+  /// **'Managed domain lists'**
+  String get managedDomainLists;
+
+  /// No description provided for @managedDomainListsHelp.
+  ///
+  /// In en, this message translates to:
+  /// **'Use a trusted public HTTPS source with one domain per line, a hosts file, or supported domain rules. A DNS list chooses domains for direct DNS. Private-network URLs are rejected.'**
+  String get managedDomainListsHelp;
+
+  /// No description provided for @listUrl.
+  ///
+  /// In en, this message translates to:
+  /// **'List URL'**
+  String get listUrl;
+
+  /// No description provided for @useDomainsFor.
+  ///
+  /// In en, this message translates to:
+  /// **'Use domains for'**
+  String get useDomainsFor;
+
+  /// No description provided for @managedMatch.
+  ///
+  /// In en, this message translates to:
+  /// **'Match'**
+  String get managedMatch;
+
+  /// No description provided for @exactDomains.
+  ///
+  /// In en, this message translates to:
+  /// **'Exact domains'**
+  String get exactDomains;
+
+  /// No description provided for @includeSubdomains.
+  ///
+  /// In en, this message translates to:
+  /// **'Include subdomains'**
+  String get includeSubdomains;
+
+  /// No description provided for @removeList.
+  ///
+  /// In en, this message translates to:
+  /// **'Remove list'**
+  String get removeList;
+
+  /// No description provided for @addDomainList.
+  ///
+  /// In en, this message translates to:
+  /// **'Add domain list'**
+  String get addDomainList;
+
+  /// No description provided for @staticDnsHosts.
+  ///
+  /// In en, this message translates to:
+  /// **'Static DNS hosts'**
+  String get staticDnsHosts;
+
+  /// No description provided for @hostname.
+  ///
+  /// In en, this message translates to:
+  /// **'Hostname'**
+  String get hostname;
+
+  /// No description provided for @ipv4OrIpv6Address.
+  ///
+  /// In en, this message translates to:
+  /// **'IPv4 or IPv6 address'**
+  String get ipv4OrIpv6Address;
+
+  /// No description provided for @removeHost.
+  ///
+  /// In en, this message translates to:
+  /// **'Remove host'**
+  String get removeHost;
+
+  /// No description provided for @addDnsHost.
+  ///
+  /// In en, this message translates to:
+  /// **'Add DNS host'**
+  String get addDnsHost;
+
+  /// No description provided for @dnsHostsInvalid.
+  ///
+  /// In en, this message translates to:
+  /// **'Enter a unique hostname and an IP address for each DNS host.'**
+  String get dnsHostsInvalid;
+
+  /// No description provided for @shareServer.
+  ///
+  /// In en, this message translates to:
+  /// **'Share server'**
+  String get shareServer;
+
+  /// No description provided for @refreshAllSubscriptions.
+  ///
+  /// In en, this message translates to:
+  /// **'Refresh all subscriptions'**
+  String get refreshAllSubscriptions;
+
+  /// No description provided for @sortServers.
+  ///
+  /// In en, this message translates to:
+  /// **'Sort'**
+  String get sortServers;
+
+  /// No description provided for @serverLocation.
+  ///
+  /// In en, this message translates to:
+  /// **'Location'**
+  String get serverLocation;
+
+  /// No description provided for @allLocations.
+  ///
+  /// In en, this message translates to:
+  /// **'All locations'**
+  String get allLocations;
+
+  /// No description provided for @shareRoutingProfile.
+  ///
+  /// In en, this message translates to:
+  /// **'Share routing profile'**
+  String get shareRoutingProfile;
+
+  /// No description provided for @useLastSuccessfulServer.
+  ///
+  /// In en, this message translates to:
+  /// **'Use last successful server'**
+  String get useLastSuccessfulServer;
+
+  /// No description provided for @licensesAndNotices.
+  ///
+  /// In en, this message translates to:
+  /// **'Licenses and notices'**
+  String get licensesAndNotices;
 }
 
 class _AppLocalizationsDelegate
