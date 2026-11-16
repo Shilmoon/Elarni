@@ -2174,6 +2174,30 @@ void main() {
     expect(find.text(named), findsOneWidget);
   });
 
+  testWidgets('Advanced settings choose the TLS fingerprint', (tester) async {
+    final control = FakeTunnelControl();
+    await tester.binding.setSurfaceSize(const Size(1200, 900));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await pumpApp(tester, control);
+    await openSettings(tester);
+    await selectCategory(tester, SettingsCategory.advanced);
+    final setting = find.byKey(const ValueKey('setting:TLS fingerprint'));
+    expect(tester.widget<ElarniSelect<String>>(setting).value, 'server');
+    expect(
+      tester.widget<ElarniSelect<String>>(setting).items.map((i) => i.value),
+      TunnelSettings.tlsFingerprints,
+    );
+    await tester.tap(setting);
+    await tester.pumpAndSettle();
+    final option = find.widgetWithText(MenuItemButton, 'Firefox');
+    await tester.ensureVisible(option);
+    await tester.tap(option);
+    await tester.pumpAndSettle();
+    expect(control.settings.tlsFingerprint, 'firefox');
+    expect(tester.widget<ElarniSelect<String>>(setting).value, 'firefox');
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets(
     'a change after a failed settings load keeps the stored settings',
     (tester) async {

@@ -599,6 +599,7 @@ extension _ProxyCatalog on DesktopProxy {
         settings.routeEnforcementError != null ||
         !{'ipv4', 'ipv6', 'automatic'}.contains(settings.preferredIP) ||
         !TunnelSettings.logLevels.contains(settings.logLevel) ||
+        !TunnelSettings.tlsFingerprints.contains(settings.tlsFingerprint) ||
         !{
           'inherit',
           'ipv4',

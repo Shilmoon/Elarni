@@ -198,7 +198,7 @@ struct ConnectionEditor: View {
     case .dns: take(\.profileDNSMode)
     case .routes: take(\.includedRoutes); take(\.excludedRoutes)
     case .advanced:
-      take(\.fragmentPackets); take(\.fragmentLength); take(\.fragmentInterval)
+      take(\.fragmentPackets); take(\.fragmentLength); take(\.fragmentInterval); take(\.tlsFingerprint)
       take(\.idleTimeoutSeconds); take(\.tcpMaxConnections); take(\.udpMaxConnections)
     }
     return next
@@ -268,7 +268,7 @@ struct ConnectionEditor: View {
       } else if kind == .routes {
         routeSections
       } else {
-        Section("Transport") {
+        Section {
           Toggle("Enable fragmentation", isOn: $value.fragmentationEnabled)
           if value.fragmentationEnabled {
             TextField("Packets (tlshello or range)", text: $value.fragmentPackets)
@@ -276,6 +276,13 @@ struct ConnectionEditor: View {
             TextField("Interval range (ms)", text: $value.fragmentInterval)
           }
           Toggle("Enable default VLESS mux", isOn: $value.muxEnabled)
+          Picker("TLS fingerprint", selection: Binding(get: { value.tlsFingerprint ?? "server" }, set: { value.tlsFingerprint = $0 == "server" ? nil : $0 })) {
+            Text("From the server").tag("server")
+            Text(verbatim: "Chrome").tag("chrome"); Text(verbatim: "Firefox").tag("firefox"); Text(verbatim: "Safari").tag("safari")
+            Text("Random browser").tag("random"); Text("Randomized").tag("randomized")
+          }
+        } header: { Text("Transport") } footer: {
+          Text("TLS fingerprint is which browser a connection to a server looks like. From the server uses what each server's link names, or Chrome when it names none. Choose another when a network blocks that one. It applies to TLS and Reality servers over TCP; Hysteria2, TUIC and WireGuard have no such fingerprint.")
         }.textInputAutocapitalization(.never).autocorrectionDisabled()
         Section {
           Picker("Connection idle timeout (seconds)", selection: $value.idleTimeoutSeconds) {

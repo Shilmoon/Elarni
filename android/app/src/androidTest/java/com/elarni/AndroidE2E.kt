@@ -210,6 +210,20 @@ class AndroidE2E {
         assertEquals("Synthetic routing", JSONObject(export).getString("Name"))
     }
 
+    // The fingerprint chosen in Settings replaces the one a TLS server's link names; the default keeps the link's.
+    @Test fun e_tlsFingerprintSettingReachesTheCompiledServer() {
+        call("import", obj("text" to "vless://00000000-0000-4000-8000-000000000001@127.0.0.1:18080?encryption=none&security=tls&sni=fixture.test&fp=chrome&type=tcp#TLS%20fixture"))
+        val id = snapshot().nodes.single().getString("id")
+        call("select", obj("id" to id))
+        fun hello() = snapshot().compile(id, ui.activity).objects("outbounds").first { it.getString("protocol") == "vless" }
+            .getJSONObject("streamSettings").getJSONObject("tlsSettings").getString("fingerprint")
+        assertEquals("chrome", hello())
+        call("settings", obj("settings" to obj("tlsFingerprint" to "firefox")))
+        assertEquals("firefox", hello())
+        assertEquals("invalid_settings", expectFailure { call("settings", obj("settings" to obj("tlsFingerprint" to "edge"))) })
+        assertEquals("firefox", snapshot().settings.getString("tlsFingerprint"))
+    }
+
     @Test fun e_tuicCatalogShareBackupAndAtomicRestore() {
         val link = "tuic://00000000-0000-4000-8000-000000000001:p%40ss%3A%E2%9C%93@[::1]:443?sni=tuic.example&udp_relay_mode=quic#TUIC%20fixture"
         call("import", obj("text" to link))

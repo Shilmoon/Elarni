@@ -1153,6 +1153,43 @@ rules:
     },
   );
 
+  // A revision follows the compiled configuration, so it shows the setting reached the compiler.
+  test('the TLS fingerprint setting changes a TLS server\'s configuration', () async {
+    final imported = await backend.control.importClientProfiles(
+      content: profile.replaceFirst(
+        'security=none&type=tcp',
+        'security=tls&type=tcp&sni=fixture.test',
+      ),
+    );
+    final id = imported.snapshot.subscriptions.single.nodes.single.id;
+    await backend.control.selectNode(id);
+    Future<String?> revision() async => (await backend.control.subscriptions())
+        .subscriptions
+        .single
+        .nodes
+        .single
+        .configurationRevision;
+    final settings = await backend.control.tunnelSettings();
+    expect(settings.tlsFingerprint, 'server');
+    final first = await revision();
+    final chosen = await backend.control.updateTunnelSettings(
+      settings.copyWith(tlsFingerprint: 'firefox'),
+    );
+    expect(chosen.tlsFingerprint, 'firefox');
+    final second = await revision();
+    expect(second, isNot(first));
+    expect((await backend.control.tunnelSettings()).tlsFingerprint, 'firefox');
+    // A hello the app does not offer is refused and the choice stays.
+    await expectLater(
+      backend.control.updateTunnelSettings(
+        settings.copyWith(tlsFingerprint: 'edge'),
+      ),
+      throwsA(isA<PlatformException>()),
+    );
+    expect((await backend.control.tunnelSettings()).tlsFingerprint, 'firefox');
+    expect(await revision(), second);
+  });
+
   test('configuration revisions follow each compiled-settings edit', () async {
     await prepare();
     Future<String?> revision() async => (await backend.control.subscriptions())

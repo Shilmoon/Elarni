@@ -126,6 +126,33 @@ pub enum PerAppMode {
     ProxyOnly,
 }
 
+/// The TLS hello of server connections: the one each server's link names, or one for all.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub enum TlsFingerprint {
+    #[default]
+    Server,
+    Chrome,
+    Firefox,
+    Safari,
+    Random,
+    Randomized,
+}
+
+impl TlsFingerprint {
+    /// Xray's name for the hello; none keeps the server's own.
+    pub(crate) fn xray_name(self) -> Option<&'static str> {
+        match self {
+            Self::Server => None,
+            Self::Chrome => Some("chrome"),
+            Self::Firefox => Some("firefox"),
+            Self::Safari => Some("safari"),
+            Self::Random => Some("random"),
+            Self::Randomized => Some("randomized"),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RuntimeOptions {
@@ -146,6 +173,8 @@ pub struct RuntimeOptions {
     pub fragment_interval: String,
     #[serde(default)]
     pub mux_enabled: bool,
+    #[serde(default)]
+    pub tls_fingerprint: TlsFingerprint,
     #[serde(default = "default_preferred_ip")]
     pub preferred_ip: PreferredIp,
     #[serde(default = "default_connection_idle")]
@@ -177,6 +206,7 @@ impl Default for RuntimeOptions {
             fragment_length: default_fragment_length(),
             fragment_interval: default_fragment_interval(),
             mux_enabled: false,
+            tls_fingerprint: TlsFingerprint::Server,
             preferred_ip: PreferredIp::Ipv4,
             connection_idle_seconds: default_connection_idle(),
             sniffing_enabled: true,

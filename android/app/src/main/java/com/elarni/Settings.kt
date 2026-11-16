@@ -52,6 +52,8 @@ object Settings {
         SettingField("fragmentLength", tr(R.string.fragment_length), "100-200", "Advanced"),
         SettingField("fragmentInterval", tr(R.string.fragment_interval), "0-1", "Advanced"),
         SettingField("muxEnabled", tr(R.string.multiplexing), false, "Advanced"),
+        SettingField("tlsFingerprint", tr(R.string.tls_fingerprint), "server", "Advanced",
+            listOf("server", "chrome", "firefox", "safari", "random", "randomized"), detail = tr(R.string.which_browser_a_connection_to_a)),
         SettingField("memoryLimitMB", tr(R.string.memory_budget_mb_0_automatic), 0, "Advanced"),
         SettingField("idleTimeoutSeconds", tr(R.string.idle_timeout_seconds), 300, "Advanced"),
         SettingField("tcpMaxConnections", tr(R.string.maximum_tcp_sessions), 2048, "Advanced"),

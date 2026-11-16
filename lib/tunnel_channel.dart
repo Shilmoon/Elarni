@@ -922,6 +922,7 @@ final class TunnelSettings {
     this.fragmentLength = '100-200',
     this.fragmentInterval = '0-1',
     this.muxEnabled = false,
+    this.tlsFingerprint = 'server',
     this.preferredIP = 'ipv4',
     this.profilePreferredIP = 'inherit',
     this.profileDNSMode = 'inherit',
@@ -966,6 +967,7 @@ final class TunnelSettings {
     fragmentLength: value['fragmentLength'] as String? ?? '100-200',
     fragmentInterval: value['fragmentInterval'] as String? ?? '0-1',
     muxEnabled: value['muxEnabled'] as bool? ?? false,
+    tlsFingerprint: value['tlsFingerprint'] as String? ?? 'server',
     preferredIP: value['preferredIP'] as String? ?? 'ipv4',
     profilePreferredIP: value['profilePreferredIP'] as String? ?? 'inherit',
     profileDNSMode:
@@ -1040,6 +1042,18 @@ final class TunnelSettings {
   }
 
   final bool muxEnabled;
+
+  /// One of [tlsFingerprints]: the TLS hello of server connections. 'server' keeps
+  /// the one each server's link names.
+  final String tlsFingerprint;
+  static const tlsFingerprints = [
+    'server',
+    'chrome',
+    'firefox',
+    'safari',
+    'random',
+    'randomized',
+  ];
   final String preferredIP;
   final String profilePreferredIP;
   final String profileDNSMode;
@@ -1186,6 +1200,7 @@ final class TunnelSettings {
     'fragmentLength': fragmentLength,
     'fragmentInterval': fragmentInterval,
     'muxEnabled': muxEnabled,
+    'tlsFingerprint': tlsFingerprint,
     'preferredIP': preferredIP,
     'profilePreferredIP': profilePreferredIP == 'inherit'
         ? null
@@ -1230,6 +1245,7 @@ final class TunnelSettings {
     String? fragmentLength,
     String? fragmentInterval,
     bool? muxEnabled,
+    String? tlsFingerprint,
     String? preferredIP,
     String? profilePreferredIP,
     String? profileDNSMode,
@@ -1271,6 +1287,7 @@ final class TunnelSettings {
     fragmentLength: fragmentLength ?? this.fragmentLength,
     fragmentInterval: fragmentInterval ?? this.fragmentInterval,
     muxEnabled: muxEnabled ?? this.muxEnabled,
+    tlsFingerprint: tlsFingerprint ?? this.tlsFingerprint,
     preferredIP: preferredIP ?? this.preferredIP,
     profilePreferredIP: profilePreferredIP ?? this.profilePreferredIP,
     profileDNSMode: profileDNSMode ?? this.profileDNSMode,

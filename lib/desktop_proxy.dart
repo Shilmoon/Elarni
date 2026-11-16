@@ -727,6 +727,7 @@ final class DesktopProxy {
         'fragmentLength': settings.fragmentLength,
         'fragmentInterval': settings.fragmentInterval,
         'muxEnabled': settings.muxEnabled,
+        'tlsFingerprint': settings.tlsFingerprint,
         'preferredIp': settings.preferredIP,
         'connectionIdleSeconds': settings.idleTimeoutSeconds,
         'sniffingEnabled': settings.sniffingEnabled,

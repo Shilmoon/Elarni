@@ -543,6 +543,11 @@
     <string name="idle_timeout_seconds">Idle timeout (seconds)</string>
     <string name="memory_budget_mb_0_automatic">Memory budget (MB, 0 = automatic)</string>
     <string name="multiplexing">Multiplexing</string>
+    <string name="tls_fingerprint">TLS fingerprint</string>
+    <string name="which_browser_a_connection_to_a">Which browser a connection to a server looks like. From the server uses what each server\'s link names, or Chrome when it names none. Choose another when a network blocks that one. For TLS and Reality servers over TCP.</string>
+    <string name="from_the_server">From the server</string>
+    <string name="random_browser">Random browser</string>
+    <string name="randomized">Randomized</string>
     <string name="fragment_interval">Fragment interval</string>
     <string name="fragment_length">Fragment length</string>
     <string name="packets_to_fragment">Packets to fragment</string>
