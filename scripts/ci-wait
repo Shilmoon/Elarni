@@ -1,0 +1,97 @@
+#!/usr/bin/env python3
+"""Wait for a workflow run to finish, then print each job's result and the end of every failed job's log.
+
+One command for "wait for CI": it blocks until the run ends (start it in the background), prints one line
+per job, and for a failed job the FLAKY, FAILED and FAIL lines plus the last lines of its failed step, not
+the whole log. Exit code: 0 when the run succeeded, 1 when it did not, 2 when there is no run to wait for.
+Without a run ID it takes the newest run of the workflow on the branch.
+"""
+import argparse
+import json
+import re
+import subprocess
+import sys
+
+# check-android repeats its FLAKY and FAILED lines behind "<avd> <serial>: " in its summary.
+EMULATOR = re.compile(r'^[ \t]*\S+ \S+: (?=FLAKY |FAILED )')
+MARKER = re.compile(r'^(?:FLAKY|FAILED) |^--- FAIL: |\[E\]$|^FAIL\b')
+# gh prefixes every log line with "<job>\t<step>\t<timestamp> ".
+TIMESTAMP = re.compile(r'^\d{4}-\d\d-\d\dT[\d:.]+Z ?')
+MARKERS_SHOWN = 40
+
+
+def gh(*args, check=True):
+    result = subprocess.run(['gh', *args], capture_output=True, text=True, encoding='utf-8', errors='replace')
+    if check and result.returncode:
+        raise SystemExit(f"gh {' '.join(args)} failed: {result.stderr.strip()}")
+    return result.returncode, result.stdout
+
+
+def current_branch():
+    return subprocess.run(['git', 'rev-parse', '--abbrev-ref', 'HEAD'], check=True, capture_output=True, text=True).stdout.strip()
+
+
+def newest_run(workflow, branch, event):
+    _, listing = gh('run', 'list', '--workflow', workflow, '--branch', branch, '--limit', '20',
+                    '--json', 'databaseId,event,status,headSha')
+    runs = [run for run in json.loads(listing) if event in (None, run['event'])]
+    return runs[0] if runs else None
+
+
+def failed_log(run, job, lines):
+    _, log = gh('run', 'view', run, '--job', str(job), '--log-failed', check=False)
+    text = [TIMESTAMP.sub('', line.split('\t', 2)[-1]) for line in log.splitlines()]
+    # gh names no step, so the job's cleanup follows the failed command; the runner marks its end.
+    failed = [index for index, line in enumerate(text) if line.startswith('##[error]')]
+    if failed:
+        text = text[:failed[-1] + 1]
+    tail = text[-lines:]
+    markers = {}
+    for line in text[:-lines] if len(text) > lines else []:
+        bare = EMULATOR.sub('', line)
+        if MARKER.search(bare) and (bare not in markers or line != bare):
+            markers[bare] = line
+    return list(markers.values())[:MARKERS_SHOWN], tail
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument('run', nargs='?', help='run ID (default: the newest run on the branch)')
+    parser.add_argument('--branch', help='branch whose newest run to wait for (default: the current branch)')
+    parser.add_argument('--event', help='only a run started by this event, for example pull_request or workflow_dispatch')
+    parser.add_argument('--workflow', default='checks.yml', help='workflow file (default: checks.yml)')
+    parser.add_argument('--lines', type=int, default=60, help='log lines to print per failed job (default: 60)')
+    arguments = parser.parse_args(argv)
+    run = arguments.run
+    if not run:
+        branch = arguments.branch or current_branch()
+        found = newest_run(arguments.workflow, branch, arguments.event)
+        if not found:
+            print(f'No run of {arguments.workflow} on {branch}' + (f' for {arguments.event}' if arguments.event else ''))
+            return 2
+        run = str(found['databaseId'])
+        print(f"Run {run} ({found['event']}, {found['headSha'][:7]}) is {found['status']}", flush=True)
+    gh('run', 'watch', run, '--exit-status', '--interval', '30', check=False)
+    _, viewed = gh('run', 'view', run, '--json', 'conclusion,attempt,url,jobs')
+    view = json.loads(viewed)
+    print(f"Run {run} attempt {view['attempt']}: {view['conclusion'] or 'not finished'}  {view['url']}")
+    for job in view['jobs']:
+        print(f"{job['conclusion'] or 'unfinished'}  {job['name']}")
+    for job in view['jobs']:
+        if job['conclusion'] != 'failure':
+            continue
+        markers, tail = failed_log(run, job['databaseId'], arguments.lines)
+        print(f"\n== {job['name']}: failed")
+        for line in markers:
+            print(line)
+        if markers:
+            print('...')
+        for line in tail:
+            print(line)
+    return 0 if view['conclusion'] == 'success' else 1
+
+
+if __name__ == '__main__':
+    for stream in (sys.stdout, sys.stderr):
+        stream.reconfigure(errors='replace')
+    raise SystemExit(main())

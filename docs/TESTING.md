@@ -6,6 +6,12 @@ run writes `.build/check-results/<UTC time>-<id>/summary.json` and `output.log`.
 `git config core.hooksPath scripts/git-hooks` adds a fast pre-push format and
 analyze check.
 
+`python scripts/ci-wait [run-id]` waits for a CI run (the newest one on the current branch
+without an ID) and prints each job's result and the end of every failed job's log.
+`python scripts/flaky-report --ci 40` ranks the tests that failed and then passed, from
+the local check results and those of the last 40 CI runs; a failure on a revision whose
+check never passed is listed apart.
+
 ## Host checks
 
 These use loopback fixtures and never change routes, DNS or adapters.

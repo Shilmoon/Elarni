@@ -10,6 +10,9 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
   VPN acceptance scripts and the route, DNS and adapter commands, and `AGENTS.md` no longer tells
   agents to leave them alone. The rules matched any command that named one of the scripts, so
   they also refused reading or searching them.
+- For contributors: `scripts/flaky-report` ranks the tests that failed and then passed, from
+  local check results and from the results CI uploads, and `scripts/ci-wait` waits for a CI run
+  and prints only each job's result and the end of the failed jobs' logs.
 
 ### Fixed
 
