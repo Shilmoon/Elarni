@@ -26,12 +26,6 @@ and `output.log`. [docs/TESTING.md](docs/TESTING.md) lists each suite.
   `splithttp.SetSetupTimeout` in Go).
 - Do not weaken assertions or skip failing tests to get a pass.
 
-## Safety
-
-Developers often run a live VPN. Do not run `check-windows-vpn`, `check-linux-vpn`,
-`check-linux-elevation`, `check-headless`, or `netsh`, `route` and DNS commands unless asked:
-they change routes, DNS or adapters and belong on disposable test hosts.
-
 ## Concurrency and remote runs
 
 - Several agents may share one checkout. Check `git status`, `git log` and `git reflog` right
