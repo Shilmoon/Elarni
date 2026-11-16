@@ -1,0 +1,4 @@
+/* Siri and Spotlight phrases of the Shortcuts actions (ConnectionIntents.swift). */
+"Connect ${applicationName}" = "Подключить ${applicationName}";
+"Disconnect ${applicationName}" = "Отключить ${applicationName}";
+"Toggle ${applicationName}" = "Переключить ${applicationName}";

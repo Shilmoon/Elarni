@@ -19,6 +19,8 @@ final class TunnelMethodChannel {
   let loadPreferences: () async throws -> [NETunnelProviderManager]
   private let makeSubscriptions: @MainActor () throws -> SubscriptionStore
   private var deepLinkObserver: NSObjectProtocol?
+  /// The channel the app's window created, which the Shortcuts actions drive (ConnectionIntents.swift).
+  static weak var shared: TunnelMethodChannel?
   var automation = AutomationPolicy()
   var automationConfiguration = AutomationConfiguration()
   var automationUnreadable = false
@@ -653,34 +655,14 @@ final class TunnelMethodChannel {
     for value in values {
       do {
         try Task.checkCancellation()
-        let action = TunnelCommandCoordinator.connectionAction(from: value)
-        // Capture Toggle before recovery changes intent; a requested Stop must
-        // not turn into Connect after the interrupted publication is reconciled.
-        let requestedMethod = action == "toggle" ? (commands.intent == .connected ? "disconnect" : "connect") : action
-        let stopping = requestedMethod == "disconnect"
-        if stopping { guard await confirmLink(String(localized: "A link asks Elarni to disconnect."), action: String(localized: "Disconnect")) else { continue } }
-        let recoveryStore = stopping ? try? subscriptionStore() : try subscriptionStore()
-        if recoveryStore?.runtimeReconciliationRequired == true {
+        if let action = TunnelCommandCoordinator.connectionAction(from: value) {
+          try await performConnectionAction(action, confirm: true)
+          continue
+        }
+        if try subscriptionStore().runtimeReconciliationRequired {
           try await commands.perform(intent: .disconnected) {
             try await self.reconcileInterruptedPublication()
           }
-        }
-        if let method = requestedMethod {
-          NSApp.mainWindow?.deminiaturize(nil)
-          NSApp.activate(ignoringOtherApps: true)
-          if method == "status" { continue }
-          automationCommandReceived(method)
-          defer { scheduleAutomation(); scheduleMaintenance() }
-          try await commands.perform(intent: method == "disconnect" ? .disconnected : .connected) {
-            if method == "disconnect" {
-              try await self.disconnect()
-            } else {
-              try await self.reconcileDisconnectedIntent()
-              try await self.prepareSelectedConnection()
-              try await self.connect()
-            }
-          }
-          continue
         }
         let store = try subscriptionStore()
         let input = try store.normalizeClientInput(value)
@@ -698,6 +680,41 @@ final class TunnelMethodChannel {
       catch { failure = failure ?? "One or more client links could not be handled. Check the link and connection status." }
     }
     channel.invokeMethod("subscriptionsChanged", arguments: failure.map { ["error": $0] })
+  }
+
+  /// Runs a connection link's action ("connect", "disconnect", "toggle" or "status", as
+  /// `TunnelCommandCoordinator.connectionAction` names them) and the Shortcuts actions. A link
+  /// confirms a stop first; a Shortcuts action is the user's own request and does not.
+  @MainActor
+  func performConnectionAction(_ action: String, confirm: Bool) async throws {
+    // Capture Toggle before recovery changes intent; a requested Stop must
+    // not turn into Connect after the interrupted publication is reconciled.
+    let method = action == "toggle" ? (commands.intent == .connected ? "disconnect" : "connect") : action
+    let stopping = method == "disconnect"
+    if stopping && confirm {
+      guard await confirmLink(String(localized: "A link asks Elarni to disconnect."), action: String(localized: "Disconnect")) else { return }
+    }
+    let recoveryStore = stopping ? try? subscriptionStore() : try subscriptionStore()
+    if recoveryStore?.runtimeReconciliationRequired == true {
+      try await commands.perform(intent: .disconnected) {
+        try await self.reconcileInterruptedPublication()
+      }
+    }
+    // The native control checks run no application, so NSApp is nil there.
+    NSApp?.mainWindow?.deminiaturize(nil)
+    NSApp?.activate(ignoringOtherApps: true)
+    if method == "status" { return }
+    automationCommandReceived(method)
+    defer { scheduleAutomation(); scheduleMaintenance() }
+    try await commands.perform(intent: stopping ? .disconnected : .connected) {
+      if stopping {
+        try await self.disconnect()
+      } else {
+        try await self.reconcileDisconnectedIntent()
+        try await self.prepareSelectedConnection()
+        try await self.connect()
+      }
+    }
   }
 
   // Links come from web pages and other apps; imports and stops wait for the user.

@@ -84,6 +84,14 @@ struct NativeControlChecks {
       throw Failure(message: "a routing link without a selected server was accepted")
     } catch let failure as Failure where failure.message == "importClientProfiles: no_selected_subscription" {}
     print("PASS a routing link without a selected server asks for one")
+    // Shortcuts reports this error (ConnectionIntents.swift) instead of a connection that never started.
+    let keptIntent = defaults.object(forKey: "ElarniConnectionIntentV1")
+    do {
+      try await controller.performConnectionAction("connect", confirm: false)
+      throw Failure(message: "a Shortcuts Connect without a selected server succeeded")
+    } catch RunnerTunnelError.notPrepared {}
+    defaults.set(keptIntent, forKey: "ElarniConnectionIntentV1")
+    print("PASS a Shortcuts Connect without a selected server fails instead of reporting success")
 
     let startingMessenger = ControlMessenger()
     var pendingLoad: CheckedContinuation<[NETunnelProviderManager], Error>?
@@ -512,6 +520,7 @@ struct NativeControlChecks {
     defaults.set(savedSettings, forKey: "ElarniTunnelSettingsV1")
     print("PASS a settings change and an ICMP ping restart the provider themselves and keep On Demand")
     await record { try await untrustedWiFiCheck(store: store, defaults: defaults, plan: candidate) }
+    await record { try await shortcutConnectionCheck(store: store, defaults: defaults, plan: candidate) }
     // Back on the second server's plan, clearing the first server's preference changes no running plan,
     // which this fixture could not validate without the core helper.
     try store.commitSelection(nodeID: second)
@@ -905,6 +914,45 @@ struct NativeControlChecks {
     _ = try await messenger.call("updateTunnelSettings", arguments: ["connectOnUntrustedWiFi": false])
     guard !manager.isOnDemandEnabled else { throw Failure(message: "turning the rule off left On Demand on") }
     print("PASS Connect on untrusted Wi-Fi arms On Demand while stopped, takes over its connection and pauses after a Stop")
+  }
+
+  // A Shortcuts action runs a connection link's code: Connect reaches the state a link's Connect reaches,
+  // and Disconnect and Toggle stop without the link's confirmation, which would stall this check.
+  static func shortcutConnectionCheck(store: SubscriptionStore, defaults: UserDefaults, plan: Data) async throws {
+    let kept = ["ElarniConnectionIntentV1", TunnelMethodChannel.automationKey].map { ($0, defaults.object(forKey: $0)) }
+    defer { for (key, value) in kept { defaults.set(value, forKey: key) } }
+    defaults.removeObject(forKey: TunnelMethodChannel.automationKey)
+    try TunnelCommandCoordinator(defaults: defaults).persist(.disconnected)
+    let manager = SwitchManager(plan: plan)
+    manager.fixtureSession.fixtureStatus = .disconnected
+    manager.fixtureSession.startable = true
+    let messenger = ControlMessenger()
+    let controller = TunnelMethodChannel(messenger: messenger, defaults: defaults, observesSystem: false,
+      makeSubscriptions: { store }, loadPreferences: { [manager] })
+    defer { withExtendedLifetime(controller) {} }
+    func reached() -> [String] {
+      ["\(manager.fixtureSession.fixtureStatus.rawValue)", controller.commands.intent?.rawValue ?? "none",
+       "\(manager.isOnDemandEnabled)", "\(manager.onDemandRules?.map(\.action.rawValue) ?? [])"]
+    }
+    func stopped(_ action: String) throws {
+      guard manager.fixtureSession.fixtureStatus == .disconnected, controller.commands.intent == .disconnected else {
+        throw Failure(message: "a Shortcuts \(action) did not stop: \(reached())")
+      }
+    }
+    try await controller.performConnectionAction("connect", confirm: true)
+    let link = reached()
+    guard manager.fixtureSession.fixtureStatus == .connected, manager.fixtureSession.starts == 1 else {
+      throw Failure(message: "a link's Connect did not start the tunnel: \(link)")
+    }
+    try await controller.performConnectionAction("disconnect", confirm: false)
+    try stopped("Disconnect")
+    try await controller.performConnectionAction("connect", confirm: false)
+    guard reached() == link, manager.fixtureSession.starts == 2 else {
+      throw Failure(message: "a Shortcuts Connect reached \(reached()), a link's Connect \(link)")
+    }
+    try await controller.performConnectionAction("toggle", confirm: false)
+    try stopped("Toggle")
+    print("PASS a Shortcuts Connect reaches a link's state; its Disconnect and Toggle stop without the link's confirmation")
   }
 
   // A manual server choice while connected under a pinned automation server switches to it.

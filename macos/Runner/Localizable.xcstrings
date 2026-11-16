@@ -95,12 +95,82 @@
         }
       }
     },
+    "Connect Elarni" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Подключить Elarni"
+          }
+        }
+      }
+    },
+    "Connects to the server selected in Elarni." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Подключается к серверу, выбранному в Elarni."
+          }
+        }
+      }
+    },
     "Disconnect" : {
       "localizations" : {
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Отключить"
+          }
+        }
+      }
+    },
+    "Disconnect Elarni" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Отключить Elarni"
+          }
+        }
+      }
+    },
+    "Disconnects Elarni and keeps On Demand from reconnecting it." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Отключает Elarni и не даёт «По требованию» подключить его снова."
+          }
+        }
+      }
+    },
+    "Disconnects Elarni when it runs, and connects it otherwise." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Отключает Elarni, если он работает, и подключает в противном случае."
+          }
+        }
+      }
+    },
+    "Elarni could not change the connection. Try it in the Elarni window to see why." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Elarni не удалось изменить подключение. Повторите это в окне Elarni, чтобы увидеть причину."
+          }
+        }
+      }
+    },
+    "Elarni did not finish opening. Try again." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Elarni не успел открыться. Попробуйте ещё раз."
           }
         }
       }
@@ -185,6 +255,16 @@
         }
       }
     },
+    "Select a server in Elarni first." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Сначала выберите сервер в Elarni."
+          }
+        }
+      }
+    },
     "Show Elarni" : {
       "localizations" : {
         "ru" : {
@@ -211,6 +291,26 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Запущенное расширение VPN (%@) не от этого приложения (%@). Удалите другие копии Elarni, затем отключитесь и подключитесь снова."
+          }
+        }
+      }
+    },
+    "Toggle" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Переключить"
+          }
+        }
+      }
+    },
+    "Toggle Elarni" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Переключить Elarni"
           }
         }
       }

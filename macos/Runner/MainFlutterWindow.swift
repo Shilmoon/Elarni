@@ -30,6 +30,7 @@ class MainFlutterWindow: NSWindow, UNUserNotificationCenterDelegate {
       headlessEngine = engine
       guard engine.run(withEntrypoint: nil) else { exit(1) }
       tunnelChannel = TunnelMethodChannel(messenger: engine.binaryMessenger)
+      TunnelMethodChannel.shared = tunnelChannel
       super.awakeFromNib()
       return
     }
@@ -44,6 +45,7 @@ class MainFlutterWindow: NSWindow, UNUserNotificationCenterDelegate {
 
     RegisterGeneratedPlugins(registry: flutterViewController)
     tunnelChannel = TunnelMethodChannel(messenger: flutterViewController.engine.binaryMessenger)
+    TunnelMethodChannel.shared = tunnelChannel
     installDesktop(messenger: flutterViewController.engine.binaryMessenger)
 
     super.awakeFromNib()

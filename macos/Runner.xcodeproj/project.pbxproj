@@ -30,6 +30,7 @@
 		C30000000000000000000009 = {isa = PBXBuildFile; fileRef = C30000000000000000000010; };
 		C30000000000000000000011 /* Localizable.xcstrings in Resources */ = {isa = PBXBuildFile; fileRef = C30000000000000000000012 /* Localizable.xcstrings */; };
 		C30000000000000000000013 /* InfoPlist.xcstrings in Resources */ = {isa = PBXBuildFile; fileRef = C30000000000000000000014 /* InfoPlist.xcstrings */; };
+		C30000000000000000000017 /* AppShortcuts.strings in Resources */ = {isa = PBXBuildFile; fileRef = C30000000000000000000018 /* AppShortcuts.strings */; };
 		B20000000000000000000001 /* ExtensionIntegrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000002; };
 		A10000000000000000000013 /* ProviderDebugFaults.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000012 /* ProviderDebugFaults.swift */; };
 		335BBD1B22A9A15E00E9071D /* GeneratedPluginRegistrant.swift in Sources */ = {isa = PBXBuildFile; fileRef = 335BBD1A22A9A15E00E9071D /* GeneratedPluginRegistrant.swift */; };
@@ -55,6 +56,7 @@
 		A10000000000000000000006 /* ProfileTitle.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000005 /* ProfileTitle.swift */; };
 		A10000000000000000000009 /* SubscriptionSafety.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000008 /* SubscriptionSafety.swift */; };
 		A10000000000000000000011 /* ConnectionAutomation.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000010 /* ConnectionAutomation.swift */; };
+		A10000000000000000000035 /* ConnectionIntents.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000034 /* ConnectionIntents.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -110,6 +112,8 @@
 		C30000000000000000000012 /* Localizable.xcstrings */ = {isa = PBXFileReference; lastKnownFileType = text.json.xcstrings; name = Localizable.xcstrings; path = Runner/Localizable.xcstrings; sourceTree = SOURCE_ROOT; };
 		C30000000000000000000014 /* InfoPlist.xcstrings */ = {isa = PBXFileReference; lastKnownFileType = text.json.xcstrings; name = InfoPlist.xcstrings; path = Runner/InfoPlist.xcstrings; sourceTree = SOURCE_ROOT; };
 		C30000000000000000000015 /* ru */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = ru; path = ru.lproj/MainMenu.strings; sourceTree = "<group>"; };
+		C30000000000000000000019 /* en */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = en; path = en.lproj/AppShortcuts.strings; sourceTree = "<group>"; };
+		C30000000000000000000020 /* ru */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = ru; path = ru.lproj/AppShortcuts.strings; sourceTree = "<group>"; };
 		B20000000000000000000002 /* ExtensionIntegrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Checks/ExtensionIntegrationTests.swift; sourceTree = "<group>"; };
 		B20000000000000000000004 /* ExtensionIntegrationTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; path = ExtensionIntegrationTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		A10000000000000000000012 /* ProviderDebugFaults.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ../ElarniPacketTunnel/ProviderDebugFaults.swift; sourceTree = "<group>"; };
@@ -147,6 +151,7 @@
 		A10000000000000000000005 /* ProfileTitle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileTitle.swift; sourceTree = "<group>"; };
 		A10000000000000000000008 /* SubscriptionSafety.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SubscriptionSafety.swift; sourceTree = "<group>"; };
 		A10000000000000000000010 /* ConnectionAutomation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionAutomation.swift; sourceTree = "<group>"; };
+		A10000000000000000000034 /* ConnectionIntents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionIntents.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -231,6 +236,7 @@
 				33CC10F42044A3C60003C045 /* MainMenu.xib */,
 				C30000000000000000000012 /* Localizable.xcstrings */,
 				C30000000000000000000014 /* InfoPlist.xcstrings */,
+				C30000000000000000000018 /* AppShortcuts.strings */,
 				33CC10F72044A3C60003C045 /* Info.plist */,
 			);
 			name = Resources;
@@ -270,6 +276,7 @@
 				A10000000000000000000005 /* ProfileTitle.swift */,
 				A10000000000000000000008 /* SubscriptionSafety.swift */,
 				A10000000000000000000010 /* ConnectionAutomation.swift */,
+				A10000000000000000000034 /* ConnectionIntents.swift */,
 				33E51913231747F40026EE4D /* DebugProfile.entitlements */,
 				33E51914231749380026EE4D /* Release.entitlements */,
 				33CC11242044D66E0003C045 /* Resources */,
@@ -419,6 +426,7 @@
 				33CC10F62044A3C60003C045 /* MainMenu.xib in Resources */,
 				C30000000000000000000011 /* Localizable.xcstrings in Resources */,
 				C30000000000000000000013 /* InfoPlist.xcstrings in Resources */,
+				C30000000000000000000017 /* AppShortcuts.strings in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -543,6 +551,7 @@
 				A10000000000000000000006 /* ProfileTitle.swift in Sources */,
 				A10000000000000000000009 /* SubscriptionSafety.swift in Sources */,
 				A10000000000000000000011 /* ConnectionAutomation.swift in Sources */,
+				A10000000000000000000035 /* ConnectionIntents.swift in Sources */,
 				335BBD1B22A9A15E00E9071D /* GeneratedPluginRegistrant.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -578,6 +587,16 @@
 				C30000000000000000000015 /* ru */,
 			);
 			name = MainMenu.xib;
+			path = Runner;
+			sourceTree = "<group>";
+		};
+		C30000000000000000000018 /* AppShortcuts.strings */ = {
+			isa = PBXVariantGroup;
+			children = (
+				C30000000000000000000019 /* en */,
+				C30000000000000000000020 /* ru */,
+			);
+			name = AppShortcuts.strings;
 			path = Runner;
 			sourceTree = "<group>";
 		};
