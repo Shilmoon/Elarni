@@ -1797,5 +1797,15 @@
   "saveQrImage": "Save QR image…",
   "exportJson": "Export JSON…",
   "fileSaved": "File saved.",
-  "fileNotSaved": "The file could not be saved. Choose a writable location and retry."
+  "fileNotSaved": "The file could not be saved. Choose a writable location and retry.",
+  "share": "Share",
+  "shareServers": "Share servers",
+  "serverHasNoShareLink": "{name} has no share link that keeps all its settings. Share it with Share server in its menu.",
+  "@serverHasNoShareLink": {
+    "placeholders": {
+      "name": {
+        "type": "Object"
+      }
+    }
+  }
 }

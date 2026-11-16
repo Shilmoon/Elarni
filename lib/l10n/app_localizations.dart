@@ -5797,6 +5797,24 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'The file could not be saved. Choose a writable location and retry.'**
   String get fileNotSaved;
+
+  /// No description provided for @share.
+  ///
+  /// In en, this message translates to:
+  /// **'Share'**
+  String get share;
+
+  /// No description provided for @shareServers.
+  ///
+  /// In en, this message translates to:
+  /// **'Share servers'**
+  String get shareServers;
+
+  /// No description provided for @serverHasNoShareLink.
+  ///
+  /// In en, this message translates to:
+  /// **'{name} has no share link that keeps all its settings. Share it with Share server in its menu.'**
+  String serverHasNoShareLink(Object name);
 }
 
 class _AppLocalizationsDelegate

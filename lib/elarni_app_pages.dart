@@ -2157,6 +2157,15 @@ extension _HomePages on _ElarniHomeState {
                               ),
                               child: Text(l10n.selectUnreachable),
                             ),
+                            // A local group has no subscription link to share.
+                            if (group.isLocal)
+                              TextButton(
+                                key: ValueKey('share-servers:${group.id}'),
+                                onPressed: _busy || selectedCount == 0
+                                    ? null
+                                    : () => _shareSelected(group),
+                                child: Text(l10n.share),
+                              ),
                             TextButton(
                               // A subscription keeps at least one server.
                               onPressed:

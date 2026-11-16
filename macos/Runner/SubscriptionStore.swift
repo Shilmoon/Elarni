@@ -84,6 +84,9 @@ final class SubscriptionStore {
   private static let service = "com.elarni.mac.endpoint"
 #endif
   private static let maxFeedBytes = 4 * 1024 * 1024
+  /// The refusals of shareLinks, which the macOS window recognises to word them in its language.
+  static let sharingDisabledMessage = "This provider has disabled sharing."
+  static let noShareLinkSuffix = " has no share link. Share it from its own page."
 
   private var catalog: SubscriptionCatalog
   private let catalogURL: URL
@@ -1027,7 +1030,7 @@ final class SubscriptionStore {
     guard let record = catalog.subscriptions.first(where: {
       subscription ? $0.id == id : $0.nodes.contains(where: { $0.id == id })
     }) else { throw SubscriptionError.notFound }
-    guard record.metadata?.hideURL != true else { throw SubscriptionError.incompatibleProfile("This provider has disabled sharing.") }
+    guard record.metadata?.hideURL != true else { throw SubscriptionError.incompatibleProfile(Self.sharingDisabledMessage) }
     guard record.isLocal == true || record.metadata?.hideURL != nil else { throw SubscriptionError.incompatibleProfile("Refresh this subscription before sharing.") }
     if subscription {
       guard record.isLocal != true,
@@ -1057,7 +1060,7 @@ final class SubscriptionStore {
   /// Share links for servers of a local group, which has no subscription link, in group order.
   func shareLinks(subscriptionID: String, nodeIDs: [String]) throws -> String {
     guard let record = catalog.subscriptions.first(where: { $0.id == subscriptionID }), record.isLocal == true else { throw SubscriptionError.notFound }
-    guard record.metadata?.hideURL != true else { throw SubscriptionError.incompatibleProfile("This provider has disabled sharing.") }
+    guard record.metadata?.hideURL != true else { throw SubscriptionError.incompatibleProfile(Self.sharingDisabledMessage) }
     let links = try record.nodes.filter { nodeIDs.contains($0.id) }.map(shareLink)
     guard !links.isEmpty else { throw SubscriptionError.notFound }
     return links.joined(separator: "\n")
@@ -1077,7 +1080,7 @@ final class SubscriptionStore {
 
   private func shareLink(_ node: SubscriptionNode) throws -> String {
     if node.format == "telegram" { return try telegramURL(nodeID: node.id).absoluteString }
-    let none = SubscriptionError.incompatibleProfile("\(node.displayName) has no share link. Share it from its own page.")
+    let none = SubscriptionError.incompatibleProfile(node.displayName + Self.noShareLinkSuffix)
     var config = try outbound(nodeID: node.id)
     if node.format == "xrayProfile" {
       guard let outbounds = config["outbounds"] as? [[String: Any]], outbounds.count == 1 else { throw none }

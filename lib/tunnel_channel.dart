@@ -156,6 +156,11 @@ abstract interface class TunnelControl {
   /// [text] as a QR code: `{'png': base64}`, without it when it is too long.
   Future<Map<String, Object?>> qrCode(String text);
 
+  /// The share links of [nodeIds] in a local group, one per line in group
+  /// order. A server without one is refused as `no_share_link`, with its name
+  /// as the details.
+  Future<String> shareLinks(String subscriptionId, List<String> nodeIds);
+
   /// The server's stored Xray JSON; refused where its provider hides it.
   Future<String> nodeConfig(String nodeId);
 
@@ -450,6 +455,17 @@ final class NativeTunnelControl implements TunnelControl {
   @override
   Future<Map<String, Object?>> qrCode(String text) =>
       _mapResult('qrCode', {'text': text});
+
+  @override
+  Future<String> shareLinks(
+    String subscriptionId,
+    List<String> nodeIds,
+  ) async =>
+      (await _mapResult('shareLinks', {
+            'subscriptionId': subscriptionId,
+            'nodeIds': nodeIds,
+          }))['text']!
+          as String;
 
   @override
   Future<String> nodeConfig(String nodeId) async =>

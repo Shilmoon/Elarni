@@ -64,7 +64,7 @@ func dispatch(raw string) (result response) {
 		code = "unsupported_profile"
 	case libxray.LibXrayMethodProfileHostMappings:
 		code = "invalid_profile"
-	case libxray.LibXrayMethodClientQR:
+	case libxray.LibXrayMethodClientQR, libxray.LibXrayMethodConvertXrayJsonToShareLinks:
 		code = "sharing_failed"
 	case "validateSubscriptionFetchOptions":
 		code = "invalid_settings"

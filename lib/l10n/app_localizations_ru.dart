@@ -3409,4 +3409,15 @@ class AppLocalizationsRu extends AppLocalizations {
   @override
   String get fileNotSaved =>
       'Не удалось сохранить файл. Выберите место, доступное для записи, и повторите.';
+
+  @override
+  String get share => 'Поделиться';
+
+  @override
+  String get shareServers => 'Поделиться серверами';
+
+  @override
+  String serverHasNoShareLink(Object name) {
+    return 'У сервера «$name» нет ссылки, которая сохранила бы все его настройки. Поделитесь им через «Поделиться сервером» в его меню.';
+  }
 }

@@ -133,6 +133,30 @@ func TestImportFailureNamesAnUnencryptedServer(t *testing.T) {
 	}
 }
 
+// A server's share link takes its name from the outbound tag; an outbound with no link is one fixed code.
+func TestShareLinkConversionNamesTheServer(t *testing.T) {
+	convert := func(protocol string) response {
+		xrayJSON := `{"outbounds":[{"protocol":"` + protocol + `","tag":"Named",` +
+			`"settings":{"servers":[{"address":"127.0.0.1","port":1080}]}}]}`
+		request, _ := json.Marshal(map[string]any{"apiVersion": 1, "method": "convertXrayJsonToShareLinks",
+			"payload": map[string]any{"xrayJson": xrayJSON}})
+		return dispatch(string(request))
+	}
+	result := convert("socks")
+	var reply struct {
+		Success bool
+		Data    struct{ Links string }
+	}
+	if json.Unmarshal([]byte(result.text), &reply) != nil || !reply.Success || result.run ||
+		!strings.HasPrefix(reply.Data.Links, "socks://") || !strings.HasSuffix(reply.Data.Links, "#Named") {
+		t.Fatalf("a SOCKS server's link: %s", result.text)
+	}
+	// libXray writes no link for an HTTP proxy.
+	if result := convert("http"); result.text != `{"success":false,"error":"sharing_failed"}` {
+		t.Fatalf("an outbound with no link: %s", result.text)
+	}
+}
+
 func TestParentEOFDuringStartupDoesNotWaitForStartup(t *testing.T) {
 	input, parent := io.Pipe()
 	defer input.Close()

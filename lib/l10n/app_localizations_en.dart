@@ -3362,4 +3362,15 @@ class AppLocalizationsEn extends AppLocalizations {
   @override
   String get fileNotSaved =>
       'The file could not be saved. Choose a writable location and retry.';
+
+  @override
+  String get share => 'Share';
+
+  @override
+  String get shareServers => 'Share servers';
+
+  @override
+  String serverHasNoShareLink(Object name) {
+    return '$name has no share link that keeps all its settings. Share it with Share server in its menu.';
+  }
 }

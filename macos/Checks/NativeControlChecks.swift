@@ -210,6 +210,7 @@ struct NativeControlChecks {
     await record { try await perAppTargetCheck(defaults: defaults) }
     await record { try await coreLogCheck(defaults: defaults) }
     await record { try await nodeConfigCheck(defaults: defaults) }
+    await record { try await shareLinksCheck(defaults: defaults) }
     await record { try versionsFolderCheck() }
 
     // Call the actual socket probe without measureICMP, which requires an OS
@@ -229,7 +230,7 @@ struct NativeControlChecks {
     print("PASS production ICMP probe supports Automatic IPv4/IPv6, address fallback and explicit family")
     guard keychainCalls == 0 else { throw Failure(message: "fixture unexpectedly needed credentials") }
     guard selectionFailures.isEmpty else { throw Failure(message: selectionFailures.joined(separator: "; ")) }
-    print("23 native control checks passed; no VPN preferences or credentials used; ICMP uses loopback only")
+    print("24 native control checks passed; no VPN preferences or credentials used; ICMP uses loopback only")
   }
 
   // Claude Code as the Claude app installs it, claude-code/<version>/<build>/claude.app, gets a new
@@ -722,6 +723,46 @@ struct NativeControlChecks {
     print("PASS qrCode draws any text, and saveFile refuses an unknown kind before a panel opens")
   }
 
+  // A local group's servers share as the store's links. A server without one is refused by name and a
+  // hidden import's group not at all, with the Windows and Linux codes the Flutter side words.
+  static func shareLinksCheck(defaults: UserDefaults) async throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent("elarni-share-links-\(UUID())")
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let (store, local, hidden) = try await twoSubscriptions(directory, selecting: false)
+    // libXray writes no link for an HTTP proxy; it joins the first local group.
+    _ = try await store.refresh(id: try store.registerProfiles("http://127.0.0.1:8080#Web"))
+    let groups = store.snapshot()["subscriptions"] as? [[String: Any]] ?? []
+    let nodes = groups.first { $0["id"] as? String == local.subscription }?["nodes"] as? [[String: Any]] ?? []
+    guard let web = nodes.first(where: { $0["name"] as? String == "Web" })?["id"] as? String else {
+      throw Failure(message: "the HTTP proxy did not join the local group")
+    }
+    try TunnelCommandCoordinator(defaults: defaults).persist(.disconnected)
+    let messenger = ControlMessenger()
+    let controller = TunnelMethodChannel(messenger: messenger, defaults: defaults, observesSystem: false,
+      makeSubscriptions: { store }, loadPreferences: { [] })
+    defer { withExtendedLifetime(controller) {} }
+    let text = try await messenger.call("shareLinks",
+      arguments: ["subscriptionId": local.subscription, "nodeIds": [local.node]])["text"] as? String
+    guard let text, text == (try store.shareLinks(subscriptionID: local.subscription, nodeIDs: [local.node])),
+          text.hasPrefix("socks://"), text.hasSuffix("#Selected") else {
+      throw Failure(message: "shareLinks did not return the store's link of a local group's server: \(text ?? "none")")
+    }
+    let refusals: [(arguments: [String: Any], code: String, details: String?)] = [
+      (["subscriptionId": local.subscription, "nodeIds": [local.node, web]], "no_share_link", "Web"),
+      (["subscriptionId": hidden.subscription, "nodeIds": [hidden.node]], "sharing_disabled", nil),
+    ]
+    for (arguments, code, details) in refusals {
+      do {
+        _ = try await messenger.call("shareLinks", arguments: arguments)
+        throw Failure(message: "shareLinks shared a server it must refuse: \(arguments)")
+      } catch let failure as Failure where failure.message == "shareLinks: \(code)" {}
+      guard messenger.lastError?.details as? String == details else {
+        throw Failure(message: "shareLinks refused \(code) with details \(String(describing: messenger.lastError?.details))")
+      }
+    }
+    print("PASS a local group's servers share as links; one without a link is named and a hidden group refused")
+  }
+
   // Recovery may list servers of any subscription, and a manual choice keeps them as backups.
   static func crossSubscriptionRecoveryCheck(defaults: UserDefaults) async throws {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent("elarni-cross-recovery-\(UUID())")
@@ -1197,6 +1238,8 @@ final class ControlMessenger: NSObject, FlutterBinaryMessenger {
   var handler: FlutterBinaryMessageHandler?
   /// Errors the handler showed through subscriptionsChanged.
   var notices: [String] = []
+  /// The last call's error, whose details the thrown failure leaves out.
+  var lastError: FlutterError?
   func send(onChannel channel: String, message: Data?) { note(message) }
   func send(onChannel channel: String, message: Data?, binaryReply callback: FlutterBinaryReply?) { note(message); callback?(nil) }
   private func note(_ message: Data?) {
@@ -1222,6 +1265,7 @@ final class ControlMessenger: NSObject, FlutterBinaryMessenger {
     }
     guard let response else { throw NativeControlChecks.Failure(message: "missing \(method) reply") }
     let value = codec.decodeEnvelope(response)
+    lastError = value as? FlutterError
     if let error = value as? FlutterError { throw NativeControlChecks.Failure(message: "\(method): \(error.code)") }
     guard let result = value as? [String: Any] else { throw NativeControlChecks.Failure(message: "invalid \(method) reply") }
     return result

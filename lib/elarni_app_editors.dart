@@ -1360,6 +1360,79 @@ extension _HomeEditors on _ElarniHomeState {
     }
   }
 
+  /// Shows the chosen servers of a local group, which has no subscription
+  /// link, as their share links, one per line in the group's order, with a
+  /// QR code when they fit one.
+  Future<void> _shareSelected(SubscriptionGroup group) async {
+    final ids = [
+      for (final node in group.nodes)
+        if (_selectedServers.contains(node.id)) node.id,
+    ];
+    if (ids.isEmpty || _busy) return;
+    _set(() {
+      _busy = true;
+      _message = null;
+    });
+    final String text;
+    Uint8List? png;
+    var tooLarge = false;
+    try {
+      text = await widget.tunnelControl.shareLinks(group.id, ids);
+      try {
+        final shared = await widget.tunnelControl.qrCode(text);
+        if (shared['png'] case final String data) {
+          png = base64Decode(data);
+        } else {
+          tooLarge = true;
+        }
+      } on Object {
+        // The links are still there to copy or save.
+      }
+    } on Object catch (error) {
+      if (mounted)
+        _set(
+          () => _message = switch (error) {
+            PlatformException(
+              code: 'no_share_link',
+              details: final String name,
+            ) =>
+              l10n.serverHasNoShareLink(name),
+            PlatformException(code: 'sharing_disabled') =>
+              l10n.sharingDisabledByProvider,
+            _ => l10n.sharingUnavailable,
+          },
+        );
+      return;
+    } finally {
+      if (mounted) _set(() => _busy = false);
+    }
+    if (!mounted) return;
+    await _showShared(l10n.shareServers, text, [
+      if (png != null) ...[
+        Image.memory(
+          png,
+          width: 384,
+          height: 384,
+          semanticLabel: l10n.connectionQrCode,
+        ),
+        const SizedBox(height: 12),
+      ] else if (tooLarge) ...[
+        Text(l10n.configTooLargeForQr),
+        const SizedBox(height: 12),
+      ],
+      Align(
+        alignment: AlignmentDirectional.centerStart,
+        child: SelectableText(
+          text,
+          key: const Key('shared-links'),
+          style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
+        ),
+      ),
+      const SizedBox(height: 12),
+      Text(l10n.anyoneCanUseDetails),
+    ], png: png);
+  }
+
   Future<void> _resetDeviceID(SubscriptionGroup group) async {
     final confirmed = await showDialog<bool>(
       context: context,

@@ -220,6 +220,17 @@ class FakeTunnelControl implements TunnelControl {
     };
   }
 
+  // Each shareLinks call's group and servers; the reply, or an error thrown.
+  final sharedLinks = <(String, List<String>)>[];
+  String shareLinksText = 'socks://fixture@127.0.0.1:1080#Fixture';
+  Object? shareLinksError;
+  @override
+  Future<String> shareLinks(String subscriptionId, List<String> nodeIds) async {
+    sharedLinks.add((subscriptionId, nodeIds));
+    if (shareLinksError case final error?) throw error;
+    return shareLinksText;
+  }
+
   String nodeConfigText = '{\n  "outbounds": []\n}';
   Object? nodeConfigError;
   final nodeConfigEdits = <(String, String)>[];

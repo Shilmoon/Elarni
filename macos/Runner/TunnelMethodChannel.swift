@@ -195,7 +195,7 @@ final class TunnelMethodChannel {
             (call.arguments as? [String: Any])?["protocol"] as? String != "icmp"
           let readOnly = ["state", "subscriptions", "routingProfiles", "tunnelSettings", "inboundCredentials",
                           "automationStatus", "runtimeMetrics", "readLogs", "readConnections", "systemInfo", "routeTable",
-                          "nodeConfig", "qrCode"].contains(call.method)
+                          "nodeConfig", "qrCode", "shareLinks"].contains(call.method)
           try await self.commands.perform(intent: intent, concurrent: concurrentProbe, readOnly: readOnly) {
             if !["disconnect", "restoreCatalogBackup", "repairTunnel"].contains(call.method) { try await self.reconcileDisconnectedIntent() }
             switch call.method {
@@ -432,6 +432,21 @@ final class TunnelMethodChannel {
               var shared = try Self.invokeLibXray(method: "clientQR", payload: ["text": text])
               shared["text"] = text
               result(shared)
+            // A local group has no subscription link; its servers share as links. Flutter words a refusal
+            // from the codes the Windows and Linux backend gives, with the server's name as the details.
+            case "shareLinks":
+              let args = try Self.arguments(call)
+              guard let id = args["subscriptionId"] as? String, let nodeIDs = args["nodeIds"] as? [String] else {
+                throw SubscriptionError.notFound
+              }
+              do {
+                result(["text": try self.subscriptionStore().shareLinks(subscriptionID: id, nodeIDs: nodeIDs)])
+              } catch SubscriptionError.incompatibleProfile(let message) where message.hasSuffix(SubscriptionStore.noShareLinkSuffix) {
+                result(FlutterError(code: "no_share_link", message: message,
+                                    details: String(message.dropLast(SubscriptionStore.noShareLinkSuffix.count))))
+              } catch SubscriptionError.incompatibleProfile(SubscriptionStore.sharingDisabledMessage) {
+                throw NodeConfigRefusal.sharingDisabled
+              }
             case "qrCode":
               guard let text = try Self.arguments(call)["text"] as? String, !text.isEmpty else { throw SubscriptionError.invalidFeed }
               result(try Self.invokeLibXray(method: "clientQR", payload: ["text": text]))

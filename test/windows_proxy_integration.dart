@@ -3733,6 +3733,48 @@ for line in sys.stdin:
   );
 
   test(
+    'a local group shares its servers as links in group order, named as listed',
+    () async {
+      const telegram =
+          'tg://proxy?server=127.0.0.1&port=443&secret=0123456789abcdef0123456789abcdef';
+      final group = (await backend.control.importClientProfiles(
+        content: '$profile\nhttp://127.0.0.1:8080#Web\n$telegram',
+      )).snapshot.subscriptions.single;
+      expect(group.isLocal, isTrue);
+      final [vless, web, proxy] = group.nodes;
+      expect(
+        [vless.name, web.name, proxy.format],
+        ['Fixture', 'Web', 'telegram'],
+      );
+      await backend.control.renameNode(vless.id, 'Renamed');
+      final [link, shared] = (await backend.control.shareLinks(group.id, [
+        proxy.id,
+        vless.id,
+      ])).split('\n');
+      final parsed = Uri.parse(link);
+      expect(parsed.scheme, 'vless');
+      expect(parsed.userInfo, userID);
+      expect(parsed.port, Uri.parse(profile).port);
+      expect(parsed.fragment, 'Renamed');
+      // The import keeps the Telegram link with its parameters sorted.
+      expect(shared, startsWith('tg://proxy?'));
+      expect(
+        Uri.parse(shared).queryParameters,
+        Uri.parse(telegram).queryParameters,
+      );
+      // libXray writes no link for an HTTP proxy.
+      await expectLater(
+        backend.control.shareLinks(group.id, [vless.id, web.id]),
+        throwsA(
+          isA<PlatformException>()
+              .having((error) => error.code, 'code', 'no_share_link')
+              .having((error) => error.details, 'details', 'Web'),
+        ),
+      );
+    },
+  );
+
+  test(
     'inbound credentials protect SOCKS and HTTP, support LAN and survive relaunch',
     () async {
       await prepare();

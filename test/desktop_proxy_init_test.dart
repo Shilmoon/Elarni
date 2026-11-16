@@ -31,14 +31,18 @@ final class _FakeOS implements SystemProxy {
   bool pointsAt(ProxySettings settings, int port) => settings['port'] == port;
 }
 
-// A core that answers each request line with [answer]'s reply, if any, and
-// exits when its input closes.
+// A core that answers each request with [answer]'s reply, if any, and exits
+// when its input closes; a [oneShot] core exits after its reply.
 final class _FakeCore implements Process {
-  _FakeCore(FutureOr<String?> Function(String method) answer) {
+  _FakeCore(
+    FutureOr<String?> Function(Map request) answer, {
+    bool oneShot = false,
+  }) {
     stdin = _Requests((line) async {
-      final reply = await answer((jsonDecode(line) as Map)['method'] as String);
+      final reply = await answer(jsonDecode(line) as Map);
       if (reply != null && !_exit.isCompleted)
         _output.add(utf8.encode('$reply\n'));
+      if (oneShot) kill();
     }, kill);
   }
   final _output = StreamController<List<int>>();
@@ -188,7 +192,7 @@ void main() {
         domainPath: 'unused-domain',
         // The lease is granted; the catalog read answers when released.
         startProcess: (_) async => _FakeCore(
-          (method) => method == 'acquireCatalog'
+          (request) => request['method'] == 'acquireCatalog'
               ? '{"success":true}'
               : release.future.then(
                   (_) => '{"success":false,"error":"storage_unavailable"}',
@@ -431,4 +435,156 @@ void main() {
     );
     expect(saved, isNull);
   });
+
+  // As on macOS, iOS and Android: a local group's servers share as links in
+  // group order, each named as the list shows it. One without a link is
+  // refused with its name, and only a local group's servers are shared.
+  test(
+    'a local group shares its servers as named links in group order',
+    () async {
+      CatalogMap outbound(String protocol) => {
+        'protocol': protocol,
+        'tag': 'proxy',
+        'settings': {'address': '127.0.0.1', 'port': 1080},
+      };
+      CatalogMap server(
+        String id,
+        String name,
+        List<String> protocols, {
+        Map<String, Object?> extra = const {},
+      }) => {
+        'id': id,
+        'name': name,
+        'format': 'xrayProfile',
+        'config': {
+          'outbounds': [for (final protocol in protocols) outbound(protocol)],
+        },
+        ...extra,
+      };
+      const telegram =
+          'tg://proxy?server=127.0.0.1&port=443&secret=0123456789abcdef0123456789abcdef';
+      final committed = DesktopCatalog.empty()
+        ..['subscriptions'] = [
+          {
+            'id': 'local',
+            'name': 'Local profiles',
+            'status': 'ready',
+            'format': 'source',
+            'nodes': [
+              server(
+                'socks',
+                'Imported name',
+                ['socks'],
+                extra: {'manualName': 'Renamed'},
+              ),
+              server('chain', 'Chain', ['socks', 'socks']),
+              {
+                'id': 'telegram',
+                'name': 'Telegram',
+                'format': 'telegram',
+                'config': {'url': telegram},
+              },
+              server('web', 'Web', ['http']),
+              server('lossy', 'Lossy', ['vless']),
+            ],
+          },
+          // A hidden import keeps its own local group.
+          {
+            'id': 'hidden',
+            'name': 'Local profiles',
+            'status': 'ready',
+            'format': 'source',
+            'nodes': [
+              server('secret', 'Secret', ['socks'], extra: {'hideURL': true}),
+            ],
+          },
+          {
+            'id': 'provider',
+            'name': 'Provider',
+            'url': 'https://127.0.0.1/synthetic-token',
+            'status': 'needsApproval',
+            'format': 'source',
+            'metadata': {'hideURL': false},
+            'nodes': [
+              server('remote', 'Remote', ['socks']),
+            ],
+          },
+        ];
+      final converted = <Object?>[];
+      final proxy = DesktopProxy(
+        corePath: 'unused-core',
+        domainPath: 'unused-domain',
+        catalogIO: (_, _) async => {
+          'revision': 'r',
+          'catalog': {'version': 1, 'committed': committed},
+        },
+        platformIO: (_, _) async => {},
+        // The core writes a SOCKS server's link, gives a VLESS server back as
+        // its JSON, as for a link that would lose settings, and has no link for
+        // an HTTP proxy.
+        startProcess: (_) async => _FakeCore((request) {
+          if (request['method'] != 'convertXrayJsonToShareLinks')
+            return '{"success":false,"error":"invalid_request"}';
+          final json = (request['payload'] as Map)['xrayJson'] as String;
+          converted.add(jsonDecode(json));
+          final config = catalogMap(jsonDecode(json));
+          final outbound = catalogList(config['outbounds']).single;
+          return jsonEncode(switch (outbound['protocol']) {
+            'socks' => {
+              'success': true,
+              'data': {'links': 'socks://127.0.0.1:1080#${outbound['tag']}'},
+            },
+            'vless' => {
+              'success': true,
+              'data': {'links': json},
+            },
+            _ => {'success': false, 'error': 'sharing_failed'},
+          });
+        }, oneShot: true),
+      );
+      addTearDown(proxy.dispose);
+      Matcher refused(String code, [String? name]) => throwsA(
+        isA<PlatformException>()
+            .having((error) => error.code, 'code', code)
+            .having((error) => error.details, 'details', name),
+      );
+      expect(
+        await proxy.control.shareLinks('local', ['telegram', 'socks']),
+        'socks://127.0.0.1:1080#Renamed\n$telegram',
+      );
+      // Only the server's outbound goes to the core, tagged with its name.
+      expect(converted, [
+        {
+          'outbounds': [
+            {...outbound('socks'), 'tag': 'Renamed'},
+          ],
+        },
+      ]);
+      await expectLater(
+        proxy.control.shareLinks('local', ['socks', 'chain']),
+        refused('no_share_link', 'Chain'),
+      );
+      await expectLater(
+        proxy.control.shareLinks('local', ['web']),
+        refused('no_share_link', 'Web'),
+      );
+      await expectLater(
+        proxy.control.shareLinks('local', ['lossy']),
+        refused('no_share_link', 'Lossy'),
+      );
+      await expectLater(
+        proxy.control.shareLinks('hidden', ['secret']),
+        refused('sharing_disabled'),
+      );
+      await expectLater(
+        proxy.control.shareLinks('provider', ['remote']),
+        refused('invalid_profile'),
+      );
+      // Servers of another group are not this group's.
+      await expectLater(
+        proxy.control.shareLinks('local', ['remote']),
+        refused('invalid_profile'),
+      );
+    },
+  );
 }
