@@ -77,6 +77,16 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
   failed to import, a connection that stopped, the system proxy, a scheduled refresh, the
   system settings and occupied-port errors, a routing profile's geofile and managed-list
   failures, a per-app paste that is not JSON. Before, they were English in a Russian interface.
+- Tests: changes to four tests that failed in CI and passed on a rerun, and more output from a
+  fifth. The heap check of waiting UDP reads counted buffers that were on their way back
+  to the pool (Linux, race build). The split-HTTP keep-alive close test's relay reset the
+  connection where a network path would only close its half, which on Windows discarded the
+  server's last response. The Android untrusted Wi-Fi test waited 10 seconds for Wi-Fi to turn
+  on and did not wait for the leave watch before its last join. When an Android catalog test
+  failed and was rerun alone, the rerun wiped the catalog the restart tests read, so they
+  failed too; the test that leaves it now always runs apart, right before them. The Android
+  TUIC test's empty first reply is not explained yet: the failure now says which connection it
+  was, and the run prints the TUIC peer's log.
 
 ### Security
 
