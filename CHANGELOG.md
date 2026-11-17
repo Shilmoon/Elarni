@@ -39,6 +39,20 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
 - **iPhone: a widget** for the Home Screen and the Lock Screen shows whether Elarni is
   connected and to which server; the Home Screen one connects and disconnects. **Hide VPN
   icon** is now in Settings, under Advanced network routes, as on macOS and Windows.
+- Elarni updates itself. An install from the Windows MSI, the Linux `.deb` or AppImage, or the
+  Android APK downloads the release its update feed names, in the background, and installs it
+  when that asks for nothing and interrupts nothing: on Windows at the app's next start (through
+  the ElarniVPN service, so without a consent prompt), for the AppImage in place (used from its
+  next start), on Android while the VPN is off once Elarni is allowed to install apps. Otherwise
+  the Home notice has **Install** instead of the link, and a tunnel that was connected comes back
+  after the update. A connected tunnel is never cut for an update nobody started. Turn it off with
+  Settings › General › **Install updates automatically**; the notice then asks first. The portable
+  ZIP and archive, macOS and iPhone keep the notice with the link. This starts with the release
+  after this one: an older build has to be updated by hand once.
+- Releases are signed with a release key (`SHA256SUMS.sig`). A build installs only a package
+  whose checksum list carries that signature and whose version is newer than its own, whatever
+  the update feed or the server behind it says; the installers check this again themselves
+  before they run anything with administrator rights. See docs/RELEASING.md.
 
 ### Changed
 

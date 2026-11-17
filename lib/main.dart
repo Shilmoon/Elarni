@@ -138,22 +138,65 @@ Future<void> main(List<String> arguments) async {
         return AppExitResponse.exit;
       },
     );
+  // Once: a quit for an update closes first, then the window's dispose follows.
+  Future<void>? closing;
+  Future<void> close() => closing ??= () async {
+    try {
+      await (await control)?.close();
+    } finally {
+      await desktop?.dispose();
+    }
+  }();
   runApp(
     ElarniApp(
       tunnelControl: desktop?.control,
       navigatorKey: navigator,
       windows: Platform.isWindows,
       linux: Platform.isLinux,
-      onDispose: () async {
-        try {
-          await (await control)?.close();
-        } finally {
-          await desktop?.dispose();
-        }
-      },
+      onDispose: close,
+      onQuit: desktop == null
+          ? null
+          : ({required bool restart}) async {
+              try {
+                await close();
+              } on Object {
+                // The update needs this process gone, closed cleanly or not.
+              }
+              // Windows' installer starts the new build itself.
+              if (restart && Platform.isLinux)
+                try {
+                  await Process.start('/bin/sh', [
+                    '-c',
+                    r'while kill -0 "$1" 2>/dev/null; do sleep 0.2; done; exec "$2"',
+                    'sh',
+                    '$pid',
+                    relaunchTarget(
+                      Platform.environment,
+                      Platform.resolvedExecutable,
+                    ),
+                  ], mode: ProcessStartMode.detached);
+                } on Object {
+                  stderr.writeln('Elarni could not start again.');
+                }
+              exit(0);
+            },
     ),
   );
   if (desktop != null) unawaited(desktop.handleLinks(arguments));
+}
+
+/// What starts this build again after an update: the AppImage it runs from,
+/// which the update replaced, or else its own executable. The AppImage runtime
+/// sets APPIMAGE to the image and APPDIR to its mount, which holds [executable].
+String relaunchTarget(Map<String, String> environment, String executable) {
+  final image = environment['APPIMAGE'] ?? '';
+  final mount = (environment['APPDIR'] ?? '').replaceFirst(RegExp(r'/+$'), '');
+  return image.startsWith('/') &&
+          mount.startsWith('/') &&
+          executable.startsWith('$mount/') &&
+          FileSystemEntity.isFileSync(image)
+      ? image
+      : executable;
 }
 
 Future<bool> _confirmLink(

@@ -135,7 +135,9 @@ class Repository(private val app: ElarniApplication) {
     }
     /** Whether the background job has anything to do: a subscription or route list to refresh, or an expiry to remind of. */
     private fun backgroundWork() = catalog.sources.any { catalog.nextRefresh(it) != null || catalog.settings.optBoolean("expiryReminders") && it.mapObject("metadata").has("expire") } ||
-        catalog.routes.any { !it.isNull("nextManagedRefreshAt") || !it.isNull("nextGeoRefreshAt") }
+        catalog.routes.any { !it.isNull("nextManagedRefreshAt") || !it.isNull("nextGeoRefreshAt") } ||
+        // The job also looks for a release to install by itself.
+        !BuildConfig.ELARNI_RECORDING && catalog.settings.optBoolean("autoUpdate") && catalog.settings.string("updateFeedURL").isNotEmpty()
     private fun retireAssets() = assets.retire(catalog.routes.flatMap { listOf(it.string("assetRevision"), it.string("originalAssetRevision")) }.toSet())
     suspend fun awaitReady() = ready.await()
     private fun check(generation: Long) { if (generation != epoch.get()) throw AppFailure("cancelled") }

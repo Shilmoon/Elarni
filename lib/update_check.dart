@@ -2,8 +2,12 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
-/// A release a user's update feed names. Elarni only shows it; nothing installs.
+/// A release a user's update feed names, and the page that offers it.
 typedef AvailableUpdate = ({String version, String url});
+
+/// A file a release offers. The core downloads and verifies it; only a
+/// release signed with Elarni's release key installs itself.
+typedef UpdateAsset = ({String name, String url});
 
 /// Reads Elarni's own feed, `{"version": "0.4.0", "url": "https://…"}`, or a
 /// GitHub `releases/latest` reply, so a mirror can serve either.
@@ -22,6 +26,31 @@ AvailableUpdate? parseUpdateFeed(String body) {
   if (version is! String || url is! String) return null;
   if (compareVersions(version, '0') == null || !isHttpsURL(url)) return null;
   return (version: version.replaceFirst(RegExp('^[vV]'), ''), url: url);
+}
+
+/// The https files a feed's release lists: a GitHub reply's `assets` with
+/// their `browser_download_url`, or Elarni's own `assets` with `name` and
+/// `url`. Malformed entries are skipped; a list is at most 200 files.
+List<UpdateAsset> parseUpdateAssets(String body) {
+  final Object? value;
+  try {
+    value = jsonDecode(body);
+  } on FormatException {
+    return const [];
+  }
+  if (value is! Map || value['assets'] is! List) return const [];
+  final address = value.containsKey('tag_name')
+      ? 'browser_download_url'
+      : 'url';
+  final assets = <UpdateAsset>[];
+  for (final entry in value['assets'] as List) {
+    if (assets.length == 200) break;
+    if (entry is! Map) continue;
+    final name = entry['name'], url = entry[address];
+    if (name is String && name.isNotEmpty && url is String && isHttpsURL(url))
+      assets.add((name: name, url: url));
+  }
+  return assets;
 }
 
 bool isHttpsURL(String value) {

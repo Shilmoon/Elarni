@@ -20,6 +20,7 @@ import (
 type serviceFixture struct {
 	name    string
 	starts  []string
+	updates []string
 	cleared int
 }
 
@@ -53,6 +54,15 @@ func startServiceFixture(t *testing.T, users []string, own string) *serviceFixtu
 			return windows.OpenProcess(windows.SYNCHRONIZE|windows.PROCESS_TERMINATE|windows.PROCESS_QUERY_LIMITED_INFORMATION, false, uint32(command.Process.Pid))
 		},
 		clear: func() error { fixture.cleared++; return nil },
+		update: func(directory string) (windows.Handle, error) {
+			fixture.updates = append(fixture.updates, directory)
+			command := exec.Command(self, "-test.run=^$")
+			if err := command.Start(); err != nil {
+				return 0, err
+			}
+			t.Cleanup(func() { _ = command.Wait() })
+			return windows.OpenProcess(windows.SYNCHRONIZE|windows.PROCESS_TERMINATE|windows.PROCESS_QUERY_LIMITED_INFORMATION, false, uint32(command.Process.Pid))
+		},
 	}
 	ready := make(chan struct{})
 	done := make(chan error, 1)
@@ -161,6 +171,49 @@ func TestVPNServiceRejectsOtherPipeNames(t *testing.T) {
 	}
 	if len(fixture.starts) != 0 {
 		t.Fatal("the helper started for a rejected request:", fixture.starts)
+	}
+}
+
+// An allowed account's broker hands over its download; the installer it gets a handle to
+// verifies the download itself, so the service passes on only a plain directory.
+func TestVPNServiceStartsTheUpdateInstallerForAnAllowedAccount(t *testing.T) {
+	fixture := startServiceFixture(t, []string{currentUserSID(t)}, ownDigest(t))
+	directory := t.TempDir()
+	reply, err := askServicePipe(fixture.name, windows.GetCurrentProcessId(), serviceRequest{Action: "update", Directory: directory})
+	if err != nil {
+		t.Fatal(err)
+	}
+	process := windows.Handle(reply.Handle)
+	defer windows.CloseHandle(process)
+	if state, err := windows.WaitForSingleObject(process, 10_000); err != nil || state != windows.WAIT_OBJECT_0 {
+		t.Fatal("the installer handle cannot be waited on:", state, err)
+	}
+	var code uint32
+	if err := windows.GetExitCodeProcess(process, &code); err != nil {
+		t.Fatal("the installer's exit code cannot be read:", err)
+	}
+	if strings.Join(fixture.updates, ",") != directory {
+		t.Fatalf("installed from %q", fixture.updates)
+	}
+	for _, refused := range []string{"", "relative", directory + `" /qn`, directory + "\n"} {
+		if _, err := askServicePipe(fixture.name, windows.GetCurrentProcessId(), serviceRequest{Action: "update", Directory: refused}); err == nil {
+			t.Fatalf("directory %q was accepted", refused)
+		}
+	}
+	if len(fixture.updates) != 1 || len(fixture.starts) != 0 {
+		t.Fatal("a rejected request started something:", fixture.updates, fixture.starts)
+	}
+}
+
+func TestVPNServiceInstallsNoUpdateForOtherAccountsOrBuilds(t *testing.T) {
+	directory := t.TempDir()
+	other := startServiceFixture(t, []string{"S-1-5-32-546"}, ownDigest(t))
+	if _, err := askServicePipe(other.name, windows.GetCurrentProcessId(), serviceRequest{Action: "update", Directory: directory}); err == nil || len(other.updates) != 0 {
+		t.Fatal("an account that is not allowed started the installer:", err)
+	}
+	outdated := startServiceFixture(t, []string{currentUserSID(t)}, strings.Repeat("0", 64))
+	if _, err := askServicePipe(outdated.name, windows.GetCurrentProcessId(), serviceRequest{Action: "update", Directory: directory}); err == nil || err.Error() != "vpn_service_outdated" || len(outdated.updates) != 0 {
+		t.Fatal("another build was served:", err)
 	}
 }
 

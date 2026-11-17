@@ -59,24 +59,8 @@ func installWindowsHelper() error {
 	if err != nil {
 		return err
 	}
-	root, err := windowsHelperRoot()
+	root, err := protectHelperRoot()
 	if err != nil {
-		return err
-	}
-	if err := os.MkdirAll(root, 0o755); err != nil {
-		return err
-	}
-	// An explicit protected DACL keeps the folder admin-only whatever it inherited.
-	descriptor, err := windows.SecurityDescriptorFromString(windowsHelperACL)
-	if err != nil {
-		return err
-	}
-	dacl, _, err := descriptor.DACL()
-	if err != nil {
-		return err
-	}
-	if err := windows.SetNamedSecurityInfo(root, windows.SE_FILE_OBJECT,
-		windows.DACL_SECURITY_INFORMATION|windows.PROTECTED_DACL_SECURITY_INFORMATION, nil, nil, dacl, nil); err != nil {
 		return err
 	}
 	digest, err := fileDigest(executable)

@@ -778,7 +778,46 @@
       }
     }
   },
-  "updateFeedHelp": "Elarni reads this address once a day and shows a notice on Home when it names a newer release. It never downloads or installs anything. Use a JSON file with \"version\" and \"url\", or a GitHub releases/latest API address; https only.",
+  "updateReady": "Elarni {version} is ready to install",
+  "@updateReady": {
+    "placeholders": {
+      "version": {
+        "type": "String"
+      }
+    }
+  },
+  "updateInstall": "Install",
+  "updateDownloading": "Downloading the update…",
+  "updateInstalling": "Installing Elarni {version}…",
+  "@updateInstalling": {
+    "placeholders": {
+      "version": {
+        "type": "String"
+      }
+    }
+  },
+  "updateInstalled": "Elarni {version} is installed",
+  "@updateInstalled": {
+    "placeholders": {
+      "version": {
+        "type": "String"
+      }
+    }
+  },
+  "updateRestartToUse": "Restart Elarni to use it.",
+  "updateRestart": "Restart",
+  "updateReconnects": "The VPN reconnects after the update.",
+  "updateFailed": "Elarni {version} could not be installed. Download it from the release page.",
+  "@updateFailed": {
+    "placeholders": {
+      "version": {
+        "type": "String"
+      }
+    }
+  },
+  "autoUpdate": "Install updates automatically",
+  "autoUpdateHelp": "Elarni downloads a new release in the background and checks its signature. It installs by itself only when nothing has to be approved and the VPN is off; otherwise Home offers Install.",
+  "updateFeedHelp": "Elarni reads this address once a day and shows a notice on Home when it names a newer release. Only a release signed with Elarni's release key installs itself. Use a JSON file with \"version\" and \"url\", or a GitHub releases/latest API address; https only.",
   "updateFeed": "Update feed",
   "updates": "Updates",
   "favoritesFirst": "Favorites first",

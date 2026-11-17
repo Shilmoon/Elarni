@@ -501,7 +501,14 @@
     <string name="included_and_excluded_ip_ranges">Included and excluded IP ranges</string>
     <string name="server_addressing">Server addressing</string>
     <string name="updates">Updates</string>
-    <string name="elarni_reads_this_address_once_a">Elarni reads this address once a day, through the tunnel while connected, and shows a notice on Home when it names a newer release. It never installs anything. Use a JSON file with \"version\" and \"url\", or a GitHub releases/latest API address.</string>
+    <string name="elarni_reads_this_address_once_a">Elarni reads this address once a day, through the tunnel while connected, and shows a notice on Home when it names a newer release. It installs only a release signed with Elarni\'s keys. Use a JSON file with \"version\" and \"url\", or a GitHub releases/latest API address.</string>
+    <string name="install_updates_automatically">Install updates automatically</string>
+    <string name="elarni_downloads_a_new_release_on">Elarni downloads a new release on Wi-Fi and installs it while the VPN is off. Android asks you to allow the first one. When off, the notice on Home asks first.</string>
+    <string name="install">Install</string>
+    <string name="downloading_the_update">Downloading the update…</string>
+    <string name="installing_the_update">Installing the update…</string>
+    <string name="you_have_installing_restarts_elarni">You have %1$s. Installing restarts Elarni; a running connection comes back after it.</string>
+    <string name="android_did_not_install_the_update">Android did not install the update. Download it from the release page.</string>
     <string name="open_server_list">Open server list</string>
     <string name="open">Open</string>
     <string name="android_manages_this_turn_on_always">Android manages this: turn on Always-on VPN and Block connections without VPN.</string>

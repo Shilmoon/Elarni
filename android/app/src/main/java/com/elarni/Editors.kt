@@ -196,7 +196,7 @@ private fun canonical(json: String) = JSONObject(json).let { value -> value.keys
     var localError by remember { mutableStateOf<String?>(null) }
     var routesOpen by rememberSaveable { mutableStateOf(false) }
     var askOpenProxy by rememberSaveable { mutableStateOf(false) }
-    val immediate = if (section == "General") setOf("onDemandEnabled", "disconnectOnSleep", "connectOnUntrustedWiFi", "expiryReminders", "allowExternalControl") else emptySet()
+    val immediate = if (section == "General") setOf("onDemandEnabled", "disconnectOnSleep", "connectOnUntrustedWiFi", "expiryReminders", "allowExternalControl", "autoUpdate") else emptySet()
     var namesAllowed by remember { mutableStateOf(true) }
     LifecycleResumeEffect(activity.wifiAnswers) { namesAllowed = WiFiRule.namesAllowed(activity); onPauseOrDispose {} }
     // Android's battery dialog answers with no result; back from it, the tile reads the answer again.
@@ -286,7 +286,7 @@ private fun canonical(json: String) = JSONObject(json).let { value -> value.keys
             SettingsTile(tr(R.string.connection_recovery), if (catalog.data.mapObject("automation").optBoolean("enabled")) tr(R.string.on) else tr(R.string.off)) { navigate("automation", "") }
             SettingsTile(tr(R.string.run_in_the_background), if (batteryExempt) tr(R.string.allowed) else tr(R.string.android_may_stop_the_vpn_while),
                 trailing = if (batteryExempt) null else {{ TextButton({ activity.allowBackground() }) { Text(tr(R.string.allow)) } }})
-            fields.filter { it.key in immediate && it.key != "allowExternalControl" }.forEach { toggle(it) }
+            fields.filter { it.key in immediate && it.key != "allowExternalControl" && it.key != "autoUpdate" }.forEach { toggle(it) }
             if (saved.optBoolean("connectOnUntrustedWiFi")) {
                 SettingsText(tr(R.string.trusted_wi_fi_networks), values["trustedWiFiNetworks"] ?: "", lines(values["trustedWiFiNetworks"] ?: "").joinToString(", ")
                     .ifEmpty { tr(R.string.none_every_wi_fi_network_connects) }, tr(R.string.one_network_name_per_line), lines = 3) { values["trustedWiFiNetworks"] = it }
@@ -314,6 +314,8 @@ private fun canonical(json: String) = JSONObject(json).let { value -> value.keys
         }
         if (section == "General") SettingsGroup(tr(R.string.updates), tr(R.string.elarni_reads_this_address_once_a)) {
             fields.filter { it.key == "updateFeedURL" }.forEach { field(it) }
+            // A recording build never replaces itself.
+            if (!BuildConfig.ELARNI_RECORDING) fields.filter { it.key == "autoUpdate" }.forEach { toggle(it) }
         }
         if (section == "Connection") SettingsGroup(tr(R.string.server_addressing)) {
             fields.filter { it.key in addressing }.forEach { field(it) }

@@ -453,13 +453,28 @@ private val LocalReselect = compositionLocalOf { 0 }
         val feed = catalog.settings.string("updateFeedURL")
         val lifecycle = LocalLifecycleOwner.current.lifecycle
         // Each minute the app shows asks whether the day (or, while the feed is unreadable, the hour) has passed.
-        LaunchedEffect(feed, lifecycle) { lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) { do { UpdateCheck.refresh(feed); delay(60_000) } while (feed.isNotEmpty()) } }
+        val automatic = catalog.settings.optBoolean("autoUpdate", true)
+        val application = activity.application as ElarniApplication
+        // With automatic updates on, the release is downloaded while the app shows and installed once it does not.
+        LaunchedEffect(feed, automatic, lifecycle) { lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            do { UpdateCheck.refresh(feed); UpdateCheck.prepare(application, automatic); delay(60_000) } while (feed.isNotEmpty())
+        } }
         val update by UpdateCheck.available.collectAsStateWithLifecycle()
+        val installable by UpdateCheck.installable.collectAsStateWithLifecycle()
+        val updateStage by UpdateCheck.stage.collectAsStateWithLifecycle()
         var dismissedUpdate by remember { mutableStateOf(prefs.getString("dismissedUpdate", "") ?: "") }
         update?.takeIf { it.first != dismissedUpdate }?.let { (version, url) ->
-            HomeNotice(tr(R.string.elarni_is_available, version), tr(R.string.you_have_it_keeps_working_update, BuildConfig.VERSION_NAME),
-                tr(R.string.download) to { activity.openURL(url) },
-                tr(R.string.not_now) to { dismissedUpdate = version; prefs.edit().putString("dismissedUpdate", version).apply() })
+            val later = tr(R.string.not_now) to { dismissedUpdate = version; prefs.edit().putString("dismissedUpdate", version).apply() }
+            val title = tr(R.string.elarni_is_available, version)
+            when {
+                updateStage == "failed" -> HomeNotice(title, tr(R.string.android_did_not_install_the_update), tr(R.string.download) to { activity.openURL(url) }, later)
+                // A release Elarni cannot install itself keeps the link to its page.
+                !installable -> HomeNotice(title, tr(R.string.you_have_it_keeps_working_update, BuildConfig.VERSION_NAME), tr(R.string.download) to { activity.openURL(url) }, later)
+                updateStage == "downloading" -> HomeNotice(title, tr(R.string.downloading_the_update), later)
+                updateStage == "installing" -> HomeNotice(title, tr(R.string.installing_the_update))
+                else -> HomeNotice(title, tr(R.string.you_have_installing_restarts_elarni, BuildConfig.VERSION_NAME),
+                    tr(R.string.install) to { application.repository.scope.launch { UpdateCheck.installNow(application) } }, later)
+            }
         }
         val noTraffic = state.connection == "connected" && state.liveness == "noTraffic"
         val warning = if (MaterialTheme.colorScheme.surface == Color(0xFF202124)) Color(0xFFFDE047) else Color(0xFF854D0E)

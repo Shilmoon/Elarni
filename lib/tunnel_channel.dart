@@ -3,6 +3,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'platform_services.dart';
+import 'update_check.dart' show UpdateAsset;
 
 /// Connection recording exists only in builds made with
 /// `--dart-define=ELARNI_RECORDING=true`; release builds compile it out.
@@ -148,6 +149,21 @@ abstract interface class TunnelControl {
 
   /// Opens the https release page an update feed named.
   Future<void> openUpdateLink(String url);
+
+  /// Desktop core only (Windows and Linux): how this install replaces itself,
+  /// `{'kind': 'msi'|'deb'|'appimage'|'', 'silent': bool, 'ready'?: version,
+  /// 'failed'?: version}`. An empty kind cannot replace itself.
+  Future<Map<String, Object?>> updateStatus();
+
+  /// Desktop core only: downloads a release's files and verifies its
+  /// signature, checksum and version, `{'version', 'name', 'silent'}`.
+  Future<Map<String, Object?>> downloadUpdate(List<UpdateAsset> assets);
+
+  /// Desktop core only: installs the verified download. Windows answers
+  /// `{'exit': true}`: a helper installs once this app exits and, with
+  /// [relaunch], starts it again. Linux answers `{'restart': true}`: the new
+  /// build runs once the app starts again.
+  Future<Map<String, Object?>> installUpdate({required bool relaunch});
   Future<Map<String, Object?>> shareClient(
     String id, {
     bool subscription = false,
@@ -445,6 +461,22 @@ final class NativeTunnelControl implements TunnelControl {
   Future<void> openUpdateLink(String url) async {
     await _mapResult('openUpdateLink', <String, Object?>{'url': url});
   }
+
+  @override
+  Future<Map<String, Object?>> updateStatus() =>
+      _mapResult('updateStatus', <String, Object?>{});
+
+  @override
+  Future<Map<String, Object?>> downloadUpdate(List<UpdateAsset> assets) =>
+      _mapResult('downloadUpdate', <String, Object?>{
+        'assets': [
+          for (final asset in assets) {'name': asset.name, 'url': asset.url},
+        ],
+      });
+
+  @override
+  Future<Map<String, Object?>> installUpdate({required bool relaunch}) =>
+      _mapResult('installUpdate', <String, Object?>{'relaunch': relaunch});
 
   @override
   Future<Map<String, Object?>> shareClient(

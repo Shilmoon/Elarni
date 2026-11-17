@@ -22,8 +22,10 @@ A cross-platform routing client on a forked Xray core.
 ## Download
 
 Builds are on the [Releases](../../releases) page, each with a `SHA256SUMS` file.
-Desktop and Android release builds check that page once a day and only show a
-notice when a newer version exists; clear **Update feed** in Settings to turn it off.
+Desktop and Android release builds check that page once a day. An install from the
+MSI, the `.deb`, the AppImage or the APK then updates itself with the signed release
+(turn **Install updates automatically** off in Settings to be asked first); the
+portable builds show a notice. Clear **Update feed** in Settings to turn the check off.
 
 | Platform | Requires | Guide |
 |---|---|---|

@@ -746,9 +746,10 @@ extension _HomePages on _ElarniHomeState {
   Widget _homeNotice(
     BuildContext context, {
     required String title,
-    required String body,
+    required String? body,
     required List<Widget> actions,
     bool severe = false,
+    bool progress = false,
   }) {
     final dark = Theme.of(context).brightness == Brightness.dark;
     final (foreground, background) = severe
@@ -780,8 +781,19 @@ extension _HomePages on _ElarniHomeState {
                     fontWeight: FontWeight.w600,
                   ),
                 ),
-                const SizedBox(height: 2),
-                Text(body, style: TextStyle(color: foreground)),
+                if (body != null) ...[
+                  const SizedBox(height: 2),
+                  Text(body, style: TextStyle(color: foreground)),
+                ],
+                if (progress)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 6),
+                    child: LinearProgressIndicator(
+                      minHeight: 3,
+                      color: foreground,
+                      backgroundColor: foreground.withValues(alpha: .2),
+                    ),
+                  ),
                 const SizedBox(height: 4),
                 Wrap(
                   spacing: 8,
@@ -849,30 +861,111 @@ extension _HomePages on _ElarniHomeState {
           ),
         ],
       ),
-    if (widget.desktop.availableUpdate case final update?
-        when update.version != widget.desktop.dismissedUpdate)
-      _homeNotice(
-        context,
-        title: l10n.updateAvailable(update.version),
-        body: l10n.youHaveVersion('${_systemInfo['appVersion']}'),
+    ?_updateNotice(context),
+  ];
+
+  Widget? _updateNotice(BuildContext context) {
+    final desktop = widget.desktop, found = desktop.availableUpdate;
+    final stage = desktop.updateStage, staged = desktop.updateVersion;
+    // The VPN is on or coming up, so the update interrupts it.
+    final reconnect =
+        _stateAvailable &&
+        const {
+          TunnelState.connecting,
+          TunnelState.connected,
+          TunnelState.reconnecting,
+          TunnelState.reasserting,
+        }.contains(_state);
+    final running = l10n.youHaveVersion('${_systemInfo['appVersion']}');
+    Widget notNow(String version) => TextButton(
+      onPressed: desktop.saving
+          ? null
+          : () => unawaited(
+              desktop
+                  .update(dismissedUpdate: version)
+                  .catchError((Object _) {}),
+            ),
+      child: Text(l10n.notNow),
+    );
+    // Not now hides the version the notice names, whichever form it takes.
+    Widget? notice(
+      String version, {
+      required String title,
+      String? body,
+      List<Widget> actions = const [],
+      bool progress = false,
+    }) => version == desktop.dismissedUpdate
+        ? null
+        : _homeNotice(
+            context,
+            title: title,
+            body: body,
+            // A running installer cannot be put off.
+            actions: progress ? const [] : [...actions, notNow(version)],
+            progress: progress,
+          );
+    if (staged != null && stage == UpdateStage.downloading)
+      return notice(
+        staged,
+        title: l10n.updateAvailable(staged),
+        body: l10n.updateDownloading,
+      );
+    if (staged != null && stage == UpdateStage.installing)
+      return notice(
+        staged,
+        title: l10n.updateInstalling(staged),
+        progress: true,
+      );
+    if (staged != null && stage == UpdateStage.installed)
+      return notice(
+        staged,
+        title: l10n.updateInstalled(staged),
+        body: l10n.updateRestartToUse,
         actions: [
           TextButton(
-            onPressed: () => _openUpdateLink(update.url),
-            child: Text(l10n.download),
-          ),
-          TextButton(
-            onPressed: widget.desktop.saving
-                ? null
-                : () => unawaited(
-                    widget.desktop
-                        .update(dismissedUpdate: update.version)
-                        .catchError((Object _) {}),
-                  ),
-            child: Text(l10n.notNow),
+            onPressed: () =>
+                unawaited(desktop.restartForUpdate(reconnect: reconnect)),
+            child: Text(l10n.updateRestart),
           ),
         ],
-      ),
-  ];
+      );
+    final ready = stage == UpdateStage.ready && staged != null;
+    if (ready ||
+        // Not downloaded: automatic updates are off, or the network cut it.
+        found != null &&
+            stage == UpdateStage.none &&
+            desktop.updateInstallable) {
+      final version = ready ? staged : found!.version;
+      return notice(
+        version,
+        title: ready
+            ? l10n.updateReady(version)
+            : l10n.updateAvailable(version),
+        body: reconnect ? '$running ${l10n.updateReconnects}' : running,
+        actions: [
+          TextButton(
+            onPressed: () =>
+                unawaited(desktop.installUpdate(reconnect: reconnect)),
+            child: Text(l10n.updateInstall),
+          ),
+        ],
+      );
+    }
+    if (found == null) return null;
+    return notice(
+      found.version,
+      title: l10n.updateAvailable(found.version),
+      body: stage == UpdateStage.failed
+          ? l10n.updateFailed(staged ?? found.version)
+          : running,
+      actions: [
+        TextButton(
+          onPressed: () => _openUpdateLink(found.url),
+          child: Text(l10n.download),
+        ),
+      ],
+    );
+  }
 
   Widget _connectionControl(BuildContext context, {bool compact = false}) {
     final scheme = Theme.of(context).colorScheme;
