@@ -4,6 +4,8 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
 
 ## Unreleased
 
+## 0.6.2 - 2026-11-17
+
 ### Added
 
 - **ShadowQUIC servers.** `sq://` and `shadowquic://` links, subscriptions that carry them and
