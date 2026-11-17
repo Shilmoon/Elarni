@@ -26,6 +26,32 @@ func windowsHelperRoot() (string, error) {
 	return filepath.Join(programs, "Elarni VPN Helper"), nil
 }
 
+// shadowquicProgram is the ShadowQUIC client the core starts from its own folder.
+const shadowquicProgram = "elarni-shadowquic.exe"
+
+// windowsHelperFiles are the files of this build's protected copy, each with the digest
+// its copy must have.
+func windowsHelperFiles(executable, digest string) []helperFile {
+	bundle := filepath.Dir(executable)
+	files := []helperFile{
+		{"elarni-core.exe", executable, digest},
+		{"wintun.dll", filepath.Join(bundle, "wintun.dll"), wintunSHA256[runtime.GOARCH]},
+	}
+	if shadowquicSHA256 != "" {
+		files = append(files, helperFile{shadowquicProgram, filepath.Join(bundle, shadowquicProgram), shadowquicSHA256})
+	}
+	return files
+}
+
+// windowsHelperInstalled reports whether directory holds a complete copy of this build.
+func windowsHelperInstalled(directory string) bool {
+	names := []string{"elarni-core.exe", "wintun.dll"}
+	if shadowquicSHA256 != "" {
+		names = append(names, shadowquicProgram)
+	}
+	return helperInstalled(directory, names...)
+}
+
 // windowsHelper returns this build's protected copy, installing it first behind
 // its own consent prompt when the build is new to this machine.
 func windowsHelper() (string, error) {
@@ -42,11 +68,11 @@ func windowsHelper() (string, error) {
 		return "", errors.New("native_unavailable")
 	}
 	directory := helperDirectory(root, digest)
-	if !helperInstalled(directory, "elarni-core.exe", "wintun.dll") {
+	if !windowsHelperInstalled(directory) {
 		if err := runElevated(executable, "--install-helper"); err != nil {
 			return "", err
 		}
-		if !helperInstalled(directory, "elarni-core.exe", "wintun.dll") {
+		if !windowsHelperInstalled(directory) {
 			return "", errors.New("elevation_failed")
 		}
 	}
@@ -76,10 +102,7 @@ func installWindowsHelper() error {
 			stopVPNService(service)
 		}
 	}
-	if err := installHelper(root, digest, []helperFile{
-		{"elarni-core.exe", executable, digest},
-		{"wintun.dll", filepath.Join(filepath.Dir(executable), "wintun.dll"), wintunSHA256[runtime.GOARCH]},
-	}); err != nil {
+	if err := installHelper(root, digest, windowsHelperFiles(executable, digest)); err != nil {
 		return err
 	}
 	helper := filepath.Join(helperDirectory(root, digest), "elarni-core.exe")
@@ -122,17 +145,17 @@ func stopHelpers(root string) {
 	})
 }
 
-// stopApp ends the app, the cores it started and the command line tool running from
-// the install folder, for every signed-in user. A running app keeps its tunnel up
-// and its files locked, so an uninstall left both behind. Only these three names
-// count: a portable bundle may share its folder with other programs.
+// stopApp ends the app, the cores it started, their ShadowQUIC clients and the command
+// line tool running from the install folder, for every signed-in user. A running app
+// keeps its tunnel up and its files locked, so an uninstall left both behind. Only these
+// names count: a portable bundle may share its folder with other programs.
 func stopApp(directory string) {
 	stopProcesses(func(image string) bool {
 		if !strings.EqualFold(filepath.Dir(image), directory) {
 			return false
 		}
 		name := strings.ToLower(filepath.Base(image))
-		return name == "elarni.exe" || name == "elarni-core.exe" || name == "elarni-cli.exe"
+		return name == "elarni.exe" || name == "elarni-core.exe" || name == "elarni-cli.exe" || name == shadowquicProgram
 	})
 }
 

@@ -79,7 +79,7 @@ def main():
     if (built.get('version'),built.get('build_number'))!=version.groups():
         raise SystemExit('Bundle version differs from pubspec.yaml: '+str(built.get('version'))+'+'+str(built.get('build_number')))
     version='-'.join(version.groups())
-    for name in ('elarni','elarni-cli','elarni-core','lib/libelarni_domain.so','lib/libflutter_linux_gtk.so','lib/libapp.so'):
+    for name in ('elarni','elarni-cli','elarni-core','elarni-shadowquic','lib/libelarni_domain.so','lib/libflutter_linux_gtk.so','lib/libapp.so'):
         path=args.bundle/name
         with path.open('rb') as source: header=source.read(20)
         if header[:4]!=b'\x7fELF' or header[4:6]!=b'\x02\x01' or header[18:20]!=b'\x3e\x00':

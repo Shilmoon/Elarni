@@ -150,3 +150,48 @@ func TestUninstallStopsTheAppInTheInstallFolder(t *testing.T) {
 		t.Fatalf("stopped a program that is not the app: other %v, nested %v", !running(other), !running(nested))
 	}
 }
+
+// The helper starts the ShadowQUIC client with its own rights, so its copy must be the
+// program this core was built with, and a copy without it is not complete.
+func TestWindowsHelperHoldsThePinnedShadowQUICClient(t *testing.T) {
+	bundle, root := t.TempDir(), t.TempDir()
+	executable := filepath.Join(bundle, "elarni-core.exe")
+	client := filepath.Join(bundle, shadowquicProgram)
+	for path, content := range map[string]string{executable: "core", client: "client", filepath.Join(bundle, "wintun.dll"): "wintun"} {
+		if err := os.WriteFile(path, []byte(content), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	digest, _ := fileDigest(executable)
+	pinned, _ := fileDigest(client)
+	wintun, _ := fileDigest(filepath.Join(bundle, "wintun.dll"))
+	if files := windowsHelperFiles(executable, digest); len(files) != 2 {
+		t.Fatalf("a core without a pinned client installs %v", files)
+	}
+	t.Cleanup(func() { shadowquicSHA256 = "" })
+	shadowquicSHA256 = pinned
+	files := windowsHelperFiles(executable, digest)
+	if len(files) != 3 || files[2] != (helperFile{shadowquicProgram, client, pinned}) {
+		t.Fatalf("installs %v", files)
+	}
+	files[1].digest = wintun // The real one is the pinned Wintun build's.
+	if err := installHelper(root, digest, files); err != nil {
+		t.Fatal(err)
+	}
+	directory := helperDirectory(root, digest)
+	if copied, err := fileDigest(filepath.Join(directory, shadowquicProgram)); err != nil || copied != pinned || !windowsHelperInstalled(directory) {
+		t.Fatalf("installed client has digest %s (%v)", copied, err)
+	}
+	if err := os.Remove(filepath.Join(directory, shadowquicProgram)); err != nil {
+		t.Fatal(err)
+	}
+	if windowsHelperInstalled(directory) {
+		t.Fatal("a copy without the client counts as installed")
+	}
+	if err := os.WriteFile(client, []byte("another program"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := installHelper(root, digest, files); err == nil || windowsHelperInstalled(directory) {
+		t.Fatalf("a client that differs from the pinned build was installed (%v)", err)
+	}
+}

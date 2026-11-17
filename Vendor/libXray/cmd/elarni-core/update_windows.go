@@ -51,7 +51,7 @@ func installedHelper() string {
 		return ""
 	}
 	directory := helperDirectory(root, digest)
-	if !helperInstalled(directory, "elarni-core.exe", "wintun.dll") {
+	if !windowsHelperInstalled(directory) {
 		return ""
 	}
 	return filepath.Join(directory, "elarni-core.exe")

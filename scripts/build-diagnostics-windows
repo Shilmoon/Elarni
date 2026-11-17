@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Stage an existing Windows app with a freshly built diagnostic core; never install it."""
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -21,14 +22,16 @@ if sys.platform != 'win32':
 source, output = args.bundle.resolve(), args.output.resolve()
 if output == source or output.is_relative_to(source) or source.is_relative_to(output):
     parser.error('Use a separate output outside the source bundle')
-require_files(source, ['elarni.exe', 'elarni-core.exe', 'elarni_domain.dll', 'wintun.dll'])
+require_files(source, ['elarni.exe', 'elarni-core.exe', 'elarni-shadowquic.exe', 'elarni_domain.dll', 'wintun.dll'])
 prepare_output(output)
 bundle = output / 'bundle'
 shutil.copytree(source, bundle)
 build_id = int(time.time())
 environment = dict(os.environ, GOOS='windows', GOARCH='amd64', CGO_ENABLED='0')
+# The new core's helper accepts the bundle's ShadowQUIC client by its digest, as the app build's does.
+client = hashlib.sha256((bundle / 'elarni-shadowquic.exe').read_bytes()).hexdigest()
 subprocess.run([args.go, 'build', '-trimpath', '-tags=elarni_diagnostics',
-                '-ldflags', f'-X main.diagnosticBuild={build_id}',
+                '-ldflags', f'-X main.diagnosticBuild={build_id} -X main.shadowquicSHA256={client}',
                 '-o', str(bundle / 'elarni-core.exe'), './Vendor/libXray/cmd/elarni-core'],
                cwd=ROOT, env=environment, check=True)
 (bundle / 'Export diagnostics.cmd').write_text(
