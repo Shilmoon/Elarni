@@ -188,13 +188,17 @@ Future<void> main(List<String> arguments) async {
 /// What starts this build again after an update: the AppImage it runs from,
 /// which the update replaced, or else its own executable. The AppImage runtime
 /// sets APPIMAGE to the image and APPDIR to its mount, which holds [executable].
-String relaunchTarget(Map<String, String> environment, String executable) {
+String relaunchTarget(
+  Map<String, String> environment,
+  String executable, {
+  bool Function(String path) isFile = FileSystemEntity.isFileSync,
+}) {
   final image = environment['APPIMAGE'] ?? '';
   final mount = (environment['APPDIR'] ?? '').replaceFirst(RegExp(r'/+$'), '');
   return image.startsWith('/') &&
           mount.startsWith('/') &&
           executable.startsWith('$mount/') &&
-          FileSystemEntity.isFileSync(image)
+          isFile(image)
       ? image
       : executable;
 }
