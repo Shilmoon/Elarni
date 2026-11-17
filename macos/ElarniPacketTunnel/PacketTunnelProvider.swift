@@ -103,6 +103,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider, @unchecked Sendable {
     DiagnosticLog.record("provider_stop", ["reason": Int64(reason.rawValue)])
     CoreLog.persist()
 #if os(iOS)
+    if reason == .userInitiated { IOSOnDemandRestart.userStopped() }
     // Alert after cleanup has joined the monitor, so a late refresh cannot re-arm it.
     let cause = Self.unexpectedStopCause(reason)
     let completion = {
@@ -652,6 +653,8 @@ final class PacketTunnelProvider: NEPacketTunnelProvider, @unchecked Sendable {
       runtime.startupFinished(generation)
 #if os(iOS)
       IOSConnectionAlerts.connected()
+      // On Demand has undone a stop from the iOS VPN switch; only the app can turn it off.
+      if IOSOnDemandRestart.restarted() { IOSOnDemandRestart.notify() }
 #endif
       completionHandler(nil)
 #if os(macOS)

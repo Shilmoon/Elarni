@@ -5,6 +5,7 @@ import Darwin
 import Network
 import NetworkExtension
 import SwiftUI
+import UserNotifications
 @testable import Elarni
 
 /// Real Swift catalog → Go importer → Rust compiler. No VPN activation.
@@ -796,6 +797,59 @@ final class ElarniTests: XCTestCase {
       "a saved choice to keep On Demand off was overridden")
   }
 
+  // iOS starts a VPN with On Demand again when its own VPN switch stops it, and the extension
+  // cannot turn On Demand off. It reports that restart, and no other start.
+  func testOnDemandRestartAfterASystemStopIsReported() throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let stop = Date(timeIntervalSince1970: 1_800_000_000)
+    IOSOnDemandRestart.setArmed(true, in: directory)
+    IOSOnDemandRestart.userStopped(now: stop, in: directory)
+    XCTAssertTrue(IOSOnDemandRestart.restarted(now: stop + 2, in: directory), "On Demand undid a stop from the iOS VPN switch unreported")
+    XCTAssertFalse(IOSOnDemandRestart.restarted(now: stop + 3, in: directory), "one stop was reported twice")
+    IOSOnDemandRestart.userStopped(now: stop, in: directory)
+    XCTAssertFalse(IOSOnDemandRestart.restarted(now: stop + IOSOnDemandRestart.window + 1, in: directory),
+      "a start long after the stop was reported as On Demand's")
+    XCTAssertFalse(IOSOnDemandRestart.restarted(now: stop + 2, in: directory), "a start without a stop was reported")
+    // Connect in the app after a stop that On Demand could not undo (no network).
+    IOSOnDemandRestart.userStopped(now: stop, in: directory)
+    IOSOnDemandRestart.forget(in: directory)
+    XCTAssertFalse(IOSOnDemandRestart.restarted(now: stop + 2, in: directory), "the user's own Connect was reported")
+    // The app turns On Demand off before its own stop, and iOS leaves a VPN without On Demand stopped.
+    IOSOnDemandRestart.setArmed(false, in: directory)
+    IOSOnDemandRestart.userStopped(now: stop, in: directory)
+    XCTAssertFalse(IOSOnDemandRestart.restarted(now: stop + 2, in: directory), "a stop without On Demand was reported")
+    // No shared container (unsigned build): nothing to note, nothing to report.
+    IOSOnDemandRestart.setArmed(true, in: nil)
+    IOSOnDemandRestart.userStopped(now: stop, in: nil)
+    XCTAssertFalse(IOSOnDemandRestart.restarted(now: stop + 2, in: nil))
+  }
+
+  // The extension cannot read the VPN configuration, so the app notes for it whether On Demand is armed.
+  func testAppNotesWhetherOnDemandIsArmed() async throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    let shared = IOSOnDemandRestart.directory
+    IOSOnDemandRestart.directory = directory
+    defer { IOSOnDemandRestart.directory = shared; try? FileManager.default.removeItem(at: directory) }
+    let vpn = IOSVPNController()
+    let tunnel = FixtureTunnel(plan: Data())
+    tunnel.session.fixtureStatus = .disconnected
+    vpn.manager = tunnel
+    var settings = IOSTunnelSettings(); settings.onDemandEnabled = true
+    try await vpn.persist(Data("plan".utf8), settings: settings, allowOnDemand: true)
+    XCTAssertTrue(IOSOnDemandRestart.armed(), "armed On Demand was not noted: its restart would go unreported")
+    try await vpn.disconnect()
+    XCTAssertFalse(IOSOnDemandRestart.armed(), "the app's Stop left On Demand noted as armed")
+    try await vpn.persist(Data("plan".utf8), settings: settings, allowOnDemand: true)
+    try await vpn.persist(Data("plan".utf8), settings: settings, allowOnDemand: false)
+    XCTAssertFalse(IOSOnDemandRestart.armed(), "a plan saved without On Demand left it noted as armed")
+    try await vpn.persist(Data("plan".utf8), settings: settings, allowOnDemand: true)
+    try await vpn.clearSavedPlan()
+    XCTAssertFalse(IOSOnDemandRestart.armed(), "a cleared plan left On Demand noted as armed")
+  }
+
   // The extension has about 50 MB and copies the route model several times, so a
   // model over the iOS cap stops before the extension with its own message.
   func testOversizedRoutingProfileFailsWithClearError() async throws {
@@ -1041,6 +1095,13 @@ final class ElarniTests: XCTestCase {
     try await model.vpn.refreshProvider()
     _ = try await ToggleConnectionIntent().perform()
     XCTAssertEqual(tunnel.session.fixtureStatus, .disconnected)
+    // The notice that On Demand restarted the VPN offers Turn Off; opening the notice stops nothing.
+    tunnel.session.fixtureStatus = .connected
+    try await model.vpn.refreshProvider()
+    await NotificationActions.perform(UNNotificationDefaultActionIdentifier)
+    XCTAssertEqual(tunnel.session.fixtureStatus, .connected, "Opening the notice stopped the VPN")
+    await NotificationActions.perform(IOSOnDemandRestart.turnOff)
+    XCTAssertEqual(tunnel.session.fixtureStatus, .disconnected, "Turn Off left the VPN running")
     _ = try await DisconnectIntent().perform()
     XCTAssertNil(model.errorMessage)
     XCTAssertEqual(ElarniShortcuts.appShortcuts.count, 3)

@@ -92,7 +92,10 @@ struct PreferencesEditor: View {
           }
           Toggle("Disconnect on sleep", isOn: setting(\.disconnectOnSleep))
         } header: { Text("Connection") } footer: {
+          VStack(alignment: .leading, spacing: 8) {
+          Text("On Demand lets iOS reconnect the VPN by itself. While it is on, iOS’s own VPN switch in Settings and Control Center cannot keep the VPN off: stop it in Elarni, with Elarni’s Control Center control or with a shortcut.")
           Text("Connect on untrusted Wi-Fi connects when iPhone joins a Wi-Fi network outside your trusted list, even before you tap Connect. Trusted Wi-Fi and mobile data leave the VPN as it is. Disconnect pauses it until your next Connect.")
+          }
         }
         Section {
           Picker("Auto-update", selection: $value.autoUpdateHours) {

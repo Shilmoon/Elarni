@@ -16,6 +16,11 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
 
 ### Fixed
 
+- iPhone: when the VPN switch of iOS itself (Settings, or the VPN button in Control Center) stops
+  Elarni while On Demand is on, iOS starts the VPN again at once, and nothing said why. iOS gives
+  an app no way to prevent that restart, so Elarni now posts a notification after it with a
+  **Turn Off** action that stops the VPN and On Demand together, and Settings › General says
+  which controls keep the VPN off (the app, its own Control Center control, a shortcut).
 - A change of per-app routing while connected no longer restarts the tunnel on Windows and
   Linux. Before, adding or removing an app, changing its target or switching the mode stopped
   the tunnel and started it again, which cut every connection of every app for about two

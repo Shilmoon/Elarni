@@ -32,7 +32,8 @@ Shared Swift changes also need `scripts/check-tests swift`.
 
 Simulator tests don't cover tunnel traffic. On a device, check TCP/UDP and DNS over
 IPv4/IPv6, routes, reconnects across Wi-Fi/cellular, background and lock, and the
-Control Center and Shortcuts actions.
+Control Center and Shortcuts actions. With On Demand on, also stop the VPN with the
+iOS VPN switch: the restart must bring a notification whose Turn Off action stops it.
 
 ## Signing
 

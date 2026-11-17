@@ -31,6 +31,16 @@
         }
       }
     },
+    "Elarni reconnected" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Elarni снова подключён"
+          }
+        }
+      }
+    },
     "Elarni was updated" : {
       "localizations" : {
         "ru" : {
@@ -61,12 +71,32 @@
         }
       }
     },
+    "Turn Off" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Выключить"
+          }
+        }
+      }
+    },
     "iOS stopped the VPN because %@. Open Elarni to reconnect." : {
       "localizations" : {
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "iOS остановила VPN: %@. Откройте Elarni, чтобы переподключиться."
+          }
+        }
+      }
+    },
+    "iOS’s VPN switch cannot stop Elarni while On Demand is on. Touch and hold this notification and tap Turn Off, or stop the VPN in Elarni." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Переключатель VPN в iOS не может остановить Elarni, пока включён режим «По требованию». Нажмите и удерживайте это уведомление и выберите «Выключить» или остановите VPN в Elarni."
           }
         }
       }
