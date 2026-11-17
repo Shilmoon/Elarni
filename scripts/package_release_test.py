@@ -120,6 +120,9 @@ class PackageReleaseChecks(unittest.TestCase):
                              'Vendor/Xray-core/proxy/tuic/client.go',
                              'Vendor/Xray-core/infra/conf/tuic.go',
                              'Vendor/libXray/share/tuic_traffic_test.go',
+                             'Vendor/shadowquic/LICENSE', 'Vendor/shadowquic/shadowquic/src/lib.rs',
+                             'native/elarni-shadowquic/src/lib.rs', 'Vendor/Xray-core/proxy/shadowquic/client.go',
+                             'scripts/build-core.cmake',
                              'Vendor/Xray-core/transport/internet/websocket/connection_test.go',
                              'assets/branding/elarni-mark.png',
                              'assets/branding/elarni-app-icon.png'):

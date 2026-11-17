@@ -44,8 +44,11 @@ def select(paths):
         hits = set()
         if path.startswith(('Vendor/Xray-core/', 'Vendor/libXray/', 'Vendor/quic-go/', 'Vendor/sagernet-quic-go/', 'Vendor/wireguard-go/')) or path in ('go.work', 'go.work.sum'):
             hits |= {'go', 'windows', 'swift'}
-        if path.startswith(('native/', 'Vendor/tun2proxy/')) or path in ('Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml'):
+        if path.startswith(('native/', 'Vendor/tun2proxy/', 'Vendor/shadowquic/')) or path in ('Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml'):
             hits |= {'rust', 'swift'}
+            # The Go outbound's tests carry traffic through the ShadowQUIC client built from these.
+            if path.startswith(('native/elarni-shadowquic/', 'Vendor/shadowquic/')):
+                hits.add('go')
             if not path.startswith(('native/elarni-packet-bridge/', 'Vendor/tun2proxy/')):
                 hits.add('windows')
         if path.startswith(('lib/', 'bin/')) or path in ('pubspec.yaml', 'pubspec.lock', 'analysis_options.yaml'):

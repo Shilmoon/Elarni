@@ -19,7 +19,7 @@ These use loopback fixtures and never change routes, DNS or adapters.
 | Changed | Command |
 |---|---|
 | Go under `Vendor/` | `sh scripts/check-tests go` |
-| Rust under `native/` or `Vendor/tun2proxy` | `sh scripts/check-tests rust` |
+| Rust under `native/`, `Vendor/tun2proxy` or `Vendor/shadowquic` | `sh scripts/check-tests rust` (the ShadowQUIC client also `go`) |
 | Dart under `lib/`, `bin/`, `test/` | `sh scripts/check-tests flutter` |
 | Swift (macOS only) | `sh scripts/check-tests swift` |
 | Kotlin logic under `android/` (needs the Android SDK and native build) | `android/gradlew -p android :app:testDebugUnitTest` |
@@ -73,6 +73,21 @@ TUIC checks need a pinned sing-box server at `.build/tuic/tools/sing-box` (or
 ```sh
 GOBIN="$PWD/.build/tuic/tools" go install -tags=with_quic github.com/sagernet/sing-box/cmd/sing-box@v1.14.0
 ```
+
+## ShadowQUIC fixture
+
+The Go tests of `Vendor/Xray-core/proxy/shadowquic` and the tunnel checks' `--protocol
+shadowquic` (`check-linux-vpn`, `check-linux-elevation`, `check-windows-vpn`) use the client
+and the test server built from `native/elarni-shadowquic`:
+
+```sh
+cargo build --locked -p elarni-shadowquic --lib --bins --examples
+```
+
+`scripts/check-tests go` builds them itself. `ELARNI_SHADOWQUIC_ARTIFACTS` names another
+directory for the Go tests, `ELARNI_SHADOWQUIC_SERVER` another test server for the tunnel
+checks. The tunnel checks need a core built by the app's build, which pins the client program
+next to it; a core built by hand has no ShadowQUIC in its elevated helper.
 
 ## Disposable test hosts
 

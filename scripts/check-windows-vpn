@@ -36,13 +36,14 @@ if len(sys.argv) == 3 and sys.argv[1] == '--owner':
     owner(sys.argv[2])
     raise SystemExit(0)
 from check_report import record_check
+from shadowquic_fixture import shadowquic_outbound, shadowquic_peer
 from tuic_fixture import android_tuic_peer
 record_check(Path(__file__).resolve().parent.parent)
 modes = ('graceful', 'reconnect', 'startup-cancel', 'helper-death', 'broker-death', 'block-broker-death', 'app-owner-death', 'route-enforcement', 'session-limits', 'adapter-loss', 'per-app-reload', 'per-app')
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--deny-elevation', action='store_true')
 parser.add_argument('--case', choices=modes, action='append')
-parser.add_argument('--protocol', choices=['vless', 'tuic-native', 'tuic-quic'], default='vless')
+parser.add_argument('--protocol', choices=['vless', 'tuic-native', 'tuic-quic', 'shadowquic'], default='vless')
 arguments = parser.parse_args()
 deny_elevation = arguments.deny_elevation
 if sys.platform != 'win32' or (not deny_elevation and not ctypes.windll.shell32.IsUserAnAdmin()):
@@ -256,6 +257,8 @@ guard_probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 guard_probe.bind(('127.0.0.1', 53))
 threading.Thread(target=dns_server, args=(guard_probe,), daemon=True).start()
 upstream_port, socks_port = free_port(), free_port()
+# The ShadowQUIC peer's requests leave through the upstream core, whose rules lead to the fixtures.
+upstream_socks = [{'listen': '127.0.0.1', 'port': free_port(), 'protocol': 'socks', 'settings': {'udp': True}}] if arguments.protocol == 'shadowquic' else []
 with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as route_probe:
     # UDP connect chooses a source address without sending a packet.
     route_probe.connect(('192.0.2.1', 9))
@@ -282,7 +285,7 @@ try:
     server = start_process([str(core)])
     request(server, 'runXrayFromJson', {'configJSON': json.dumps({
         'log': {'loglevel': 'none'},
-        'inbounds': [{'listen': physical_address, 'port': upstream_port, 'protocol': 'vless', 'settings': {'decryption': 'none', 'clients': [{'id': user_id}]}}],
+        'inbounds': [{'listen': physical_address, 'port': upstream_port, 'protocol': 'vless', 'settings': {'decryption': 'none', 'clients': [{'id': user_id}]}}] + upstream_socks,
         'outbounds': [{'tag': 'block', 'protocol': 'blackhole'}, freedom('http-fixture', http_server.server_port), freedom('dns-fixture', dns_port)],
         'routing': {'rules': [
             {'type': 'field', 'ip': ['198.18.0.53/32'], 'network': 'udp', 'port': str(dns_port), 'outboundTag': 'dns-fixture'},
@@ -302,6 +305,9 @@ try:
             'udpRelayMode': arguments.protocol.removeprefix('tuic-')}, 'streamSettings': {'security': 'tls',
             'tlsSettings': {'serverName': 'tuic-fixture.example', 'alpn': ['h3'], 'disableSystemRoot': True,
                 'certificates': [{'usage': 'verify', 'certificate': base64.b64decode(certificate).decode().splitlines()}]}}}
+    if arguments.protocol == 'shadowquic':
+        config['outbounds'][0] = shadowquic_outbound(physical_address, fixtures.enter_context(
+            shadowquic_peer(root, physical_address, socks='127.0.0.1:' + str(upstream_socks[0]['port']))))
     print('Tunnel protocol: ' + arguments.protocol, flush=True)
     dns_probe(True)
     http_target('198.18.0.1', http_server.server_port, False)

@@ -80,6 +80,12 @@ class CheckChangedSelection(unittest.TestCase):
         self.write('Vendor/tun2proxy/src/lib.rs')
         self.assertEqual(self.selection()[0], sorted(['rust', 'scripts'] + LINT) if DESKTOP else ['rust', 'scripts', 'swift'])
 
+    def test_the_shadowquic_client_runs_the_go_checks_that_start_it(self):
+        for path in ('Vendor/shadowquic/shadowquic/src/lib.rs', 'native/elarni-shadowquic/src/lib.rs'):
+            self.write(path)
+            self.assertEqual(self.selection()[0], sorted(['go', 'rust', 'windows'] + LINT) if DESKTOP else ['go', 'rust', 'swift'], path)
+            (self.root / path).unlink()
+
     def test_failure_output_prints_on_a_legacy_console_code_page(self):
         # Flutter frames failures with box-drawing characters, which cp1251 cannot encode.
         (self.root / 'scripts/check-tests').write_bytes(b"#!/bin/sh\nprintf '\\342\\225\\220 failure\\n'\nexit 1\n")

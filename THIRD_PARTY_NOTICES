@@ -396,6 +396,22 @@ Pinned tun2proxy resolves runtime dependency `socks5-impl v0.9.6`, declared
 GPL-3.0-or-later. Its full corresponding source and notice are required with
 any Elarni object-code conveyance.
 
+## ShadowQUIC v0.4.12
+
+Copyright (c) 2025 spongebob888. Licensed under MIT.
+Source snapshot (the `shadowquic` and `shadowquic-macros` crates of
+https://github.com/spongebob888/shadowquic, revision
+`fe852e5cad08538385bfe450732aedabb88c2553`) with Elarni changes recorded in
+`third_party/modifications.json` and described in
+`Vendor/shadowquic/ELARNI_PATCHES.md`: `Vendor/shadowquic`.
+License: `Vendor/shadowquic/LICENSE`.
+
+The ShadowQUIC client resolves `quinn-jls v0.4.0`, `quinn-proto-jls v0.4.0`,
+`quinn-udp-jls v0.4.0` (MIT OR Apache-2.0), `rustls-jls v1.3.7`
+(Apache-2.0 OR ISC OR MIT), `ring v0.17.14` (Apache-2.0 AND ISC),
+`brutal-core v0.1.0` (MIT) and `webpki-roots v1.0.12`
+(CDLA-Permissive-2.0); `Cargo.lock` pins the complete graph.
+
 ## GPL-3.0-or-later runtime components
 
 - Elarni-owned source: GPL-3.0-or-later.
