@@ -133,6 +133,19 @@ class CatalogTest {
         assertTrue("Written under a clock a year ahead", Catalog.refreshDue(time + 365 * 86400, time, longest))
     }
 
+    @Test fun lastSuccessfulServerIsTheLatestCurrentSuccess() {
+        fun node(id: String, at: Double?, revision: String = "r-$id", success: String? = revision, format: String = "xrayProfile") = obj("id" to id, "format" to format,
+            "configurationRevision" to revision, "lastSuccessAt" to at, "lastSuccessRevision" to success)
+        val older = node("older", 100.0); val latest = node("latest", 300.0)
+        assertEquals("The latest success wins", "latest", Catalog.lastSuccessful(listOf(older, latest, node("never", null)), "")?.getString("id"))
+        assertNull("The selected server is not offered, nor another in its place", Catalog.lastSuccessful(listOf(older, latest), "latest"))
+        assertEquals("A Telegram proxy is not a server to connect to", "older", Catalog.lastSuccessful(listOf(older, node("telegram", 900.0, format = "telegram")), "")?.getString("id"))
+        assertEquals("A success with an older configuration", "older", Catalog.lastSuccessful(listOf(older, node("edited", 900.0, revision = "new", success = "old")), "")?.getString("id"))
+        assertEquals("A server without a revision of its own goes by its id", "plain",
+            Catalog.lastSuccessful(listOf(obj("id" to "plain", "format" to "xrayProfile", "lastSuccessAt" to 50.0, "lastSuccessRevision" to "plain")), "")?.getString("id"))
+        assertNull("Nothing worked yet", Catalog.lastSuccessful(listOf(node("never", null), node("unrecorded", 400.0, success = null)), ""))
+    }
+
     @Test fun retryDelayAndCanonicalForm() {
         assertEquals(listOf(60, 60, 300, 1800, 1800), listOf(0, 1, 2, 3, 9).map(Catalog::retryDelay))
         assertEquals(Catalog.canonical(JSONObject("""{"b":[1,{"y":2,"x":"s"}],"a":null}""")), Catalog.canonical(JSONObject("""{"a":null,"b":[1,{"x":"s","y":2}]}""")))

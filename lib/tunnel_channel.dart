@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'platform_services.dart';
 
@@ -152,6 +153,14 @@ abstract interface class TunnelControl {
     bool subscription = false,
   });
 
+  /// [text] as a QR code: `{'png': base64}`, without it when it is too long.
+  Future<Map<String, Object?>> qrCode(String text);
+
+  /// The share links of [nodeIds] in a local group, one per line in group
+  /// order. A server without one is refused as `no_share_link`, with its name
+  /// as the details.
+  Future<String> shareLinks(String subscriptionId, List<String> nodeIds);
+
   /// The server's stored Xray JSON; refused where its provider hides it.
   Future<String> nodeConfig(String nodeId);
 
@@ -192,6 +201,10 @@ abstract interface class TunnelControl {
     String? profileId,
   );
   Future<RoutingSnapshot> refreshRoutingGeofiles(String id, {String? file});
+
+  /// Downloads a routing profile's managed domain lists again, or only
+  /// [sourceId]; a failed download keeps the list's last good copy.
+  Future<RoutingSnapshot> refreshManagedLists(String id, {String? sourceId});
   Future<String> connect();
   Future<String> disconnect();
   Future<String> state();
@@ -224,6 +237,10 @@ abstract interface class TunnelControl {
 
   /// Saves exported log text where the user chooses.
   Future<void> saveLogs(String text);
+
+  /// Saves [bytes] where the user chooses, a file of [kind] (text, png or
+  /// json); false when the user cancels the save panel.
+  Future<bool> saveFile(String kind, Uint8List bytes);
   Future<Map<String, Object?>> systemInfo();
   Future<Map<String, Object?>> routeTable();
   Future<Map<String, Object?>> setLaunchAtLogin(bool enabled);
@@ -436,6 +453,21 @@ final class NativeTunnelControl implements TunnelControl {
   }) => _mapResult('shareClient', {'id': id, 'subscription': subscription});
 
   @override
+  Future<Map<String, Object?>> qrCode(String text) =>
+      _mapResult('qrCode', {'text': text});
+
+  @override
+  Future<String> shareLinks(
+    String subscriptionId,
+    List<String> nodeIds,
+  ) async =>
+      (await _mapResult('shareLinks', {
+            'subscriptionId': subscriptionId,
+            'nodeIds': nodeIds,
+          }))['text']!
+          as String;
+
+  @override
   Future<String> nodeConfig(String nodeId) async =>
       const JsonEncoder.withIndent(
         '  ',
@@ -605,6 +637,17 @@ final class NativeTunnelControl implements TunnelControl {
   );
 
   @override
+  Future<RoutingSnapshot> refreshManagedLists(
+    String id, {
+    String? sourceId,
+  }) async => RoutingSnapshot.fromMap(
+    await _mapResult('refreshManagedLists', <String, Object?>{
+      'id': id,
+      'sourceId': sourceId,
+    }),
+  );
+
+  @override
   Future<TunnelSettings> tunnelSettings() async =>
       TunnelSettings.fromMap(await _mapResult('tunnelSettings'));
 
@@ -700,6 +743,11 @@ final class NativeTunnelControl implements TunnelControl {
   Future<void> saveLogs(String text) async {
     await _mapResult('saveLogs', {'content': text});
   }
+
+  @override
+  Future<bool> saveFile(String kind, Uint8List bytes) async =>
+      (await _mapResult('saveFile', {'kind': kind, 'bytes': bytes}))['saved'] ==
+      true;
 
   @override
   Future<Map<String, Object?>> exportEvidence({

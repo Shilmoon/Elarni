@@ -1,5 +1,7 @@
 import 'dart:convert';
+import 'dart:math';
 
+import 'package:flutter/cupertino.dart' show CupertinoIcons;
 import 'package:flutter/material.dart';
 import 'elarni_widgets.dart';
 import 'strings.dart';
@@ -85,11 +87,54 @@ class _RoutingEditorState extends State<RoutingEditor> {
     'BlockIp',
   ];
 
+  /// The geofile URLs by their key, with the alias the decoder also reads.
+  static const _geofiles = {'Geoipurl': 'GeoipUrl', 'Geositeurl': 'GeositeUrl'};
+
+  /// The most managed domain lists the decoder accepts.
+  static const _maxSources = 125;
+  static final _random = Random.secure();
+
+  // The geofile URLs, managed domain lists and static DNS hosts are written
+  // back only when edited, so an untouched profile saves as it came.
+  final _geofileFields = <String, TextEditingController>{};
+  final _geofileTexts = <String, String>{};
+  final _sources =
+      <({Map<String, dynamic> source, TextEditingController url})>[];
+  final _hosts =
+      <({TextEditingController host, TextEditingController address})>[];
+  // Fields of removed rows, disposed with the editor: the frame that removes
+  // a row still has its text field.
+  final _removed = <TextEditingController>[];
+
   @override
   void initState() {
     super.initState();
     _section = widget.initialSection;
     _profile = Map<String, dynamic>.from(jsonDecode(widget.json) as Map);
+    for (final MapEntry(key: key, value: alias) in _geofiles.entries) {
+      final text = '${_profile[key] ?? _profile[alias] ?? ''}';
+      _geofileTexts[key] = text;
+      _geofileFields[key] = TextEditingController(text: text);
+    }
+    if (_profile['ManagedSources'] case final List sources) {
+      for (final source in sources) {
+        if (source is Map) {
+          _sources.add((
+            source: Map<String, dynamic>.from(source),
+            url: TextEditingController(text: '${source['url'] ?? ''}'),
+          ));
+        }
+      }
+    }
+    if (_profile['DnsHosts'] case final Map hosts) {
+      for (final MapEntry(:key, :value) in hosts.entries) {
+        _hosts.add((
+          host: TextEditingController(text: '$key'),
+          address: TextEditingController(text: '$value'),
+        ));
+      }
+    }
+    if (_hosts.isNotEmpty) _expanded.add('hosts');
     _profile['FakeDNS'] ??= _profile['FakeDns'] ?? 'false';
     // As the native decoder does: geofiles are reduced unless the profile opts out.
     _profile['UseChunkFiles'] ??= 'true';
@@ -117,7 +162,13 @@ class _RoutingEditorState extends State<RoutingEditor> {
 
   @override
   void dispose() {
-    for (final field in _fields.values) {
+    for (final field in [
+      ..._fields.values,
+      ..._geofileFields.values,
+      for (final source in _sources) source.url,
+      for (final host in _hosts) ...[host.host, host.address],
+      ..._removed,
+    ]) {
       field.dispose();
     }
     super.dispose();
@@ -253,6 +304,39 @@ class _RoutingEditorState extends State<RoutingEditor> {
         }
       }
     }
+    // As Android and iOS check them: a hostname once, ignoring case, and an
+    // address the decoder reads as an IP.
+    final hosts = <String, String>{};
+    final hostnames = <String>{};
+    for (final row in _hosts) {
+      final host = row.host.text.trim(), address = row.address.text.trim();
+      if (host.isEmpty ||
+          !hostnames.add(host.toLowerCase()) ||
+          !RegExp(r'^[0-9A-Fa-f:.]+$').hasMatch(address) ||
+          !_validIpTarget(address)) {
+        setState(() => _error = l10n.dnsHostsInvalid);
+        return;
+      }
+      hosts[host] = address;
+    }
+    for (final MapEntry(key: key, value: alias) in _geofiles.entries) {
+      final text = _geofileFields[key]!.text.trim();
+      if (text == _geofileTexts[key]!.trim()) continue;
+      _profile[key] = text;
+      _profile.remove(alias);
+    }
+    // A profile without lists or hosts gets no empty ones.
+    void edited(String key, Object value, {required bool empty}) {
+      if ((!empty || _profile.containsKey(key)) &&
+          jsonEncode(value) != jsonEncode(_profile[key]))
+        _profile[key] = value;
+    }
+
+    final sources = [
+      for (final row in _sources) {...row.source, 'url': row.url.text.trim()},
+    ];
+    edited('ManagedSources', sources, empty: sources.isEmpty);
+    edited('DnsHosts', hosts, empty: hosts.isEmpty);
     final content = jsonEncode(_profile);
     final route = ModalRoute.of(context);
     setState(() => _saving = true);
@@ -417,6 +501,178 @@ class _RoutingEditorState extends State<RoutingEditor> {
           ),
         ],
       ),
+      ExpansionTile(
+        key: const ValueKey('routing-dns:hosts'),
+        title: Text(l10n.staticDnsHosts),
+        tilePadding: EdgeInsets.zero,
+        initiallyExpanded: _expanded.contains('hosts'),
+        onExpansionChanged: (open) =>
+            open ? _expanded.add('hosts') : _expanded.remove('hosts'),
+        children: [
+          for (final (index, row) in _hosts.indexed)
+            Padding(
+              // Records have no identity; the row's field has.
+              key: ObjectKey(row.host),
+              padding: const EdgeInsets.symmetric(vertical: 8),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      key: ValueKey('routing-host:$index'),
+                      controller: row.host,
+                      decoration: InputDecoration(labelText: l10n.hostname),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: TextField(
+                      key: ValueKey('routing-host-address:$index'),
+                      controller: row.address,
+                      decoration: InputDecoration(
+                        labelText: l10n.ipv4OrIpv6Address,
+                      ),
+                    ),
+                  ),
+                  IconButton(
+                    key: ValueKey('routing-host-remove:$index'),
+                    tooltip: l10n.removeHost,
+                    onPressed: () => setState(() {
+                      _hosts.remove(row);
+                      _removed.addAll([row.host, row.address]);
+                    }),
+                    icon: const Icon(CupertinoIcons.minus_circle),
+                  ),
+                ],
+              ),
+            ),
+          Align(
+            alignment: AlignmentDirectional.centerStart,
+            child: TextButton.icon(
+              key: const Key('routing-host-add'),
+              onPressed: () => setState(
+                () => _hosts.add((
+                  host: TextEditingController(),
+                  address: TextEditingController(),
+                )),
+              ),
+              icon: const Icon(Icons.add, size: 18),
+              label: Text(l10n.addDnsHost),
+            ),
+          ),
+        ],
+      ),
+    ],
+  );
+
+  /// A new managed domain list as Android adds one.
+  Map<String, dynamic> _newSource() => {
+    'id': List.generate(
+      32,
+      (_) => _random.nextInt(256).toRadixString(16).padLeft(2, '0'),
+    ).join(),
+    'url': '',
+    'destination': 'block',
+    'matchMode': 'subdomains',
+  };
+
+  Widget _sourceChoice(
+    int index,
+    Map<String, dynamic> source,
+    String key,
+    String label,
+    Map<String, String> choices,
+  ) => ElarniSelectTile(
+    contentPadding: EdgeInsets.zero,
+    title: Text(label),
+    trailing: ElarniSelect<String>(
+      key: ValueKey('routing-source-$key:$index'),
+      value: choices.containsKey(source[key]) ? source[key] as String : null,
+      hint: Text(l10n.select),
+      items: [
+        for (final MapEntry(key: choice, value: text) in choices.entries)
+          DropdownMenuItem(value: choice, child: Text(text)),
+      ],
+      onChanged: (value) => setState(() => source[key] = value),
+    ),
+  );
+
+  Widget _managedSources() => Column(
+    crossAxisAlignment: CrossAxisAlignment.stretch,
+    children: [
+      const Divider(height: 32),
+      Text(
+        l10n.managedDomainLists,
+        style: Theme.of(context).textTheme.titleSmall,
+      ),
+      for (final (index, row) in _sources.indexed)
+        Column(
+          // Records have no identity; the row's field has.
+          key: ObjectKey(row.url),
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 8),
+              child: TextField(
+                key: ValueKey('routing-source-url:$index'),
+                controller: row.url,
+                decoration: InputDecoration(labelText: l10n.listUrl),
+              ),
+            ),
+            _sourceChoice(
+              index,
+              row.source,
+              'destination',
+              l10n.useDomainsFor,
+              {
+                'block': l10n.ruleGroupBlock,
+                'direct': l10n.ruleGroupDirect,
+                'proxy': l10n.ruleGroupProxy,
+                'dns': l10n.directDns,
+              },
+            ),
+            _sourceChoice(index, row.source, 'matchMode', l10n.managedMatch, {
+              'exact': l10n.exactDomains,
+              'subdomains': l10n.includeSubdomains,
+            }),
+            Align(
+              alignment: AlignmentDirectional.centerEnd,
+              child: TextButton(
+                key: ValueKey('routing-source-remove:$index'),
+                onPressed: () => setState(() {
+                  _sources.remove(row);
+                  _removed.add(row.url);
+                }),
+                child: Text(
+                  l10n.removeList,
+                  style: TextStyle(color: Theme.of(context).colorScheme.error),
+                ),
+              ),
+            ),
+            const Divider(),
+          ],
+        ),
+      Align(
+        alignment: AlignmentDirectional.centerStart,
+        child: TextButton.icon(
+          key: const Key('routing-source-add'),
+          onPressed: _sources.length >= _maxSources
+              ? null
+              : () => setState(
+                  () => _sources.add((
+                    source: _newSource(),
+                    url: TextEditingController(),
+                  )),
+                ),
+          icon: const Icon(Icons.add, size: 18),
+          label: Text(l10n.addDomainList),
+        ),
+      ),
+      Text(
+        l10n.managedDomainListsHelp,
+        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+          color: Theme.of(context).colorScheme.onSurfaceVariant,
+        ),
+      ),
     ],
   );
 
@@ -475,6 +731,19 @@ class _RoutingEditorState extends State<RoutingEditor> {
         value: _enabled('UseChunkFiles'),
         onChanged: (value) => setState(() => _profile['UseChunkFiles'] = value),
       ),
+      for (final (key, label) in [
+        ('Geoipurl', l10n.geoipUrl),
+        ('Geositeurl', l10n.geositeUrl),
+      ])
+        Padding(
+          padding: const EdgeInsets.symmetric(vertical: 8),
+          child: TextField(
+            key: ValueKey('routing-field:$key'),
+            controller: _geofileFields[key],
+            decoration: InputDecoration(labelText: label),
+          ),
+        ),
+      _managedSources(),
     ],
   );
 

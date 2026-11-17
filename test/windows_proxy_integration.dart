@@ -3733,6 +3733,48 @@ for line in sys.stdin:
   );
 
   test(
+    'a local group shares its servers as links in group order, named as listed',
+    () async {
+      const telegram =
+          'tg://proxy?server=127.0.0.1&port=443&secret=0123456789abcdef0123456789abcdef';
+      final group = (await backend.control.importClientProfiles(
+        content: '$profile\nhttp://127.0.0.1:8080#Web\n$telegram',
+      )).snapshot.subscriptions.single;
+      expect(group.isLocal, isTrue);
+      final [vless, web, proxy] = group.nodes;
+      expect(
+        [vless.name, web.name, proxy.format],
+        ['Fixture', 'Web', 'telegram'],
+      );
+      await backend.control.renameNode(vless.id, 'Renamed');
+      final [link, shared] = (await backend.control.shareLinks(group.id, [
+        proxy.id,
+        vless.id,
+      ])).split('\n');
+      final parsed = Uri.parse(link);
+      expect(parsed.scheme, 'vless');
+      expect(parsed.userInfo, userID);
+      expect(parsed.port, Uri.parse(profile).port);
+      expect(parsed.fragment, 'Renamed');
+      // The import keeps the Telegram link with its parameters sorted.
+      expect(shared, startsWith('tg://proxy?'));
+      expect(
+        Uri.parse(shared).queryParameters,
+        Uri.parse(telegram).queryParameters,
+      );
+      // libXray writes no link for an HTTP proxy.
+      await expectLater(
+        backend.control.shareLinks(group.id, [vless.id, web.id]),
+        throwsA(
+          isA<PlatformException>()
+              .having((error) => error.code, 'code', 'no_share_link')
+              .having((error) => error.details, 'details', 'Web'),
+        ),
+      );
+    },
+  );
+
+  test(
     'inbound credentials protect SOCKS and HTTP, support LAN and survive relaunch',
     () async {
       await prepare();
@@ -7740,6 +7782,93 @@ print(json.dumps({'success': False, 'error': 'connection_failed'}), flush=True)
     expect(watch.elapsed, lessThan(const Duration(seconds: 10)));
     expect(count(), 1);
   });
+
+  // Like a geofile refresh the user runs: the failure is recorded on the
+  // profile, which keeps the list's last good copy, and reported to the caller.
+  test(
+    'a managed list refresh the user runs records and reports a failed download',
+    () async {
+      final fetches = File.fromUri(
+        temporary.uri.resolve('managed-user-fetches'),
+      );
+      final broken = File.fromUri(temporary.uri.resolve('managed-broken'));
+      await broken.writeAsString('');
+      await useStub('''
+import json, os, subprocess, sys
+line = sys.stdin.readline()
+request = json.loads(line)
+if request['method'] == 'fetchSubscription':
+    url = request['payload']['url']
+    with open(${jsonEncode(fetches.path)}, 'a') as log:
+        log.write(url + '\\n')
+    if 'broken' in url and os.path.exists(${jsonEncode(broken.path)}):
+        print(json.dumps({'success': False, 'error': 'fetch_failed'}), flush=True)
+    else:
+        host = url.split('/')[2]
+        print(json.dumps({'success': True, 'data': {'body': host + '\\n'}}), flush=True)
+else:
+    child = subprocess.Popen([${jsonEncode(corePath)}], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+    child.stdin.write(line)
+    child.stdin.flush()
+    print(child.stdout.readline(), end='', flush=True)
+    child.stdin.close()
+    child.wait(timeout=10)
+''');
+      final imported = await backend.control.importRouting(
+        jsonEncode({
+          'Name': 'Managed route',
+          'RemoteDNSType': 'DoU',
+          'RemoteDNSIP': '1.1.1.1',
+          'DomesticDNSType': 'DoU',
+          'DomesticDNSIP': '8.8.8.8',
+          'ManagedSources': [
+            for (final id in ['fresh', 'broken'])
+              {
+                'id': id,
+                'url': 'https://$id.example/list',
+                'destination': 'proxy',
+                'matchMode': 'exact',
+              },
+          ],
+        }),
+      );
+      final id = imported.profiles.single.id;
+      List<String> fetched() =>
+          fetches.existsSync() ? fetches.readAsLinesSync() : const [];
+      CatalogMap stored() => catalogList(
+        catalogMap(storedCatalog!['committed'])['profiles'],
+      ).singleWhere((route) => route['id'] == id);
+      await expectLater(
+        backend.control.refreshManagedLists(id),
+        throwsA(
+          isA<PlatformException>().having(
+            (error) => error.code,
+            'code',
+            'fetch_failed',
+          ),
+        ),
+      );
+      expect(fetched().toSet(), {
+        'https://fresh.example/list',
+        'https://broken.example/list',
+      });
+      final failed = (await backend.control.routingProfiles()).profiles.single;
+      expect(failed.managedErrorCode, 'fetch_failed');
+      expect(failed.managedError, desktopError('fetch_failed').message);
+      // The list that downloaded is in use; the failed one has no copy yet.
+      expect(catalogMap(stored()['lists']).keys, ['fresh']);
+
+      await broken.delete();
+      final before = fetched().length;
+      final refreshed = await backend.control.refreshManagedLists(id);
+      expect(refreshed.profiles.single.managedError, isNull);
+      expect(fetched().length, before + 2);
+      expect(catalogMap(stored()['lists']).keys.toSet(), {'fresh', 'broken'});
+      // One list alone downloads only that list.
+      await backend.control.refreshManagedLists(id, sourceId: 'broken');
+      expect(fetched().skip(before + 2), ['https://broken.example/list']);
+    },
+  );
 
   test(
     'a failed scheduled refresh retries on the subscription schedule',

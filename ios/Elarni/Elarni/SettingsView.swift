@@ -189,12 +189,12 @@ struct ConnectionEditor: View {
     case .advanced: [\.fragmentationEnabled, \.muxEnabled, \.sniffingEnabled, \.monitoringEnabled]
     }
   }
-  private var flipped: [Bool?] { switches.map { Optional(value[keyPath: $0]) } + [value.recordDiagnostics] }
+  private var flipped: [Bool?] { switches.map { Optional(value[keyPath: $0]) } + [value.recordDiagnostics, value.hideVPNIcon] }
   /// The saved settings with the switches flipped here and, with `typed`, what was typed or picked here.
   private func merged(typed: Bool) -> IOSTunnelSettings {
     var next = model.settings
     func take<Value: Equatable>(_ key: WritableKeyPath<IOSTunnelSettings, Value>) { carry(key, from: value, since: base, to: &next) }
-    switches.forEach(take); take(\.recordDiagnostics)
+    switches.forEach(take); take(\.recordDiagnostics); take(\.hideVPNIcon)
     guard typed else { return next }
     switch kind {
     case .connection: take(\.profilePreferredIP); take(\.preferredIP); take(\.socksPort); take(\.httpPort)
@@ -219,9 +219,11 @@ struct ConnectionEditor: View {
       try await model.saveSettings(next)
       for key in switches { base[keyPath: key] = sent[keyPath: key] }
       base.recordDiagnostics = sent.recordDiagnostics
+      base.hideVPNIcon = sent.hideVPNIcon
     }, failed: {
       for key in switches where value[keyPath: key] == sent[keyPath: key] { value[keyPath: key] = base[keyPath: key] }
       if value.recordDiagnostics == sent.recordDiagnostics { value.recordDiagnostics = base.recordDiagnostics }
+      if value.hideVPNIcon == sent.hideVPNIcon { value.hideVPNIcon = base.hideVPNIcon }
     })
   }
   // Its own builder keeps the body within what the type checker solves in time.
@@ -232,10 +234,17 @@ struct ConnectionEditor: View {
     Section {
       DisclosureGroup("Advanced network routes") {
       Toggle("Enforce tunnel routes", isOn: $value.enforceRoutes)
+      Toggle("Hide VPN icon", isOn: Binding(get: { value.hideVPNIcon == true }, set: { value.hideVPNIcon = $0 ? true : nil }))
+        .accessibilityIdentifier("hideVPNIcon")
       LinesEditor(title: "Included routes", text: Binding(get: { value.includedRoutes.joined(separator: "\n") }, set: { value.includedRoutes = lines($0) }))
       LinesEditor(title: "Excluded routes", text: Binding(get: { value.excludedRoutes.joined(separator: "\n") }, set: { value.excludedRoutes = lines($0) }))
       }
-    } footer: { Text("Enforce routes is for specific networks and cannot be combined with Block traffic without VPN or a default /0 route.") }
+    } footer: {
+      VStack(alignment: .leading, spacing: 6) {
+        Text("Enforce routes is for specific networks and cannot be combined with Block traffic without VPN or a default /0 route.")
+        Text("Hide VPN icon adds the route exclusions of the hide-icon workaround: it changes excluded network routes, not only the icon. Hiding the VPN icon is not verified.")
+      }
+    }
   }
   var body: some View {
     AppForm {

@@ -221,6 +221,23 @@ extension _ProxyCommands on DesktopProxy {
           throw desktopError('invalid_settings');
         await _platformRequest('saveLogs', {'content': content});
         return {};
+      case 'saveFile':
+        final kind = args['kind'], bytes = args['bytes'];
+        if (!{'text', 'png', 'json'}.contains(kind) || bytes is! Uint8List)
+          throw desktopError('invalid_request');
+        final CatalogMap picked;
+        try {
+          picked = await _platformRequest('pickSavePath', {'kind': kind});
+        } on PlatformException catch (error) {
+          if (error.code == 'cancelled') return {'saved': false};
+          rethrow;
+        }
+        try {
+          await File(picked['path']! as String).writeAsBytes(bytes);
+        } on FileSystemException {
+          throw desktopError('save_failed');
+        }
+        return {'saved': true};
       case 'exportEvidence':
         final evidence = connectionDiagnostics(
           platform: Platform.isLinux ? 'linux' : 'windows',
@@ -374,6 +391,69 @@ extension _ProxyCommands on DesktopProxy {
           'text': text,
           ...await _native('clientQR', {'text': text}),
         };
+      // A local group has no subscription link; its servers are shared as
+      // their links, one per line in group order, as macOS, iOS and Android do.
+      case 'shareLinks':
+        final ids = args['nodeIds'];
+        if (ids is! List || ids.any((id) => id is! String))
+          throw desktopError('invalid_request');
+        final source = _catalog!.source(args['subscriptionId']! as String);
+        if (source['url'] != null) throw desktopError('invalid_profile');
+        if (catalogMap(source['metadata'] ?? {})['hideURL'] == true)
+          throw desktopError('sharing_disabled');
+        final nodes = [
+          for (final node in catalogList(source['nodes']))
+            if (ids.contains(node['id'])) node,
+        ];
+        if (nodes.isEmpty) throw desktopError('invalid_profile');
+        final links = <String>[];
+        for (final node in nodes) {
+          if (node['hideURL'] == true) throw desktopError('sharing_disabled');
+          if (node['format'] == 'telegram') {
+            links.add(catalogMap(node['config'])['url']! as String);
+            continue;
+          }
+          final name = (node['manualName'] ?? node['name'])! as String;
+          // The window words this in its language, with the name it is given.
+          final none = PlatformException(
+            code: 'no_share_link',
+            message: '$name has no share link. Share it from its own page.',
+            details: name,
+          );
+          // A profile with several outbounds has no link.
+          final outbounds = catalogList(
+            catalogMap(node['config'])['outbounds'],
+          );
+          if (outbounds.length != 1) throw none;
+          final CatalogMap converted;
+          try {
+            converted = await _native('convertXrayJsonToShareLinks', {
+              // The link takes its name from the outbound tag.
+              'xrayJson': jsonEncode({
+                'outbounds': [
+                  {...outbounds.single, 'tag': name},
+                ],
+              }),
+            });
+          } on PlatformException catch (error) {
+            // The core's refusal of a protocol it writes no link for, such as
+            // WireGuard or HTTP, reads as operation_failed.
+            if (error.code != 'operation_failed') rethrow;
+            throw none;
+          }
+          final text = converted['links'];
+          // An outbound whose link would lose settings comes back as the JSON
+          // it was given.
+          if (text is! String || text.isEmpty || text.startsWith('{'))
+            throw none;
+          links.add(text);
+        }
+        return {'text': links.join('\n')};
+      case 'qrCode':
+        final text = args['text'];
+        if (text is! String || text.isEmpty)
+          throw desktopError('invalid_request');
+        return _native('clientQR', {'text': text});
       case 'openTelegramProxy':
         final node = _catalog!.node(args['id']! as String);
         if (node['format'] != 'telegram') throw desktopError('invalid_profile');
@@ -426,6 +506,7 @@ extension _ProxyCommands on DesktopProxy {
       'setRoutingProfileEnabled',
       'assignRoutingProfile',
       'refreshRoutingGeofiles',
+      'refreshManagedLists',
     };
     if (!mutations.contains(method))
       throw desktopError('unsupported_operation');
@@ -821,6 +902,15 @@ extension _ProxyCommands on DesktopProxy {
             candidate.geofilesFailed(args['id']! as String, error);
             refreshError = error;
           }
+        // Like a geofile refresh, a failed download is recorded on the
+        // profile, which keeps the list's last good copy, and reported.
+        case 'refreshManagedLists':
+          final failure = await candidate.refreshManaged(
+            args['id']! as String,
+            sourceId: args['sourceId'] as String?,
+            proxy: _tunnelFetchProxy(),
+          );
+          if (failure != null) refreshError = desktopError(failure);
       }
       return switch (method) {
         'importClientProfiles' ||
@@ -853,6 +943,8 @@ extension _ProxyCommands on DesktopProxy {
       _refreshBackoff.remove('source:${args['id']}');
     if (method == 'refreshRoutingGeofiles')
       _refreshBackoff.remove('geo:${args['id']}');
+    if (method == 'refreshManagedLists')
+      _refreshBackoff.remove('managed:${args['id']}');
     if (method == 'selectNode') result['state'] = _state;
     if (result.containsKey('profiles')) return _catalog!.routingSnapshot();
     return result;

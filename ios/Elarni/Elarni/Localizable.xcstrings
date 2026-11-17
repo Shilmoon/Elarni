@@ -153,6 +153,16 @@
         }
       }
     },
+    "%@’s next refresh replaces your edits." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Следующее обновление «%@» заменит ваши правки."
+          }
+        }
+      }
+    },
     "%@’s server did not answer. Your network may block it, or it is down. Retry later or ask the provider for a mirror." : {
       "localizations" : {
         "ru" : {
@@ -955,6 +965,16 @@
         }
       }
     },
+    "Configuration" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Конфигурация"
+          }
+        }
+      }
+    },
     "Configuration notice" : {
       "localizations" : {
         "ru" : {
@@ -1121,6 +1141,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Подключение"
+          }
+        }
+      }
+    },
+    "Connecting…" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Подключение…"
           }
         }
       }
@@ -1825,6 +1855,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Двойной"
+          }
+        }
+      }
+    },
+    "Download %@/s, upload %@/s" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Скачивание: %1$@/с, отдача: %2$@/с"
           }
         }
       }
@@ -2627,6 +2667,26 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Скрыть %@?"
+          }
+        }
+      }
+    },
+    "Hide VPN icon" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Скрыть значок VPN"
+          }
+        }
+      }
+    },
+    "Hide VPN icon adds the route exclusions of the hide-icon workaround: it changes excluded network routes, not only the icon. Hiding the VPN icon is not verified." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "«Скрыть значок VPN» добавляет исключения маршрутов, которые использует обходной способ скрытия значка: меняются исключённые сетевые маршруты, а не только значок. Скрытие значка VPN не проверено."
           }
         }
       }
@@ -4464,6 +4524,16 @@
         }
       }
     },
+    "Refresh the subscription once before viewing this server’s configuration." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Чтобы увидеть конфигурацию этого сервера, один раз обновите подписку."
+          }
+        }
+      }
+    },
     "Refreshes" : {
       "localizations" : {
         "ru" : {
@@ -5759,6 +5829,16 @@
         }
       }
     },
+    "The configuration must be one Xray server." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Конфигурация должна описывать один сервер Xray."
+          }
+        }
+      }
+    },
     "The connection could not be restored. Disconnect before trying again." : {
       "localizations" : {
         "ru" : {
@@ -5845,6 +5925,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Провайдер"
+          }
+        }
+      }
+    },
+    "The provider does not allow viewing this server’s configuration." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Провайдер не разрешает просматривать конфигурацию этого сервера."
           }
         }
       }
@@ -6913,6 +7003,16 @@
                 }
               }
             }
+          }
+        }
+      }
+    },
+    "↓ %@/s   ↑ %@/s" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "↓ %1$@/с   ↑ %2$@/с"
           }
         }
       }

@@ -1,0 +1,5 @@
+/* Siri and Spotlight phrases of the Shortcuts actions (ConnectionIntents.swift). A string catalog
+   for them needs macOS 14; the app supports macOS 13. */
+"Connect ${applicationName}" = "Connect ${applicationName}";
+"Disconnect ${applicationName}" = "Disconnect ${applicationName}";
+"Toggle ${applicationName}" = "Toggle ${applicationName}";

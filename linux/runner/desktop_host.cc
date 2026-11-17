@@ -574,9 +574,18 @@ void picker(DesktopHost* host, FlMethodCall* call, bool apps) {
   bool save_logs = strcmp(fl_method_call_get_name(call), "saveLogs") == 0;
   // The recording ZIP can be large, so Dart copies it to the chosen path.
   bool save_recording = strcmp(fl_method_call_get_name(call), "pickRecordingPath") == 0;
-  bool save = save_backup || save_evidence || save_logs || save_recording;
-  const char* content = save && !save_recording ? text_field(args, "content", save_backup ? 12 * 1024 * 1024 : save_logs ? 4 * 1024 * 1024 : 512 * 1024) : nullptr;
-  if (save && !save_recording && (!content || !*content)) { fail(call, save_backup ? "backup_failed" : "diagnostics_failed"); return; }
+  // Share text, QR images and routing JSON: Dart writes the bytes to the chosen path.
+  const char* save_name = nullptr;
+  if (strcmp(fl_method_call_get_name(call), "pickSavePath") == 0) {
+    const char* kind = text_field(args, "kind", 16);
+    save_name = !kind ? nullptr : strcmp(kind, "text") == 0 ? "elarni-share.txt" : strcmp(kind, "png") == 0 ? "elarni-qr.png"
+        : strcmp(kind, "json") == 0 ? "elarni-routing.json" : nullptr;
+    if (!save_name) { fail(call, "invalid_request"); return; }
+  }
+  bool pick_path = save_recording || save_name != nullptr;
+  bool save = save_backup || save_evidence || save_logs || pick_path;
+  const char* content = save && !pick_path ? text_field(args, "content", save_backup ? 12 * 1024 * 1024 : save_logs ? 4 * 1024 * 1024 : 512 * 1024) : nullptr;
+  if (save && !pick_path && (!content || !*content)) { fail(call, save_backup ? "backup_failed" : "diagnostics_failed"); return; }
   GtkWidget* dialog = gtk_file_chooser_dialog_new(save ? localized("Save Elarni file", "Сохранить файл Elarni")
       : apps ? localized("Select applications", "Выберите приложения") : localized("Import file", "Импорт файла"),
       host->window, save ? GTK_FILE_CHOOSER_ACTION_SAVE : GTK_FILE_CHOOSER_ACTION_OPEN,
@@ -588,7 +597,7 @@ void picker(DesktopHost* host, FlMethodCall* call, bool apps) {
   gtk_file_chooser_set_select_multiple(chooser, apps);
   if (save) {
     gtk_file_chooser_set_do_overwrite_confirmation(chooser, TRUE);
-    gtk_file_chooser_set_current_name(chooser, save_backup ? "elarni-backup.json" : save_logs ? "elarni-log.txt" : save_recording ? "elarni-recording.zip" : "elarni-diagnostics.json");
+    gtk_file_chooser_set_current_name(chooser, save_name ? save_name : save_backup ? "elarni-backup.json" : save_logs ? "elarni-log.txt" : save_recording ? "elarni-recording.zip" : "elarni-diagnostics.json");
   } else if (!apps) {
     auto* image = field(args, "image", FL_VALUE_TYPE_BOOL);
     auto* backup = field(args, "backup", FL_VALUE_TYPE_BOOL);
@@ -627,7 +636,7 @@ void picker(DesktopHost* host, FlMethodCall* call, bool apps) {
     } else {
       g_autofree char* path = gtk_file_chooser_get_filename(chooser);
       if (!path) error = "picker_failed";
-      else if (save_recording) fl_value_set_string_take(result, "path", fl_value_new_string(path));
+      else if (pick_path) fl_value_set_string_take(result, "path", fl_value_new_string(path));
       else if (save) {
         if (!write_private(path, content, strlen(content))) error = save_backup ? "backup_failed" : "diagnostics_failed";
       } else fl_value_set_string_take(result, "path", fl_value_new_string(path));
@@ -715,7 +724,8 @@ void platform_call(FlMethodChannel*, FlMethodCall* call, gpointer data) {
     fl_value_set_string_take(result, "links", links); success(call, result);
   } else if (method == "cameraFrame") camera_frame(host, call);
   else if (method == "cameraStop") { stop_camera(host); success(call); }
-  else if (method == "pickFile" || method == "saveBackup" || method == "saveEvidence" || method == "saveLogs" || method == "pickRecordingPath") picker(host, call, false);
+  else if (method == "pickFile" || method == "saveBackup" || method == "saveEvidence" || method == "saveLogs" || method == "pickRecordingPath" ||
+           method == "pickSavePath") picker(host, call, false);
   else if (method == "systemInfo") { g_autoptr(FlValue) info = system_info(); success(call, info); }
   else if (method == "setLaunchAtLogin") {
     auto* enabled = field(args, "enabled", FL_VALUE_TYPE_BOOL);

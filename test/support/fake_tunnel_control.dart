@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import 'package:elarni/tunnel_channel.dart';
 
 const fixtureSubscriptions = SubscriptionSnapshot(
@@ -113,6 +115,8 @@ class FakeTunnelControl implements TunnelControl {
   int routingReads = 0;
   Future<SubscriptionOperationResult> Function(String, String?)? onImport;
   final sharedIDs = <String>[];
+  // Whether each share asked for the subscription link or the server's.
+  final sharedSubscription = <bool>[];
   final savedFetchOptions = <Map<String, Object?>>[];
   final exportedPasswords = <String>[];
   final restoredPasswords = <String>[];
@@ -196,10 +200,35 @@ class FakeTunnelControl implements TunnelControl {
     bool subscription = false,
   }) async {
     sharedIDs.add(id);
+    sharedSubscription.add(subscription);
     return {
       'text': 'https://sub.example.com/test-vector',
       if (sharingPNG != null) 'png': sharingPNG,
     };
+  }
+
+  // The texts given a QR code, and the reply: an error is thrown.
+  final qrTexts = <String>[];
+  Object? qrReply;
+  @override
+  Future<Map<String, Object?>> qrCode(String text) async {
+    qrTexts.add(text);
+    return switch (qrReply) {
+      final String png => {'png': png},
+      null => {},
+      final Object error => throw error,
+    };
+  }
+
+  // Each shareLinks call's group and servers; the reply, or an error thrown.
+  final sharedLinks = <(String, List<String>)>[];
+  String shareLinksText = 'socks://fixture@127.0.0.1:1080#Fixture';
+  Object? shareLinksError;
+  @override
+  Future<String> shareLinks(String subscriptionId, List<String> nodeIds) async {
+    sharedLinks.add((subscriptionId, nodeIds));
+    if (shareLinksError case final error?) throw error;
+    return shareLinksText;
   }
 
   String nodeConfigText = '{\n  "outbounds": []\n}';
@@ -320,6 +349,17 @@ class FakeTunnelControl implements TunnelControl {
     return routingSnapshot;
   }
 
+  Object? managedRefreshError;
+  @override
+  Future<RoutingSnapshot> refreshManagedLists(
+    String id, {
+    String? sourceId,
+  }) async {
+    routingActions.add('lists:$id:${sourceId ?? 'all'}');
+    if (managedRefreshError case final error?) throw error;
+    return routingSnapshot;
+  }
+
   Map<String, Object?> systemInfoValue = {};
   @override
   Future<Map<String, Object?>> systemInfo() async => systemInfoValue;
@@ -338,10 +378,12 @@ class FakeTunnelControl implements TunnelControl {
     return onSettings?.call() ?? settings;
   }
 
+  /// What runtimeMetrics returns; nothing when null.
+  Map<String, Object?> Function()? onMetrics;
   @override
   Future<Map<String, Object?>> runtimeMetrics() async {
     metricsReads++;
-    return {};
+    return onMetrics?.call() ?? {};
   }
 
   /// The core's list: entries with a seq after the read's are returned.
@@ -386,6 +428,15 @@ class FakeTunnelControl implements TunnelControl {
 
   @override
   Future<void> saveLogs(String text) async => savedLogs.add(text);
+
+  // Each saved file's kind and bytes; false answers as a cancelled panel.
+  final savedFiles = <(String, Uint8List)>[];
+  Future<bool> Function(String kind)? onSaveFile;
+  @override
+  Future<bool> saveFile(String kind, Uint8List bytes) async {
+    savedFiles.add((kind, bytes));
+    return onSaveFile?.call(kind) ?? Future.value(true);
+  }
 
   @override
   Future<String> connect() {

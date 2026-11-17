@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -367,6 +368,252 @@ void main() {
     );
 
     // Windows and Linux report a provider's profile as 'provider', macOS as 'subscription'.
+    testWidgets(
+      'Share routing profile shows and copies the profile JSON ($windows)',
+      (tester) async {
+        final copied = <String>[];
+        final messenger = tester.binding.defaultBinaryMessenger;
+        messenger.setMockMethodCallHandler(SystemChannels.platform, (
+          call,
+        ) async {
+          if (call.method == 'Clipboard.setData')
+            copied.add((call.arguments as Map)['text'] as String);
+          return null;
+        });
+        addTearDown(
+          () =>
+              messenger.setMockMethodCallHandler(SystemChannels.platform, null),
+        );
+        final control = FakeTunnelControl()..routingSnapshot = routingFixture;
+        await mount(tester, control);
+        await tester.tap(find.byKey(const Key('nav-routing')));
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(const ValueKey('routing-actions:route')));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Share routing profile'));
+        await tester.pumpAndSettle();
+        final json = routingFixture.profiles.single.json;
+        final dialog = find.byType(AlertDialog);
+        expect(
+          find.descendant(of: dialog, matching: find.text('Everyday routing')),
+          findsOneWidget,
+        );
+        expect(
+          tester
+              .widget<SelectableText>(
+                find.byKey(const Key('shared-routing-json')),
+              )
+              .data,
+          json,
+        );
+        await tester.tap(find.widgetWithText(TextButton, 'Copy'));
+        await tester.pumpAndSettle();
+        // The same text Android and iOS share: the profile as JSON.
+        expect(copied, [json]);
+        expect(jsonDecode(copied.single), isA<Map>());
+        expect(dialog, findsNothing);
+        expect(control.routingActions, isEmpty);
+        expect(tester.takeException(), isNull);
+        await tester.pumpWidget(const SizedBox());
+      },
+    );
+
+    testWidgets(
+      'Share routing profile shows its QR code and saves the JSON and the image ($windows)',
+      (tester) async {
+        final png = File('test/windows_profile_qr.png').readAsBytesSync();
+        final control = FakeTunnelControl()
+          ..routingSnapshot = routingFixture
+          ..qrReply = base64Encode(png);
+        await mount(tester, control);
+        await tester.tap(find.byKey(const Key('nav-routing')));
+        await tester.pumpAndSettle();
+        Future<void> share() async {
+          await tester.tap(find.byKey(const ValueKey('routing-actions:route')));
+          await tester.pumpAndSettle();
+          await tester.tap(find.text('Share routing profile'));
+          await tester.pumpAndSettle();
+        }
+
+        final json = routingFixture.profiles.single.json;
+        final dialog = find.byType(AlertDialog);
+        await share();
+        expect(control.qrTexts, [json]);
+        expect(find.bySemanticsLabel('Connection QR code'), findsOneWidget);
+        // A cancelled save panel leaves the dialog open and says nothing.
+        control.onSaveFile = (_) async => false;
+        await tester.tap(find.byKey(const Key('shared-save-qr')));
+        await tester.pumpAndSettle();
+        expect(dialog, findsOneWidget);
+        expect(find.text('File saved.'), findsNothing);
+        expect(find.textContaining('could not be saved'), findsNothing);
+        control.onSaveFile = null;
+        await tester.tap(find.byKey(const Key('shared-save-qr')));
+        await tester.pumpAndSettle();
+        expect(dialog, findsNothing);
+        expect(find.text('File saved.'), findsOneWidget);
+        await share();
+        await tester.tap(find.text('Save to file…'));
+        await tester.pumpAndSettle();
+        expect(dialog, findsNothing);
+        expect(
+          [
+            for (final (kind, bytes) in control.savedFiles) [kind, bytes],
+          ],
+          [
+            ['png', png],
+            ['png', png],
+            ['text', utf8.encode(json)],
+          ],
+        );
+        // Without a QR code the JSON is still there to copy and save.
+        control.qrReply = PlatformException(code: 'sharing_failed');
+        await share();
+        expect(find.bySemanticsLabel('Connection QR code'), findsNothing);
+        expect(find.byKey(const Key('shared-save-qr')), findsNothing);
+        expect(find.byKey(const Key('shared-save-text')), findsOneWidget);
+        expect(
+          find.text('This configuration is too large for a QR code. Use Copy.'),
+          findsNothing,
+        );
+        expect(find.byKey(const Key('shared-routing-json')), findsOneWidget);
+        await tester.tap(find.text('Close'));
+        await tester.pumpAndSettle();
+        expect(control.routingActions, isEmpty);
+        expect(tester.takeException(), isNull);
+        await tester.pumpWidget(const SizedBox());
+      },
+    );
+
+    testWidgets(
+      'Export JSON saves the routing profile as a JSON file ($windows)',
+      (tester) async {
+        final control = FakeTunnelControl()..routingSnapshot = routingFixture;
+        await mount(tester, control);
+        await tester.tap(find.byKey(const Key('nav-routing')));
+        await tester.pumpAndSettle();
+        Future<void> export() async {
+          await tester.tap(find.byKey(const ValueKey('routing-actions:route')));
+          await tester.pumpAndSettle();
+          await tester.tap(find.text('Export JSON…'));
+          await tester.pumpAndSettle();
+        }
+
+        final json = utf8.encode(routingFixture.profiles.single.json);
+        const failed =
+            'The file could not be saved. Choose a writable location and retry.';
+        await export();
+        expect(find.text('File saved.'), findsOneWidget);
+        // The panels answer a cancel with an error on Windows and Linux.
+        control.onSaveFile = (_) async =>
+            throw PlatformException(code: 'cancelled');
+        await export();
+        expect(find.text('File saved.'), findsNothing);
+        expect(find.text(failed), findsNothing);
+        control.onSaveFile = (_) async =>
+            throw PlatformException(code: 'save_failed');
+        await export();
+        expect(find.text(failed), findsOneWidget);
+        expect(
+          [
+            for (final (kind, bytes) in control.savedFiles) [kind, bytes],
+          ],
+          [
+            ['json', json],
+            ['json', json],
+            ['json', json],
+          ],
+        );
+        expect(control.routingActions, isEmpty);
+        expect(tester.takeException(), isNull);
+      },
+    );
+
+    testWidgets(
+      'routing details refresh the managed lists and show a failure ($windows)',
+      (tester) async {
+        final managed = jsonEncode({
+          ...jsonDecode(routingFixture.profiles.single.json) as Map,
+          'ManagedSources': [
+            {
+              'id': 'ads',
+              'url': 'https://lists.example/ads.txt',
+              'destination': 'block',
+              'matchMode': 'exact',
+            },
+          ],
+        });
+        final control = FakeTunnelControl()
+          ..routingSnapshot = RoutingSnapshot(
+            profiles: [
+              RoutingProfile.fromMap({
+                'id': 'route',
+                'name': 'Everyday routing',
+                'source': 'subscription',
+                'edited': false,
+                'enabled': true,
+                'geofileStatus': 'ready',
+                'json': managed,
+              }),
+              RoutingProfile.fromMap({
+                'id': 'plain',
+                'name': 'Plain routing',
+                'source': 'custom',
+                'edited': false,
+                'enabled': true,
+                'geofileStatus': 'ready',
+                'json': routingFixture.profiles.single.json,
+              }),
+            ],
+            assignments: const {},
+          );
+        await mount(tester, control);
+        await tester.tap(find.byKey(const Key('nav-routing')));
+        await tester.pumpAndSettle();
+        Future<void> details(String id) async {
+          await tester.tap(find.byKey(ValueKey('routing-actions:$id')));
+          await tester.pumpAndSettle();
+          await tester.tap(find.text('Profile details'));
+          await tester.pumpAndSettle();
+        }
+
+        // A profile without managed lists has nothing to refresh.
+        await details('plain');
+        expect(find.text('Refresh lists'), findsNothing);
+        await tester.tap(find.text('Done'));
+        await tester.pumpAndSettle();
+        await details('route');
+        final refresh = find.byKey(
+          const ValueKey('routing-refresh-lists:route'),
+        );
+        await tester.tap(refresh);
+        await tester.pumpAndSettle();
+        expect(control.routingActions, ['lists:route:all']);
+        const failed =
+            'Routing change failed. The last working profile was kept.';
+        expect(
+          find.descendant(
+            of: find.byType(AlertDialog),
+            matching: find.text(failed),
+          ),
+          findsNothing,
+        );
+        control.managedRefreshError = PlatformException(code: 'fetch_failed');
+        await tester.tap(refresh);
+        await tester.pumpAndSettle();
+        expect(control.routingActions, ['lists:route:all', 'lists:route:all']);
+        // Shown in the dialog, as a failed geofile refresh is.
+        expect(
+          find.descendant(
+            of: find.byType(AlertDialog),
+            matching: find.text(failed),
+          ),
+          findsOneWidget,
+        );
+        expect(tester.takeException(), isNull);
+      },
+    );
+
     testWidgets('a provider routing profile can be reset ($windows)', (
       tester,
     ) async {

@@ -384,4 +384,170 @@ void main() {
       variant: TargetPlatformVariant.only(platform),
     );
   }
+
+  Future<void> openServerMenu(WidgetTester tester, String id) async {
+    final menu = find.byKey(ValueKey('server-menu:$id'));
+    await tester.ensureVisible(menu);
+    await tester.pumpAndSettle();
+    await tester.tap(menu);
+    await tester.pumpAndSettle();
+  }
+
+  testWidgets('the server menu shares that one server', (tester) async {
+    final control = ConvenienceControl()..snapshot = fixture();
+    await tester.binding.setSurfaceSize(const Size(1280, 900));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(ElarniApp(tunnelControl: control));
+    await tester.pumpAndSettle();
+    await openServerMenu(tester, 'b');
+    await tester.tap(find.text('Share server'));
+    await tester.pumpAndSettle();
+    expect(control.sharedIDs, ['b']);
+    expect(control.sharedSubscription, [false]);
+    final dialog = find.byType(AlertDialog);
+    expect(
+      find.descendant(of: dialog, matching: find.text('Share server')),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(
+        of: dialog,
+        matching: find.text(
+          'This configuration is too large for a QR code. Use Copy.',
+        ),
+      ),
+      findsOneWidget,
+    );
+    await tester.tap(find.widgetWithText(TextButton, 'Close'));
+    await tester.pumpAndSettle();
+    expect(dialog, findsNothing);
+    expect(control.selectedIDs, isEmpty);
+
+    // A provider that hides its link hides its servers' links too.
+    final shown = fixture().subscriptions.single;
+    control.snapshot = SubscriptionSnapshot(
+      selectedNodeId: 'a',
+      subscriptions: [
+        SubscriptionGroup(
+          id: shown.id,
+          name: shown.name,
+          status: shown.status,
+          metadata: const {'hideURL': true},
+          nodes: shown.nodes,
+        ),
+      ],
+    );
+    control.importListener!(null);
+    await tester.pumpAndSettle();
+    await openServerMenu(tester, 'b');
+    expect(find.text('Rename server'), findsOneWidget);
+    expect(find.text('Share server'), findsNothing);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('the server menu sets the IP type of that one server', (
+    tester,
+  ) async {
+    final control = ConvenienceControl()..snapshot = fixture();
+    await tester.binding.setSurfaceSize(const Size(1280, 900));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(ElarniApp(tunnelControl: control));
+    await tester.pumpAndSettle();
+    await openServerMenu(tester, 'b');
+    await tester.tap(find.text('Server IP type'));
+    await tester.pumpAndSettle();
+    Finder choice(String value) =>
+        find.byKey(ValueKey('server-ip-choice:$value'));
+    // The choices Settings offers for the selected server.
+    for (final (value, label) in [
+      ('default', 'Use app default'),
+      ('automatic', 'Automatic'),
+      ('ipv4', 'IPv4'),
+      ('ipv6', 'IPv6'),
+    ]) {
+      expect(
+        find.descendant(of: choice(value), matching: find.text(label)),
+        findsOneWidget,
+      );
+    }
+    expect(tester.widget<ListTile>(choice('default')).selected, isTrue);
+    await tester.tap(choice('ipv6'));
+    await tester.pumpAndSettle();
+    expect(control.nodeIPPreferences, [('b', 'ipv6')]);
+    // Keeping the current choice changes nothing.
+    await openServerMenu(tester, 'b');
+    await tester.tap(find.text('Server IP type'));
+    await tester.pumpAndSettle();
+    await tester.tap(choice('default'));
+    await tester.pumpAndSettle();
+    expect(control.nodeIPPreferences, [('b', 'ipv6')]);
+    expect(control.selectedIDs, isEmpty);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets(
+    'Use last successful server selects the latest unchanged one, as on iOS',
+    (tester) async {
+      SubscriptionSnapshot snapshot({required bool bCurrent}) {
+        final group = fixture().subscriptions.single;
+        return SubscriptionSnapshot(
+          selectedNodeId: 'a',
+          subscriptions: [
+            SubscriptionGroup(
+              id: group.id,
+              name: group.name,
+              status: group.status,
+              nodes: [
+                group.nodes.first,
+                SubscriptionNode(
+                  id: 'b',
+                  selected: false,
+                  name: 'Replacement server',
+                  protocol: 'VLESS',
+                  transport: 'tcp',
+                  security: 'tls',
+                  lastSuccessAt: 1700000100,
+                  lastSuccessCurrent: bCurrent,
+                ),
+                // A Telegram proxy is not a server to connect through.
+                const SubscriptionNode(
+                  id: 't',
+                  selected: false,
+                  name: 'Telegram proxy',
+                  protocol: 'MTProto',
+                  transport: 'tcp',
+                  security: 'none',
+                  format: 'telegram',
+                  lastSuccessAt: 1700000200,
+                  lastSuccessCurrent: true,
+                ),
+              ],
+            ),
+          ],
+        );
+      }
+
+      final control = ConvenienceControl()
+        ..snapshot = snapshot(bCurrent: false);
+      await tester.binding.setSurfaceSize(const Size(1280, 900));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      await tester.pumpWidget(ElarniApp(tunnelControl: control));
+      await tester.pumpAndSettle();
+      final button = find.byKey(const Key('use-last-successful'));
+      // b changed since it connected, so the latest is a, the selected one.
+      expect(button, findsNothing);
+      control.snapshot = snapshot(bCurrent: true);
+      control.importListener!(null);
+      await tester.pumpAndSettle();
+      expect(find.text('Use last successful server'), findsOneWidget);
+      expect(find.byTooltip('Replacement server'), findsOneWidget);
+      await tester.tap(button);
+      await tester.pumpAndSettle();
+      expect(control.selectedIDs, ['b']);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
 }

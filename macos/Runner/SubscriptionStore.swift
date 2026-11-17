@@ -84,6 +84,9 @@ final class SubscriptionStore {
   private static let service = "com.elarni.mac.endpoint"
 #endif
   private static let maxFeedBytes = 4 * 1024 * 1024
+  /// The refusals of shareLinks, which the macOS window recognises to word them in its language.
+  static let sharingDisabledMessage = "This provider has disabled sharing."
+  static let noShareLinkSuffix = " has no share link. Share it from its own page."
 
   private var catalog: SubscriptionCatalog
   private let catalogURL: URL
@@ -1027,7 +1030,7 @@ final class SubscriptionStore {
     guard let record = catalog.subscriptions.first(where: {
       subscription ? $0.id == id : $0.nodes.contains(where: { $0.id == id })
     }) else { throw SubscriptionError.notFound }
-    guard record.metadata?.hideURL != true else { throw SubscriptionError.incompatibleProfile("This provider has disabled sharing.") }
+    guard record.metadata?.hideURL != true else { throw SubscriptionError.incompatibleProfile(Self.sharingDisabledMessage) }
     guard record.isLocal == true || record.metadata?.hideURL != nil else { throw SubscriptionError.incompatibleProfile("Refresh this subscription before sharing.") }
     if subscription {
       guard record.isLocal != true,
@@ -1044,10 +1047,20 @@ final class SubscriptionStore {
     return String(decoding: try JSONSerialization.data(withJSONObject: config, options: [.sortedKeys]), as: UTF8.self)
   }
 
+  /// A server's stored Xray JSON, refused where sharing it would be; only an Xray profile has one to show.
+  func nodeConfig(nodeID: String) throws -> [String: Any] {
+    guard let record = catalog.subscriptions.first(where: { $0.nodes.contains(where: { $0.id == nodeID }) }),
+          let node = record.nodes.first(where: { $0.id == nodeID }) else { throw SubscriptionError.notFound }
+    guard record.metadata?.hideURL != true else { throw NodeConfigRefusal.sharingDisabled }
+    guard record.isLocal == true || record.metadata?.hideURL != nil else { throw NodeConfigRefusal.refreshRequired }
+    guard node.format == "xrayProfile" else { throw NodeConfigRefusal.unsupportedProfile }
+    return try outbound(nodeID: nodeID)
+  }
+
   /// Share links for servers of a local group, which has no subscription link, in group order.
   func shareLinks(subscriptionID: String, nodeIDs: [String]) throws -> String {
     guard let record = catalog.subscriptions.first(where: { $0.id == subscriptionID }), record.isLocal == true else { throw SubscriptionError.notFound }
-    guard record.metadata?.hideURL != true else { throw SubscriptionError.incompatibleProfile("This provider has disabled sharing.") }
+    guard record.metadata?.hideURL != true else { throw SubscriptionError.incompatibleProfile(Self.sharingDisabledMessage) }
     let links = try record.nodes.filter { nodeIDs.contains($0.id) }.map(shareLink)
     guard !links.isEmpty else { throw SubscriptionError.notFound }
     return links.joined(separator: "\n")
@@ -1067,7 +1080,7 @@ final class SubscriptionStore {
 
   private func shareLink(_ node: SubscriptionNode) throws -> String {
     if node.format == "telegram" { return try telegramURL(nodeID: node.id).absoluteString }
-    let none = SubscriptionError.incompatibleProfile("\(node.displayName) has no share link. Share it from its own page.")
+    let none = SubscriptionError.incompatibleProfile(node.displayName + Self.noShareLinkSuffix)
     var config = try outbound(nodeID: node.id)
     if node.format == "xrayProfile" {
       guard let outbounds = config["outbounds"] as? [[String: Any]], outbounds.count == 1 else { throw none }
@@ -1592,6 +1605,65 @@ final class SubscriptionStore {
     return SubscriptionOperationResult(snapshot: snapshot(), removedSelection: false, warning: nil)
   }
 
+  /// A hand edit must still parse as one Xray server; the provider's next refresh replaces it like any
+  /// other change. As a refresh that changes a server's config does, the edit gets a new secret, and so
+  /// a new configuration revision, and is published like a group choice.
+  func replaceNodeConfig(nodeID: String, content: String) async throws -> [String: Any] {
+    guard let found = catalog.subscriptions.first(where: { $0.nodes.contains(where: { $0.id == nodeID }) }),
+          let position = found.nodes.firstIndex(where: { $0.id == nodeID }) else { throw SubscriptionError.notFound }
+    guard transaction == nil, !publicationRecoveryRequired, refreshTasks[found.id] == nil else {
+      throw SubscriptionError.invalidState
+    }
+    var record = found
+    let old = record.nodes[position]
+    guard record.metadata?.hideURL != true else { throw NodeConfigRefusal.sharingDisabled }
+    guard old.format == "xrayProfile", content.utf8.count <= Self.maxFeedBytes else { throw NodeConfigRefusal.unsupportedProfile }
+    let parsed: [ParsedNode]
+    do { parsed = try parseImport(Data(content.utf8)).nodes }
+    catch SubscriptionError.invalidFeed { throw NodeConfigRefusal.unsupportedProfile }
+    guard parsed.count == 1, parsed[0].format == "xrayProfile" else { throw NodeConfigRefusal.unsupportedProfile }
+    let edit = parsed[0]
+    guard try runtimeConfiguration(readSecret(ref: old.outboundRef)) != runtimeConfiguration(edit.outbound) else {
+      return snapshot()
+    }
+    let ref = "subscription.\(record.id).node.\(UUID().uuidString.lowercased())"
+    try storeSecret(edit.outbound, ref: ref)
+    record.nodes[position] = SubscriptionNode(
+      id: old.id,
+      name: old.name,
+      protocolName: edit.protocolName,
+      transport: edit.transport,
+      security: edit.security,
+      outboundRef: ref,
+      format: edit.format,
+      groups: edit.groups,
+      groupOverrides: old.groupOverrides,
+      ipPreference: old.ipPreference,
+      favorite: old.favorite,
+      manualName: old.manualName,
+      lastSuccessAt: old.lastSuccessAt,
+      lastSuccessRevision: old.lastSuccessRevision,
+      lastSuccessSession: old.lastSuccessSession,
+      probeKey: probeKey(outbound: edit.outbound)
+    )
+    record.retiredSecretRefs = (record.retiredSecretRefs ?? []) + [old.outboundRef]
+    record.publishedRevision = UUID().uuidString.lowercased()
+    let generation = UUID()
+    refreshGenerations[record.id] = generation
+    defer { if refreshGenerations[record.id] == generation { refreshGenerations.removeValue(forKey: record.id) } }
+    do {
+      guard let publishRefresh else { throw SubscriptionError.invalidState }
+      try await publishRefresh(RefreshCandidate(record: record, generation: generation,
+        routingContent: nil, approvedChain: try readApprovalChain(subscriptionID: record.id)))
+    } catch {
+      if transaction == nil, !catalog.subscriptions.contains(where: {
+        $0.allNodes.contains { $0.outboundRef == ref } || ($0.retiredSecretRefs ?? []).contains(ref)
+      }) { deleteSecret(ref) }
+      throw error
+    }
+    return snapshot()
+  }
+
   private func matchKey(_ node: SubscriptionNode) -> SubscriptionNodeMatchKey {
     SubscriptionNodeMatchKey(
       name: node.name,
@@ -2055,6 +2127,13 @@ enum SubscriptionError: Error, Equatable {
   var hwidStatus: String? {
     switch self { case .hwidRequired: "device_required"; case .hwidLimit: "device_limit"; default: nil }
   }
+}
+
+/// Why a server's config cannot be shown or replaced, in the codes the Windows and Linux backends give.
+enum NodeConfigRefusal: String, Error {
+  case sharingDisabled = "sharing_disabled"
+  case refreshRequired = "sharing_refresh_required"
+  case unsupportedProfile = "unsupported_profile"
 }
 
 struct SubscriptionOperationResult {

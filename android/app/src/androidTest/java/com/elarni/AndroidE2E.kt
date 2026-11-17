@@ -224,6 +224,58 @@ class AndroidE2E {
         assertEquals("firefox", snapshot().settings.getString("tlsFingerprint"))
     }
 
+    // As on the desktop, a server's stored Xray JSON can be replaced by one that still reads as one server.
+    @Test fun e_serverConfigEditReplacesTheStoredServer() {
+        call("import", obj("text" to link()))
+        val id = snapshot().nodes.single().getString("id")
+        call("select", obj("id" to id))
+        call("renameNode", obj("id" to id, "name" to "Renamed server")); call("favorite", obj("id" to id, "value" to true))
+        val before = snapshot().node(id)
+        assertNull(snapshot().configRefusal(id))
+        val text = before.getJSONObject("config").toString(2)
+        // The shown text saved as it is is no new configuration.
+        call("updateNodeConfig", obj("id" to id, "text" to text))
+        assertEquals(before.getString("configurationRevision"), snapshot().node(id).getString("configurationRevision"))
+        val edited = text.replace("18080", "18089")
+        assertTrue(call("updateNodeConfig", obj("id" to id, "text" to edited)).optBoolean("saved"))
+        val after = snapshot().node(id)
+        assertEquals(Catalog.canonical(JSONObject(edited)), Catalog.canonical(after.getJSONObject("config")))
+        assertNotEquals("Tests and successes of the old configuration no longer count", before.getString("configurationRevision"), after.getString("configurationRevision"))
+        for (key in listOf("id", "name", "providerName", "favorite", "format")) assertEquals(key, before.opt(key), after.opt(key))
+        assertEquals(id, snapshot().selected)
+        assertEquals("The server still compiles, with the edit", 18089, endpointPort(snapshot()))
+        val saved = Catalog(EncryptedStore(ui.activity).load()!!.getJSONObject("committed"))
+        assertEquals(Catalog.canonical(after.getJSONObject("config")), Catalog.canonical(saved.node(id).getJSONObject("config")))
+    }
+
+    @Test fun e_serverConfigEditThatIsNotOneServerChangesNothing() {
+        call("import", obj("text" to link()))
+        val id = snapshot().nodes.single().getString("id")
+        val before = snapshot().node(id)
+        val config = before.getJSONObject("config")
+        // Broken JSON, no server, two servers, nothing, and a server Xray refuses: a public address without encryption.
+        for (edit in listOf("{", """{"outbounds": []}""", JSONArray(listOf(config, config)).toString(), "", config.toString(2).replace("127.0.0.1", "8.8.8.8")))
+            expectFailure { call("updateNodeConfig", obj("id" to id, "text" to edit)) }
+        assertEquals(Catalog.canonical(before), Catalog.canonical(snapshot().node(id)))
+        assertEquals(18080, endpointPort(snapshot()))
+    }
+
+    @Test fun e_serverConfigIsRefusedWhereTheProviderHidesIt() {
+        call("import", obj("text" to "#hide-url: yes\n" + link("Hidden local", 18081)))
+        HTTPFixture().use { feed ->
+            feed.body = link("Hidden provider", 18082); feed.headers = mapOf("hide-url" to "true")
+            subscribe(feed)
+            for (name in listOf("Hidden local", "Hidden provider")) {
+                val node = snapshot().nodes.single { it.string("name") == name }
+                val id = node.getString("id")
+                assertEquals(name, "sharing_disabled", snapshot().configRefusal(id))
+                val edit = node.getJSONObject("config").toString(2).replace(Regex("1808[12]"), "18089")
+                assertEquals(name, "sharing_disabled", expectFailure { call("updateNodeConfig", obj("id" to id, "text" to edit)) })
+                assertEquals(name, Catalog.canonical(node), Catalog.canonical(snapshot().node(id)))
+            }
+        }
+    }
+
     @Test fun e_tuicCatalogShareBackupAndAtomicRestore() {
         val link = "tuic://00000000-0000-4000-8000-000000000001:p%40ss%3A%E2%9C%93@[::1]:443?sni=tuic.example&udp_relay_mode=quic#TUIC%20fixture"
         call("import", obj("text" to link))
