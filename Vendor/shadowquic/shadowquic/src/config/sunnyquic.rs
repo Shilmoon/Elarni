@@ -1,0 +1,353 @@
+use std::{net::SocketAddr, path::PathBuf};
+
+use serde::Deserialize;
+
+use crate::config::{
+    AuthUser, BrutalParams, CipherSuitePreference, CongestionControl, HasCipherSuitePreference,
+    SocketOpt, default_alpn, default_congestion_control, default_gso, default_half_close_timeout,
+    default_inbound_max_streams, default_initial_mtu, default_keep_alive_interval, default_min_mtu,
+    default_mtu_discovery, default_outbound_max_streams, default_over_stream,
+    default_store_flush_interval, default_stream_receive_window, default_zero_rtt,
+};
+
+pub(crate) fn default_multipath_num() -> u32 {
+    12
+}
+
+/// Configuration of sunnyquic inbound
+///
+/// Example:
+/// ```yaml
+/// tag: proxy
+/// type: sunnyquic
+/// bind-addr: "0.0.0.0:1443"
+/// users:
+///   - username: "zhangsan"
+///     password: "12345678"
+/// server-name: "echo.free.beeceptor.com" # must be the same as client
+/// alpn: ["h3"]
+/// congestion-control: bbr
+/// zero-rtt: true
+/// ```
+#[derive(Deserialize, Clone, Debug)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub struct SunnyQuicServerCfg {
+    /// Required label for this endpoint.
+    pub tag: String,
+    /// Outbound this inbound prefers, stamped on every accepted request as
+    /// `UserContext::preferred_outbound`. A router script may honor or override
+    /// it; without a router it selects the outbound, and unset falls back to the
+    /// global default.
+    #[serde(default)]
+    pub default_outbound: Option<String>,
+    /// Binding address. e.g. `0.0.0.0:443`, `[::1]:443`
+    pub bind_addr: SocketAddr,
+    /// Users for client authentication
+    pub users: Vec<AuthUser>,
+    /// Server name of the certificates
+    pub server_name: String,
+    /// Certificate path for tls
+    pub cert_path: PathBuf,
+    /// Private key path for tls
+    pub key_path: PathBuf,
+    /// Maximum number of paths for multipath quic, 0 for disabling multipath
+    #[serde(default = "default_multipath_num")]
+    pub max_path_num: u32,
+    /// Alpn of tls. Default is `["h3"]`, must have common element with client
+    #[serde(default = "default_alpn")]
+    pub alpn: Vec<String>,
+    /// 0-RTT handshake.
+    /// Set to true to enable zero rtt.
+    /// Enabled by default
+    #[serde(default = "default_zero_rtt")]
+    pub zero_rtt: bool,
+    /// Congestion control, default to "bbr", supported: "bbr", "new-reno", "cubic"
+    #[serde(default = "default_congestion_control")]
+    pub congestion_control: CongestionControl,
+    /// Initial mtu, must be larger than min mtu, at least to be 1200.
+    /// 1400 is recommended for high packet loss network. default to be 1300
+    #[serde(default = "default_initial_mtu")]
+    pub initial_mtu: u16,
+    /// Minimum mtu, must be smaller than initial mtu, at least to be 1200.
+    /// 1400 is recommended for high packet loss network. default to be 1290
+    #[serde(default = "default_min_mtu")]
+    pub min_mtu: u16,
+    /// Enable QUIC Generic Segmentation Offload (GSO).
+    /// Controls [`quinn::TransportConfig::enable_segmentation_offload`]. When supported, GSO reduces
+    /// CPU usage for bulk sends; unsupported environments may see transient startup packet loss.
+    /// Enabled by default
+    #[serde(default = "default_gso")]
+    pub gso: bool,
+    /// Enable auto MTU discovery, default to true
+    /// For stable udp network, it's better to disable it and set a proper initial mtu
+    #[serde(default = "default_mtu_discovery")]
+    pub mtu_discovery: bool,
+
+    /// Brutal server configuration
+    #[serde(default)]
+    pub brutal: Option<BrutalParams>,
+    /// Path of a YAML file persisting users and their traffic statistics.
+    /// Loaded and merged with `users` at startup; written on every user
+    /// change via API, periodically and on graceful shutdown.
+    /// Optional, persistence is disabled when omitted.
+    /// ```yaml
+    /// user-store: "users.yaml"
+    /// ```
+    #[serde(default)]
+    pub user_store: Option<PathBuf>,
+    /// Interval in seconds for periodically flushing users and traffic
+    /// statistics to the `user-store` file. Default is 60, set to 0 to
+    /// disable periodic flushing (only API changes and shutdown persist).
+    /// Only takes effect when `user-store` is set.
+    #[serde(default = "default_store_flush_interval")]
+    pub store_flush_interval: u64,
+
+    /// Streams the peer may hold open concurrently. Each proxied request and
+    /// each UDP association holds one for its whole lifetime, so this is also
+    /// the ceiling on concurrent sessions over a single connection; a peer that
+    /// reaches it waits in `open_bi` until this side frees a stream. Worst-case
+    /// buffering is this multiplied by `stream-receive-window`. Default 1000.
+    #[serde(default = "default_inbound_max_streams")]
+    pub max_concurrent_bidi_streams: u32,
+
+    /// Unidirectional streams the peer may hold open concurrently. With
+    /// `over-stream` on, this side's UDP replies travel over these. Default 1000.
+    #[serde(default = "default_inbound_max_streams")]
+    pub max_concurrent_uni_streams: u32,
+
+    /// Bytes the peer may have in flight on one stream, and therefore the most
+    /// this side can be made to buffer for it. The default is a 400 Mbit/s
+    /// bandwidth-delay product over a 100 ms path. Default 5000000.
+    #[serde(default = "default_stream_receive_window")]
+    pub stream_receive_window: u64,
+
+    /// Bytes the peer may have in flight across every stream at once. Left out,
+    /// the transport's own default is kept, which is unlimited — so the only
+    /// bound on buffering is `max-concurrent-bidi-streams` multiplied by
+    /// `stream-receive-window`. Setting it caps that independently of the
+    /// stream count.
+    #[serde(default)]
+    pub receive_window: Option<u64>,
+
+    /// Bytes this side may have in flight before it stalls waiting for
+    /// acknowledgement. Default 40000000.
+    #[serde(default = "crate::config::default_inbound_send_window")]
+    pub send_window: Option<u64>,
+}
+
+impl Default for SunnyQuicServerCfg {
+    fn default() -> Self {
+        Self {
+            tag: String::new(),
+            default_outbound: None,
+            bind_addr: "127.0.0.1:443".parse().unwrap(),
+            users: Default::default(),
+            alpn: Default::default(),
+            zero_rtt: Default::default(),
+            congestion_control: Default::default(),
+            initial_mtu: default_initial_mtu(),
+            min_mtu: default_min_mtu(),
+            cert_path: PathBuf::from("./assets/certs/localhost.cert.pem"),
+            key_path: PathBuf::from("./assets/certs/localhost.key.pem"),
+            max_path_num: default_multipath_num(),
+            server_name: "localhost".into(),
+            mtu_discovery: default_mtu_discovery(),
+            gso: default_gso(),
+            brutal: None,
+            user_store: None,
+            store_flush_interval: default_store_flush_interval(),
+            max_concurrent_bidi_streams: crate::config::default_inbound_max_streams(),
+            max_concurrent_uni_streams: crate::config::default_inbound_max_streams(),
+            stream_receive_window: crate::config::default_stream_receive_window(),
+            receive_window: None,
+            send_window: crate::config::default_inbound_send_window(),
+        }
+    }
+}
+
+impl Default for SunnyQuicClientCfg {
+    fn default() -> Self {
+        Self {
+            half_close_timeout: crate::config::default_half_close_timeout(),
+            max_concurrent_bidi_streams: crate::config::default_outbound_max_streams(),
+            max_concurrent_uni_streams: crate::config::default_outbound_max_streams(),
+            stream_receive_window: crate::config::default_stream_receive_window(),
+            receive_window: None,
+            send_window: None,
+            #[cfg(feature = "dns-server")]
+            dns: None,
+            #[cfg(feature = "dns-server")]
+            addr_resolver: None,
+            tag: String::new(),
+            password: Default::default(),
+            username: Default::default(),
+            addr: Default::default(),
+            server_name: Default::default(),
+            alpn: Default::default(),
+            initial_mtu: default_initial_mtu(),
+            congestion_control: Default::default(),
+            zero_rtt: Default::default(),
+            over_stream: Default::default(),
+            min_mtu: default_min_mtu(),
+            keep_alive_interval: default_keep_alive_interval(),
+            max_path_num: default_multipath_num(),
+            extra_paths: Default::default(),
+            cert_path: Default::default(),
+            gso: default_gso(),
+            mtu_discovery: default_mtu_discovery(),
+            cipher_suite_preference: None,
+            socket_opt: Default::default(),
+            protect_path: Default::default(),
+        }
+    }
+}
+
+/// Sunnyquic outbound configuration
+///
+/// example:
+/// ```yaml
+/// tag: proxy
+/// type: sunnyquic
+/// addr: "12.34.56.7:1089" # or "[12:ff::ff]:1089" for dualstack
+/// password: "12345678"
+/// username: "87654321"
+/// server-name: "echo.free.beeceptor.com"
+/// alpn: ["h3"]
+/// initial-mtu: 1400
+/// congestion-control: bbr
+/// zero-rtt: true
+/// over-stream: false  # true for udp over stream, false for udp over datagram
+/// ```
+#[derive(Deserialize, Clone, Debug)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub struct SunnyQuicClientCfg {
+    /// Required label for this endpoint.
+    pub tag: String,
+    /// username, must be the same as the server
+    pub username: String,
+    /// password, must be the same as the server
+    pub password: String,
+    /// Shadowquic server address. example: `127.0.0.0.1:443`, `www.server.com:443`, `[ff::f1]:4443`
+    pub addr: String,
+    /// Additional paths for multipath quic
+    /// IPV4 or IPv6 path are all fine.
+    /// Right now only one path is used to sending data, the rest paths are backup paths.
+    /// See https://github.com/n0-computer/quinn/issues/389 for more details.
+    ///
+    /// It's recommended to use IPV4 and IPV6 path together for dual stack network.
+    /// ```yaml
+    /// extra-paths:
+    ///   - "[12:ff::ff]:1089"
+    /// ```
+    #[serde(default)]
+    pub extra_paths: Vec<QuicPath>,
+    /// Maximum number of paths for multipath quic, 0 for disabling multipath
+    #[serde(default = "default_multipath_num")]
+    pub max_path_num: u32,
+    /// Server name, must be the same as the server jls_upstream
+    /// domain name
+    pub server_name: String,
+    /// Alpn of tls, default is \["h3"\], must have common element with server
+    #[serde(default = "default_alpn")]
+    pub alpn: Vec<String>,
+    /// Certificate path for tls
+    pub cert_path: Option<PathBuf>,
+    /// Initial mtu, must be larger than min mtu, at least to be 1200.
+    /// 1400 is recommended for high packet loss network. default to be 1300
+    #[serde(default = "default_initial_mtu")]
+    pub initial_mtu: u16,
+    /// Congestion control, default to "bbr", supported: "bbr", "new-reno", "cubic"
+    #[serde(default = "default_congestion_control")]
+    pub congestion_control: CongestionControl,
+    /// Set to true to enable zero rtt, default to true
+    #[serde(default = "default_zero_rtt")]
+    pub zero_rtt: bool,
+    /// Transfer udp over stream or over datagram.
+    /// If true, use quic stream to send UDP, otherwise use quic datagram
+    /// extension, similar to native UDP in TUIC
+    #[serde(default = "default_over_stream")]
+    pub over_stream: bool,
+    #[serde(default = "default_min_mtu")]
+    /// Minimum mtu, must be smaller than initial mtu, at least to be 1200.
+    /// 1400 is recommended for high packet loss network. default to be 1290
+    pub min_mtu: u16,
+    /// Keep alive interval in milliseconds
+    /// 0 means disable keep alive, should be smaller than 30_000(idle time).
+    /// Disabled by default.
+    #[serde(default = "default_keep_alive_interval")]
+    pub keep_alive_interval: u32,
+    /// Enable QUIC Generic Segmentation Offload (GSO).
+    /// Controls [`quinn::TransportConfig::enable_segmentation_offload`]. When supported, GSO reduces
+    /// CPU usage for bulk sends; unsupported environments may see transient startup packet loss.
+    /// Enabled by default
+    #[serde(default = "default_gso")]
+    pub gso: bool,
+    /// Enable auto MTU discovery, default to true
+    /// For stable udp network, it's better to disable it and set a proper initial mtu
+    #[serde(default = "default_mtu_discovery")]
+    pub mtu_discovery: bool,
+
+    /// Inactivity timeout after either TCP source reaches EOF, in milliseconds.
+    /// Defaults to 60 seconds. Zero disables the timeout.
+    #[serde(default = "default_half_close_timeout")]
+    pub half_close_timeout: u64,
+
+    /// Streams the peer may hold open concurrently. Each proxied request and
+    /// each UDP association holds one for its whole lifetime, so this is also
+    /// the ceiling on concurrent sessions over a single connection; a peer that
+    /// reaches it waits in `open_bi` until this side frees a stream. Worst-case
+    /// buffering is this multiplied by `stream-receive-window`. Default 500.
+    #[serde(default = "default_outbound_max_streams")]
+    pub max_concurrent_bidi_streams: u32,
+
+    /// Unidirectional streams the peer may hold open concurrently. With
+    /// `over-stream` on, the peer's UDP replies travel over these. Default 500.
+    #[serde(default = "default_outbound_max_streams")]
+    pub max_concurrent_uni_streams: u32,
+
+    /// Bytes the peer may have in flight on one stream, and therefore the most
+    /// this side can be made to buffer for it. The default is a 400 Mbit/s
+    /// bandwidth-delay product over a 100 ms path. Default 5000000.
+    #[serde(default = "default_stream_receive_window")]
+    pub stream_receive_window: u64,
+
+    /// Bytes the peer may have in flight across every stream at once. Left out,
+    /// the transport's own default is kept, which is unlimited — so the only
+    /// bound on buffering is `max-concurrent-bidi-streams` multiplied by
+    /// `stream-receive-window`. Setting it caps that independently of the
+    /// stream count.
+    #[serde(default)]
+    pub receive_window: Option<u64>,
+
+    /// Bytes this side may have in flight before it stalls waiting for
+    /// acknowledgement. Left out, the transport's own default is kept.
+    #[serde(default)]
+    pub send_window: Option<u64>,
+    /// DNS service used to resolve destination domains after routing.
+    #[cfg(feature = "dns-server")]
+    pub dns: Option<String>,
+    /// DNS resolver used to resolve the server address.
+    #[cfg(feature = "dns-server")]
+    pub addr_resolver: Option<String>,
+
+    /// Optional TLS 1.3 cipher suite preference.
+    /// If unset, use rustls/ring default preference order.
+    #[serde(default)]
+    pub cipher_suite_preference: Option<Vec<CipherSuitePreference>>,
+    #[serde(flatten)]
+    pub socket_opt: SocketOpt,
+
+    /// Android Only. the unix socket path for protecting android socket
+    #[serde(default)]
+    pub protect_path: Option<std::path::PathBuf>,
+}
+
+impl HasCipherSuitePreference for SunnyQuicClientCfg {
+    fn has_cipher_suite_preference(&self) -> bool {
+        self.cipher_suite_preference
+            .as_ref()
+            .is_some_and(|preferences| !preferences.is_empty())
+    }
+}
+
+type QuicPath = String;

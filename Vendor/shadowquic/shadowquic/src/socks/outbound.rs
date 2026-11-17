@@ -1,0 +1,279 @@
+use std::sync::Arc;
+
+use crate::{
+    TcpSession, UdpRecv, UdpSend, UdpSession,
+    msgs::socks5::{
+        CmdReply, PasswordAuthReply, PasswordAuthReq, SOCKS5_AUTH_METHOD_PASSWORD,
+        SOCKS5_CMD_TCP_CONNECT, SOCKS5_CMD_UDP_ASSOCIATE, SOCKS5_REPLY_SUCCEEDED, SOCKS5_RESERVE,
+        SOCKS5_VERSION, SocksAddr,
+    },
+    socks::UdpSocksWrap,
+    utils::socket_opt::{SocketFactory, TcpSocketFactory, UdpSocketFactory},
+};
+use tokio::{
+    io::AsyncReadExt,
+    net::{TcpStream, UdpSocket},
+    sync::OnceCell,
+};
+
+use async_trait::async_trait;
+use tracing::{error, instrument};
+
+use crate::{
+    Outbound, ProxyRequest,
+    config::SocksClientCfg,
+    dns::ResolverManager,
+    error::SError,
+    msgs::socks5::{AuthReply, AuthReq, CmdReq, SOCKS5_AUTH_METHOD_NONE, VarVec},
+    msgs::{SDecode, SEncode},
+};
+
+#[derive(Clone)]
+pub struct SocksClient {
+    pub cfg: SocksClientCfg,
+    pub(crate) tcp_socket_factory: Arc<dyn SocketFactory>,
+    pub(crate) addr_resolver: Arc<dyn crate::dns::DnsService>,
+}
+
+impl std::fmt::Debug for SocksClient {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SocksClient")
+            .field("cfg", &self.cfg)
+            .finish()
+    }
+}
+
+#[async_trait]
+impl Outbound for SocksClient {
+    #[instrument(name = "outbound", skip_all, fields(tag = %self.cfg.tag))]
+    async fn handle(&self, req: ProxyRequest) -> Result<(), SError> {
+        let client = self.clone();
+        let fut = async move {
+            match req {
+                ProxyRequest::Tcp(tcp_session) => client.handle_tcp(tcp_session).await,
+                ProxyRequest::Udp(udp_session) => client.handle_udp(udp_session).await,
+            }
+        };
+        fut.await?;
+        Ok(())
+    }
+}
+
+impl SocksClient {
+    pub fn new(cfg: SocksClientCfg, resolver_manager: Arc<ResolverManager>) -> Self {
+        #[cfg(feature = "dns-server")]
+        let tag = cfg
+            .addr_resolver
+            .clone()
+            .unwrap_or(crate::dns::DEFAULT_SYSTEM_DNS_TAG.to_string());
+        #[cfg(not(feature = "dns-server"))]
+        let tag = String::new();
+        let addr_resolver = resolver_manager
+            .resolver(&tag)
+            .unwrap_or_else(|| panic!("dns resolver not found: {}", tag));
+        let tcp_socket_factory = Arc::new(TcpSocketFactory {
+            addr: cfg.addr.clone(),
+            keep_alive: false,
+            interface: cfg.socket_opt.bind_interface.clone(),
+            fw_mark: cfg.socket_opt.fw_mark,
+            protect_path: None,
+            resolver: addr_resolver.clone(),
+        });
+        Self {
+            cfg,
+            tcp_socket_factory,
+            addr_resolver,
+        }
+    }
+    async fn authenticate(&self, mut tcp: TcpStream) -> Result<TcpStream, SError> {
+        let method = if self.cfg.username.is_some() {
+            SOCKS5_AUTH_METHOD_PASSWORD
+        } else {
+            SOCKS5_AUTH_METHOD_NONE
+        };
+        let auth = AuthReq {
+            version: SOCKS5_VERSION,
+            methods: VarVec {
+                len: 1,
+                contents: vec![method],
+            },
+        };
+
+        auth.encode(&mut tcp).await?;
+        let rep = AuthReply::decode(&mut tcp).await?;
+        if rep.version != SOCKS5_VERSION {
+            return Err(SError::SocksError("version not supported".into()));
+        }
+        if rep.method != method {
+            return Err(SError::SocksError(
+                "authenticate method not supported".into(),
+            ));
+        }
+        if let Some(username) = &self.cfg.username {
+            let password = self
+                .cfg
+                .password
+                .as_ref()
+                .ok_or(SError::SocksError("password not provided".into()))?;
+            // A name or password over 255 bytes fails to encode.
+            let auth = PasswordAuthReq {
+                version: 0x01, // This is password auth version not socks version
+                username: VarVec::from(username.as_bytes().to_vec()),
+                password: VarVec::from(password.as_bytes().to_vec()),
+            };
+            auth.encode(&mut tcp).await?;
+            let rep = PasswordAuthReply::decode(&mut tcp).await?;
+            if rep.status != SOCKS5_REPLY_SUCCEEDED {
+                return Err(SError::SocksError("authenticate failed".into()));
+            }
+        }
+        Ok(tcp)
+    }
+
+    async fn connect_destination(&self, dst: SocksAddr) -> Result<tokio::net::TcpStream, SError> {
+        tracing::info!(event = "socks:connection_started", server = %self.cfg.addr, "connect to socks server");
+        let socket = self.tcp_socket_factory.create_socket().await?;
+        let std_stream: std::net::TcpStream = socket.into();
+        let tokio_socket = tokio::net::TcpSocket::from_std_stream(std_stream);
+        let addr =
+            crate::dns::resolve_destination(&*self.addr_resolver, &self.cfg.addr.parse()?, None)
+                .await?;
+        let tcp = tokio_socket.connect(addr).await?;
+        tcp.set_nodelay(true)?;
+        let mut tcp = self.authenticate(tcp).await?;
+        let socksreq = CmdReq {
+            version: SOCKS5_VERSION,
+            cmd: SOCKS5_CMD_TCP_CONNECT,
+            rsv: SOCKS5_RESERVE,
+            dst,
+        };
+        socksreq.encode(&mut tcp).await?;
+        let rep = CmdReply::decode(&mut tcp).await?;
+        if rep.rep != SOCKS5_REPLY_SUCCEEDED {
+            return Err(SError::SocksError(format!("CONNECT failed: {}", rep.rep)));
+        }
+        tracing::trace!(
+            event = "socks:connection_established",
+            "socks tcp connection established"
+        );
+        Ok(tcp)
+    }
+
+    async fn handle_tcp(&self, mut tcp_session: TcpSession) -> Result<(), SError> {
+        let mut tcp = self.connect_destination(tcp_session.dst).await?;
+        crate::utils::copy::copy_bidirectional(
+            &mut tcp,
+            &mut tcp_session.stream,
+            16 * 1024,
+            16 * 1024,
+            self.cfg.half_close_timeout,
+        )
+        .await?;
+        Ok(())
+    }
+
+    async fn handle_udp(&self, mut udp_session: UdpSession) -> Result<(), SError> {
+        tracing::info!(
+            event = "socks:udp_connection_started",
+            server_addr = %self.cfg.addr,
+            "connect to socks server",
+        );
+        let socket = self.tcp_socket_factory.create_socket().await?;
+        let std_stream: std::net::TcpStream = socket.into();
+        let tokio_socket = tokio::net::TcpSocket::from_std_stream(std_stream);
+        let server =
+            crate::dns::resolve_destination(&*self.addr_resolver, &self.cfg.addr.parse()?, None)
+                .await?;
+        let tcp = tokio_socket.connect(server).await?;
+        tcp.set_nodelay(true)?;
+
+        let mut tcp = self.authenticate(tcp).await?;
+
+        let socksreq = CmdReq {
+            version: SOCKS5_VERSION,
+            cmd: SOCKS5_CMD_UDP_ASSOCIATE,
+            rsv: SOCKS5_RESERVE,
+            dst: udp_session.bind_addr.clone(),
+        };
+        socksreq.encode(&mut tcp).await?;
+        let rep = CmdReply::decode(&mut tcp).await?;
+        tracing::trace!(
+            event = "socks:udp_association_established",
+            "socks udp association established"
+        );
+        if rep.rep != SOCKS5_REPLY_SUCCEEDED {
+            return Err(SError::SocksError(format!(
+                "UDP ASSOCIATE failed: {}",
+                rep.rep
+            )));
+        }
+        let mut peer_addr =
+            crate::dns::resolve_destination(&*self.addr_resolver, &rep.bind_addr, None).await?;
+        // A server listening on every address answers with the wildcard
+        // address and means the address it was reached at.
+        if peer_addr.ip().is_unspecified() {
+            peer_addr.set_ip(server.ip());
+        }
+
+        let udp_socket_factory = UdpSocketFactory {
+            addr: peer_addr.to_string(),
+            interface: self.cfg.socket_opt.bind_interface.clone(),
+            fw_mark: self.cfg.socket_opt.fw_mark,
+            protect_path: None,
+            try_dual_stack: false,
+            resolver: self.addr_resolver.clone(),
+        };
+        let socket = udp_socket_factory.create_socket().await?;
+        socket.set_nonblocking(true)?;
+        let std_socket: std::net::UdpSocket = socket.into();
+        let socket = UdpSocket::from_std(std_socket)?;
+        socket.connect(peer_addr).await?;
+        let mut upstream = UdpSocksWrap(Arc::new(socket), OnceCell::new_with(Some(peer_addr)));
+
+        let upstream_clone = upstream.clone();
+        let fut1 = async move {
+            loop {
+                let (buf, dst) = upstream.recv_from().await?;
+
+                let _ = udp_session.send.send_to(buf, dst).await?;
+            }
+            #[allow(unreachable_code)]
+            (Ok(()) as Result<(), SError>)
+        };
+        let fut2 = async move {
+            loop {
+                let (buf, dst) = udp_session.recv.recv_from().await?;
+
+                let _ = upstream_clone.send_to(buf, dst).await?;
+            }
+            #[allow(unreachable_code)]
+            (Ok(()) as Result<(), SError>)
+        };
+        // control stream, in socks5 inbound, end of control stream
+        // means end of udp association.
+        let fut3 = async {
+            if udp_session.stream.is_none() {
+                return Ok(());
+            }
+            let mut buf = [0u8];
+            udp_session
+                .stream
+                .unwrap()
+                .read_exact(&mut buf)
+                .await
+                .map_err(|x| SError::UDPSessionClosed(x.to_string()))?;
+            error!(
+                event = "socks:unexpected_control_data",
+                "unexpected data received from socks control stream"
+            );
+            Err(SError::UDPSessionClosed(
+                "unexpected data received from socks control stream".into(),
+            )) as Result<(), SError>
+        };
+        // We can use spawn, but it requirs communication to shutdown the other
+        // Flatten spawn handle using try_join! doesn't work. Don't know why
+        tokio::try_join!(fut1, fut2, fut3)?;
+
+        Ok(())
+    }
+}

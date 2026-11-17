@@ -1,0 +1,183 @@
+use std::sync::Arc;
+
+use async_trait::async_trait;
+use socket2::{Domain, Protocol, Socket, Type};
+use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::mpsc::{Receiver, Sender, channel};
+use tracing::{Instrument, error};
+
+use crate::utils::log::{REQ_ID, fetch_add_req_cnt};
+use crate::{
+    Inbound, ProxyRequest,
+    config::AuthUser,
+    config::MixedServerCfg,
+    error::{SError, SResult},
+    http::inbound::{HttpProxyServer, ProxyBasicAuth},
+    observe::Observer,
+    socks::inbound::SocksServer,
+    utils::dual_socket::to_ipv4_mapped,
+    utils::replay_stream::ReplayStream,
+};
+
+pub struct MixedServer {
+    cfg: MixedServerCfg,
+    /// Shared with the manager's observer map when registering this inbound.
+    pub observer: Arc<Observer>,
+    request_sender: Sender<ProxyRequest>,
+    request_receiver: Receiver<ProxyRequest>,
+}
+
+impl MixedServer {
+    pub async fn new(cfg: MixedServerCfg) -> Result<Self, SError> {
+        let (s, r) = channel(20);
+        Ok(Self {
+            cfg,
+            observer: Arc::new(Observer::new()),
+            request_sender: s,
+            request_receiver: r,
+        })
+    }
+}
+
+async fn handle_connection(
+    mut stream: TcpStream,
+    http: Arc<HttpProxyServer>,
+    users: Arc<Vec<AuthUser>>,
+    sender: Sender<ProxyRequest>,
+) -> SResult<()> {
+    use tokio::io::AsyncReadExt;
+
+    let local_addr = to_ipv4_mapped(stream.local_addr().unwrap());
+    let first_byte = stream.read_u8().await?;
+
+    let req = if first_byte == 0x05 {
+        let prefix = vec![first_byte];
+        SocksServer::accept_stream_with_local_addr(
+            ReplayStream::new(prefix, stream),
+            local_addr,
+            &users,
+        )
+        .await?
+    } else {
+        let prefix = vec![first_byte];
+        http.accept_stream(ReplayStream::new(prefix, stream))
+            .await?
+    };
+
+    sender
+        .send(req)
+        .await
+        .map_err(|_| SError::ChannelError("mixed request channel closed".into()))
+}
+
+#[async_trait]
+impl Inbound for MixedServer {
+    async fn accept(&mut self) -> Result<ProxyRequest, SError> {
+        let mut recv = self
+            .request_receiver
+            .recv()
+            .await
+            .ok_or(SError::InboundUnavailable)?;
+        recv.user_context_mut().inbound_tag = self.cfg.tag.clone();
+        recv.user_context_mut().preferred_outbound = self.cfg.default_outbound.clone();
+        recv.user_context_mut().observer = Arc::downgrade(&self.observer);
+        Ok(recv)
+    }
+
+    async fn init(&self) -> Result<(), SError> {
+        let bind_addr = self.cfg.bind_addr;
+        let dual_stack = bind_addr.is_ipv6();
+        let socket = Socket::new(
+            if dual_stack {
+                Domain::IPV6
+            } else {
+                Domain::IPV4
+            },
+            Type::STREAM,
+            Some(Protocol::TCP),
+        )?;
+        if dual_stack {
+            let _ = socket.set_only_v6(false).map_err(|e| {
+                tracing::warn!(
+                    event = "connectivity:dual_stack_failed",
+                    "failed to set dual stack for socket: {}",
+                    e
+                )
+            });
+        }
+        socket.set_reuse_address(true)?;
+        socket.set_nonblocking(true)?;
+        socket.bind(&bind_addr.into())?;
+        socket.listen(256)?;
+
+        let listener = TcpListener::from_std(socket.into())
+            .map_err(|e| SError::SocksError(format!("failed to create TcpListener: {e}")))?;
+
+        let http_users = self
+            .cfg
+            .users
+            .iter()
+            .map(|u| ProxyBasicAuth {
+                username: u.username.clone(),
+                password: u.password.clone(),
+            })
+            .collect();
+
+        let http = Arc::new(HttpProxyServer::with_users(http_users));
+        let users = Arc::new(self.cfg.users.clone());
+        let req_send = self.request_sender.clone();
+        let tag = self.cfg.tag.clone();
+
+        let fut = async move {
+            loop {
+                let (stream, addr) = match listener.accept().await {
+                    Ok(connection) => connection,
+                    Err(error) => {
+                        error!(event = "mixed:connection_accept_failed", %error, "failed to accept mixed connection");
+                        // Avoid spinning when resource exhaustion prevents accepting.
+                        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                        continue;
+                    }
+                };
+                // Same reason as socks/inbound.rs: the handshake replies are written
+                // field by field, so Nagle plus the peer's delayed ACK costs about
+                // 40ms per connection unless it is off.
+                let _ = stream.set_nodelay(true);
+                let req_id = fetch_add_req_cnt();
+                let span = tracing::info_span!("inbound",
+                    tag = %tag,
+                    src = %addr,
+                    user = tracing::field::Empty,
+                    id = tracing::field::Empty,
+                    req_id = req_id,
+                );
+                span.in_scope(|| {
+                    tracing::info!(
+                        event = "mixed:connection_started",
+                        "accepted mixed connection"
+                    );
+                });
+                let http = http.clone();
+                let users = users.clone();
+                let req_send = req_send.clone();
+                tokio::spawn(
+                    async move {
+                        REQ_ID
+                            .scope(req_id, handle_connection(stream, http, users, req_send))
+                            .await
+                            .map_err(|x| {
+                                error!(
+                                    event = "mixed:connection_failed",
+                                    "failed to handle mixed connection: {}", x
+                                )
+                            })
+                    }
+                    .instrument(span),
+                );
+            }
+        };
+        tokio::spawn(fut.in_current_span());
+
+        Ok(())
+    }
+}

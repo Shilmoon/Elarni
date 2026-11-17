@@ -1,0 +1,407 @@
+use async_trait::async_trait;
+use std::{collections::HashMap, sync::Arc};
+
+use arc_swap::ArcSwap;
+use tokio::sync::{
+    RwLock, SetOnce,
+    mpsc::{Receiver, Sender, channel},
+};
+use tracing::{Instrument, error};
+
+use crate::{
+    Inbound, ProxyRequest,
+    config::{AuthUser, SunnyQuicServerCfg},
+    error::SError,
+    msgs::squic::{SQExtError, SunnyCredential, UserStats},
+    observe::Observer,
+    quic::QuicConnection,
+    squic::inbound::{SQServerConn, SunnyQuicUsers, UserManager},
+    sunnyquic::EndServer,
+    utils::{dual_socket::ToCanonical, user_store},
+};
+
+use crate::squic::SQConn;
+
+use crate::quic::QuicServer;
+pub struct SunnyQuicServer {
+    pub endpoint: EndServer,
+    users: Arc<ArcSwap<HashMap<SunnyCredential, String>>>,
+    user_manager: Arc<SunnyQuicUserManager>,
+    request_sender: Sender<ProxyRequest>,
+    request: Receiver<ProxyRequest>,
+    /// Shared with the manager's observer map when registering this inbound.
+    pub observer: Arc<Observer>,
+}
+
+struct SunnyQuicUserManager {
+    endpoint: EndServer,
+    users: Arc<ArcSwap<HashMap<SunnyCredential, String>>>,
+    config: RwLock<SunnyQuicServerCfg>,
+    observer: Arc<Observer>,
+    /// Held while the user store is written.
+    persisting: tokio::sync::Mutex<()>,
+}
+
+impl SunnyQuicUserManager {
+    /// Persist current users and traffic stats to the configured store file.
+    async fn persist(&self) {
+        let config = self.config.read().await;
+        let Some(path) = config.user_store.clone() else {
+            return;
+        };
+        drop(config);
+        // One at a time, and the users are read after the wait: the store
+        // written last is then the newest one.
+        let _saving = self.persisting.lock().await;
+        let users = self.config.read().await.users.clone();
+        let store = user_store::build_store(&users, &self.observer).await;
+        if let Err(error) = user_store::save_store(&path, &store) {
+            error!(
+                event = "user_api:user_store_persist_failed",
+                "failed to persist user store: {}", error
+            );
+        }
+    }
+}
+
+#[async_trait]
+impl UserManager for SunnyQuicUserManager {
+    async fn add_user(&self, user: AuthUser) -> Result<(), SQExtError> {
+        let mut config = self.config.write().await;
+        let old_config = config.clone();
+        if let Some(existing_user) = config
+            .users
+            .iter_mut()
+            .find(|existing_user| existing_user.username == user.username)
+        {
+            existing_user.password = user.password;
+        } else {
+            config.users.push(user);
+        }
+
+        if let Err(error) = QuicServer::update_config(&self.endpoint, &config).await {
+            *config = old_config;
+            tracing::error!(
+                event = "user_api:user_add_failed",
+                "failed to add sunnyquic user: {}",
+                error
+            );
+            return Err(SQExtError::Other(error.to_string()));
+        }
+        self.users.store(SunnyQuicServer::gen_users_hash(&config));
+        drop(config);
+        self.persist().await;
+        Ok(())
+    }
+
+    async fn remove_user(&self, username: &str) -> Result<(), SQExtError> {
+        let mut config = self.config.write().await;
+        let old_config = config.clone();
+        let old_len = config.users.len();
+        config.users.retain(|user| user.username != username);
+        if config.users.len() == old_len {
+            return Err(SQExtError::NotFound);
+        }
+
+        if let Err(error) = QuicServer::update_config(&self.endpoint, &config).await {
+            *config = old_config;
+            tracing::error!(
+                event = "user_api:user_remove_failed",
+                "failed to remove sunnyquic user: {}",
+                error
+            );
+            return Err(SQExtError::Other(error.to_string()));
+        }
+        self.users.store(SunnyQuicServer::gen_users_hash(&config));
+        drop(config);
+        self.observer.remove_user(username).await;
+        self.persist().await;
+        Ok(())
+    }
+
+    async fn list_users(&self) -> Result<Vec<String>, SQExtError> {
+        let config = self.config.read().await;
+        Ok(config
+            .users
+            .iter()
+            .map(|user| user.username.clone())
+            .collect())
+    }
+
+    async fn get_user_stats(&self, username: &str) -> Result<UserStats, SQExtError> {
+        let config = self.config.read().await;
+        if !config.users.iter().any(|user| user.username == username) {
+            return Err(SQExtError::NotFound);
+        }
+        drop(config);
+        Ok(self.observer.get_user_stats(username).await)
+    }
+
+    async fn get_all_stats(&self) -> Result<Vec<UserStats>, SQExtError> {
+        let config = self.config.read().await;
+        let usernames = config
+            .users
+            .iter()
+            .map(|user| user.username.clone())
+            .collect::<Vec<_>>();
+        drop(config);
+        Ok(self.observer.get_all_stats(&usernames).await)
+    }
+
+    async fn kill_user_conns(&self, username: &str) -> Result<(), SQExtError> {
+        let config = self.config.read().await;
+        if !config.users.iter().any(|user| user.username == username) {
+            return Err(SQExtError::NotFound);
+        }
+        drop(config);
+        self.observer.close_conn(username).await;
+        Ok(())
+    }
+
+    async fn clear_user_stats(&self, username: &str) -> Result<(), SQExtError> {
+        let config = self.config.read().await;
+        if !config.users.iter().any(|user| user.username == username) {
+            return Err(SQExtError::NotFound);
+        }
+        drop(config);
+        self.observer.clear_user_stats(username).await;
+        self.persist().await;
+        Ok(())
+    }
+
+    async fn clear_all_stats(&self) -> Result<(), SQExtError> {
+        let config = self.config.read().await;
+        let usernames = config
+            .users
+            .iter()
+            .map(|user| user.username.clone())
+            .collect::<Vec<_>>();
+        drop(config);
+        self.observer.clear_all_stats(&usernames).await;
+        self.persist().await;
+        Ok(())
+    }
+}
+
+impl SunnyQuicServer {
+    pub async fn new(mut cfg: SunnyQuicServerCfg) -> Result<Self, SError> {
+        let (send, recv) = channel::<ProxyRequest>(10);
+        let store = match &cfg.user_store {
+            Some(path) => user_store::load_store(path)?,
+            None => None,
+        };
+        if let Some(store) = &store {
+            user_store::merge_users(&mut cfg.users, store);
+        }
+        let endpoint: EndServer = QuicServer::new(&cfg).await?;
+        let users = Arc::new(ArcSwap::new(Self::gen_users_hash(&cfg)));
+        let observer = Arc::new(Observer::new());
+        if let Some(store) = &store {
+            observer
+                .restore_stats(&user_store::stored_stats(store))
+                .await;
+        }
+        let user_manager = Arc::new(SunnyQuicUserManager {
+            endpoint: endpoint.clone(),
+            users: users.clone(),
+            config: RwLock::new(cfg),
+            observer: observer.clone(),
+            persisting: Default::default(),
+        });
+
+        Ok(Self {
+            endpoint,
+            users,
+            user_manager,
+            request_sender: send,
+            request: recv,
+            observer,
+        })
+    }
+
+    pub async fn update_config(&self, cfg: &SunnyQuicServerCfg) -> Result<(), SError> {
+        QuicServer::update_config(&self.endpoint, cfg).await?;
+        self.users.store(Self::gen_users_hash(cfg));
+        *self.user_manager.config.write().await = cfg.clone();
+        Ok(())
+    }
+
+    /// Periodically flush users and traffic stats to the user store,
+    /// so stats survive unexpected crashes.
+    async fn spawn_store_flush(&self) {
+        let config = self.user_manager.config.read().await;
+        let interval_secs = config.store_flush_interval;
+        let store_enabled = config.user_store.is_some();
+        drop(config);
+        if !store_enabled || interval_secs == 0 {
+            return;
+        }
+        let user_manager = self.user_manager.clone();
+        tokio::spawn(
+            async move {
+                let interval = std::time::Duration::from_secs(interval_secs);
+                loop {
+                    tokio::time::sleep(interval).await;
+                    user_manager.persist().await;
+                }
+            }
+            .in_current_span(),
+        );
+    }
+
+    async fn handle_incoming<C: QuicConnection>(
+        incom: C,
+        req_sender: Sender<ProxyRequest>,
+        user_hash: SunnyQuicUsers,
+        user_manager: Arc<dyn UserManager>,
+    ) -> Result<(), SError> {
+        let sq_conn = SQServerConn {
+            inner: SQConn::new(incom, SetOnce::new()),
+            users: user_hash,
+            user_manager: Some(user_manager),
+        };
+        let span = tracing::Span::current();
+        span.record(
+            "src",
+            tracing::field::display(sq_conn.inner.remote_address().to_canonical()),
+        );
+        span.record("id", sq_conn.inner.peer_id());
+        span.in_scope(|| {
+            tracing::info!(
+                event = "sunnyquic:connection_started",
+                "accepted sunnyquic connection"
+            );
+        });
+        let sq_conn = Arc::new(sq_conn);
+        sq_conn
+            .handle_connection(req_sender)
+            .instrument(span)
+            .await?;
+
+        Ok(())
+    }
+    fn gen_users_hash(cfg: &SunnyQuicServerCfg) -> SunnyQuicUsers {
+        let users = HashMap::from_iter(cfg.users.iter().map(|x| {
+            let hash = crate::sunnyquic::gen_sunny_user_hash(&x.username, &x.password);
+            (hash, x.username.clone())
+        }));
+        Arc::new(users)
+    }
+}
+
+#[async_trait]
+impl Inbound for SunnyQuicServer {
+    async fn accept(&mut self) -> Result<crate::ProxyRequest, SError> {
+        let mut req = self
+            .request
+            .recv()
+            .await
+            .ok_or(SError::InboundUnavailable)?;
+        {
+            let config = self.user_manager.config.read().await;
+            let context = req.user_context_mut();
+            context.inbound_tag = config.tag.clone();
+            context.preferred_outbound = config.default_outbound.clone();
+            context.observer = Arc::downgrade(&self.observer);
+        }
+        Ok(req)
+    }
+    /// Init background job for accepting connection
+    async fn init(&self) -> Result<(), SError> {
+        let request_sender = self.request_sender.clone();
+        let endpoint = self.endpoint.clone();
+        let users = self.users.clone();
+        let user_manager = self.user_manager.clone();
+        let tag = self.user_manager.config.read().await.tag.clone();
+        // Each handshake runs in its own task: a handshake that fails or
+        // stalls must not delay the connections queued behind it.
+        #[cfg(feature = "sunnyquic-noq")]
+        let fut = async move {
+            while let Some(incoming) = endpoint.next_incoming().await {
+                let endpoint = endpoint.clone();
+                let request_sender = request_sender.clone();
+                let users = users.clone();
+                let user_manager = user_manager.clone();
+                let span = tracing::info_span!("inbound",
+                    tag = %tag,
+                    src = tracing::field::Empty,
+                    user = tracing::field::Empty,
+                    id = tracing::field::Empty,
+                );
+                tokio::spawn(
+                    async move {
+                        let conn = match endpoint.handshake(incoming).await {
+                            Ok(conn) => conn,
+                            Err(e) => {
+                                // Anyone can make handshakes fail, so this line
+                                // is rate limited.
+                                static LIMIT: crate::utils::log::LogRateLimit =
+                                    crate::utils::log::LogRateLimit::new();
+                                if let Some(held_back) = LIMIT.allow() {
+                                    error!(
+                                        event = "sunnyquic:connection_accept_failed",
+                                        held_back, "Error accepting quic connection: {}", e
+                                    );
+                                }
+                                return;
+                            }
+                        };
+                        // The users as they are once the handshake is done:
+                        // it can take long, and a user may be removed meanwhile.
+                        let user_hash = users.load_full();
+                        let _ =
+                            Self::handle_incoming(conn, request_sender, user_hash, user_manager)
+                                .await
+                                .map_err(|x| error!(event = "proxy:connection_failed", "{}", x));
+                    }
+                    .instrument(span),
+                );
+            }
+            error!(
+                event = "sunnyquic:quic_endpoint_closed",
+                "quic endpoint closed, no more connections are accepted"
+            );
+        };
+        #[cfg(not(feature = "sunnyquic-noq"))]
+        let fut = async move {
+            loop {
+                match QuicServer::accept(&endpoint).await {
+                    Ok(conn) => {
+                        let request_sender = request_sender.clone();
+                        let user_hash = users.load_full();
+                        let user_manager = user_manager.clone();
+                        let span = tracing::info_span!("inbound",
+                            tag = %tag,
+                            src = tracing::field::Empty,
+                            user = tracing::field::Empty,
+                            id = tracing::field::Empty,
+                        );
+                        tokio::spawn(
+                            async move {
+                                Self::handle_incoming(conn, request_sender, user_hash, user_manager)
+                                    .await
+                                    .map_err(|x| error!(event = "proxy:connection_failed", "{}", x))
+                            }
+                            .instrument(span),
+                        );
+                    }
+                    Err(e) => {
+                        error!(
+                            event = "sunnyquic:connection_accept_failed",
+                            "Error accepting quic connection: {}", e
+                        );
+                        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                    }
+                }
+            }
+        };
+        tokio::spawn(fut.in_current_span());
+        self.spawn_store_flush().await;
+        Ok(())
+    }
+
+    async fn shutdown(&self) -> Result<(), SError> {
+        self.user_manager.persist().await;
+        Ok(())
+    }
+}

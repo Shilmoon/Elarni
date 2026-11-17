@@ -1,0 +1,277 @@
+use std::{net::SocketAddr, sync::Arc};
+
+use ipnet::{Ipv4Net, Ipv6Net};
+use serde::Deserialize;
+
+use super::{Backend, DnsCache, DnsServer, FakeIp, tls_connector};
+use crate::error::SError;
+
+/// Local UDP/TCP DNS listener using a UDP upstream, with TCP fallback.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub struct DnsUdpServerCfg {
+    pub tag: String,
+    pub bind_addr: SocketAddr,
+    /// Literal upstream address avoids recursive bootstrap resolution.
+    pub upstream: SocketAddr,
+    /// Skip shared DNS cache reads and writes. Defaults to false.
+    #[serde(default)]
+    pub bypass_cache: bool,
+}
+
+impl DnsUdpServerCfg {
+    pub async fn build(self) -> Result<DnsServer, SError> {
+        self.build_with_cache(Arc::new(DnsCache::default())).await
+    }
+
+    pub(crate) async fn build_with_cache(self, cache: Arc<DnsCache>) -> Result<DnsServer, SError> {
+        DnsServer::new(
+            self.tag,
+            self.bind_addr,
+            Backend::Udp(self.upstream),
+            cache,
+            self.bypass_cache,
+        )
+        .await
+    }
+}
+
+/// Local UDP/TCP DNS listener using a TCP upstream.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub struct DnsTcpServerCfg {
+    pub tag: String,
+    pub bind_addr: SocketAddr,
+    pub upstream: SocketAddr,
+    /// Skip shared DNS cache reads and writes. Defaults to false.
+    #[serde(default)]
+    pub bypass_cache: bool,
+}
+
+impl DnsTcpServerCfg {
+    pub async fn build(self) -> Result<DnsServer, SError> {
+        self.build_with_cache(Arc::new(DnsCache::default())).await
+    }
+
+    pub(crate) async fn build_with_cache(self, cache: Arc<DnsCache>) -> Result<DnsServer, SError> {
+        DnsServer::new(
+            self.tag,
+            self.bind_addr,
+            Backend::Tcp(self.upstream),
+            cache,
+            self.bypass_cache,
+        )
+        .await
+    }
+}
+
+/// Local UDP/TCP DNS listener using a certificate-verified TLS upstream.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub struct DnsTlsServerCfg {
+    pub tag: String,
+    pub bind_addr: SocketAddr,
+    pub upstream: SocketAddr,
+    /// TLS identity verified against the public root store.
+    pub server_name: String,
+    /// Skip shared DNS cache reads and writes. Defaults to false.
+    #[serde(default)]
+    pub bypass_cache: bool,
+}
+
+impl DnsTlsServerCfg {
+    pub fn validate(&self) -> Result<(), SError> {
+        rustls_jls::pki_types::ServerName::try_from(self.server_name.as_str())
+            .map_err(|error| SError::InvalidConfig(error.to_string()))?;
+        Ok(())
+    }
+
+    pub async fn build(self) -> Result<DnsServer, SError> {
+        self.build_with_cache(Arc::new(DnsCache::default())).await
+    }
+
+    pub(crate) async fn build_with_cache(self, cache: Arc<DnsCache>) -> Result<DnsServer, SError> {
+        let server_name = rustls_jls::pki_types::ServerName::try_from(self.server_name)
+            .map_err(|error| SError::InvalidConfig(error.to_string()))?;
+        let backend = Backend::Tls {
+            upstream: self.upstream,
+            server_name,
+            connector: tls_connector()?,
+        };
+        DnsServer::new(self.tag, self.bind_addr, backend, cache, self.bypass_cache).await
+    }
+}
+
+/// Local UDP/TCP DNS listener using a certificate-verified DNS over QUIC upstream.
+/// DNS over QUIC supports connection reuse and zero-rtt and is generally faster than DNS over TCP/TLS.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub struct DnsQuicServerCfg {
+    pub tag: String,
+    pub bind_addr: SocketAddr,
+    pub upstream: SocketAddr,
+    /// TLS identity verified against the public root store.
+    pub server_name: String,
+    /// Attempt TLS early data on resumed QUIC connections. Defaults to false.
+    #[serde(default)]
+    pub zero_rtt: bool,
+    #[serde(default)]
+    pub bypass_cache: bool,
+}
+
+impl DnsQuicServerCfg {
+    pub fn validate(&self) -> Result<(), SError> {
+        rustls_jls::pki_types::ServerName::try_from(self.server_name.as_str())
+            .map_err(|error| SError::InvalidConfig(error.to_string()))?;
+        Ok(())
+    }
+
+    pub async fn build(self) -> Result<DnsServer, SError> {
+        self.build_with_cache(Arc::new(DnsCache::default())).await
+    }
+
+    pub(crate) async fn build_with_cache(self, cache: Arc<DnsCache>) -> Result<DnsServer, SError> {
+        self.validate()?;
+        let client = super::quic::DoqClient::new(
+            self.upstream,
+            self.server_name,
+            crate::utils::tls::quic_client_config()?,
+            self.zero_rtt,
+        )?;
+        DnsServer::new(
+            self.tag,
+            self.bind_addr,
+            Backend::Quic(Arc::new(client)),
+            cache,
+            self.bypass_cache,
+        )
+        .await
+    }
+}
+
+pub(super) fn default_ipv4_range() -> Ipv4Net {
+    "198.18.0.0/15".parse().unwrap()
+}
+
+pub(super) fn default_ipv6_range() -> Ipv6Net {
+    "2001:0002::/48".parse().unwrap()
+}
+
+/// Local UDP/TCP DNS listener allocating stable synthetic addresses.
+/// Only tun/tproxy inbound supports fake ip.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub struct DnsFakeIpServerCfg {
+    pub tag: String,
+    pub bind_addr: SocketAddr,
+    /// IPv4 CIDR pool. Defaults to 198.18.0.0/15.
+    #[serde(default = "default_ipv4_range")]
+    pub ipv4_range: Ipv4Net,
+    /// IPv6 CIDR pool. Defaults to 2001:0002::/48.
+    #[serde(default = "default_ipv6_range")]
+    pub ipv6_range: Ipv6Net,
+}
+
+impl DnsFakeIpServerCfg {
+    pub fn validate(&self) -> Result<(), SError> {
+        FakeIp::validate_ranges(self.ipv4_range, self.ipv6_range).map(|_| ())
+    }
+
+    pub async fn build(self) -> Result<DnsServer, SError> {
+        self.build_with_cache(Arc::new(DnsCache::default())).await
+    }
+
+    pub(crate) async fn build_with_cache(self, cache: Arc<DnsCache>) -> Result<DnsServer, SError> {
+        let fake = Arc::new(FakeIp::new(self.ipv4_range, self.ipv6_range)?);
+        DnsServer::new(self.tag, self.bind_addr, Backend::FakeIp(fake), cache, true).await
+    }
+}
+
+/// Local UDP/TCP DNS listener using the operating system resolver.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub struct DnsSystemServerCfg {
+    pub tag: String,
+    pub bind_addr: SocketAddr,
+    /// Skip shared DNS cache reads and writes. Defaults to false.
+    #[serde(default)]
+    pub bypass_cache: bool,
+}
+
+impl DnsSystemServerCfg {
+    pub async fn build(self) -> Result<DnsServer, SError> {
+        self.build_with_cache(Arc::new(DnsCache::default())).await
+    }
+
+    pub(crate) async fn build_with_cache(self, cache: Arc<DnsCache>) -> Result<DnsServer, SError> {
+        DnsServer::new(
+            self.tag,
+            self.bind_addr,
+            Backend::System,
+            cache,
+            self.bypass_cache,
+        )
+        .await
+    }
+}
+
+/// Standalone DNS service configuration, listed under the top-level `dns` key.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+#[serde(tag = "type")]
+pub enum DnsCfg {
+    #[serde(rename = "dns-udp")]
+    Udp(DnsUdpServerCfg),
+    #[serde(rename = "dns-tcp")]
+    Tcp(DnsTcpServerCfg),
+    #[serde(rename = "dns-tls")]
+    Tls(DnsTlsServerCfg),
+    #[serde(rename = "dns-quic")]
+    Quic(DnsQuicServerCfg),
+    #[serde(rename = "dns-fakeip")]
+    FakeIp(DnsFakeIpServerCfg),
+    #[serde(rename = "dns-system")]
+    System(DnsSystemServerCfg),
+}
+
+impl DnsCfg {
+    pub fn tag(&self) -> &str {
+        match self {
+            Self::Udp(cfg) => &cfg.tag,
+            Self::Tcp(cfg) => &cfg.tag,
+            Self::Tls(cfg) => &cfg.tag,
+            Self::Quic(cfg) => &cfg.tag,
+            Self::FakeIp(cfg) => &cfg.tag,
+            Self::System(cfg) => &cfg.tag,
+        }
+    }
+
+    pub fn is_fake_ip(&self) -> bool {
+        matches!(self, Self::FakeIp(_))
+    }
+
+    pub fn validate(&self) -> Result<(), SError> {
+        match self {
+            Self::Tls(cfg) => cfg.validate()?,
+            Self::Quic(cfg) => cfg.validate()?,
+            Self::FakeIp(cfg) => cfg.validate()?,
+            _ => {}
+        }
+        Ok(())
+    }
+
+    pub async fn build(self) -> Result<DnsServer, SError> {
+        self.build_with_cache(Arc::new(DnsCache::default())).await
+    }
+
+    pub(crate) async fn build_with_cache(self, cache: Arc<DnsCache>) -> Result<DnsServer, SError> {
+        match self {
+            Self::Udp(cfg) => cfg.build_with_cache(cache).await,
+            Self::Tcp(cfg) => cfg.build_with_cache(cache).await,
+            Self::Tls(cfg) => cfg.build_with_cache(cache).await,
+            Self::Quic(cfg) => cfg.build_with_cache(cache).await,
+            Self::FakeIp(cfg) => cfg.build_with_cache(cache).await,
+            Self::System(cfg) => cfg.build_with_cache(cache).await,
+        }
+    }
+}
