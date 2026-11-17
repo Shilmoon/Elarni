@@ -259,34 +259,32 @@ void main() {
 
   test(
     'a Linux restart starts the AppImage it runs from, otherwise its executable',
-    () async {
-      final folder = await Directory.systemTemp.createTemp('elarni-relaunch');
-      addTearDown(() => folder.delete(recursive: true));
-      final image = File('${folder.path}/Elarni.AppImage')
-        ..writeAsStringSync('');
+    () {
+      // Linux paths whatever system runs the test: the file is asked for, not read.
+      const image = '/home/user/Elarni.AppImage';
       const mount = '/tmp/.mount_ElarniX', executable = '$mount/elarni';
+      String target(Map<String, String> environment, String executable) =>
+          relaunchTarget(
+            environment,
+            executable,
+            isFile: (path) => path == image,
+          );
+      expect(target({'APPIMAGE': image, 'APPDIR': mount}, executable), image);
       expect(
-        relaunchTarget({'APPIMAGE': image.path, 'APPDIR': mount}, executable),
-        image.path,
+        target({'APPIMAGE': image, 'APPDIR': '$mount/'}, executable),
+        image,
       );
-      expect(
-        relaunchTarget({
-          'APPIMAGE': image.path,
-          'APPDIR': '$mount/',
-        }, executable),
-        image.path,
-      );
-      expect(relaunchTarget({}, '/opt/elarni/elarni'), '/opt/elarni/elarni');
+      expect(target({}, '/opt/elarni/elarni'), '/opt/elarni/elarni');
       for (final environment in [
         // The image is gone, or this build does not run from it.
-        {'APPIMAGE': '${folder.path}/missing', 'APPDIR': mount},
-        {'APPIMAGE': image.path, 'APPDIR': '/tmp/.mount_Other'},
-        {'APPIMAGE': image.path, 'APPDIR': '/tmp/.mount_Elarni'},
-        {'APPIMAGE': image.path},
+        {'APPIMAGE': '/home/user/missing', 'APPDIR': mount},
+        {'APPIMAGE': image, 'APPDIR': '/tmp/.mount_Other'},
+        {'APPIMAGE': image, 'APPDIR': '/tmp/.mount_Elarni'},
+        {'APPIMAGE': image},
         {'APPIMAGE': 'Elarni.AppImage', 'APPDIR': mount},
       ])
         expect(
-          relaunchTarget(environment, executable),
+          target(environment, executable),
           executable,
           reason: '$environment',
         );
