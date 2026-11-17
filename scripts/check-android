@@ -46,7 +46,8 @@ if sys.platform == 'darwin' and not env.get('JAVA_HOME'):
     env['JAVA_HOME'] = '/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home'
 adb = sdk / 'platform-tools/adb'
 RUNNER = 'com.elarni.debug.test/androidx.test.runner.AndroidJUnitRunner'
-# Tests per class run (the catalog's without its large-geofile test); shards of one AVD must add up to them.
+# Tests per class (the catalog's without its large-geofile test, with the one that runs apart before the restart tests);
+# shards of one AVD must add up to them.
 EXPECTED = {'com.elarni.AndroidE2E': 70, 'com.elarni.AndroidUIE2E': 45, 'com.elarni.AndroidVpnE2E': 23}
 out = ROOT / '.build/android-development'
 native_env = env.copy()
@@ -295,12 +296,15 @@ if args.case != 'native':
         large = 'com.elarni.AndroidE2E#e_geofileOverTheCoreLimitIsReducedOrRefused'
         # The restart sequence reads what this test leaves, so with shards it runs last on the first one.
         leave = 'com.elarni.AndroidE2E#f_leaveEncryptedCatalogForProcessRestart'
-        excluded = ','.join([large, leave] if shard_count > 1 else [large])
+        # It runs apart and last: a failed test is rerun alone, in a new process that starts from an empty catalog,
+        # and a rerun after this test wiped what it left, so the restart tests failed with it.
+        excluded = ','.join([large, leave])
         # Unsharded on the Linux x86_64 API 30 emulator, beside the API 36 one, the catalog suite takes about 11 minutes.
-        instrumentation('com.elarni.AndroidE2E', options=() if args.test_method else ('-e', 'notClass', excluded), timeout=1500, sharded=True)
+        instrumentation('com.elarni.AndroidE2E', EXPECTED['com.elarni.AndroidE2E'] - 1,
+                        options=() if args.test_method else ('-e', 'notClass', excluded), timeout=1500, sharded=True)
         if not args.test_method and first_shard:
+            instrumentation(leave, 1)
             if shard_count > 1:
-                instrumentation(leave, 1)
                 print('elarni-ran com.elarni.AndroidE2E=1', flush=True)
             shell('am', 'force-stop', 'com.elarni.debug')
             instrumentation('com.elarni.AndroidRestartE2E', 1)
@@ -343,7 +347,9 @@ if args.case != 'native':
              http.server.ThreadingHTTPServer(('127.0.0.1', 0), ProxyHTTP) as proxy_http, socketserver.ThreadingUDPServer(('127.0.0.1', 0), ProxyUDP) as proxy_udp:
             for server in (http_peer, udp, proxy_http, proxy_udp): threading.Thread(target=server.serve_forever, daemon=True).start()
             try:
-                with android_tuic_peer(ROOT, proxy_http.server_port, proxy_udp.server_address[1]) as (tuic_port, certificate):
+                out.mkdir(parents=True, exist_ok=True)
+                tuic_log, failed_before = out / f'tuic-server-{args.serial}.log', len(failures)
+                with android_tuic_peer(ROOT, proxy_http.server_port, proxy_udp.server_address[1], log_path=tuic_log) as (tuic_port, certificate):
                     peers = ('-e', 'httpPort', str(http_peer.server_port), '-e', 'udpPort', str(udp.server_address[1]),
                              '-e', 'tuicPort', str(tuic_port), '-e', 'tuicCertificate', certificate)
                     instrumentation('com.elarni.AndroidVpnE2E', options=(*peers, '-e', 'sleepMinutes', str(args.sleep_minutes)),
@@ -361,6 +367,9 @@ if args.case != 'native':
                                     raise RuntimeError('the process was not killed as planned')
                             if attempt(f'com.elarni.AndroidProcessDeathE2E#{killed}', kill):
                                 instrumentation(f'com.elarni.AndroidProcessDeathE2E#{restarted}', 1, peers)
+                if len(failures) > failed_before:
+                    # A TUIC request came back empty in CI four times and the peer's log was gone with its directory.
+                    print('TUIC peer log, last 60 lines:\n' + '\n'.join(tuic_log.read_text(errors='replace').splitlines()[-60:]), flush=True)
             finally:
                 # An interrupted test must not leave a synthetic VPN active in the emulator.
                 shell('am', 'force-stop', 'com.elarni.debug')

@@ -203,7 +203,15 @@ func TestWaitingUDPReadsHoldNoBuffer(t *testing.T) {
 	const flows = 200
 	before := heapInUse()
 	sockets, results := startWaitingReaders(t, flows, 3, packetReads[0].wrap)
-	if grown := int64(heapInUse()) - int64(before); grown > flows*16<<10 {
+	// A buffer a read borrowed stays in the pool for one more collection, and on a loaded machine a
+	// reader may still be on its first attempt: neither is held by a waiting read, and both are gone a
+	// collection or two later. A buffer a waiting read holds stays for as long as the read waits.
+	grown := int64(heapInUse()) - int64(before)
+	for deadline := time.Now().Add(5 * time.Second); grown > flows*16<<10 && time.Now().Before(deadline); {
+		time.Sleep(50 * time.Millisecond)
+		grown = int64(heapInUse()) - int64(before)
+	}
+	if grown > flows*16<<10 {
 		t.Fatalf("%d waiting reads grew the heap by %d KiB", flows, grown>>10)
 	}
 	sender, err := net.DialUDP("udp4", nil, sockets[0].LocalAddr().(*net.UDPAddr))

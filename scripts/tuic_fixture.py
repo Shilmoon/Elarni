@@ -17,7 +17,8 @@ import time
 
 
 @contextmanager
-def android_tuic_peer(root, tcp_port=None, udp_port=None, *, listen_host='127.0.0.1', listen_port=0):
+def android_tuic_peer(root, tcp_port=None, udp_port=None, *, listen_host='127.0.0.1', listen_port=0, log_path=None):
+    """Start the peer; log_path keeps its log after the peer stops, for a caller that prints it when a test fails."""
     binary = Path(os.environ.get('ELARNI_TUIC_SERVER', root / '.build/tuic/tools/sing-box'))
     if not binary.is_file():
         raise RuntimeError('Build the pinned sing-box TUIC fixture described in docs/TESTING.md first.')
@@ -43,7 +44,7 @@ def android_tuic_peer(root, tcp_port=None, udp_port=None, *, listen_host='127.0.
                                 for network, target in [('tcp', tcp_port), ('udp', udp_port)] if target is not None]}}
         path = directory / 'server.json'
         path.write_text(json.dumps(config)); path.chmod(0o600)
-        with (directory / 'server.log').open('w+') as log:
+        with Path(log_path or directory / 'server.log').open('w+') as log:
             process = subprocess.Popen([str(binary), 'run', '-c', str(path)], stdout=log, stderr=log)
             try:
                 deadline = time.monotonic() + 5

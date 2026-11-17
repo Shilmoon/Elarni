@@ -208,12 +208,12 @@ class AndroidVpnE2E {
             assertEquals(mode, node.getJSONObject("config").objects("outbounds").first().getJSONObject("settings").getString("udpRelayMode"))
             call("select", obj("id" to node.getString("id")))
             call("settings", obj("settings" to obj("monitoringEnabled" to true)))
-            repeat(2) {
+            repeat(2) { pass ->
                 connect()
                 // The physical TUIC endpoint is excluded; the controlled payload
                 // destinations are different IPs and must traverse VpnService.
                 // A TCP reply without the proxy's body came once in CI; name what came instead.
-                traffic("a", "tcp", httpPort, "198.18.0.81").let { assertTrue("TUIC $mode IPv4 TCP body: $it", it.contains("proxy:elarni-synthetic")) }
+                traffic("a", "tcp", httpPort, "198.18.0.81").let { assertTrue("TUIC $mode connection ${pass + 1} IPv4 TCP body: $it", it.contains("proxy:elarni-synthetic")) }
                 assertEquals("proxy:elarni-udp-fixture", traffic("b", "udp", udpPort, "198.18.0.81"))
                 traffic("b", "tcp", httpPort, "fdfe:dcba:9876::10").let { assertTrue("TUIC $mode IPv6 TCP body: $it", it.contains("proxy:elarni-synthetic")) }
                 assertEquals("proxy:elarni-udp-fixture", traffic("a", "udp", udpPort, "fdfe:dcba:9876::10"))
@@ -781,7 +781,8 @@ class AndroidVpnE2E {
             fun join() = seen.getString("join", null)
             // After a few quick toggles Android may hold back autojoin (API 30 did); joining by name does not wait for it.
             fun wifiOn() {
-                shell("cmd wifi set-wifi-enabled enabled"); ui.waitUntil(10_000) { shell("cmd wifi status").contains("Wifi is enabled") }
+                // In CI Wi-Fi was still off 10 s after one command, four times; the command is safe to repeat.
+                ui.waitUntil(30_000) { shell("cmd wifi set-wifi-enabled enabled"); shell("cmd wifi status").contains("Wifi is enabled") }
                 shell("cmd wifi connect-network $ssid open"); ui.waitUntil(30_000) { network() != null }
             }
             fun rejoin(): String? {
@@ -821,6 +822,8 @@ class AndroidVpnE2E {
                 ui.waitUntil(15_000) { repo.state.value.connection == "connected" }
                 repo.requestStop(); ui.waitUntil(10_000) { repo.state.value.connection == "disconnected" }
                 rule(true, listOf(ssid))
+                // As before the joins above: the next join is asked for when Android reports leaving this one.
+                ui.waitUntil(125_000) { WiFiRule.watching == "leave" }
                 before = rejoin()
                 ui.waitUntil(15_000) { join() != before }
                 Thread.sleep(2000)
