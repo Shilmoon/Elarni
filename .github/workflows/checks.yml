@@ -103,7 +103,7 @@ jobs:
           echo emulators=$main >> "$GITHUB_OUTPUT"
           if [ $main = true ] ||
              git diff --name-only "$(git merge-base origin/main HEAD)" HEAD | grep -E \
-               '^(android/|Vendor/|native/|include/|go\.work|Cargo\.|rust-toolchain\.toml|\.github/workflows/|scripts/(check-android|build-android-native|prepare-android-linux|tuic_fixture\.py|check-linux-container|check_report\.py)$)' > /dev/null
+               '^(android/|Vendor/|native/|include/|go\.work|Cargo\.|rust-toolchain\.toml|\.github/workflows/|scripts/(check-android|build-android-native|prepare-android-linux|tuic_fixture\.py|shadowquic_fixture\.py|check-linux-container|check_report\.py)$)' > /dev/null
           then echo run=true; else echo run=false; fi >> "$GITHUB_OUTPUT"
       - name: Android unsigned release build
         if: steps.android.outputs.run == 'true'

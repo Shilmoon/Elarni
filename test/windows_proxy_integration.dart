@@ -4422,6 +4422,78 @@ for line in sys.stdin:
   );
 
   test(
+    'ShadowQUIC incoming links persist, compile and share through native backends',
+    () async {
+      const link =
+          'sq://us%40er:p%40ss%3A%E2%9C%93@[::1]:8443?sni=fixture.example&udp_mode=datagram&alpn=h3,h2&zero_rtt=1#ShadowQUIC%20%E2%9C%93';
+      await backend.handleLinks([link]);
+      final group =
+          (await backend.control.subscriptions()).subscriptions.single;
+      final node = group.nodes.single;
+      expect(node.name, 'ShadowQUIC ✓');
+      expect(node.protocol, 'ShadowQUIC');
+      expect(node.transport, 'QUIC');
+      expect(node.security, 'TLS');
+      await backend.control.selectNode(node.id);
+      expect(await backend.control.state(), 'prepared');
+      final shared = await backend.control.shareClient(node.id);
+      final config =
+          jsonDecode(shared['text']! as String) as Map<String, dynamic>;
+      final outbound =
+          (config['outbounds'] as List).single as Map<String, dynamic>;
+      expect(outbound['protocol'], 'shadowquic');
+      expect(outbound['settings'], {
+        'address': '::1',
+        'port': 8443,
+        'username': 'us@er',
+        'password': 'p@ss:✓',
+        'serverName': 'fixture.example',
+        'alpn': ['h3', 'h2'],
+        'zeroRtt': true,
+        'udpOverStream': false,
+      });
+      // The server's menu shares the link, which imports as the same server.
+      final sharedLink = Uri.parse(
+        await backend.control.shareLinks(group.id, [node.id]),
+      );
+      expect(sharedLink.scheme, 'sq');
+      expect(Uri.decodeComponent(sharedLink.userInfo), 'us@er:p@ss:✓');
+      expect(sharedLink.host, '::1');
+      expect(sharedLink.port, 8443);
+      expect(sharedLink.queryParameters, {
+        'sni': 'fixture.example',
+        'udp_mode': 'datagram',
+        'alpn': 'h3,h2',
+        'zero_rtt': '1',
+      });
+      expect(Uri.decodeComponent(sharedLink.fragment), 'ShadowQUIC ✓');
+      pickedPath = '${temporary.path}/shadowquic-qr.png';
+      await File(
+        pickedPath!,
+      ).writeAsBytes(base64Decode(shared['png']! as String));
+      final qr = await backend.control.importClientProfiles(source: 'qrImage');
+      expect(
+        qr.snapshot.subscriptions.last.nodes.single.protocol,
+        'ShadowQUIC',
+      );
+      await backend.dispose();
+      backend = DesktopProxy(
+        corePath: corePath,
+        startProcess: startCore,
+        domainPath: domainPath,
+        catalogIO: storage,
+        platformIO: (method, payload) async => {},
+      );
+      final reopened = await backend.control.subscriptions();
+      expect(reopened.selectedNodeId, node.id);
+      expect(
+        reopened.subscriptions.first.nodes.single.configurationRevision,
+        node.configurationRevision,
+      );
+    },
+  );
+
+  test(
     'automatic recovery, sleep and manual stop preserve connection intent',
     () async {
       await prepare();
