@@ -478,12 +478,13 @@ struct NativeControlChecks {
     print("PASS a switch to a server with another IP preference restarts the provider")
     // A settings change rebuilds the selected server's plan; global settings must not replace it.
     let savedSettings = defaults.data(forKey: "ElarniTunnelSettingsV1")
-    _ = try await restartingMessenger.call("updateTunnelSettings", arguments: ["muxEnabled": true])
+    _ = try await restartingMessenger.call("updateTunnelSettings", arguments: ["muxEnabled": true, "tlsFingerprint": "firefox"])
     let reapplied = try JSONSerialization.jsonObject(with:
       (restarting.protocolConfiguration as! NETunnelProviderProtocol).providerConfiguration!["planPayload"] as! Data) as! [String: Any]
     let reappliedSettings = reapplied["settings"] as? [String: Any]
     guard reapplied["backend"] == nil, reappliedSettings?["preferredIP"] as? String == "ipv6",
-          reappliedSettings?["muxEnabled"] as? Bool == true, restarting.fixtureSession.status == .connected else {
+          reappliedSettings?["muxEnabled"] as? Bool == true, reappliedSettings?["tlsFingerprint"] as? String == "firefox",
+          restarting.fixtureSession.status == .connected else {
       throw Failure(message: "a settings change replaced the selected server's plan with global settings")
     }
     defaults.set(savedSettings, forKey: "ElarniTunnelSettingsV1")

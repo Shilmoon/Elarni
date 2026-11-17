@@ -543,6 +543,11 @@
     <string name="idle_timeout_seconds">Тайм-аут простоя (секунды)</string>
     <string name="memory_budget_mb_0_automatic">Лимит памяти (МБ, 0 = автоматически)</string>
     <string name="multiplexing">Мультиплексирование</string>
+    <string name="tls_fingerprint">Отпечаток TLS</string>
+    <string name="which_browser_a_connection_to_a">На какой браузер похоже подключение к серверу. «Как у сервера» берёт отпечаток из ссылки сервера, а если его там нет — Chrome. Выберите другой, если сеть блокирует этот. Для серверов с TLS и Reality поверх TCP.</string>
+    <string name="from_the_server">Как у сервера</string>
+    <string name="random_browser">Случайный браузер</string>
+    <string name="randomized">Случайный набор</string>
     <string name="fragment_interval">Интервал фрагментов</string>
     <string name="fragment_length">Длина фрагмента</string>
     <string name="packets_to_fragment">Фрагментируемые пакеты</string>

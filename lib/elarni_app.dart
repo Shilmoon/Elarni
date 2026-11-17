@@ -1162,6 +1162,33 @@ class _ElarniHomeState extends State<ElarniHome> {
           (value) => _settings.copyWith(muxEnabled: value),
           help: l10n.defaultMuxHelp,
         ),
+        ElarniSelectTile(
+          title: ElarniHelpLabel(
+            l10n.tlsFingerprint,
+            help: l10n.tlsFingerprintHelp,
+          ),
+          trailing: ElarniSelect<String>(
+            key: ValueKey('setting:${l10n.tlsFingerprint}'),
+            value: _settings.tlsFingerprint,
+            items: [
+              for (final (value, label) in [
+                ('server', l10n.tlsFingerprintServer),
+                ('chrome', 'Chrome'),
+                ('firefox', 'Firefox'),
+                ('safari', 'Safari'),
+                ('random', l10n.tlsFingerprintRandom),
+                ('randomized', l10n.tlsFingerprintRandomized),
+              ])
+                DropdownMenuItem(value: value, child: Text(label)),
+            ],
+            onChanged: _busy
+                ? null
+                : (value) {
+                    if (value != null)
+                      _saveSettings(_settings.copyWith(tlsFingerprint: value));
+                  },
+          ),
+        ),
         section(l10n.resources),
         numberSetting(
           l10n.xrayMemoryLimit,

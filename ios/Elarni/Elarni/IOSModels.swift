@@ -250,6 +250,8 @@ struct IOSTunnelSettings: Codable, Equatable {
   var fragmentLength = "100-200"
   var fragmentInterval = "0-1"
   var muxEnabled = false
+  /// The TLS hello of server connections; nil keeps the one each server's link names. Optional: older saved settings lack it.
+  var tlsFingerprint: String?
   var sniffingEnabled = true
   var monitoringEnabled = false
   var recordDiagnostics: Bool? // optional, so settings saved by older builds still decode
@@ -271,6 +273,7 @@ struct IOSTunnelSettings: Codable, Equatable {
           !inboundAuthEnabled || inboundCredentialRef != nil,
           ["inherit", "automatic", "ipv4", "ipv6"].contains(profilePreferredIP),
           ["inherit", "routing", "default"].contains(profileDNSMode),
+          tlsFingerprint == nil || TunnelRuntimeSettings.tlsFingerprints.contains(tlsFingerprint!),
           fragmentPackets == "tlshello" || range(fragmentPackets, low: 1, high: 65535),
           range(fragmentLength, low: 1, high: 65535), range(fragmentInterval, low: 0, high: 1000),
           includedRoutes.allSatisfy(Self.validCIDR), excludedRoutes.allSatisfy(Self.validCIDR),
@@ -285,7 +288,7 @@ struct IOSTunnelSettings: Codable, Equatable {
   func runtime(nodePreference: String? = nil) throws -> TunnelRuntimeSettings {
     var map = try JSONSerialization.jsonObject(with: JSONEncoder().encode(TunnelRuntimeSettings.defaults)) as! [String: Any]
     let own = try JSONSerialization.jsonObject(with: JSONEncoder().encode(self)) as! [String: Any]
-    for (key, value) in own where map[key] != nil || ["fragmentPackets", "fragmentLength", "fragmentInterval", "httpPort", "allowLAN", "inboundAuthEnabled", "inboundCredentialRef", "resolveServer", "profileDNSMode", "recordDiagnostics"].contains(key) {
+    for (key, value) in own where map[key] != nil || ["fragmentPackets", "fragmentLength", "fragmentInterval", "httpPort", "allowLAN", "inboundAuthEnabled", "inboundCredentialRef", "resolveServer", "profileDNSMode", "tlsFingerprint", "recordDiagnostics"].contains(key) {
       map[key] = value
     }
     if profilePreferredIP != "inherit" { map["profilePreferredIP"] = profilePreferredIP }
@@ -297,6 +300,7 @@ struct IOSTunnelSettings: Codable, Equatable {
   var compilerRuntime: [String: Any] {
     ["fragmentationEnabled": fragmentationEnabled, "fragmentPackets": fragmentPackets,
      "fragmentLength": fragmentLength, "fragmentInterval": fragmentInterval, "muxEnabled": muxEnabled,
+     "tlsFingerprint": tlsFingerprint ?? "server",
      "preferredIp": preferredIP, "connectionIdleSeconds": idleTimeoutSeconds, "sniffingEnabled": sniffingEnabled,
      "httpInboundEnabled": httpInboundEnabled, "httpPort": httpPort, "allowLan": allowLAN,
      "useDnsFromJson": profileDNSMode != "default", "profileDnsMode": profileDNSMode,

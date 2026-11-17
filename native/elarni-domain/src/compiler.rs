@@ -480,6 +480,78 @@ fn has_vless_flow(outbound: &Value) -> bool {
             .any(|server| server["users"].as_array().into_iter().flatten().any(flow))
 }
 
+/// Puts the hello the user chose on a server's streams that send a TLS hello over TCP: its
+/// stream and XHTTP's separate download stream. QUIC and cleartext streams have none.
+pub(crate) fn apply_tls_fingerprint(outbound: &mut Value, runtime: &RuntimeOptions) {
+    let Some(name) = runtime.tls_fingerprint.xray_name() else {
+        return;
+    };
+    if outbound["protocol"].as_str().is_none_or(|protocol| {
+        !is_client_protocol(protocol)
+            || matches!(protocol, "hysteria" | "tuic" | "wireguard" | "amneziawg")
+    }) {
+        return;
+    }
+    let mut paths = vec!["/streamSettings".to_owned()];
+    if let Some((_, path)) =
+        crate::profile::download_settings(&outbound["streamSettings"], "/streamSettings")
+    {
+        paths.push(path);
+    }
+    for path in paths {
+        let Some(stream) = outbound.pointer_mut(&path).and_then(Value::as_object_mut) else {
+            continue;
+        };
+        let network = stream
+            .get("method")
+            .filter(|value| !value.is_null())
+            .or_else(|| stream.get("network"))
+            .and_then(Value::as_str)
+            .unwrap_or("tcp")
+            .to_ascii_lowercase();
+        if !matches!(
+            network.as_str(),
+            "tcp"
+                | "raw"
+                | "ws"
+                | "websocket"
+                | "grpc"
+                | "gun"
+                | "httpupgrade"
+                | "xhttp"
+                | "splithttp"
+        ) {
+            continue;
+        }
+        let security = stream
+            .get("security")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        let settings = match security.as_str() {
+            "tls" => {
+                let tls = stream.entry("tlsSettings").or_insert_with(|| json!({}));
+                if tls.is_null() {
+                    *tls = json!({});
+                }
+                // XHTTP with only h3 in its ALPN runs over QUIC.
+                if tls.get("alpn") == Some(&json!(["h3"])) {
+                    continue;
+                }
+                tls
+            }
+            "reality" => match stream.get_mut("realitySettings") {
+                Some(reality) => reality,
+                None => continue,
+            },
+            _ => continue,
+        };
+        if let Some(settings) = settings.as_object_mut() {
+            settings.insert("fingerprint".to_owned(), json!(name));
+        }
+    }
+}
+
 pub(crate) fn apply_outbound_runtime(
     proxy_outbound: &mut Value,
     runtime: &RuntimeOptions,
@@ -661,6 +733,7 @@ pub(crate) fn compile_owned_config(
         &default_dns_routes
     };
     strip_vless_reverse(&mut proxy_outbound);
+    apply_tls_fingerprint(&mut proxy_outbound, runtime);
     let fragment_outbound =
         apply_outbound_runtime(&mut proxy_outbound, runtime, "elarni-fragment")?;
     if !(1280..=9000).contains(&tun_mtu) {
@@ -1062,7 +1135,10 @@ fn per_app_proxy_outbound(text: &str, config: &Value) -> Result<Value, CompileEr
 }
 
 /// A per-app server target: a node's outbound, or its profile's first one.
-fn per_app_server_outbound(server: &Value) -> Result<Value, CompileError> {
+fn per_app_server_outbound(
+    server: &Value,
+    runtime: &RuntimeOptions,
+) -> Result<Value, CompileError> {
     let mut outbound = match server.get("outbounds") {
         Some(outbounds) => outbounds
             .get(0)
@@ -1084,6 +1160,7 @@ fn per_app_server_outbound(server: &Value) -> Result<Value, CompileError> {
         return Err(CompileError::InvalidOutbound);
     }
     normalize_client_outbound(&mut outbound)?;
+    apply_tls_fingerprint(&mut outbound, runtime);
     Ok(outbound)
 }
 
@@ -1198,7 +1275,7 @@ pub(crate) fn apply_per_app_routing(
             "block" => block_tag.clone(),
             kind => {
                 let mut outbound = match kind {
-                    "server" => per_app_server_outbound(item.server.as_ref().unwrap())?,
+                    "server" => per_app_server_outbound(item.server.as_ref().unwrap(), runtime)?,
                     _ => per_app_proxy_outbound(item.proxy.as_ref().unwrap(), config)?,
                 };
                 let found = extra

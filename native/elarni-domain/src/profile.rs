@@ -165,6 +165,9 @@ pub fn compile_profile(
         .unwrap();
     let mut outbound_runtime = runtime.clone();
     outbound_runtime.preferred_ip = preferred_ip.unwrap_or(PreferredIp::Automatic);
+    for outbound in outbounds.iter_mut() {
+        crate::compiler::apply_tls_fingerprint(outbound, runtime);
+    }
     let mut fragments = Vec::new();
     if runtime.fragmentation_enabled || runtime.mux_enabled {
         let mut unfragmented = outbound_runtime.clone();

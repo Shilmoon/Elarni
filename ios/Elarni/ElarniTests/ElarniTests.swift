@@ -245,6 +245,32 @@ final class ElarniTests: XCTestCase {
     XCTAssertEqual((config["dns"] as? [String: Any])?["servers"] as? [String], ["192.0.2.53"])
   }
 
+  // The fingerprint chosen in Settings reaches the extension's plan and the compiled server.
+  func testTLSFingerprintSettingReachesThePlanAndTheCompiler() throws {
+    var settings = IOSTunnelSettings()
+    XCTAssertNil(try settings.runtime().tlsFingerprint)
+    XCTAssertEqual(settings.compilerRuntime["tlsFingerprint"] as? String, "server")
+    settings.tlsFingerprint = "firefox"
+    try settings.runtime().validate()
+    XCTAssertEqual(try settings.runtime().tlsFingerprint, "firefox")
+    let outbound: [String: Any] = ["protocol": "vless",
+      "settings": ["address": "example.invalid", "port": 443, "id": "00000000-0000-4000-8000-000000000001", "encryption": "none"],
+      "streamSettings": ["network": "raw", "security": "tls", "tlsSettings": ["serverName": "peer.example.com", "fingerprint": "chrome"]]]
+    let result = try RoutingDomainDecoder.request("compileProfile", payload: [
+      "profile": ["outbounds": [outbound]],
+      "routes": ["rules": [], "dnsServers": ["192.0.2.53"], "fallbackAction": "proxy"],
+      "socksPort": 10890, "packetBackend": "nativeTun2Proxy", "runtime": settings.compilerRuntime])
+    let json = try XCTUnwrap(result["configUtf8"] as? String)
+    let config = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
+    let server = try XCTUnwrap((config["outbounds"] as? [[String: Any]])?.first { $0["protocol"] as? String == "vless" })
+    let tls = (server["streamSettings"] as? [String: Any])?["tlsSettings"] as? [String: Any]
+    XCTAssertEqual(tls?["fingerprint"] as? String, "firefox")
+    // A hello the app does not offer is refused.
+    settings.tlsFingerprint = "edge"
+    XCTAssertThrowsError(try settings.validate())
+    XCTAssertThrowsError(try settings.runtime().validate())
+  }
+
   func testChangedIPPreferenceRequiresProviderRestart() throws {
     func plan(_ settings: TunnelRuntimeSettings, secret: String) throws -> Data {
       try JSONEncoder().encode(TunnelPlan(schemaVersion: 1, secretRef: secret, socksPort: 10890, mtu: 1500,

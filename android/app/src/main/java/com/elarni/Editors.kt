@@ -259,9 +259,13 @@ private fun canonical(json: String) = JSONObject(json).let { value -> value.keys
                     "probeMode" -> listOf(tr(R.string.proxy), tr(R.string.current_rules_active_tunnel), tr(R.string.direct_tcp_2), tr(R.string.direct_icmp_2))
                     "probeVariant" -> listOf(tr(R.string.single_request), tr(R.string.double_request), "Keep-alive")
                     "profileDNSMode" -> listOf(tr(R.string.provider_profile), "1.1.1.1", tr(R.string.routing_profile))
+                    "tlsFingerprint" -> listOf(tr(R.string.from_the_server), "Chrome", "Firefox", "Safari", tr(R.string.random_browser), tr(R.string.randomized))
                     else -> field.choices
                 }
-                SettingsChoice(field.title, value, field.choices, labels) {
+                val detail: (@Composable () -> Unit)? = if (field.detail.isEmpty()) null else {
+                    { Text(field.detail, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                }
+                SettingsChoice(field.title, value, field.choices, labels, below = detail) {
                     values[field.key] = it
                     if (field.key == "profilePreferredIP" && it != "inherit") values["preferredIP"] = it
                 }

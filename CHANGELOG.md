@@ -4,6 +4,16 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
 
 ## Unreleased
 
+### Added
+
+- **TLS fingerprint** in Settings › Advanced chooses which browser a connection to a server
+  looks like: Chrome, Firefox, Safari, a random browser, or a randomized hello. The default,
+  **From the server**, keeps what each server's link names (Chrome when it names none), as
+  before. Until now the fingerprint came only from the link, so when a network began to block
+  one browser's hello, a server from a provider could not be switched to another. The choice
+  applies to TLS and Reality servers over TCP, to a provider profile's backup servers and to a
+  per-app server; Hysteria2, TUIC and WireGuard servers have no such fingerprint. All platforms.
+
 ### Changed
 
 - For contributors who use coding agents: the checked-in Claude Code settings no longer refuse the

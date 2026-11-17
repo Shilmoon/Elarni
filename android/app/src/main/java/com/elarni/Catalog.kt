@@ -413,7 +413,7 @@ class Catalog(val data: JSONObject, private val snapshot: Boolean = false) {
         val runtime = obj("httpInboundEnabled" to setting.getBoolean("httpInboundEnabled"), "httpPort" to setting.getInt("httpPort"),
             "allowLan" to setting.getBoolean("allowLAN"), "fragmentationEnabled" to setting.getBoolean("fragmentationEnabled"),
             "fragmentPackets" to setting.getString("fragmentPackets"), "fragmentLength" to setting.getString("fragmentLength"), "fragmentInterval" to setting.getString("fragmentInterval"),
-            "muxEnabled" to setting.getBoolean("muxEnabled"), "preferredIp" to node.string("ipPreference", setting.getString("preferredIP")),
+            "muxEnabled" to setting.getBoolean("muxEnabled"), "tlsFingerprint" to setting.getString("tlsFingerprint"), "preferredIp" to node.string("ipPreference", setting.getString("preferredIP")),
             "connectionIdleSeconds" to setting.getInt("idleTimeoutSeconds"), "sniffingEnabled" to setting.getBoolean("sniffingEnabled"),
             "useDnsFromJson" to setting.getBoolean("useDNSFromJSON"), "profileDnsMode" to setting.getString("profileDNSMode"),
             "perAppMode" to setting.getString("perAppMode"), "perAppProcesses" to JSONArray(setting.strings("perAppProcesses").map(::process)))

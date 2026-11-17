@@ -2781,3 +2781,177 @@ fn bracketed_ipv6_server_addresses_are_ip_literals() {
     .unwrap();
     assert_eq!(host, "2001:db8::10");
 }
+
+fn fingerprint_runtime(value: &str) -> RuntimeOptions {
+    serde_json::from_value(json!({"tlsFingerprint": value})).unwrap()
+}
+
+fn compile_server(outbound: Value, runtime: &RuntimeOptions) -> Value {
+    let routes: RouteModel =
+        serde_json::from_value(json!({"rules": [], "dnsServers": ["1.1.1.1"]})).unwrap();
+    let (bytes, _) = crate::compiler::compile_xray_outbound_config_with_options(
+        outbound,
+        &routes,
+        1080,
+        PacketBackend::NativeTun2Proxy,
+        1500,
+        runtime,
+    )
+    .unwrap();
+    serde_json::from_slice::<Value>(&bytes).unwrap()["outbounds"][0].clone()
+}
+
+// The setting replaces the hello a link asked for wherever Xray sends a TLS hello over TCP.
+#[test]
+fn tls_fingerprint_override_replaces_the_links_hello_on_tls_and_reality() {
+    let firefox = fingerprint_runtime("firefox");
+    // A TLS link without `fp`, and one that names another browser.
+    let mut named = node("named", "named.example.com");
+    named["streamSettings"]["tlsSettings"]["fingerprint"] = json!("chrome");
+    for source in [node("plain", "plain.example.com"), named] {
+        let stream = compile_server(source, &firefox)["streamSettings"].clone();
+        assert_eq!(
+            stream["tlsSettings"],
+            json!({"serverName": "peer.example.com", "fingerprint": "firefox"})
+        );
+    }
+    let mut reality = node("reality", "reality.example.com");
+    reality["streamSettings"] = json!({"network": "raw", "security": "reality", "realitySettings": {
+        "serverName": "cover.example.com", "publicKey": "key", "shortId": "01", "fingerprint": "chrome"}});
+    assert_eq!(
+        compile_server(reality, &firefox)["streamSettings"]["realitySettings"],
+        json!({"serverName": "cover.example.com", "publicKey": "key", "shortId": "01", "fingerprint": "firefox"})
+    );
+    // TLS settings a link left out or wrote as null still take the hello.
+    for missing in [None, Some(Value::Null)] {
+        let mut bare = node("bare", "bare.example.com");
+        let stream = bare["streamSettings"].as_object_mut().unwrap();
+        stream.remove("tlsSettings");
+        if let Some(value) = missing {
+            stream.insert("tlsSettings".into(), value);
+        }
+        stream.insert("network".into(), json!("ws"));
+        assert_eq!(
+            compile_server(bare, &firefox)["streamSettings"]["tlsSettings"],
+            json!({"fingerprint": "firefox"})
+        );
+    }
+    for value in ["chrome", "safari", "random", "randomized"] {
+        let stream = compile_server(
+            node("server", "server.example.com"),
+            &fingerprint_runtime(value),
+        )["streamSettings"]
+            .clone();
+        assert_eq!(stream["tlsSettings"]["fingerprint"], value);
+    }
+}
+
+// "server" is the default: the link's own hello, or Xray's when it names none.
+#[test]
+fn tls_fingerprint_default_keeps_the_links_hello() {
+    let mut named = node("named", "named.example.com");
+    named["streamSettings"]["tlsSettings"]["fingerprint"] = json!("safari");
+    for runtime in [RuntimeOptions::default(), fingerprint_runtime("server")] {
+        for source in [node("plain", "plain.example.com"), named.clone()] {
+            assert_eq!(
+                compile_server(source.clone(), &runtime)["streamSettings"],
+                source["streamSettings"]
+            );
+        }
+    }
+    // A name the app does not offer is refused, not passed to the core.
+    for value in ["edge", "Chrome", ""] {
+        assert!(
+            serde_json::from_value::<RuntimeOptions>(json!({"tlsFingerprint": value})).is_err(),
+            "{value}"
+        );
+    }
+}
+
+// QUIC servers send no uTLS hello, and a server without TLS has none to change.
+#[test]
+fn tls_fingerprint_override_skips_streams_without_a_tcp_tls_hello() {
+    let firefox = fingerprint_runtime("firefox");
+    let mut hysteria = node("hysteria", "hysteria.example.com");
+    hysteria["protocol"] = json!("hysteria");
+    hysteria["settings"] = json!({"version": 2, "address": "hysteria.example.com", "port": 443});
+    hysteria["streamSettings"] = json!({"network": "hysteria", "security": "tls",
+        "tlsSettings": {"serverName": "peer.example.com"}, "hysteriaSettings": {"version": 2, "auth": "secret"}});
+    let mut vless_hysteria = node("vless-hysteria", "quic.example.com");
+    vless_hysteria["streamSettings"]["network"] = json!("hysteria");
+    let mut h3 = node("h3", "h3.example.com");
+    h3["streamSettings"]["network"] = json!("xhttp");
+    h3["streamSettings"]["tlsSettings"]["alpn"] = json!(["h3"]);
+    h3["streamSettings"]["xhttpSettings"] = json!({"path": "/"});
+    let mut kcp = node("kcp", "kcp.example.com");
+    kcp["streamSettings"]["network"] = json!("kcp");
+    let mut cleartext = node("cleartext", "cleartext.example.com");
+    cleartext["streamSettings"] = json!({"network": "ws", "security": "none"});
+    for source in [hysteria, vless_hysteria, h3, kcp, cleartext] {
+        assert_eq!(
+            compile_server(source.clone(), &firefox)["streamSettings"],
+            source["streamSettings"],
+            "{}",
+            source["tag"]
+        );
+    }
+}
+
+// XHTTP can download over a second connection with its own TLS settings.
+#[test]
+fn tls_fingerprint_override_covers_the_xhttp_download_stream() {
+    let mut upload = node("upload", "upload.example.com");
+    upload["streamSettings"]["network"] = json!("xhttp");
+    upload["streamSettings"]["xhttpSettings"] = json!({"path": "/up", "extra": {"downloadSettings": {
+        "address": "download.example.com", "port": 443, "network": "xhttp", "security": "reality",
+        "realitySettings": {"serverName": "cover.example.com", "publicKey": "key", "fingerprint": "chrome"},
+        "xhttpSettings": {"path": "/down"}
+    }}});
+    let stream = compile_server(upload, &fingerprint_runtime("safari"))["streamSettings"].clone();
+    assert_eq!(stream["tlsSettings"]["fingerprint"], "safari");
+    assert_eq!(
+        stream["xhttpSettings"]["extra"]["downloadSettings"]["realitySettings"]["fingerprint"],
+        "safari"
+    );
+}
+
+// A provider profile's backups and a per-app server connect with the same hello as the
+// primary, with mux and fragmentation off.
+#[test]
+fn tls_fingerprint_override_covers_profile_backups_and_per_app_servers() {
+    let mut runtime = per_app_runtime(json!([
+        {"process":"telegram", "target":"server", "server": node("app", "app.example.com")},
+    ]));
+    runtime.tls_fingerprint = crate::model::TlsFingerprint::Firefox;
+    let profile = json!({"outbounds":[node("proxy", "edge.example.com"), node("backup", "backup.example.com"),
+        {"tag":"direct", "protocol":"freedom", "settings":{}}]});
+    let compiled = compile_profile(
+        profile,
+        None,
+        1080,
+        PacketBackend::XrayTun,
+        1500,
+        &runtime,
+        None,
+    )
+    .unwrap();
+    let config: Value = serde_json::from_slice(&compiled.config).unwrap();
+    let mut servers = Vec::new();
+    for outbound in config["outbounds"].as_array().unwrap() {
+        if outbound["protocol"] == "vless" {
+            assert_eq!(
+                outbound["streamSettings"]["tlsSettings"]["fingerprint"], "firefox",
+                "{}",
+                outbound["tag"]
+            );
+            servers.push(outbound["settings"]["address"].as_str().unwrap());
+        } else {
+            assert!(outbound.pointer("/streamSettings/tlsSettings").is_none());
+        }
+    }
+    servers.sort_unstable();
+    assert_eq!(
+        servers,
+        ["app.example.com", "backup.example.com", "edge.example.com"]
+    );
+}
