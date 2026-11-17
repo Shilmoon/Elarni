@@ -304,6 +304,7 @@ pub(crate) fn is_client_protocol(protocol: &str) -> bool {
             | "http"
             | "hysteria"
             | "tuic"
+            | "shadowquic"
             | "wireguard"
             | "amneziawg"
     )
@@ -488,7 +489,10 @@ pub(crate) fn apply_tls_fingerprint(outbound: &mut Value, runtime: &RuntimeOptio
     };
     if outbound["protocol"].as_str().is_none_or(|protocol| {
         !is_client_protocol(protocol)
-            || matches!(protocol, "hysteria" | "tuic" | "wireguard" | "amneziawg")
+            || matches!(
+                protocol,
+                "hysteria" | "tuic" | "shadowquic" | "wireguard" | "amneziawg"
+            )
     }) {
         return;
     }

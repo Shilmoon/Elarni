@@ -22,6 +22,9 @@ wire format: a patched client or server works with a stock v0.4.12 peer.
   DNS server, the Lua router, the REST interface, SunnyQUIC and jemalloc, with their
   dependencies, are not declared; their sources stay in `src/` unchanged and are compiled
   out. `[lints.rust]` allows the feature names the sources still mention.
+  The REST interface (`src/api`) in particular cannot be switched on from this copy: neither
+  its feature nor hyper is declared. It answers any origin and needs no secret by default, so
+  do not declare it here without an origin check and a required secret.
 - New feature `global-allocator` (on by default, off in Elarni): upstream always installs
   an allocation-counting global allocator; a library must leave that to its program
   (`src/lib.rs`).

@@ -98,6 +98,36 @@ fn tuic_endpoints_are_udp_and_preserve_tls_identity_when_pinned() {
     );
 }
 
+// A ShadowQUIC server carries its own server name and takes no stream settings: pinning its
+// address must leave both as they were.
+#[test]
+fn shadowquic_endpoints_are_udp_and_pinning_changes_only_the_address() {
+    let settings = json!({"address":"sq.example.com","port":8443,"username":"user","password":"synthetic",
+        "serverName":"cover.example.com","zeroRtt":false,"udpOverStream":true});
+    let source =
+        json!({"outbounds":[{"tag":"proxy","protocol":"shadowquic","settings":settings.clone()}]});
+    let config = compile(source, None);
+    let endpoints = crate::profile::profile_endpoints(&config).unwrap();
+    assert_eq!(endpoints.len(), 1);
+    assert_eq!(
+        (endpoints[0].host.as_str(), endpoints[0].port),
+        ("sq.example.com", 8443)
+    );
+    assert!(endpoints[0].physical);
+    assert!(!endpoints[0].supports_tcp_probe);
+    let pinned = crate::profile::pin_config(
+        config,
+        &[("sq.example.com".into(), "2001:db8::1".into())].into(),
+    )
+    .unwrap();
+    let mut expected = settings;
+    expected["address"] = json!("2001:db8::1");
+    assert_eq!(
+        pinned["outbounds"][0],
+        json!({"tag":"proxy","protocol":"shadowquic","settings":expected})
+    );
+}
+
 #[test]
 fn per_app_policy_gates_tun_then_preserves_provider_and_app_routing() {
     use crate::model::PerAppMode;
@@ -429,6 +459,8 @@ fn tcp_probe_eligibility_uses_the_endpoint_transport() {
         ("vless", json!({"network": "hysteria"}), false),
         ("hysteria", json!({}), false),
         ("hysteria", json!({"network": "hysteria"}), false),
+        ("tuic", json!({}), false),
+        ("shadowquic", json!({}), false),
         ("vless", json!({"network": "raw", "method": "kcp"}), false),
         ("vless", json!({"network": "kcp", "method": "raw"}), true),
         (
@@ -2895,6 +2927,13 @@ fn tls_fingerprint_override_skips_streams_without_a_tcp_tls_hello() {
             source["tag"]
         );
     }
+    // ShadowQUIC has no stream settings at all, and Xray refuses any on it.
+    let shadowquic = json!({"tag": "shadowquic", "protocol": "shadowquic", "settings": {
+        "address": "sq.example.com", "port": 443, "username": "user", "password": "synthetic",
+        "serverName": "cover.example.com", "zeroRtt": true, "udpOverStream": false}});
+    let mut expected = shadowquic.clone();
+    expected["tag"] = json!("elarni-proxy");
+    assert_eq!(compile_server(shadowquic, &firefox), expected);
 }
 
 // XHTTP can download over a second connection with its own TLS settings.
