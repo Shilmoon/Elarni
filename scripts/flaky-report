@@ -1,0 +1,144 @@
+#!/usr/bin/env python3
+"""Rank the tests that failed and then passed, from check results.
+
+Reads every summary.json and output.log under the given directories (default: .build/check-results) and
+counts, per check and test:
+  - a FLAKY line (the check reran the test itself and it passed);
+  - a failure in a check that also passed on the same revision and system (someone reran it).
+A failure on a revision whose check never passed is listed apart: that is a broken test, or one nobody
+reran. --ci N first downloads the check results of the last N runs of the checks workflow with gh.
+"""
+import argparse
+from collections import defaultdict
+import io
+import json
+from pathlib import Path
+import re
+import subprocess
+import sys
+import zipfile
+
+root = Path(__file__).resolve().parent.parent
+NO_NAME = '(no test name in the log)'
+# check-android repeats its FLAKY and FAILED lines behind "<avd> <serial>: " in its summary.
+PREFIX = r'^(?:[ \t]*\S+ \S+: )?'
+FLAKY = re.compile(PREFIX + r'FLAKY (.+?): ', re.M)
+FAILED = [
+    re.compile(PREFIX + r'FAILED (.+?): ', re.M),                                      # check-android
+    re.compile(r'^--- FAIL: (\S+)', re.M),                                             # go test, top-level tests only
+    re.compile(r'^(?:\d+:\d+ )?\+\d+(?: ~\d+)?(?: -\d+)?: (?:\S+\.dart: )?(.+) \[E\]$', re.M),  # flutter test
+    re.compile(r'^test (\S+) \.\.\. FAILED$', re.M),                                   # cargo test
+]
+SWIFT_FAILED = re.compile(r'^FAIL (\S.*)$', re.M)                                       # check-tests swift
+
+
+def check_name(command):
+    for index, token in enumerate(command):
+        path = token.replace('\\', '/')
+        if 'scripts/' in path:
+            name = path.rsplit('/', 1)[-1]
+            return f'{name} {command[index + 1]}' if name == 'check-tests' and index + 1 < len(command) else name
+    return ' '.join(token.replace('\\', '/').rsplit('/', 1)[-1] for token in command[:3])
+
+
+def read(directories):
+    results = []
+    for directory in directories:
+        for path in sorted(Path(directory).rglob('summary.json')):
+            try:
+                summary = json.loads(path.read_text())
+                if summary['status'] != 'completed':
+                    continue  # still running, or interrupted before the tests finished
+                check = f"{check_name(summary['command'])} [{summary['platform'].split('-')[0]}]"
+                passed = summary['exitCode'] == 0
+            except (OSError, ValueError, KeyError, TypeError, AttributeError):
+                continue
+            try:
+                log = (path.parent / 'output.log').read_text(errors='replace')
+            except OSError:
+                log = ''
+            flaky = set(FLAKY.findall(log))
+            failed = set()
+            if not passed:
+                patterns = FAILED + ([SWIFT_FAILED] if check.startswith('check-tests swift') else [])
+                failed = {name.strip() for pattern in patterns for name in pattern.findall(log)} - flaky
+                if not failed and not flaky:
+                    failed = {NO_NAME}
+            results.append({'check': check, 'revision': summary.get('revision') or str(path.parent), 'passed': passed,
+                            'at': summary.get('startedAt') or '', 'flaky': flaky, 'failed': failed})
+    return results
+
+
+def rank(results):
+    passed = {(result['check'], result['revision']) for result in results if result['passed']}
+    flaky, unresolved = defaultdict(list), defaultdict(list)
+    for result in results:
+        for test in result['flaky']:
+            flaky[result['check'], test].append(result['at'])
+        table = flaky if (result['check'], result['revision']) in passed else unresolved
+        for test in result['failed']:
+            table[result['check'], test].append(result['at'])
+
+    def rows(table):
+        listed = [{'check': check, 'test': test, 'count': len(times), 'last': max(times)}
+                  for (check, test), times in table.items()]
+        listed.sort(key=lambda row: (row['check'], row['test']))
+        listed.sort(key=lambda row: row['last'], reverse=True)
+        listed.sort(key=lambda row: row['count'], reverse=True)
+        return listed
+    return {'results': len(results), 'flaky': rows(flaky), 'unresolved': rows(unresolved)}
+
+
+def gh(*args, text=True):
+    return subprocess.run(['gh', *args], check=True, capture_output=True, text=text).stdout
+
+
+def download(count, workflow, target):
+    """Fetch the checks-* artifacts of the last runs; an artifact already on disk is not fetched again."""
+    runs = json.loads(gh('run', 'list', '--workflow', workflow, '--limit', str(count), '--json', 'databaseId'))
+    for run in runs:
+        number = run['databaseId']
+        try:
+            listing = json.loads(gh('api', f'repos/{{owner}}/{{repo}}/actions/runs/{number}/artifacts?per_page=100'))
+        except subprocess.CalledProcessError as error:
+            print(f'run {number}: {error.stderr.strip()}', file=sys.stderr)
+            continue
+        for artifact in listing['artifacts']:
+            directory = target / str(number) / str(artifact['id'])
+            if not artifact['name'].startswith('checks-') or artifact['expired'] or directory.exists():
+                continue
+            try:
+                archive = gh('api', f"repos/{{owner}}/{{repo}}/actions/artifacts/{artifact['id']}/zip", text=False)
+                with zipfile.ZipFile(io.BytesIO(archive)) as unpacked:
+                    unpacked.extractall(directory)
+            except (subprocess.CalledProcessError, zipfile.BadZipFile) as error:
+                print(f"run {number}, artifact {artifact['name']}: not downloaded ({type(error).__name__})", file=sys.stderr)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument('directories', nargs='*', help='directories with check results (default: .build/check-results)')
+    parser.add_argument('--ci', type=int, metavar='N', help='also read the last N runs of the checks workflow (needs gh)')
+    parser.add_argument('--workflow', default='checks.yml', help='workflow whose runs --ci reads (default: checks.yml)')
+    parser.add_argument('--json', action='store_true', help='print the ranking as JSON')
+    arguments = parser.parse_args()
+    directories = arguments.directories or [root / '.build/check-results']
+    if arguments.ci:
+        target = root / '.build/flaky-report/ci'
+        download(arguments.ci, arguments.workflow, target)
+        directories.append(target)
+    report = rank(read(directories))
+    if arguments.json:
+        print(json.dumps(report, indent=2))
+        return 0
+    print(f"{report['results']} check results")
+    for title, key in (('Failed, then passed (flaky)', 'flaky'),
+                       ('Failed on a revision whose check never passed', 'unresolved')):
+        print(f'\n{title}: {len(report[key])}')
+        for row in report[key]:
+            print(f"{row['count']:>3}  {row['last'][:10]}  {row['check']}  {row['test']}")
+    return 0
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())
