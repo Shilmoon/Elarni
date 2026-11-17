@@ -62,6 +62,9 @@ type ClashProxy struct {
 	WsOpts     *ClashProxyWsOpts     `yaml:"ws-opts,omitempty"`
 	GrpcOpts   *ClashProxyGrpcOpts   `yaml:"grpc-opts,omitempty"`
 	XhttpOpts  *ClashProxyXhttpOpts  `yaml:"xhttp-opts,omitempty"`
+
+	// Set from a ShadowQUIC proxy's own keys when it is decoded, so that no other type reads them.
+	ShadowQUIC *clashShadowQUIC `yaml:"-"`
 }
 
 type ClashProxyEchOpts struct {
@@ -164,6 +167,8 @@ func (proxy ClashProxy) outbound() (*conf.OutboundDetourConfig, error) {
 	switch proxy.Type {
 	case "tuic":
 		return proxy.tuicOutbound()
+	case "shadowquic":
+		return proxy.shadowQUICOutbound()
 	case "ss":
 		outbound, err := proxy.shadowsocksOutbound()
 		if err != nil {

@@ -253,7 +253,15 @@ func clashClientOutbound(node yaml.Node) (map[string]any, error) {
 		"private-key": true, "public-key": true, "pre-shared-key": true, "ip": true, "ipv6": true, "mtu": true, "dns": true, "persistent-keepalive": true, "allowed-ips": true, "reserved": true}
 	typ := reflect.TypeOf(proxy)
 	for i := 0; i < typ.NumField(); i++ {
-		known[strings.Split(typ.Field(i).Tag.Get("yaml"), ",")[0]] = true
+		if name := strings.Split(typ.Field(i).Tag.Get("yaml"), ",")[0]; name != "-" {
+			known[name] = true
+		}
+	}
+	if proxy.Type == "shadowquic" {
+		// Its own keys, checked with the rest of the proxy when it was decoded.
+		for key := range shadowQUICClashFields {
+			known[key] = true
+		}
 	}
 	for key := range fields {
 		if !known[key] {
@@ -353,7 +361,8 @@ func clashClientOutbound(node yaml.Node) (map[string]any, error) {
 		json.Unmarshal(raw, &outbound)
 	}
 	outbound["tag"] = proxy.Name
-	if version := clashString(fields, "ip-version"); version != "" {
+	// A ShadowQUIC proxy takes only "dual", which is no strategy: Xray refuses one for that protocol.
+	if version := clashString(fields, "ip-version"); version != "" && proxy.Type != "shadowquic" {
 		strategies := map[string]string{"dual": "AsIs", "ipv4": "ForceIPv4", "ipv6": "ForceIPv6", "ipv4-prefer": "UseIPv4v6", "ipv6-prefer": "UseIPv6v4"}
 		strategy, ok := strategies[version]
 		if !ok {

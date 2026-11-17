@@ -100,6 +100,7 @@ func TestShareLinksSkipAnOutboundWithoutAServer(t *testing.T) {
 		`{"protocol":"shadowsocks","settings":{"servers":[]}}`,
 		`{"protocol":"socks","settings":{}}`,
 		`{"protocol":"hysteria","settings":{"version":2}}`,
+		`{"protocol":"shadowquic","settings":{"username":"user","password":"pass","serverName":"cdn.example.com"}}`,
 	} {
 		links, err := ConvertXrayJsonToShareLinks([]byte(`{"outbounds":[` + outbound + `]}`))
 		if err == nil {
@@ -330,7 +331,7 @@ func TestImportedLinksShareAsLinks(t *testing.T) {
 	links := fixtureStrings(t, func(text string) bool {
 		return strings.Contains(text, "://") && !strings.Contains(text, "\n") && !strings.HasPrefix(strings.TrimSpace(text), "{")
 	})
-	checked := 0
+	checked, shadowQUIC := 0, 0
 	for _, link := range links {
 		imported, err := ImportClientProfiles(link)
 		if err != nil {
@@ -347,6 +348,9 @@ func TestImportedLinksShareAsLinks(t *testing.T) {
 				continue
 			}
 			checked++
+			if config.OutboundConfigs[0].Protocol == "shadowquic" {
+				shadowQUIC++
+			}
 			if strings.HasPrefix(exported, "{") {
 				t.Errorf("%s shares as its profile:\n%s", link, profile.Config)
 			}
@@ -354,6 +358,10 @@ func TestImportedLinksShareAsLinks(t *testing.T) {
 	}
 	if checked < 20 {
 		t.Fatalf("only %d links checked", checked)
+	}
+	// A ShadowQUIC link carries one MTU for both of the client's: what it imported has the two alike.
+	if shadowQUIC == 0 {
+		t.Fatal("no ShadowQUIC link checked")
 	}
 }
 

@@ -534,7 +534,9 @@ func TestIPv6ServerAddressIsStoredWithoutBrackets(t *testing.T) {
 		"http://[2001:db8::10]:8080#v6",
 		"hy2://pw@[2001:db8::10]:443?sni=v6.example.com#v6",
 		"tuic://" + id + ":pw@[2001:db8::10]:443?sni=v6.example.com#v6",
+		"sq://user:pw@[2001:db8::10]:443?sni=v6.example.com#v6",
 		"proxies:\n  - {name: v6, type: trojan, server: '2001:db8::10', port: 443, password: pw}\n",
+		"proxies:\n  - {name: v6, type: shadowquic, server: '2001:db8::10', port: 443, username: user, password: pw, sni: v6.example.com}\n",
 	} {
 		result, err := ImportClientProfiles(link)
 		if err != nil {

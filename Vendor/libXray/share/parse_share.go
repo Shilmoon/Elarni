@@ -96,7 +96,7 @@ func parseXrayJSONConfig(text string) (*conf.Config, error) {
 
 var shareSchemes = []string{
 	"vless://", "vmess://", "socks://", "socks5://", "http://", "https://", "ss://", "trojan://",
-	"hysteria2://", "hy2://", "tuic://",
+	"hysteria2://", "hy2://", "tuic://", "sq://", "shadowquic://",
 }
 
 func hasShareSchemeLine(text string) bool {
@@ -192,6 +192,8 @@ func (proxy xrayShareLink) outbound() (*conf.OutboundDetourConfig, error) {
 		return proxy.hysteriaOutbound()
 	case "tuic":
 		return proxy.tuicOutbound()
+	case "sq", "shadowquic":
+		return proxy.shadowQUICOutbound()
 	default:
 		return nil, fmt.Errorf("unsupported client link scheme")
 	}
@@ -647,7 +649,7 @@ func clientPort(link *url.URL) (uint16, error) {
 	text := link.Port()
 	if text == "" {
 		switch link.Scheme {
-		case "trojan", "hy2", "hysteria2", "https":
+		case "trojan", "hy2", "hysteria2", "https", "sq", "shadowquic":
 			text = "443"
 		case "http":
 			text = "80"
