@@ -32,7 +32,8 @@ Shared Swift changes also need `scripts/check-tests swift`.
 
 Simulator tests don't cover tunnel traffic. On a device, check TCP/UDP and DNS over
 IPv4/IPv6, routes, reconnects across Wi-Fi/cellular, background and lock, and the
-Control Center and Shortcuts actions.
+Control Center and Shortcuts actions. With On Demand on, also stop the VPN with the
+iOS VPN switch: the restart must bring a notification whose Turn Off action stops it.
 
 ## Signing
 
@@ -56,6 +57,7 @@ The app and packet tunnel need the App Group and Network Extension
 - Per-app routing isn't available: iOS apps can't see other apps' traffic.
 - Background refresh and health checks run only while the app is open; on-demand
   rules handle background reconnects.
-- Local proxy listeners always require a login.
+- A new install's local proxy listeners require a generated login; set your own
+  in Settings › Connection › Inbound credentials. Settings saved before keep their choice.
 - The packet tunnel targets a 30 MiB Go heap.
 - Backups carry servers, credentials and routing, not app settings.

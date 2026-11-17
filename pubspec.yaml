@@ -28,3 +28,5 @@ flutter:
   uses-material-design: true
   assets:
     - assets/branding/elarni-app-icon.png
+    # Shown in Settings > Licenses beside Flutter's own package licenses.
+    - THIRD_PARTY_NOTICES

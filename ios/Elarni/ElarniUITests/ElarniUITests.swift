@@ -248,6 +248,43 @@ final class ElarniUITests: XCTestCase {
     let attachment = XCTAttachment(screenshot: app.screenshot()); attachment.name = "Routing profiles"; attachment.lifetime = .keepAlways; add(attachment)
   }
 
+  // A server's page opens its stored Xray JSON. Typed quotes and dashes stay plain, so the JSON stays valid,
+  // and Save waits for a change.
+  @MainActor
+  func testServerConfigurationOpensItsJSON() throws {
+    continueAfterFailure = false
+    let app = XCUIApplication()
+    app.launchArguments = ["--ui-testing", UUID().uuidString]
+    app.launch()
+    importClipboard(app, text: "socks://127.0.0.1:1080#Config%20fixture")
+    XCTAssertTrue(app.buttons["selectedServer"].waitForExistence(timeout: 15))
+    app.buttons["selectedServer"].tap()
+    let details = app.buttons["details.Config fixture"]
+    XCTAssertTrue(details.waitForExistence(timeout: 5))
+    reveal(details, in: app)
+    details.tap()
+    XCTAssertTrue(app.navigationBars["Config fixture"].waitForExistence(timeout: 5))
+    let open = app.buttons["server-config"]
+    reveal(open, in: app)
+    open.tap()
+    let editor = app.textViews["server-config-editor"]
+    XCTAssertTrue(editor.waitForExistence(timeout: 5))
+    let text = try XCTUnwrap(editor.value as? String)
+    let object = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any])
+    XCTAssertEqual((object["outbounds"] as? [[String: Any]])?.first?["protocol"] as? String, "socks")
+    XCTAssertTrue(text.contains("127.0.0.1"))
+    let save = app.buttons["server-config-save"]
+    XCTAssertFalse(save.isEnabled)
+    let image = XCTAttachment(screenshot: app.screenshot()); image.name = "Server configuration"; image.lifetime = .keepAlways; add(image)
+    editor.tap()
+    editor.typeText("\"a--b\"")
+    XCTAssertTrue((editor.value as? String)?.contains("\"a--b\"") == true, "smart punctuation changed the typed JSON")
+    XCTAssertTrue(save.isEnabled)
+    app.navigationBars["Configuration"].buttons["Cancel"].tap()
+    XCTAssertTrue(editor.waitForNonExistence(timeout: 5))
+    XCTAssertTrue(app.navigationBars["Config fixture"].exists)
+  }
+
   @MainActor
   func testHomeSupportNavigationAndLandscape() throws {
     // Home keeps its first screen for servers in both orientations;

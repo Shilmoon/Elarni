@@ -863,6 +863,12 @@ final class RoutingStore {
     }
   }
 
+  /// The managed lists of a profile, for a refresh of all of them.
+  func managedSourceIDs(profileID: String) throws -> [String] {
+    guard let record = catalog.profiles.first(where: { $0.id == profileID }) else { throw RoutingStoreError.notFound }
+    return (record.managedSources ?? []).map(\.source.id)
+  }
+
   func nextManagedDate() -> Date? {
     let current = now()
     return catalog.profiles.filter { $0.enabled && managedTasks[$0.id] == nil }

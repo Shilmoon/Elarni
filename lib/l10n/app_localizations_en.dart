@@ -1499,6 +1499,22 @@ class AppLocalizationsEn extends AppLocalizations {
   String get enableDefaultVlessMux => 'Enable default VLESS mux';
 
   @override
+  String get tlsFingerprint => 'TLS fingerprint';
+
+  @override
+  String get tlsFingerprintHelp =>
+      'Which browser a connection to a server looks like. From the server uses what each server\'s link names, or Chrome when it names none. Choose another when a network blocks that one. This applies to TLS and Reality servers over TCP; Hysteria2, TUIC and WireGuard have no such fingerprint.';
+
+  @override
+  String get tlsFingerprintServer => 'From the server';
+
+  @override
+  String get tlsFingerprintRandom => 'Random browser';
+
+  @override
+  String get tlsFingerprintRandomized => 'Randomized';
+
+  @override
   String fragmentationSummary(Object packets, Object length, Object interval) {
     return '$packets · $length bytes · $interval ms';
   }
@@ -1672,8 +1688,50 @@ class AppLocalizationsEn extends AppLocalizations {
   }
 
   @override
+  String updateReady(String version) {
+    return 'Elarni $version is ready to install';
+  }
+
+  @override
+  String get updateInstall => 'Install';
+
+  @override
+  String get updateDownloading => 'Downloading the update…';
+
+  @override
+  String updateInstalling(String version) {
+    return 'Installing Elarni $version…';
+  }
+
+  @override
+  String updateInstalled(String version) {
+    return 'Elarni $version is installed';
+  }
+
+  @override
+  String get updateRestartToUse => 'Restart Elarni to use it.';
+
+  @override
+  String get updateRestart => 'Restart';
+
+  @override
+  String get updateReconnects => 'The VPN reconnects after the update.';
+
+  @override
+  String updateFailed(String version) {
+    return 'Elarni $version could not be installed. Download it from the release page.';
+  }
+
+  @override
+  String get autoUpdate => 'Install updates automatically';
+
+  @override
+  String get autoUpdateHelp =>
+      'Elarni downloads a new release in the background and checks its signature. It installs by itself only when nothing has to be approved and the VPN is off; otherwise Home offers Install.';
+
+  @override
   String get updateFeedHelp =>
-      'Elarni reads this address once a day and shows a notice on Home when it names a newer release. It never downloads or installs anything. Use a JSON file with \"version\" and \"url\", or a GitHub releases/latest API address; https only.';
+      'Elarni reads this address once a day and shows a notice on Home when it names a newer release. Only a release signed with Elarni\'s release key installs itself. Use a JSON file with \"version\" and \"url\", or a GitHub releases/latest API address; https only.';
 
   @override
   String get updateFeed => 'Update feed';
@@ -3231,5 +3289,130 @@ class AppLocalizationsEn extends AppLocalizations {
   @override
   String perAppConnectionsRestart(String apps) {
     return 'Restart $apps: their connections opened before Elarni connected skip per-app routing until they reconnect.';
+  }
+
+  @override
+  String trafficRates(String download, String upload) {
+    return '↓ $download/s · ↑ $upload/s';
+  }
+
+  @override
+  String kilobytesValue(String value) {
+    return '$value KB';
+  }
+
+  @override
+  String bytesValue(String value) {
+    return '$value B';
+  }
+
+  @override
+  String get geoipUrl => 'GeoIP URL';
+
+  @override
+  String get geositeUrl => 'GeoSite URL';
+
+  @override
+  String get managedDomainLists => 'Managed domain lists';
+
+  @override
+  String get managedDomainListsHelp =>
+      'Use a trusted public HTTPS source with one domain per line, a hosts file, or supported domain rules. A DNS list chooses domains for direct DNS. Private-network URLs are rejected.';
+
+  @override
+  String get listUrl => 'List URL';
+
+  @override
+  String get useDomainsFor => 'Use domains for';
+
+  @override
+  String get managedMatch => 'Match';
+
+  @override
+  String get exactDomains => 'Exact domains';
+
+  @override
+  String get includeSubdomains => 'Include subdomains';
+
+  @override
+  String get removeList => 'Remove list';
+
+  @override
+  String get addDomainList => 'Add domain list';
+
+  @override
+  String get staticDnsHosts => 'Static DNS hosts';
+
+  @override
+  String get hostname => 'Hostname';
+
+  @override
+  String get ipv4OrIpv6Address => 'IPv4 or IPv6 address';
+
+  @override
+  String get removeHost => 'Remove host';
+
+  @override
+  String get addDnsHost => 'Add DNS host';
+
+  @override
+  String get dnsHostsInvalid =>
+      'Enter a unique hostname and an IP address for each DNS host.';
+
+  @override
+  String get shareServer => 'Share server';
+
+  @override
+  String get refreshAllSubscriptions => 'Refresh all subscriptions';
+
+  @override
+  String get sortServers => 'Sort';
+
+  @override
+  String get serverLocation => 'Location';
+
+  @override
+  String get allLocations => 'All locations';
+
+  @override
+  String get shareRoutingProfile => 'Share routing profile';
+
+  @override
+  String get useLastSuccessfulServer => 'Use last successful server';
+
+  @override
+  String get licensesAndNotices => 'Licenses and notices';
+
+  @override
+  String get cancelTests => 'Cancel tests';
+
+  @override
+  String get refreshLists => 'Refresh lists';
+
+  @override
+  String get saveToFile => 'Save to file…';
+
+  @override
+  String get saveQrImage => 'Save QR image…';
+
+  @override
+  String get exportJson => 'Export JSON…';
+
+  @override
+  String get fileSaved => 'File saved.';
+
+  @override
+  String get fileNotSaved =>
+      'The file could not be saved. Choose a writable location and retry.';
+
+  @override
+  String get share => 'Share';
+
+  @override
+  String get shareServers => 'Share servers';
+
+  @override
+  String serverHasNoShareLink(Object name) {
+    return '$name has no share link that keeps all its settings. Share it with Share server in its menu.';
   }
 }

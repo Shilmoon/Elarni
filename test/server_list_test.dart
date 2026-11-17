@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:elarni/desktop_integration.dart';
 import 'package:elarni/elarni_app.dart';
@@ -265,6 +266,101 @@ void main() {
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox());
   });
+
+  testWidgets(
+    'a local group shares its chosen servers as links in group order; a provider group does not',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1280, 1400));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final fixture = countryFixture();
+      const links =
+          'vless://one@127.0.0.1:443#Local%20One\nss://three@127.0.0.1:8388#Local%20Three';
+      final control = NoticeControl()
+        ..snapshot = SubscriptionSnapshot(
+          selectedNodeId: fixture.selectedNodeId,
+          subscriptions: [
+            ...fixture.subscriptions,
+            SubscriptionGroup(
+              id: 'mine',
+              name: 'Local profiles',
+              status: 'ready',
+              isLocal: true,
+              nodes: [
+                server('one', 'Local One', 'VLESS'),
+                server('two', 'Local Two', 'Trojan'),
+                server('three', 'Local Three', 'Shadowsocks'),
+              ],
+            ),
+          ],
+        )
+        ..shareLinksText = links;
+      control.onPing = (id) async => reply(id);
+      await tester.pumpWidget(ElarniApp(tunnelControl: control, windows: true));
+      await tester.pumpAndSettle();
+      await openServers(tester, 'mine', 'Local profiles');
+      await tester.tap(find.byKey(const ValueKey('select-servers:mine')));
+      await tester.pumpAndSettle();
+      final share = find.byKey(const ValueKey('share-servers:mine'));
+      expect(tester.widget<TextButton>(share).onPressed, isNull);
+      // Chosen out of order, they are shared in the group's order.
+      await tester.tap(find.byKey(const ValueKey('select-node:three')));
+      await tester.tap(find.byKey(const ValueKey('select-node:one')));
+      await tester.pumpAndSettle();
+      await tester.tap(share);
+      await tester.pumpAndSettle();
+      final (group, ids) = control.sharedLinks.single;
+      expect(group, 'mine');
+      expect(ids, ['one', 'three']);
+      // The links did not fit a QR code; the dialog still shows them.
+      expect(control.qrTexts, [links]);
+      final dialog = find.byType(AlertDialog);
+      expect(
+        find.descendant(of: dialog, matching: find.text('Share servers')),
+        findsOneWidget,
+      );
+      expect(
+        tester
+            .widget<SelectableText>(find.byKey(const Key('shared-links')))
+            .data,
+        links,
+      );
+      expect(
+        find.text('This configuration is too large for a QR code. Use Copy.'),
+        findsOneWidget,
+      );
+      expect(find.byKey(const Key('shared-save-text')), findsOneWidget);
+      await tester.tap(find.text('Close'));
+      await tester.pumpAndSettle();
+      // A server without a link is named.
+      control.shareLinksError = PlatformException(
+        code: 'no_share_link',
+        message: 'Local Three has no share link. Share it from its own page.',
+        details: 'Local Three',
+      );
+      await tester.tap(share);
+      await tester.pumpAndSettle();
+      expect(dialog, findsNothing);
+      expect(
+        find.text(
+          'Local Three has no share link that keeps all its settings. Share it with Share server in its menu.',
+        ),
+        findsOneWidget,
+      );
+      // A provider's group has its subscription link to share instead.
+      await tester.tap(find.text('Cancel'));
+      await tester.pumpAndSettle();
+      await openServers(tester, 'daily', 'boVPN');
+      await tester.tap(find.byKey(const ValueKey('select-servers:daily')));
+      await tester.pumpAndSettle();
+      expect(find.widgetWithText(TextButton, 'Hide'), findsOneWidget);
+      expect(find.byKey(const ValueKey('share-servers:daily')), findsNothing);
+      expect(control.sharedLinks, hasLength(2));
+      expect(control.connectCalls, 0);
+      expect(control.selectedIDs, isEmpty);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
 
   testWidgets(
     'check exit names where a server reaches the internet and flags a name that disagrees',

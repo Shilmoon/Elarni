@@ -114,6 +114,9 @@ struct TunnelRuntimeSettings: Codable, Sendable, Equatable {
   var fragmentInterval: String? = nil
   var profilePreferredIP: String? = nil
   var profileDNSMode: String? = nil
+  /// The TLS hello of server connections; nil keeps the one each server's link names.
+  var tlsFingerprint: String? = nil
+  static let tlsFingerprints = ["server", "chrome", "firefox", "safari", "random", "randomized"]
   var httpPort: Int?
   var allowLAN: Bool?
   var inboundAuthEnabled: Bool?
@@ -171,7 +174,7 @@ struct TunnelRuntimeSettings: Codable, Sendable, Equatable {
   func validate() throws {
 #if os(iOS)
     guard (perAppMode ?? "off") == "off", (perAppProcesses ?? []).isEmpty, (perAppTargets ?? [:]).isEmpty,
-          !xrayTunEnabled, !hideVPNIcon, memoryLimitMB == 0 else {
+          !xrayTunEnabled, memoryLimitMB == 0 else {
       throw TunnelPlanError.invalidBounds
     }
 #endif
@@ -190,6 +193,7 @@ struct TunnelRuntimeSettings: Codable, Sendable, Equatable {
           ["ipv4", "ipv6", "automatic"].contains(preferredIP),
           profilePreferredIP == nil || ["ipv4", "ipv6", "automatic"].contains(profilePreferredIP!),
           profileDNSMode == nil || ["inherit", "routing", "default"].contains(profileDNSMode!),
+          tlsFingerprint == nil || Self.tlsFingerprints.contains(tlsFingerprint!),
           (memoryLimitMB == 0 || (40...4096).contains(memoryLimitMB)),
           (30...3_600).contains(idleTimeoutSeconds),
           (1...4_096).contains(tcpMaxConnections),

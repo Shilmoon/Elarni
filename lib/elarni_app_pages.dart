@@ -160,6 +160,10 @@ extension _HomePages on _ElarniHomeState {
         )
         .where(
           (node) =>
+              _locationFilter == null || _locationKey(node) == _locationFilter,
+        )
+        .where(
+          (node) =>
               _search.isEmpty ||
               group.name.toLowerCase().contains(_search) ||
               '${node.name} ${ServerLocation.fromName(node.name)?.name ?? ''} ${node.protocol} ${node.transport} ${node.security}'
@@ -640,6 +644,14 @@ extension _HomePages on _ElarniHomeState {
                             child: Text(l10n.editJson),
                           ),
                           PopupMenuItem(
+                            value: 'share',
+                            child: Text(l10n.shareRoutingProfile),
+                          ),
+                          PopupMenuItem(
+                            value: 'export',
+                            child: Text(l10n.exportJson),
+                          ),
+                          PopupMenuItem(
                             value: 'duplicate',
                             child: Text(l10n.duplicate),
                           ),
@@ -662,6 +674,10 @@ extension _HomePages on _ElarniHomeState {
                               _showRoutingDetails(profile.id);
                             case 'json':
                               _editRouting(profile);
+                            case 'share':
+                              _shareRouting(profile);
+                            case 'export':
+                              _saveFile('json', utf8.encode(profile.json));
                             case 'refresh':
                               _runRouting(
                                 () => widget.tunnelControl
@@ -730,9 +746,10 @@ extension _HomePages on _ElarniHomeState {
   Widget _homeNotice(
     BuildContext context, {
     required String title,
-    required String body,
+    required String? body,
     required List<Widget> actions,
     bool severe = false,
+    bool progress = false,
   }) {
     final dark = Theme.of(context).brightness == Brightness.dark;
     final (foreground, background) = severe
@@ -764,8 +781,19 @@ extension _HomePages on _ElarniHomeState {
                     fontWeight: FontWeight.w600,
                   ),
                 ),
-                const SizedBox(height: 2),
-                Text(body, style: TextStyle(color: foreground)),
+                if (body != null) ...[
+                  const SizedBox(height: 2),
+                  Text(body, style: TextStyle(color: foreground)),
+                ],
+                if (progress)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 6),
+                    child: LinearProgressIndicator(
+                      minHeight: 3,
+                      color: foreground,
+                      backgroundColor: foreground.withValues(alpha: .2),
+                    ),
+                  ),
                 const SizedBox(height: 4),
                 Wrap(
                   spacing: 8,
@@ -833,30 +861,111 @@ extension _HomePages on _ElarniHomeState {
           ),
         ],
       ),
-    if (widget.desktop.availableUpdate case final update?
-        when update.version != widget.desktop.dismissedUpdate)
-      _homeNotice(
-        context,
-        title: l10n.updateAvailable(update.version),
-        body: l10n.youHaveVersion('${_systemInfo['appVersion']}'),
+    ?_updateNotice(context),
+  ];
+
+  Widget? _updateNotice(BuildContext context) {
+    final desktop = widget.desktop, found = desktop.availableUpdate;
+    final stage = desktop.updateStage, staged = desktop.updateVersion;
+    // The VPN is on or coming up, so the update interrupts it.
+    final reconnect =
+        _stateAvailable &&
+        const {
+          TunnelState.connecting,
+          TunnelState.connected,
+          TunnelState.reconnecting,
+          TunnelState.reasserting,
+        }.contains(_state);
+    final running = l10n.youHaveVersion('${_systemInfo['appVersion']}');
+    Widget notNow(String version) => TextButton(
+      onPressed: desktop.saving
+          ? null
+          : () => unawaited(
+              desktop
+                  .update(dismissedUpdate: version)
+                  .catchError((Object _) {}),
+            ),
+      child: Text(l10n.notNow),
+    );
+    // Not now hides the version the notice names, whichever form it takes.
+    Widget? notice(
+      String version, {
+      required String title,
+      String? body,
+      List<Widget> actions = const [],
+      bool progress = false,
+    }) => version == desktop.dismissedUpdate
+        ? null
+        : _homeNotice(
+            context,
+            title: title,
+            body: body,
+            // A running installer cannot be put off.
+            actions: progress ? const [] : [...actions, notNow(version)],
+            progress: progress,
+          );
+    if (staged != null && stage == UpdateStage.downloading)
+      return notice(
+        staged,
+        title: l10n.updateAvailable(staged),
+        body: l10n.updateDownloading,
+      );
+    if (staged != null && stage == UpdateStage.installing)
+      return notice(
+        staged,
+        title: l10n.updateInstalling(staged),
+        progress: true,
+      );
+    if (staged != null && stage == UpdateStage.installed)
+      return notice(
+        staged,
+        title: l10n.updateInstalled(staged),
+        body: l10n.updateRestartToUse,
         actions: [
           TextButton(
-            onPressed: () => _openUpdateLink(update.url),
-            child: Text(l10n.download),
-          ),
-          TextButton(
-            onPressed: widget.desktop.saving
-                ? null
-                : () => unawaited(
-                    widget.desktop
-                        .update(dismissedUpdate: update.version)
-                        .catchError((Object _) {}),
-                  ),
-            child: Text(l10n.notNow),
+            onPressed: () =>
+                unawaited(desktop.restartForUpdate(reconnect: reconnect)),
+            child: Text(l10n.updateRestart),
           ),
         ],
-      ),
-  ];
+      );
+    final ready = stage == UpdateStage.ready && staged != null;
+    if (ready ||
+        // Not downloaded: automatic updates are off, or the network cut it.
+        found != null &&
+            stage == UpdateStage.none &&
+            desktop.updateInstallable) {
+      final version = ready ? staged : found!.version;
+      return notice(
+        version,
+        title: ready
+            ? l10n.updateReady(version)
+            : l10n.updateAvailable(version),
+        body: reconnect ? '$running ${l10n.updateReconnects}' : running,
+        actions: [
+          TextButton(
+            onPressed: () =>
+                unawaited(desktop.installUpdate(reconnect: reconnect)),
+            child: Text(l10n.updateInstall),
+          ),
+        ],
+      );
+    }
+    if (found == null) return null;
+    return notice(
+      found.version,
+      title: l10n.updateAvailable(found.version),
+      body: stage == UpdateStage.failed
+          ? l10n.updateFailed(staged ?? found.version)
+          : running,
+      actions: [
+        TextButton(
+          onPressed: () => _openUpdateLink(found.url),
+          child: Text(l10n.download),
+        ),
+      ],
+    );
+  }
 
   Widget _connectionControl(BuildContext context, {bool compact = false}) {
     final scheme = Theme.of(context).colorScheme;
@@ -1024,6 +1133,26 @@ extension _HomePages on _ElarniHomeState {
               child: Text(label, style: const TextStyle(fontSize: 16)),
             ),
           ),
+          if (_stateAvailable && _state == TunnelState.connected)
+            ValueListenableBuilder(
+              valueListenable: _trafficRate,
+              builder: (context, rate, _) => rate == null
+                  ? const SizedBox.shrink()
+                  : Padding(
+                      padding: const EdgeInsets.only(top: 10),
+                      child: Text(
+                        l10n.trafficRates(
+                          byteSize(rate.down),
+                          byteSize(rate.up),
+                        ),
+                        key: const Key('traffic-rates'),
+                        style: TextStyle(
+                          color: scheme.onSurfaceVariant,
+                          fontFeatures: const [FontFeature.tabularFigures()],
+                        ),
+                      ),
+                    ),
+            ),
           if (group != null) ...[
             const SizedBox(height: 24),
             SubscriptionSummary(
@@ -1086,6 +1215,11 @@ extension _HomePages on _ElarniHomeState {
         ),
         items: [
           PopupMenuItem(value: 'rename', child: Text(l10n.renameServer)),
+          // A provider that hides its link hides its servers' links too.
+          if (group.metadata['hideURL'] != true)
+            PopupMenuItem(value: 'share', child: Text(l10n.shareServer)),
+          if (node.isVPN)
+            PopupMenuItem(value: 'ip', child: Text(l10n.serverIpType)),
           if (node.isVPN)
             PopupMenuItem(value: 'exit', child: Text(l10n.checkExit)),
           if (!node.selected && group.nodes.length > 1)
@@ -1097,6 +1231,9 @@ extension _HomePages on _ElarniHomeState {
       );
       if (!mounted || _busy) return;
       if (action == 'rename') await _renameNode(node);
+      if (action == 'share')
+        await _shareSubscription(node.id, subscription: false);
+      if (action == 'ip') await _chooseNodeIPPreference(node);
       if (action == 'exit') await _checkExit(node);
       if (action == 'delete') await _deleteNode(node, group);
     }
@@ -1260,9 +1397,9 @@ extension _HomePages on _ElarniHomeState {
                       trailing: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          // Only the Windows and Linux backends can show and replace a config.
+                          // The backend refuses what a provider hides and
+                          // configs that are not Xray JSON.
                           if (subscriptionView &&
-                              widget.desktopCore &&
                               node.isVPN &&
                               group.metadata['hideURL'] != true)
                             IconButton(
@@ -1306,7 +1443,10 @@ extension _HomePages on _ElarniHomeState {
                                 : l10n.openInTelegram,
                             child: TextButton(
                               key: ValueKey('ping:${node.id}'),
-                              onPressed: (_busy || node.isVPN && _pinging)
+                              onPressed:
+                                  (_busy ||
+                                      node.isVPN &&
+                                          (_pinging || _pingCancelled))
                                   ? null
                                   : node.isVPN
                                   ? () => _pingNode(node.id)
@@ -1586,7 +1726,9 @@ extension _HomePages on _ElarniHomeState {
           .where(
             (group) =>
                 _displayNodes(group).isNotEmpty ||
-                (_nodeFilter == 'all' && _search.isEmpty),
+                (_nodeFilter == 'all' &&
+                    _search.isEmpty &&
+                    _locationFilter == null),
           )
           .toList();
       if (groups.isEmpty)
@@ -1607,6 +1749,7 @@ extension _HomePages on _ElarniHomeState {
                     _search = '';
                     _nodeSearch.clear();
                     _nodeFilter = 'all';
+                    _locationFilter = null;
                   }),
                   child: Text(l10n.showAllServers),
                 ),
@@ -1741,29 +1884,38 @@ extension _HomePages on _ElarniHomeState {
     );
   }
 
-  Widget _pingAllButton({String? subscriptionId}) => IconButton(
-    key: subscriptionId == null
-        ? const Key('ping-all')
-        : ValueKey('subscription-ping-all:$subscriptionId'),
-    tooltip: _pinging
-        ? l10n.testing
-        : _pingProtocol == 'icmp'
-        ? l10n.useNodePingForIcmp
-        : subscriptionId == null
-        ? l10n.testAllNodes
-        : l10n.testSubscriptionNodes,
-    onPressed:
-        _pingControlsDisabled ||
-            _pingProtocol == 'icmp' ||
-            !_subscriptions.subscriptions.any(
-              (group) =>
-                  (subscriptionId == null || group.id == subscriptionId) &&
-                  group.nodes.any((node) => node.isVPN),
-            )
-        ? null
-        : () => _pingAllNodes(subscriptionId: subscriptionId),
-    icon: const Icon(CupertinoIcons.gauge, size: 20),
-  );
+  // A running test turns the button into one that cancels it.
+  Widget _pingAllButton({String? subscriptionId}) => _pinging
+      ? IconButton(
+          key: subscriptionId == null
+              ? const Key('ping-cancel')
+              : ValueKey('subscription-ping-cancel:$subscriptionId'),
+          tooltip: l10n.cancelTests,
+          onPressed: _busy ? null : _cancelPings,
+          icon: const Icon(CupertinoIcons.stop_fill, size: 20),
+        )
+      : IconButton(
+          key: subscriptionId == null
+              ? const Key('ping-all')
+              : ValueKey('subscription-ping-all:$subscriptionId'),
+          tooltip: _pingProtocol == 'icmp'
+              ? l10n.useNodePingForIcmp
+              : subscriptionId == null
+              ? l10n.testAllNodes
+              : l10n.testSubscriptionNodes,
+          onPressed:
+              _pingControlsDisabled ||
+                  _pingProtocol == 'icmp' ||
+                  !_subscriptions.subscriptions.any(
+                    (group) =>
+                        (subscriptionId == null ||
+                            group.id == subscriptionId) &&
+                        group.nodes.any((node) => node.isVPN),
+                  )
+              ? null
+              : () => _pingAllNodes(subscriptionId: subscriptionId),
+          icon: const Icon(CupertinoIcons.gauge, size: 20),
+        );
 
   Widget _subscriptionActions(
     SubscriptionGroup group,
@@ -2098,6 +2250,15 @@ extension _HomePages on _ElarniHomeState {
                               ),
                               child: Text(l10n.selectUnreachable),
                             ),
+                            // A local group has no subscription link to share.
+                            if (group.isLocal)
+                              TextButton(
+                                key: ValueKey('share-servers:${group.id}'),
+                                onPressed: _busy || selectedCount == 0
+                                    ? null
+                                    : () => _shareSelected(group),
+                                child: Text(l10n.share),
+                              ),
                             TextButton(
                               // A subscription keeps at least one server.
                               onPressed:
@@ -2237,6 +2398,112 @@ extension _HomePages on _ElarniHomeState {
     );
   }
 
+  /// The country a server's name names, or 'other' for none.
+  static String _locationKey(SubscriptionNode node) =>
+      ServerLocation.fromName(node.name)?.code ?? 'other';
+
+  /// The countries of all servers by name, with servers without one last.
+  List<String> _serverLocations() {
+    final codes = {
+      for (final group in _subscriptions.subscriptions)
+        for (final node in group.nodes) _locationKey(node),
+    }.toList();
+    String name(String code) => ServerLocation.fromCode(code)?.name ?? code;
+    return codes..sort((a, b) {
+      if (a == 'other') return 1;
+      if (b == 'other') return -1;
+      return name(a).compareTo(name(b));
+    });
+  }
+
+  /// The server Home last connected through, as iOS offers it: one whose
+  /// configuration has not changed since, other than the selected one.
+  SubscriptionNode? get _lastSuccessfulNode {
+    SubscriptionNode? last;
+    for (final group in _subscriptions.subscriptions) {
+      for (final node in group.nodes) {
+        final at = node.lastSuccessAt;
+        if (at != null &&
+            node.lastSuccessCurrent &&
+            node.isVPN &&
+            (last == null || at > last.lastSuccessAt!))
+          last = node;
+      }
+    }
+    return last == null || last.id == _subscriptions.selectedNodeId
+        ? null
+        : last;
+  }
+
+  Widget _serverSortMenu() => PopupMenuButton<String>(
+    key: const Key('server-sort'),
+    tooltip: l10n.sortServers,
+    enabled: !widget.desktop.saving,
+    icon: const Icon(CupertinoIcons.arrow_up_arrow_down, size: 20),
+    onSelected: (value) {
+      // The menu was built from the preferences of the moment it opened.
+      if (!widget.desktop.available || widget.desktop.saving) return;
+      if (value == 'favoritesFirst') {
+        _saveDesktop(favoritesFirst: !widget.desktop.favoritesFirst);
+      } else if (value != widget.desktop.sort) {
+        _saveDesktop(sort: value);
+      }
+    },
+    itemBuilder: (context) => [
+      // The orders Settings > General offers.
+      for (final (value, label) in [
+        ('provider', l10n.providerOrder),
+        ('alphabet', l10n.alphabetical),
+        ('latency', l10n.lowestLatency),
+      ])
+        CheckedPopupMenuItem(
+          value: value,
+          checked: widget.desktop.sort == value,
+          child: Text(label),
+        ),
+      const PopupMenuDivider(),
+      CheckedPopupMenuItem(
+        value: 'favoritesFirst',
+        checked: widget.desktop.favoritesFirst,
+        child: Text(l10n.favoritesFirst),
+      ),
+    ],
+  );
+
+  Widget _serverLocationMenu() => PopupMenuButton<String>(
+    key: const Key('server-location'),
+    tooltip: l10n.serverLocation,
+    icon: const Icon(CupertinoIcons.globe, size: 20),
+    onSelected: (value) =>
+        _set(() => _locationFilter = value == 'all' ? null : value),
+    // Built when the menu opens: it reads every server's name.
+    itemBuilder: (context) => [
+      CheckedPopupMenuItem(
+        value: 'all',
+        checked: _locationFilter == null,
+        child: Text(l10n.allLocations),
+      ),
+      const PopupMenuDivider(),
+      for (final code in _serverLocations())
+        CheckedPopupMenuItem(
+          key: ValueKey('server-location:$code'),
+          value: code,
+          checked: _locationFilter == code,
+          child: Row(
+            children: [
+              LocationFlag(location: ServerLocation.fromCode(code)),
+              const SizedBox(width: 10),
+              Flexible(
+                child: Text(
+                  ServerLocation.fromCode(code)?.name ?? l10n.otherLocations,
+                ),
+              ),
+            ],
+          ),
+        ),
+    ],
+  );
+
   Widget _serverHeader() => Padding(
     padding: const EdgeInsets.fromLTRB(20, 20, 20, 12),
     child: Column(
@@ -2250,6 +2517,8 @@ extension _HomePages on _ElarniHomeState {
                 style: Theme.of(context).textTheme.titleLarge,
               ),
             ),
+            if (widget.desktop.available) _serverSortMenu(),
+            _serverLocationMenu(),
           ],
         ),
         const SizedBox(height: 16),
@@ -2266,6 +2535,18 @@ extension _HomePages on _ElarniHomeState {
                 label: Text(entry.value),
                 selected: _nodeFilter == entry.key,
                 onSelected: (_) => _set(() => _nodeFilter = entry.key),
+              ),
+            if (_locationFilter case final location?)
+              InputChip(
+                key: const Key('server-location-chip'),
+                avatar: LocationFlag(
+                  location: ServerLocation.fromCode(location),
+                ),
+                label: Text(
+                  ServerLocation.fromCode(location)?.name ??
+                      l10n.otherLocations,
+                ),
+                onDeleted: () => _set(() => _locationFilter = null),
               ),
           ],
         ),
@@ -2288,6 +2569,21 @@ extension _HomePages on _ElarniHomeState {
             _pingAllButton(),
           ],
         ),
+        if (_lastSuccessfulNode case final last?)
+          Padding(
+            padding: const EdgeInsets.only(top: 8),
+            child: Tooltip(
+              message: ServerLocation.displayName(last.name),
+              child: TextButton.icon(
+                key: const Key('use-last-successful'),
+                onPressed: _profileEditsDisabled
+                    ? null
+                    : () => _selectNode(last.id),
+                icon: const Icon(CupertinoIcons.clock, size: 18),
+                label: Text(l10n.useLastSuccessfulServer),
+              ),
+            ),
+          ),
       ],
     ),
   );

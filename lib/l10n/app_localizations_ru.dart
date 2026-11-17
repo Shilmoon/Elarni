@@ -1518,6 +1518,22 @@ class AppLocalizationsRu extends AppLocalizations {
   String get enableDefaultVlessMux => 'Включить mux для VLESS по умолчанию';
 
   @override
+  String get tlsFingerprint => 'Отпечаток TLS';
+
+  @override
+  String get tlsFingerprintHelp =>
+      'На какой браузер похоже подключение к серверу. «Как у сервера» берёт отпечаток из ссылки сервера, а если его там нет — Chrome. Выберите другой, если сеть блокирует этот. Действует для серверов с TLS и Reality поверх TCP; у Hysteria2, TUIC и WireGuard такого отпечатка нет.';
+
+  @override
+  String get tlsFingerprintServer => 'Как у сервера';
+
+  @override
+  String get tlsFingerprintRandom => 'Случайный браузер';
+
+  @override
+  String get tlsFingerprintRandomized => 'Случайный набор';
+
+  @override
   String fragmentationSummary(Object packets, Object length, Object interval) {
     return '$packets · $length байт · $interval мс';
   }
@@ -1691,8 +1707,51 @@ class AppLocalizationsRu extends AppLocalizations {
   }
 
   @override
+  String updateReady(String version) {
+    return 'Elarni $version готова к установке';
+  }
+
+  @override
+  String get updateInstall => 'Установить';
+
+  @override
+  String get updateDownloading => 'Обновление загружается…';
+
+  @override
+  String updateInstalling(String version) {
+    return 'Устанавливается Elarni $version…';
+  }
+
+  @override
+  String updateInstalled(String version) {
+    return 'Elarni $version установлена';
+  }
+
+  @override
+  String get updateRestartToUse =>
+      'Перезапустите Elarni, чтобы перейти на неё.';
+
+  @override
+  String get updateRestart => 'Перезапустить';
+
+  @override
+  String get updateReconnects => 'После обновления VPN подключится снова.';
+
+  @override
+  String updateFailed(String version) {
+    return 'Не удалось установить Elarni $version. Скачайте её со страницы выпуска.';
+  }
+
+  @override
+  String get autoUpdate => 'Устанавливать обновления автоматически';
+
+  @override
+  String get autoUpdateHelp =>
+      'Elarni загружает новую версию в фоне и проверяет её подпись. Сама она устанавливается, только когда не нужно ничего подтверждать и VPN выключен; иначе на главной появится кнопка «Установить».';
+
+  @override
   String get updateFeedHelp =>
-      'Elarni раз в день читает этот адрес и показывает на главной уведомление, если там указана более новая версия. Elarni ничего не скачивает и не устанавливает. Используйте JSON-файл с \"version\" и \"url\" или адрес API GitHub releases/latest; только https.';
+      'Elarni раз в день читает этот адрес и показывает на главной уведомление, если там указана более новая версия. Сама устанавливается только версия, подписанная ключом выпусков Elarni. Используйте JSON-файл с \"version\" и \"url\" или адрес API GitHub releases/latest; только https.';
 
   @override
   String get updateFeed => 'Источник обновлений';
@@ -3278,5 +3337,130 @@ class AppLocalizationsRu extends AppLocalizations {
   @override
   String perAppConnectionsRestart(String apps) {
     return 'Перезапустите $apps: их подключения, открытые до подключения Elarni, идут мимо правил приложений, пока они не переподключатся.';
+  }
+
+  @override
+  String trafficRates(String download, String upload) {
+    return '↓ $download/с · ↑ $upload/с';
+  }
+
+  @override
+  String kilobytesValue(String value) {
+    return '$value КБ';
+  }
+
+  @override
+  String bytesValue(String value) {
+    return '$value Б';
+  }
+
+  @override
+  String get geoipUrl => 'Адрес GeoIP';
+
+  @override
+  String get geositeUrl => 'Адрес GeoSite';
+
+  @override
+  String get managedDomainLists => 'Управляемые списки доменов';
+
+  @override
+  String get managedDomainListsHelp =>
+      'Используйте надёжный публичный HTTPS-источник: по одному домену на строку, файл hosts или поддерживаемые правила доменов. Список для DNS выбирает домены для прямого DNS. Адреса из частных сетей отклоняются.';
+
+  @override
+  String get listUrl => 'Адрес списка';
+
+  @override
+  String get useDomainsFor => 'Использовать домены для';
+
+  @override
+  String get managedMatch => 'Совпадение';
+
+  @override
+  String get exactDomains => 'Точные домены';
+
+  @override
+  String get includeSubdomains => 'С поддоменами';
+
+  @override
+  String get removeList => 'Удалить список';
+
+  @override
+  String get addDomainList => 'Добавить список доменов';
+
+  @override
+  String get staticDnsHosts => 'Статические DNS-хосты';
+
+  @override
+  String get hostname => 'Имя хоста';
+
+  @override
+  String get ipv4OrIpv6Address => 'Адрес IPv4 или IPv6';
+
+  @override
+  String get removeHost => 'Удалить хост';
+
+  @override
+  String get addDnsHost => 'Добавить DNS-хост';
+
+  @override
+  String get dnsHostsInvalid =>
+      'Укажите для каждого DNS-хоста уникальное имя и IP-адрес.';
+
+  @override
+  String get shareServer => 'Поделиться сервером';
+
+  @override
+  String get refreshAllSubscriptions => 'Обновить все подписки';
+
+  @override
+  String get sortServers => 'Сортировка';
+
+  @override
+  String get serverLocation => 'Местоположение';
+
+  @override
+  String get allLocations => 'Все местоположения';
+
+  @override
+  String get shareRoutingProfile => 'Поделиться профилем маршрутизации';
+
+  @override
+  String get useLastSuccessfulServer => 'Последний успешный сервер';
+
+  @override
+  String get licensesAndNotices => 'Лицензии и уведомления';
+
+  @override
+  String get cancelTests => 'Отменить проверки';
+
+  @override
+  String get refreshLists => 'Обновить списки';
+
+  @override
+  String get saveToFile => 'Сохранить в файл…';
+
+  @override
+  String get saveQrImage => 'Сохранить QR-код…';
+
+  @override
+  String get exportJson => 'Экспорт JSON…';
+
+  @override
+  String get fileSaved => 'Файл сохранён.';
+
+  @override
+  String get fileNotSaved =>
+      'Не удалось сохранить файл. Выберите место, доступное для записи, и повторите.';
+
+  @override
+  String get share => 'Поделиться';
+
+  @override
+  String get shareServers => 'Поделиться серверами';
+
+  @override
+  String serverHasNoShareLink(Object name) {
+    return 'У сервера «$name» нет ссылки, которая сохранила бы все его настройки. Поделитесь им через «Поделиться сервером» в его меню.';
   }
 }

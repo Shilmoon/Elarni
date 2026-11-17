@@ -517,6 +517,12 @@ func platformMetrics() (xray.RuntimeMetrics, error) {
 }
 
 func platformMain() (bool, int) {
+	if len(os.Args) == 3 && os.Args[1] == "--install-update" {
+		if os.Geteuid() != 0 || installStagedUpdate(os.Args[2]) != nil {
+			return true, 1
+		}
+		return true, 0
+	}
 	if len(os.Args) != 2 {
 		return false, 0
 	}

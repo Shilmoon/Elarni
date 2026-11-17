@@ -374,7 +374,8 @@ class RefreshJobService : JobService() {
     private var work: Job? = null
     override fun onStartJob(params: JobParameters): Boolean {
         work = (application as ElarniApplication).repository.scope.launch {
-            try { (application as ElarniApplication).repository.maintenance(wait = true) } finally { jobFinished(params, false) }
+            // The update comes last: installing it ends this process.
+            try { (application as ElarniApplication).let { it.repository.maintenance(wait = true); UpdateCheck.unattended(it) } } finally { jobFinished(params, false) }
         }
         return true
     }

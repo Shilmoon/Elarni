@@ -538,6 +538,19 @@ func platformMain() (bool, int) {
 		}
 		return true, 0
 	}
+	if len(os.Args) == 3 && os.Args[1] == "--install-update" {
+		if !windows.GetCurrentProcessToken().IsElevated() || installStagedUpdate(os.Args[2]) != nil {
+			return true, 1
+		}
+		return true, 0
+	}
+	if len(os.Args) == 5 && os.Args[1] == "--apply-update" {
+		app, err := strconv.ParseUint(os.Args[3], 10, 32)
+		if err != nil || !updateArgument(os.Args[2]) {
+			return true, 1
+		}
+		return true, applyUpdate(os.Args[2], uint32(app), os.Args[4] == "true")
+	}
 	if len(os.Args) == 3 && os.Args[1] == "--service" {
 		return true, runVPNService(os.Args[2])
 	}

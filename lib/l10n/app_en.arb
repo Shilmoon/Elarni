@@ -698,6 +698,11 @@
   "resources": "Resources",
   "defaultMuxHelp": "Imported mux settings take precedence. This preference applies only to VLESS; it does not enable mux for Hysteria.",
   "enableDefaultVlessMux": "Enable default VLESS mux",
+  "tlsFingerprint": "TLS fingerprint",
+  "tlsFingerprintHelp": "Which browser a connection to a server looks like. From the server uses what each server's link names, or Chrome when it names none. Choose another when a network blocks that one. This applies to TLS and Reality servers over TCP; Hysteria2, TUIC and WireGuard have no such fingerprint.",
+  "tlsFingerprintServer": "From the server",
+  "tlsFingerprintRandom": "Random browser",
+  "tlsFingerprintRandomized": "Randomized",
   "fragmentationSummary": "{packets} · {length} bytes · {interval} ms",
   "@fragmentationSummary": {
     "placeholders": {
@@ -773,7 +778,46 @@
       }
     }
   },
-  "updateFeedHelp": "Elarni reads this address once a day and shows a notice on Home when it names a newer release. It never downloads or installs anything. Use a JSON file with \"version\" and \"url\", or a GitHub releases/latest API address; https only.",
+  "updateReady": "Elarni {version} is ready to install",
+  "@updateReady": {
+    "placeholders": {
+      "version": {
+        "type": "String"
+      }
+    }
+  },
+  "updateInstall": "Install",
+  "updateDownloading": "Downloading the update…",
+  "updateInstalling": "Installing Elarni {version}…",
+  "@updateInstalling": {
+    "placeholders": {
+      "version": {
+        "type": "String"
+      }
+    }
+  },
+  "updateInstalled": "Elarni {version} is installed",
+  "@updateInstalled": {
+    "placeholders": {
+      "version": {
+        "type": "String"
+      }
+    }
+  },
+  "updateRestartToUse": "Restart Elarni to use it.",
+  "updateRestart": "Restart",
+  "updateReconnects": "The VPN reconnects after the update.",
+  "updateFailed": "Elarni {version} could not be installed. Download it from the release page.",
+  "@updateFailed": {
+    "placeholders": {
+      "version": {
+        "type": "String"
+      }
+    }
+  },
+  "autoUpdate": "Install updates automatically",
+  "autoUpdateHelp": "Elarni downloads a new release in the background and checks its signature. It installs by itself only when nothing has to be approved and the VPN is off; otherwise Home offers Install.",
+  "updateFeedHelp": "Elarni reads this address once a day and shows a notice on Home when it names a newer release. Only a release signed with Elarni's release key installs itself. Use a JSON file with \"version\" and \"url\", or a GitHub releases/latest API address; https only.",
   "updateFeed": "Update feed",
   "updates": "Updates",
   "favoritesFirst": "Favorites first",
@@ -1731,6 +1775,75 @@
     "placeholders": {
       "apps": {
         "type": "String"
+      }
+    }
+  },
+  "trafficRates": "↓ {download}/s · ↑ {upload}/s",
+  "@trafficRates": {
+    "placeholders": {
+      "download": {
+        "type": "String"
+      },
+      "upload": {
+        "type": "String"
+      }
+    }
+  },
+  "kilobytesValue": "{value} KB",
+  "@kilobytesValue": {
+    "placeholders": {
+      "value": {
+        "type": "String"
+      }
+    }
+  },
+  "bytesValue": "{value} B",
+  "@bytesValue": {
+    "placeholders": {
+      "value": {
+        "type": "String"
+      }
+    }
+  },
+  "geoipUrl": "GeoIP URL",
+  "geositeUrl": "GeoSite URL",
+  "managedDomainLists": "Managed domain lists",
+  "managedDomainListsHelp": "Use a trusted public HTTPS source with one domain per line, a hosts file, or supported domain rules. A DNS list chooses domains for direct DNS. Private-network URLs are rejected.",
+  "listUrl": "List URL",
+  "useDomainsFor": "Use domains for",
+  "managedMatch": "Match",
+  "exactDomains": "Exact domains",
+  "includeSubdomains": "Include subdomains",
+  "removeList": "Remove list",
+  "addDomainList": "Add domain list",
+  "staticDnsHosts": "Static DNS hosts",
+  "hostname": "Hostname",
+  "ipv4OrIpv6Address": "IPv4 or IPv6 address",
+  "removeHost": "Remove host",
+  "addDnsHost": "Add DNS host",
+  "dnsHostsInvalid": "Enter a unique hostname and an IP address for each DNS host.",
+  "shareServer": "Share server",
+  "refreshAllSubscriptions": "Refresh all subscriptions",
+  "sortServers": "Sort",
+  "serverLocation": "Location",
+  "allLocations": "All locations",
+  "shareRoutingProfile": "Share routing profile",
+  "useLastSuccessfulServer": "Use last successful server",
+  "licensesAndNotices": "Licenses and notices",
+  "cancelTests": "Cancel tests",
+  "refreshLists": "Refresh lists",
+  "saveToFile": "Save to file…",
+  "saveQrImage": "Save QR image…",
+  "exportJson": "Export JSON…",
+  "fileSaved": "File saved.",
+  "fileNotSaved": "The file could not be saved. Choose a writable location and retry.",
+  "share": "Share",
+  "shareServers": "Share servers",
+  "serverHasNoShareLink": "{name} has no share link that keeps all its settings. Share it with Share server in its menu.",
+  "@serverHasNoShareLink": {
+    "placeholders": {
+      "name": {
+        "type": "Object"
       }
     }
   }

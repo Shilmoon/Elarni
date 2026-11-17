@@ -123,22 +123,32 @@ func delayRelay(t *testing.T, target string, oneWay time.Duration) (string, *ato
 				client.Close()
 				continue
 			}
-			go delayCopy(server, client, oneWay, time.Now().Add(2*oneWay))
-			go delayCopy(client, server, oneWay, time.Time{})
+			// Each direction ends with a FIN to its side; the connections close once both have ended.
+			var both sync.WaitGroup
+			both.Add(2)
+			go func() { defer both.Done(); delayCopy(server, client, oneWay, time.Now().Add(2*oneWay)) }()
+			go func() { defer both.Done(); delayCopy(client, server, oneWay, time.Time{}) }()
+			go func() { both.Wait(); client.Close(); server.Close() }()
 		}
 	}()
 	return ln.Addr().String(), &accepted
 }
 
-// delayCopy copies src to dst, sending each chunk delay after it arrived or after notBefore.
+// delayCopy copies src to dst, sending each chunk delay after it arrived or after notBefore, and
+// returns once the last chunk is sent. When src ends it only stops sending to dst, as src did:
+// closing dst while its peer still sends resets the connection, and on Windows a reset discards
+// what the peer has not read yet (the server's last response, in a keep-alive close).
 func delayCopy(dst, src gonet.Conn, delay time.Duration, notBefore time.Time) {
 	type chunk struct {
 		at   time.Time
 		data []byte
 	}
 	chunks := make(chan chunk, 1024)
+	sent := make(chan struct{})
+	defer func() { <-sent }()
 	go func() {
-		defer dst.Close()
+		defer close(sent)
+		defer dst.(*gonet.TCPConn).CloseWrite()
 		for c := range chunks {
 			time.Sleep(time.Until(c.at))
 			if _, err := dst.Write(c.data); err != nil {

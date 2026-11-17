@@ -153,6 +153,16 @@
         }
       }
     },
+    "%@’s next refresh replaces your edits." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Следующее обновление «%@» заменит ваши правки."
+          }
+        }
+      }
+    },
     "%@’s server did not answer. Your network may block it, or it is down. Retry later or ask the provider for a mirror." : {
       "localizations" : {
         "ru" : {
@@ -955,6 +965,16 @@
         }
       }
     },
+    "Configuration" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Конфигурация"
+          }
+        }
+      }
+    },
     "Configuration notice" : {
       "localizations" : {
         "ru" : {
@@ -1121,6 +1141,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Подключение"
+          }
+        }
+      }
+    },
+    "Connecting…" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Подключение…"
           }
         }
       }
@@ -1829,6 +1859,16 @@
         }
       }
     },
+    "Download %@/s, upload %@/s" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Скачивание: %1$@/с, отдача: %2$@/с"
+          }
+        }
+      }
+    },
     "Download format" : {
       "localizations" : {
         "ru" : {
@@ -1981,6 +2021,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Уведомления Elarni"
+          }
+        }
+      }
+    },
+    "Elarni reconnected" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Elarni снова подключён"
           }
         }
       }
@@ -2393,6 +2443,16 @@
         }
       }
     },
+    "From the server" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Как у сервера"
+          }
+        }
+      }
+    },
     "GNU General Public License" : {
       "shouldTranslate" : false
     },
@@ -2607,6 +2667,26 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Скрыть %@?"
+          }
+        }
+      }
+    },
+    "Hide VPN icon" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Скрыть значок VPN"
+          }
+        }
+      }
+    },
+    "Hide VPN icon adds the route exclusions of the hide-icon workaround: it changes excluded network routes, not only the icon. Hiding the VPN icon is not verified." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "«Скрыть значок VPN» добавляет исключения маршрутов, которые использует обходной способ скрытия значка: меняются исключённые сетевые маршруты, а не только значок. Скрытие значка VPN не проверено."
           }
         }
       }
@@ -3653,6 +3733,16 @@
         }
       }
     },
+    "On Demand lets iOS reconnect the VPN by itself. While it is on, iOS’s own VPN switch in Settings and Control Center cannot keep the VPN off: stop it in Elarni, with Elarni’s Control Center control or with a shortcut." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "«По требованию» позволяет iOS самой переподключать VPN. Пока этот режим включён, системный переключатель VPN в Настройках и Пункте управления не может оставить VPN выключенным: останавливайте его в Elarni, элементом управления Elarni в Пункте управления или быстрой командой."
+          }
+        }
+      }
+    },
     "One hostname per line, up to 8. Your subscription token will also be sent to these hosts. Add only hosts you trust." : {
       "localizations" : {
         "ru" : {
@@ -4164,6 +4254,26 @@
         }
       }
     },
+    "Random browser" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Случайный браузер"
+          }
+        }
+      }
+    },
+    "Randomized" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Случайный набор"
+          }
+        }
+      }
+    },
     "Reaches the internet in" : {
       "localizations" : {
         "ru" : {
@@ -4410,6 +4520,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Обновить состояние"
+          }
+        }
+      }
+    },
+    "Refresh the subscription once before viewing this server’s configuration." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Чтобы увидеть конфигурацию этого сервера, один раз обновите подписку."
           }
         }
       }
@@ -5499,6 +5619,26 @@
         }
       }
     },
+    "TLS fingerprint" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Отпечаток TLS"
+          }
+        }
+      }
+    },
+    "TLS fingerprint is which browser a connection to a server looks like. From the server uses what each server's link names, or Chrome when it names none. Choose another when a network blocks that one. It applies to TLS and Reality servers over TCP; Hysteria2, TUIC and WireGuard have no such fingerprint." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Отпечаток TLS — на какой браузер похоже подключение к серверу. «Как у сервера» берёт отпечаток из ссылки сервера, а если его там нет — Chrome. Выберите другой, если сеть блокирует этот. Действует для серверов с TLS и Reality поверх TCP; у Hysteria2, TUIC и WireGuard такого отпечатка нет."
+          }
+        }
+      }
+    },
     "Teal" : {
       "localizations" : {
         "ru" : {
@@ -5689,6 +5829,16 @@
         }
       }
     },
+    "The configuration must be one Xray server." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Конфигурация должна описывать один сервер Xray."
+          }
+        }
+      }
+    },
     "The connection could not be restored. Disconnect before trying again." : {
       "localizations" : {
         "ru" : {
@@ -5775,6 +5925,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Провайдер"
+          }
+        }
+      }
+    },
+    "The provider does not allow viewing this server’s configuration." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Провайдер не разрешает просматривать конфигурацию этого сервера."
           }
         }
       }
@@ -6249,6 +6409,16 @@
         }
       }
     },
+    "Turn Off" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Выключить"
+          }
+        }
+      }
+    },
     "Turn on Record connection diagnostics in Advanced settings, reproduce the problem, mark it, then save the recording for support." : {
       "localizations" : {
         "ru" : {
@@ -6695,6 +6865,16 @@
         }
       }
     },
+    "iOS’s VPN switch cannot stop Elarni while On Demand is on. Touch and hold this notification and tap Turn Off, or stop the VPN in Elarni." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Переключатель VPN в iOS не может остановить Elarni, пока включён режим «По требованию». Нажмите и удерживайте это уведомление и выберите «Выключить» или остановите VPN в Elarni."
+          }
+        }
+      }
+    },
     "iPhone supports domain and IP rules. Desktop executable rules cannot identify other apps on iOS. Use network rules for the traffic you want to route." : {
       "localizations" : {
         "ru" : {
@@ -6823,6 +7003,16 @@
                 }
               }
             }
+          }
+        }
+      }
+    },
+    "↓ %@/s   ↑ %@/s" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "↓ %1$@/с   ↑ %2$@/с"
           }
         }
       }

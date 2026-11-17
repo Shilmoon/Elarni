@@ -205,6 +205,26 @@ struct ExitResult {
   }
 }
 
+/// Download and upload speed from two growing byte counters, sampled at times the caller supplies.
+struct TrafficRate: Equatable {
+  struct Speed: Equatable { let down: Double; let up: Double }
+  private struct Sample: Equatable { let down: UInt64; let up: UInt64; let time: TimeInterval }
+  private var last: Sample?
+  /// Bytes per second between the last two samples; nil until there are two.
+  private(set) var speed: Speed?
+
+  /// A counter that went back (the core restarted), a missing one or no time passed gives no speed.
+  mutating func record(down: UInt64?, up: UInt64?, at time: TimeInterval) {
+    guard let down, let up else { reset(); return }
+    defer { last = Sample(down: down, up: up, time: time) }
+    guard let previous = last, time > previous.time, down >= previous.down, up >= previous.up else { speed = nil; return }
+    let elapsed = time - previous.time
+    speed = Speed(down: Double(down - previous.down) / elapsed, up: Double(up - previous.up) / elapsed)
+  }
+
+  mutating func reset() { last = nil; speed = nil }
+}
+
 struct IOSPreferences: Codable, Equatable {
   var version = 1
   var theme = "system"
@@ -240,6 +260,8 @@ struct IOSTunnelSettings: Codable, Equatable {
   var trustedWiFiNetworks: [String]?
   var includeAllNetworks = false
   var enforceRoutes = false
+  /// The route exclusions of the hide-icon workaround; nil is off. Optional: older saved settings lack it.
+  var hideVPNIcon: Bool?
   var disconnectOnSleep = false
   var preferredIP = "ipv4"
   var profilePreferredIP = "inherit"
@@ -250,6 +272,8 @@ struct IOSTunnelSettings: Codable, Equatable {
   var fragmentLength = "100-200"
   var fragmentInterval = "0-1"
   var muxEnabled = false
+  /// The TLS hello of server connections; nil keeps the one each server's link names. Optional: older saved settings lack it.
+  var tlsFingerprint: String?
   var sniffingEnabled = true
   var monitoringEnabled = false
   var recordDiagnostics: Bool? // optional, so settings saved by older builds still decode
@@ -271,6 +295,7 @@ struct IOSTunnelSettings: Codable, Equatable {
           !inboundAuthEnabled || inboundCredentialRef != nil,
           ["inherit", "automatic", "ipv4", "ipv6"].contains(profilePreferredIP),
           ["inherit", "routing", "default"].contains(profileDNSMode),
+          tlsFingerprint == nil || TunnelRuntimeSettings.tlsFingerprints.contains(tlsFingerprint!),
           fragmentPackets == "tlshello" || range(fragmentPackets, low: 1, high: 65535),
           range(fragmentLength, low: 1, high: 65535), range(fragmentInterval, low: 0, high: 1000),
           includedRoutes.allSatisfy(Self.validCIDR), excludedRoutes.allSatisfy(Self.validCIDR),
@@ -285,7 +310,7 @@ struct IOSTunnelSettings: Codable, Equatable {
   func runtime(nodePreference: String? = nil) throws -> TunnelRuntimeSettings {
     var map = try JSONSerialization.jsonObject(with: JSONEncoder().encode(TunnelRuntimeSettings.defaults)) as! [String: Any]
     let own = try JSONSerialization.jsonObject(with: JSONEncoder().encode(self)) as! [String: Any]
-    for (key, value) in own where map[key] != nil || ["fragmentPackets", "fragmentLength", "fragmentInterval", "httpPort", "allowLAN", "inboundAuthEnabled", "inboundCredentialRef", "resolveServer", "profileDNSMode", "recordDiagnostics"].contains(key) {
+    for (key, value) in own where map[key] != nil || ["fragmentPackets", "fragmentLength", "fragmentInterval", "httpPort", "allowLAN", "inboundAuthEnabled", "inboundCredentialRef", "resolveServer", "profileDNSMode", "tlsFingerprint", "recordDiagnostics"].contains(key) {
       map[key] = value
     }
     if profilePreferredIP != "inherit" { map["profilePreferredIP"] = profilePreferredIP }
@@ -297,6 +322,7 @@ struct IOSTunnelSettings: Codable, Equatable {
   var compilerRuntime: [String: Any] {
     ["fragmentationEnabled": fragmentationEnabled, "fragmentPackets": fragmentPackets,
      "fragmentLength": fragmentLength, "fragmentInterval": fragmentInterval, "muxEnabled": muxEnabled,
+     "tlsFingerprint": tlsFingerprint ?? "server",
      "preferredIp": preferredIP, "connectionIdleSeconds": idleTimeoutSeconds, "sniffingEnabled": sniffingEnabled,
      "httpInboundEnabled": httpInboundEnabled, "httpPort": httpPort, "allowLan": allowLAN,
      "useDnsFromJson": profileDNSMode != "default", "profileDnsMode": profileDNSMode,

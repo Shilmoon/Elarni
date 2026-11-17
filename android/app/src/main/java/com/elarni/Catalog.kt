@@ -413,7 +413,7 @@ class Catalog(val data: JSONObject, private val snapshot: Boolean = false) {
         val runtime = obj("httpInboundEnabled" to setting.getBoolean("httpInboundEnabled"), "httpPort" to setting.getInt("httpPort"),
             "allowLan" to setting.getBoolean("allowLAN"), "fragmentationEnabled" to setting.getBoolean("fragmentationEnabled"),
             "fragmentPackets" to setting.getString("fragmentPackets"), "fragmentLength" to setting.getString("fragmentLength"), "fragmentInterval" to setting.getString("fragmentInterval"),
-            "muxEnabled" to setting.getBoolean("muxEnabled"), "preferredIp" to node.string("ipPreference", setting.getString("preferredIP")),
+            "muxEnabled" to setting.getBoolean("muxEnabled"), "tlsFingerprint" to setting.getString("tlsFingerprint"), "preferredIp" to node.string("ipPreference", setting.getString("preferredIP")),
             "connectionIdleSeconds" to setting.getInt("idleTimeoutSeconds"), "sniffingEnabled" to setting.getBoolean("sniffingEnabled"),
             "useDnsFromJson" to setting.getBoolean("useDNSFromJSON"), "profileDnsMode" to setting.getString("profileDNSMode"),
             "perAppMode" to setting.getString("perAppMode"), "perAppProcesses" to JSONArray(setting.strings("perAppProcesses").map(::process)))
@@ -494,6 +494,27 @@ class Catalog(val data: JSONObject, private val snapshot: Boolean = false) {
         }
         if (text.isEmpty()) throw AppFailure("unsupported_profile")
         return Native.call("clientQR", obj("text" to text)).put("text", text)
+    }
+    /** Why a server's stored configuration may not be shown, as sharing it may not; null when it may. */
+    fun configRefusal(id: String): String? {
+        val node = node(id); val source = sourceFor(id)
+        return when {
+            node.string("format") != "xrayProfile" -> "unsupported_profile"
+            node.optBoolean("hideURL") || source.mapObject("metadata").optBoolean("hideURL") -> "sharing_disabled"
+            source.has("url") && !source.mapObject("metadata").has("hideURL") -> "sharing_refresh_required"
+            else -> null
+        }
+    }
+    /** As on the desktop, a hand edit must still read as one Xray server; the provider's next refresh replaces it like any other change.
+     *  Applying it compiles it, and a changed configuration is a new revision, whose tests and last success are not yet known. */
+    fun replaceNodeConfig(id: String, text: String) {
+        val node = node(id)
+        if (node.optBoolean("hideURL") || sourceFor(id).mapObject("metadata").optBoolean("hideURL")) throw AppFailure("sharing_disabled")
+        if (node.string("format") != "xrayProfile") throw AppFailure("unsupported_profile")
+        if (text.toByteArray().size !in 1..4*1024*1024) throw AppFailure("input_too_large")
+        val profile = Native.call("importClientProfiles", obj("text" to text)).objects("profiles").singleOrNull()
+        val config = profile?.takeIf { it.string("format") == "xrayProfile" }?.optJSONObject("config") ?: throw AppFailure("unsupported_profile")
+        if (canonical(config) != canonical(node.getJSONObject("config"))) node.put("config", config).put("configurationRevision", newId())
     }
     /** A profile with several outbounds has no share link; it is shared from its own page. */
     // Nor do the protocols libXray share/generate_share.go writes no link for, such as WireGuard and HTTP. For a server
@@ -651,6 +672,12 @@ class Catalog(val data: JSONObject, private val snapshot: Boolean = false) {
             val value = URI(text)
             if (text.isEmpty() || text.length > 16384 || text.any { it.code < 32 } || value.scheme?.lowercase() !in listOf("http", "https") || value.host.isNullOrEmpty() || value.userInfo != null || value.fragment != null) null else text
         } catch (_: Exception) { null }
+        /** Whether [node]'s last success was with its current configuration, as desktop and iPhone tell. */
+        fun successCurrent(node: JSONObject) = !node.isNull("lastSuccessAt") && node.string("lastSuccessRevision").isNotEmpty() &&
+            node.string("lastSuccessRevision") == node.string("configurationRevision", node.string("id"))
+        /** As on the iPhone: the server that last worked with its current configuration, offered unless it is [selected] already. */
+        fun lastSuccessful(nodes: List<JSONObject>, selected: String) = nodes.filter { it.string("format") == "xrayProfile" && successCurrent(it) }
+            .maxByOrNull { it.optDouble("lastSuccessAt", 0.0) }?.takeIf { it.string("id") != selected }
         fun isRoutingLink(text: String) = listOf("happ://routing/", "elarni://routing/", "incy://routing/").any { text.startsWith(it) }
         // Panels such as 3x-ui send their Happ routing to every client (3x-ui #5999), so links addressed to Elarni win when a feed has any.
         fun addressedRouting(links: List<String>) = links.filter { it.startsWith("elarni://routing/") }.ifEmpty { links }

@@ -93,6 +93,99 @@ void main() {
     },
   );
 
+  test(
+    'one managed list refreshed alone leaves the others and their schedule',
+    () async {
+      final now = DateTime.fromMillisecondsSinceEpoch(100000 * 1000);
+      final fetched = <String>[];
+      var reachable = true;
+      final catalog = DesktopCatalog(
+        DesktopCatalog.empty(),
+        (method, payload) async {
+          final host = Uri.parse(payload['url']! as String).host;
+          fetched.add(host);
+          if (!reachable) throw PlatformException(code: 'fetch_failed');
+          return {'body': host};
+        },
+        (operation, payload) => switch (operation) {
+          'parseManagedDomains' => {
+            'domains': ['full:${payload['text']}'],
+          },
+          'mergeManagedRouting' => {
+            'routeModel': {'lists': payload['lists']},
+          },
+          _ => throw StateError(operation),
+        },
+        clock: () => now,
+      );
+      CatalogMap source(String id) => {
+        'id': id,
+        'url': 'https://$id.example/list',
+        'destination': 'proxy',
+        'matchMode': 'exact',
+      };
+      final scheduled = catalog.now + 5000;
+      catalog.putRoute({
+        'id': 'route',
+        'profile': {
+          'ManagedSources': [source('first'), source('second')],
+        },
+        'lists': {
+          'first': ['full:old-first.example'],
+          'second': ['full:old-second.example'],
+        },
+        'routeModel': <String, Object?>{},
+        'nextManagedRefreshAt': scheduled,
+        'managedError': 'fetch_failed',
+        'managedFailures': 2,
+      });
+      expect(await catalog.refreshManaged('route', sourceId: 'second'), isNull);
+      expect(fetched, ['second.example']);
+      var route = catalog.route('route');
+      final lists = {
+        'first': ['full:old-first.example'],
+        'second': ['full:second.example'],
+      };
+      expect(route['lists'], lists);
+      expect(route['routeModel'], {'lists': lists});
+      // The other list's failure still stands, and is retried on time.
+      expect(route['managedError'], 'fetch_failed');
+      expect(route['managedFailures'], 2);
+      expect(route['nextManagedRefreshAt'], scheduled);
+
+      reachable = false;
+      expect(
+        await catalog.refreshManaged('route', sourceId: 'first'),
+        'fetch_failed',
+      );
+      expect(fetched, ['second.example', 'first.example']);
+      route = catalog.route('route');
+      expect(route['lists'], lists, reason: 'the last good copy stays');
+      expect(route['managedError'], 'fetch_failed');
+      expect(route['managedFailures'], 3);
+      expect(route['nextManagedRefreshAt'], catalog.now + 1800);
+
+      await expectLater(
+        catalog.refreshManaged('route', sourceId: 'missing'),
+        throwsA(
+          isA<PlatformException>().having(
+            (error) => error.code,
+            'code',
+            'not_found',
+          ),
+        ),
+      );
+      expect(fetched, hasLength(2));
+
+      reachable = true;
+      expect(await catalog.refreshManaged('route'), isNull);
+      route = catalog.route('route');
+      expect(route['managedError'], isNull);
+      expect(route['managedFailures'], 0);
+      expect(route['nextManagedRefreshAt'], catalog.now + 86400);
+    },
+  );
+
   // A refresh under a clock set years ahead writes a time years away; once
   // the clock is right again, the schedule must not wait for it.
   test('a schedule written under a clock that was ahead is due again', () {

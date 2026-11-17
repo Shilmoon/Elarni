@@ -304,20 +304,33 @@ bool FlutterWindow::OnCreate() {
     if (call.method_name() == "cameraStop") {
       camera_->Stop(); result->Success(); return;
     }
-    if (call.method_name() == "saveEvidence" || call.method_name() == "saveBackup" || call.method_name() == "saveLogs" || call.method_name() == "pickRecordingPath") {
+    if (call.method_name() == "saveEvidence" || call.method_name() == "saveBackup" || call.method_name() == "saveLogs" || call.method_name() == "pickRecordingPath" ||
+        call.method_name() == "pickSavePath") {
       const bool backup = call.method_name() == "saveBackup";
       const bool logs = call.method_name() == "saveLogs";
       // The recording ZIP can be large, so Dart copies it to the chosen path.
       const bool recording = call.method_name() == "pickRecordingPath";
-      const auto error = backup ? "backup_failed" : recording ? "recording_failed" : "diagnostics_failed";
+      // Share text, QR images and routing JSON: Dart writes the bytes to the chosen path.
+      const wchar_t* name = nullptr;
+      const wchar_t* extension = nullptr;
+      if (call.method_name() == "pickSavePath") {
+        const auto entry = args->find(EncodableValue("kind"));
+        const auto* kind = entry == args->end() ? nullptr : std::get_if<std::string>(&entry->second);
+        if (kind && *kind == "text") { name = L"Elarni-share.txt"; extension = L"txt"; }
+        else if (kind && *kind == "png") { name = L"Elarni-qr.png"; extension = L"png"; }
+        else if (kind && *kind == "json") { name = L"Elarni-routing.json"; extension = L"json"; }
+        else { result->Error("invalid_request", "Invalid file kind."); return; }
+      }
+      const bool picked = recording || name != nullptr;
+      const auto error = backup ? "backup_failed" : recording ? "recording_failed" : name ? "save_failed" : "diagnostics_failed";
       const auto entry = args->find(EncodableValue("content"));
       const auto* content = entry == args->end() ? nullptr : std::get_if<std::string>(&entry->second);
-      if (!recording && (!content || content->empty() || content->size() > (backup ? 12 * 1024 * 1024 : logs ? 4 * 1024 * 1024 : 512 * 1024))) { result->Error(error, "Invalid export."); return; }
+      if (!picked && (!content || content->empty() || content->size() > (backup ? 12 * 1024 * 1024 : logs ? 4 * 1024 * 1024 : 512 * 1024))) { result->Error(error, "Invalid export."); return; }
       Microsoft::WRL::ComPtr<IFileSaveDialog> dialog;
       auto status = CoCreateInstance(CLSID_FileSaveDialog, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&dialog));
       if (SUCCEEDED(status)) status = dialog->SetOptions(FOS_FORCEFILESYSTEM | FOS_OVERWRITEPROMPT | FOS_PATHMUSTEXIST);
-      if (SUCCEEDED(status)) status = dialog->SetFileName(backup ? L"Elarni-backup.json" : logs ? L"Elarni-log.txt" : recording ? L"Elarni-recording.zip" : L"Elarni-diagnostics.json");
-      if (SUCCEEDED(status)) status = dialog->SetDefaultExtension(logs ? L"txt" : recording ? L"zip" : L"json");
+      if (SUCCEEDED(status)) status = dialog->SetFileName(name ? name : backup ? L"Elarni-backup.json" : logs ? L"Elarni-log.txt" : recording ? L"Elarni-recording.zip" : L"Elarni-diagnostics.json");
+      if (SUCCEEDED(status)) status = dialog->SetDefaultExtension(extension ? extension : logs ? L"txt" : recording ? L"zip" : L"json");
       if (SUCCEEDED(status)) { ++modal_; status = dialog->Show(GetHandle()); --modal_; }
       if (status == HRESULT_FROM_WIN32(ERROR_CANCELLED)) { result->Error("cancelled", "Export was cancelled."); return; }
       Microsoft::WRL::ComPtr<IShellItem> item;
@@ -327,7 +340,7 @@ bool FlutterWindow::OnCreate() {
       if (FAILED(status)) { result->Error(error, "The export path is unavailable."); return; }
       const std::wstring target(path);
       CoTaskMemFree(path);
-      if (recording) { result->Success(EncodableValue(EncodableMap{{EncodableValue("path"), EncodableValue(Utf8FromUtf16(target.c_str()))}})); return; }
+      if (picked) { result->Success(EncodableValue(EncodableMap{{EncodableValue("path"), EncodableValue(Utf8FromUtf16(target.c_str()))}})); return; }
       if (!SaveReplacing(target, *content)) { result->Error(error, "The file could not be saved."); return; }
       result->Success(EncodableValue(EncodableMap{})); return;
     }

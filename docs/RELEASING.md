@@ -15,9 +15,10 @@ nothing they build is published.
 1. Run the workflow with stage `build` on the commit to release. It refuses a commit without a
    successful "checks passed" from Development checks, then builds the Linux packages, the Windows ZIP
    and MSI, the source archives and the unsigned APK, and records build provenance for each file.
-2. On the release machine, which holds the Android signing key, sign the APK and upload a draft
-   release at the run's commit with every file of the run plus `SHA256SUMS`. The maintainer's scripts
-   for this step (`assemble.sh`, `gh_release.py`) live on that machine, not in this repository.
+2. On the release machine, which holds the Android signing key and the release key, sign the APK,
+   write `SHA256SUMS`, sign it (below) and upload a draft release at the run's commit with every file
+   of the run plus `SHA256SUMS` and `SHA256SUMS.sig`. The maintainer's scripts for this step
+   (`assemble.sh`, `gh_release.py`) live on that machine, not in this repository.
 3. Run the workflow with stage `publish` and the tag. It checks every file against `SHA256SUMS` and,
    except for the signed APK, against the build provenance; then it signs `SHA256SUMS` (Sigstore,
    keyless) and publishes the release.
@@ -32,13 +33,56 @@ cosign verify-blob SHA256SUMS --bundle SHA256SUMS.sigstore.json \
 sha256sum -c SHA256SUMS
 ```
 
-Upgrades are manual: nothing downloads or installs. Desktop and Android release
-builds read `https://api.github.com/repos/Shilmoon/elarni/releases/latest` once a
-day (hourly while it cannot be read) and show a notice when it names a newer
-version; pre-release tags never do. Settings › General › Update feed changes it to
-another HTTPS address, serving a GitHub `releases/latest` reply or
-`{"version": "0.4.1", "url": "https://…"}`, or clears it to turn the check off;
-debug builds start with it off. The default feed needs the repository to be public.
+## Updates
+
+Desktop and Android release builds read
+`https://api.github.com/repos/Shilmoon/elarni/releases/latest` once a day (hourly while it
+cannot be read) and show a notice when it names a newer version; pre-release tags never do.
+Settings › General › Update feed changes it to another HTTPS address, serving a GitHub
+`releases/latest` reply or `{"version": "0.4.1", "url": "https://…"}`, or clears it to turn the
+check off; debug builds start with it off. The default feed needs the repository to be public.
+
+An install from the MSI, the `.deb`, the AppImage or the APK also replaces itself with the
+release the feed names (Settings › General › Install updates automatically, on by default). It
+downloads the package in the background and installs it only when that asks for nothing and
+interrupts nothing: Windows at the app's next start, through the ElarniVPN service; the AppImage
+in place, used from its next start; Android while the VPN is off, once the user has allowed
+Elarni to install apps. Otherwise the Home notice offers Install, behind the consent prompt,
+the administrator password or Android's confirmation. A connected tunnel is never cut for an
+update the user did not start. The portable ZIP and archive, macOS and iPhone keep the notice
+with the link. The feed must list the release's files: a GitHub reply does, and the short form
+may carry `"assets": [{"name": "…", "url": "https://…"}]`.
+
+What may install is decided by the release key, not by the feed or the server it names. The
+installers run with more rights than the app (SYSTEM, root), so they copy the download to a
+place only they can write and accept it only when
+
+- `SHA256SUMS.sig` is the release key's Ed25519 signature of `SHA256SUMS` (the public half is
+  in `Vendor/libXray/update/update.go`),
+- the package has the digest `SHA256SUMS` lists, under the name the packagers give this form, and
+- the version in that name is newer than the installed build.
+
+Android relies on the system instead, which installs only an APK signed like the installed one
+and never an older one.
+
+Sign `SHA256SUMS` after the last file is in it; a release without `SHA256SUMS.sig` is refused by
+the publish stage, and no installed build would update to it:
+
+```sh
+cd Vendor/libXray
+go run ./cmd/elarni-sign-update -key ~/.config/elarni-release/update-signing-key /path/SHA256SUMS
+```
+
+The tool refuses a key the build does not trust. The key is a 32-byte seed in a file only its
+owner can read; keep a copy offline. Losing it means installed builds stay on the notice until
+their users install a release by hand that trusts a new key. To replace it, generate one
+(`-generate FILE`), add its public half to `keys` in `update.go` and keep signing with the old
+key until builds without the new one are out of use. Never sign a test package with it: a
+signed package of a made-up high version would install over every older build.
+
+Builds that test updates against their own releases add a key at link time
+(`-ldflags "-X github.com/xtls/libxray/update.extraKey=<base64 public key>"`); release builds
+never set it.
 
 ## Before you package
 

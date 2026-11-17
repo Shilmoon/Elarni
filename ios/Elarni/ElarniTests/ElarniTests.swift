@@ -5,6 +5,7 @@ import Darwin
 import Network
 import NetworkExtension
 import SwiftUI
+import UserNotifications
 @testable import Elarni
 
 /// Real Swift catalog → Go importer → Rust compiler. No VPN activation.
@@ -244,6 +245,61 @@ final class ElarniTests: XCTestCase {
     XCTAssertEqual((config["dns"] as? [String: Any])?["servers"] as? [String], ["192.0.2.53"])
   }
 
+  // The fingerprint chosen in Settings reaches the extension's plan and the compiled server.
+  func testTLSFingerprintSettingReachesThePlanAndTheCompiler() throws {
+    var settings = IOSTunnelSettings()
+    XCTAssertNil(try settings.runtime().tlsFingerprint)
+    XCTAssertEqual(settings.compilerRuntime["tlsFingerprint"] as? String, "server")
+    settings.tlsFingerprint = "firefox"
+    try settings.runtime().validate()
+    XCTAssertEqual(try settings.runtime().tlsFingerprint, "firefox")
+    let outbound: [String: Any] = ["protocol": "vless",
+      "settings": ["address": "example.invalid", "port": 443, "id": "00000000-0000-4000-8000-000000000001", "encryption": "none"],
+      "streamSettings": ["network": "raw", "security": "tls", "tlsSettings": ["serverName": "peer.example.com", "fingerprint": "chrome"]]]
+    let result = try RoutingDomainDecoder.request("compileProfile", payload: [
+      "profile": ["outbounds": [outbound]],
+      "routes": ["rules": [], "dnsServers": ["192.0.2.53"], "fallbackAction": "proxy"],
+      "socksPort": 10890, "packetBackend": "nativeTun2Proxy", "runtime": settings.compilerRuntime])
+    let json = try XCTUnwrap(result["configUtf8"] as? String)
+    let config = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
+    let server = try XCTUnwrap((config["outbounds"] as? [[String: Any]])?.first { $0["protocol"] as? String == "vless" })
+    let tls = (server["streamSettings"] as? [String: Any])?["tlsSettings"] as? [String: Any]
+    XCTAssertEqual(tls?["fingerprint"] as? String, "firefox")
+    // A hello the app does not offer is refused.
+    settings.tlsFingerprint = "edge"
+    XCTAssertThrowsError(try settings.validate())
+    XCTAssertThrowsError(try settings.runtime().validate())
+  }
+
+  // Hide VPN icon reaches the plan the extension validates and its route exclusions; settings saved before it existed load with it off.
+  func testHideVPNIconReachesThePlanAndOlderSettingsLoadWithItOff() throws {
+    func network(_ settings: IOSTunnelSettings) throws -> NEPacketTunnelNetworkSettings {
+      let payload = try JSONEncoder().encode(TunnelPlan(schemaVersion: 1, secretRef: "fixture", socksPort: 10890, mtu: 1500,
+        dnsServers: ["198.18.0.1"], controlledRoutes: [], staticHosts: [:], outboundFormat: .xrayOutbound,
+        fallbackAction: .proxy, routingRevision: nil, routingDigest: nil, assetRevision: nil,
+        backend: .nativeTun2Proxy, settings: try settings.runtime()))
+      let plan = try TunnelPlanEnvelope(payload: payload, digest: Data(SHA256.hash(data: payload))).validatedPlan()
+      return try TunnelSettingsFactory.make(plan: plan, excludedEndpointAddresses: ["192.0.2.10"])
+    }
+    func hidesIcon(_ network: NEPacketTunnelNetworkSettings) -> [Bool] {
+      [network.ipv4Settings?.excludedRoutes?.contains { $0.destinationAddress == "0.0.0.0" && $0.destinationSubnetMask == "255.0.0.0" } == true,
+       network.ipv6Settings?.excludedRoutes?.contains { $0.destinationAddress == "::" && $0.destinationNetworkPrefixLength == 128 } == true]
+    }
+    var settings = IOSTunnelSettings()
+    XCTAssertFalse(try settings.runtime().hideVPNIcon)
+    XCTAssertEqual(hidesIcon(try network(settings)), [false, false])
+    settings.hideVPNIcon = true
+    try settings.validate()
+    XCTAssertTrue(try settings.runtime().hideVPNIcon)
+    XCTAssertEqual(hidesIcon(try network(settings)), [true, true], "the extension did not apply Hide VPN icon")
+    // Settings saved before the switch existed lack its key.
+    var json = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(IOSTunnelSettings())) as? [String: Any])
+    json.removeValue(forKey: "hideVPNIcon")
+    let old = try JSONDecoder().decode(IOSTunnelSettings.self, from: JSONSerialization.data(withJSONObject: json))
+    XCTAssertNil(old.hideVPNIcon)
+    XCTAssertFalse(try old.runtime().hideVPNIcon)
+  }
+
   func testChangedIPPreferenceRequiresProviderRestart() throws {
     func plan(_ settings: TunnelRuntimeSettings, secret: String) throws -> Data {
       try JSONEncoder().encode(TunnelPlan(schemaVersion: 1, secretRef: secret, socksPort: 10890, mtu: 1500,
@@ -270,6 +326,50 @@ final class ElarniTests: XCTestCase {
     tunnel.session.liveness = "ok"
     try await vpn.refreshProvider()
     XCTAssertEqual(vpn.stateLabel, "Connected")
+  }
+
+  // Home's speed line: the bytes between two samples over the time between them, none across a restarted core.
+  func testTrafficRateComesFromTwoSamplesAndStartsAgainAfterACounterReset() {
+    var rate = TrafficRate()
+    rate.record(down: 1_000, up: 500, at: 10)
+    XCTAssertNil(rate.speed, "one sample has no speed")
+    rate.record(down: 5_000_000, up: 620_500, at: 12)
+    XCTAssertEqual(rate.speed, TrafficRate.Speed(down: 2_499_500, up: 310_000))
+    // The core restarted, so its counters start again from zero.
+    rate.record(down: 100, up: 50, at: 14)
+    XCTAssertNil(rate.speed, "a counter that went back gave a speed")
+    rate.record(down: 4_100, up: 2_050, at: 16)
+    XCTAssertEqual(rate.speed, TrafficRate.Speed(down: 2_000, up: 1_000))
+    rate.record(down: nil, up: 3_000, at: 18)
+    XCTAssertNil(rate.speed, "a missing counter gave a speed")
+    rate.record(down: 5_000, up: 3_000, at: 20)
+    XCTAssertNil(rate.speed, "the sample before a missing counter still counted")
+    rate.record(down: 6_000, up: 4_000, at: 20)
+    XCTAssertNil(rate.speed, "no time passed, yet there was a speed")
+    rate.reset()
+    XCTAssertEqual(rate, TrafficRate())
+    rate.record(down: 7_000, up: 5_000, at: 22)
+    XCTAssertNil(rate.speed, "a disconnect kept the previous connection's sample")
+  }
+
+  // The widget reads the VPN as the Control Center toggle does and names the server the app selected.
+  func testConnectionWidgetShowsTheStateTheServerAndTheMatchingButton() async throws {
+    let statuses: [[NEVPNStatus]] = [[], [.disconnected, .connected], [.connecting], [.reasserting], [.disconnecting], [.invalid]]
+    XCTAssertEqual(statuses.map(ConnectionWidgetStatus.state), [.disconnected, .connected, .connecting, .connecting, .disconnected, .disconnected])
+    XCTAssertEqual(ConnectionWidgetStatus.presentation(state: .connected, server: "DE Berlin"),
+                   .init(status: "Connected", server: "DE Berlin", action: "Disconnect", connects: false))
+    XCTAssertEqual(ConnectionWidgetStatus.presentation(state: .connecting, server: "DE Berlin"),
+                   .init(status: "Connecting…", server: "DE Berlin", action: "Disconnect", connects: false))
+    XCTAssertEqual(ConnectionWidgetStatus.presentation(state: .disconnected, server: nil),
+                   .init(status: "Disconnected", server: "No server selected", action: "Connect", connects: true))
+    XCTAssertEqual(ConnectionWidgetStatus.presentation(state: .disconnected, server: "").server, "No server selected")
+    let model = IOSAppModel()
+    await model.start()
+    let group = try await importLocal(model, "socks://127.0.0.1:1080#Widget%20Server")
+    try await model.select(try XCTUnwrap(group.nodes.first))
+    XCTAssertEqual(ConnectionWidgetStatus.serverName, "Widget Server", "the widget names another server")
+    try await model.delete(group)
+    XCTAssertEqual(ConnectionWidgetStatus.serverName, model.selected?.name, "the widget names a deleted server")
   }
 
   // A full-profile override must not alter ordinary outbound preferences.
@@ -796,6 +896,102 @@ final class ElarniTests: XCTestCase {
       "a saved choice to keep On Demand off was overridden")
   }
 
+  // iOS starts a VPN with On Demand again when its own VPN switch stops it, and the extension
+  // cannot turn On Demand off. It reports that restart, and no other start.
+  func testOnDemandRestartAfterASystemStopIsReported() throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let stop = Date(timeIntervalSince1970: 1_800_000_000)
+    IOSOnDemandRestart.setArmed(true, in: directory)
+    IOSOnDemandRestart.userStopped(now: stop, in: directory)
+    XCTAssertTrue(IOSOnDemandRestart.restarted(now: stop + 2, in: directory), "On Demand undid a stop from the iOS VPN switch unreported")
+    XCTAssertFalse(IOSOnDemandRestart.restarted(now: stop + 3, in: directory), "one stop was reported twice")
+    IOSOnDemandRestart.userStopped(now: stop, in: directory)
+    XCTAssertFalse(IOSOnDemandRestart.restarted(now: stop + IOSOnDemandRestart.window + 1, in: directory),
+      "a start long after the stop was reported as On Demand's")
+    XCTAssertFalse(IOSOnDemandRestart.restarted(now: stop + 2, in: directory), "a start without a stop was reported")
+    // Connect in the app after a stop that On Demand could not undo (no network).
+    IOSOnDemandRestart.userStopped(now: stop, in: directory)
+    IOSOnDemandRestart.forget(in: directory)
+    XCTAssertFalse(IOSOnDemandRestart.restarted(now: stop + 2, in: directory), "the user's own Connect was reported")
+    // The app turns On Demand off before its own stop, and iOS leaves a VPN without On Demand stopped.
+    IOSOnDemandRestart.setArmed(false, in: directory)
+    IOSOnDemandRestart.userStopped(now: stop, in: directory)
+    XCTAssertFalse(IOSOnDemandRestart.restarted(now: stop + 2, in: directory), "a stop without On Demand was reported")
+    // No shared container (unsigned build): nothing to note, nothing to report.
+    IOSOnDemandRestart.setArmed(true, in: nil)
+    IOSOnDemandRestart.userStopped(now: stop, in: nil)
+    XCTAssertFalse(IOSOnDemandRestart.restarted(now: stop + 2, in: nil))
+  }
+
+  // The extension cannot read the VPN configuration, so the app notes for it whether On Demand is armed.
+  func testAppNotesWhetherOnDemandIsArmed() async throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    let shared = IOSOnDemandRestart.directory
+    IOSOnDemandRestart.directory = directory
+    defer { IOSOnDemandRestart.directory = shared; try? FileManager.default.removeItem(at: directory) }
+    let vpn = IOSVPNController()
+    let tunnel = FixtureTunnel(plan: Data())
+    tunnel.session.fixtureStatus = .disconnected
+    vpn.manager = tunnel
+    var settings = IOSTunnelSettings(); settings.onDemandEnabled = true
+    try await vpn.persist(Data("plan".utf8), settings: settings, allowOnDemand: true)
+    XCTAssertTrue(IOSOnDemandRestart.armed(), "armed On Demand was not noted: its restart would go unreported")
+    try await vpn.disconnect()
+    XCTAssertFalse(IOSOnDemandRestart.armed(), "the app's Stop left On Demand noted as armed")
+    try await vpn.persist(Data("plan".utf8), settings: settings, allowOnDemand: true)
+    try await vpn.persist(Data("plan".utf8), settings: settings, allowOnDemand: false)
+    XCTAssertFalse(IOSOnDemandRestart.armed(), "a plan saved without On Demand left it noted as armed")
+    try await vpn.persist(Data("plan".utf8), settings: settings, allowOnDemand: true)
+    try await vpn.clearSavedPlan()
+    XCTAssertFalse(IOSOnDemandRestart.armed(), "a cleared plan left On Demand noted as armed")
+  }
+
+  // As on macOS: other local apps must not reach a fresh install's listeners without a login (v2rayNG #5457).
+  // Settings saved before keep their listeners as they were.
+  func testFreshInstallListenersRequireAGeneratedLogin() async throws {
+    let file = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
+      .appendingPathComponent("Elarni/ios-settings.json")
+    let saved = try? Data(contentsOf: file)
+    var generated: String?
+    defer {
+      if let saved { try? saved.write(to: file) } else { try? FileManager.default.removeItem(at: file) }
+      // The simulator's app-only Keychain, as the model uses it there.
+      if let generated {
+        SecItemDelete([kSecClass: kSecClassGenericPassword, kSecAttrService: "com.elarni.ios.endpoint", kSecAttrAccount: generated] as CFDictionary)
+      }
+    }
+    try? FileManager.default.removeItem(at: file)
+    let fresh = IOSAppModel()
+    await fresh.start()
+    XCTAssertNil(fresh.errorMessage)
+    XCTAssertTrue(fresh.settings.inboundAuthEnabled, "a fresh install's listeners take no login")
+    let ref = try XCTUnwrap(fresh.settings.inboundCredentialRef)
+    generated = ref
+    let runtime = try fresh.settings.runtime()
+    XCTAssertEqual(runtime.inboundAuthEnabled, true)
+    XCTAssertEqual(runtime.inboundCredentialRef, ref)
+    let outbound: [String: Any] = ["protocol": "socks", "settings": ["servers": [["address": "example.invalid", "port": 1080]]]]
+    let compiled = try fresh.compile(outbound, routes: nil, preference: nil, port: 10890)
+    let socks = try XCTUnwrap((compiled["inbounds"] as? [[String: Any]])?.first { $0["tag"] as? String == "elarni-socks" }?["settings"] as? [String: Any])
+    XCTAssertEqual(socks["auth"] as? String, "password")
+    let account = try XCTUnwrap((socks["accounts"] as? [[String: Any]])?.first)
+    XCTAssertTrue([account["user"], account["pass"]].allSatisfy { ($0 as? String)?.range(of: "^[0-9a-f]{32}$", options: .regularExpression) != nil },
+                  "a fresh install's generated login")
+    // The next start reads the saved login instead of making another.
+    let reopened = IOSAppModel()
+    await reopened.start()
+    XCTAssertEqual(reopened.settings, fresh.settings)
+    // Settings saved by an earlier version, here with open listeners.
+    let earlier = IOSTunnelSettings()
+    try JSONEncoder().encode(earlier).write(to: file)
+    let upgraded = IOSAppModel()
+    await upgraded.start()
+    XCTAssertEqual(upgraded.settings, earlier, "an upgraded install's listeners changed")
+  }
+
   // The extension has about 50 MB and copies the route model several times, so a
   // model over the iOS cap stops before the extension with its own message.
   func testOversizedRoutingProfileFailsWithClearError() async throws {
@@ -1041,6 +1237,13 @@ final class ElarniTests: XCTestCase {
     try await model.vpn.refreshProvider()
     _ = try await ToggleConnectionIntent().perform()
     XCTAssertEqual(tunnel.session.fixtureStatus, .disconnected)
+    // The notice that On Demand restarted the VPN offers Turn Off; opening the notice stops nothing.
+    tunnel.session.fixtureStatus = .connected
+    try await model.vpn.refreshProvider()
+    await NotificationActions.perform(UNNotificationDefaultActionIdentifier)
+    XCTAssertEqual(tunnel.session.fixtureStatus, .connected, "Opening the notice stopped the VPN")
+    await NotificationActions.perform(IOSOnDemandRestart.turnOff)
+    XCTAssertEqual(tunnel.session.fixtureStatus, .disconnected, "Turn Off left the VPN running")
     _ = try await DisconnectIntent().perform()
     XCTAssertNil(model.errorMessage)
     XCTAssertEqual(ElarniShortcuts.appShortcuts.count, 3)
@@ -1449,6 +1652,81 @@ final class ElarniTests: XCTestCase {
     await model.disconnect()
     model.vpn.manager = nil
     try await model.delete(user)
+  }
+
+  // A hand edit of a server's Xray JSON replaces its stored config under the same id and name,
+  // and the connected tunnel takes it, as after a group choice.
+  func testServerConfigEditIsStoredAndReachesTheTunnel() async throws {
+    let model = IOSAppModel()
+    await model.start()
+    let source = try await importLocal(model, "socks://127.0.0.1:1080#Config%20fixture")
+    let node = try XCTUnwrap(source.nodes.first)
+    XCTAssertEqual(node.format, "xrayProfile")
+    try await model.select(node)
+    let original = try model.nodeConfig(node)
+    let edited = original.replacingOccurrences(of: "1080", with: "1081")
+    XCTAssertNotEqual(edited, original, "the fixture's port is not in its config")
+    let before = try await model.makePlan(nodeID: node.id)
+    model.vpn.manager = FixtureTunnel(plan: before)
+    try await model.vpn.refreshProvider()
+    try await model.replaceNodeConfig(node, text: edited)
+    model.reload()
+    let saved = try XCTUnwrap(model.nodes.first { $0.id == node.id }, "the edit changed the server's id")
+    XCTAssertEqual(saved.name, "Config fixture")
+    func object(_ text: String) throws -> NSDictionary { try XCTUnwrap(JSONSerialization.jsonObject(with: Data(text.utf8)) as? NSDictionary) }
+    XCTAssertEqual(try object(model.nodeConfig(saved)), try object(edited))
+    XCTAssertEqual(model.selectedID, node.id)
+    let after = try await model.makePlan(nodeID: node.id)
+    XCTAssertNotEqual(after, before)
+    XCTAssertEqual(model.vpn.savedPlan, after, "the connected tunnel kept the old config")
+    await model.disconnect()
+    model.vpn.manager = nil
+    try await model.delete(source)
+  }
+
+  // An edit must stay one Xray server: two servers, or JSON that is no server, are refused and change nothing.
+  func testServerConfigEditThatIsNotOneServerIsRefused() async throws {
+    let model = IOSAppModel()
+    await model.start()
+    let source = try await importLocal(model, "socks://127.0.0.1:1080#Config%20fixture")
+    let node = try XCTUnwrap(source.nodes.first)
+    let original = try model.nodeConfig(node)
+    let revision = node.revision
+    for edit in ["[\(original),\(original.replacingOccurrences(of: "1080", with: "1081"))]", #"{"log":{"loglevel":"warning"}}"#] {
+      do { try await model.replaceNodeConfig(node, text: edit); XCTFail("an edit that is not one server was saved: \(edit)") }
+      catch {
+        XCTAssertEqual(error as? NodeConfigRefusal, .unsupportedProfile, "\(error)")
+        model.show(error)
+        XCTAssertEqual(model.errorMessage, "The configuration must be one Xray server.")
+        model.errorMessage = nil
+      }
+      model.reload()
+      let kept = try XCTUnwrap(model.nodes.first { $0.id == node.id })
+      XCTAssertEqual(try model.nodeConfig(kept), original)
+      XCTAssertEqual(kept.revision, revision)
+    }
+    try await model.delete(source)
+  }
+
+  // A provider that hides its servers hides their configs too, for viewing and for editing.
+  func testServerConfigOfAHidingProviderIsRefused() async throws {
+    let model = IOSAppModel()
+    await model.start()
+    let existing = Set(model.subscriptions.map(\.id))
+    try await model.importInput("#hide-url: yes\nsocks://127.0.0.1:1081#Hidden%20config")
+    let source = try XCTUnwrap(model.subscriptions.first { !existing.contains($0.id) })
+    let node = try XCTUnwrap(source.nodes.first)
+    do { _ = try model.nodeConfig(node); XCTFail("a hiding provider's server config was shown") }
+    catch {
+      XCTAssertEqual(error as? NodeConfigRefusal, .sharingDisabled, "\(error)")
+      model.show(error)
+      XCTAssertEqual(model.errorMessage, "The provider does not allow viewing this server’s configuration.")
+      model.errorMessage = nil
+    }
+    let edit = #"{"outbounds":[{"protocol":"socks","settings":{"servers":[{"address":"127.0.0.1","port":1082}]},"tag":"proxy"}]}"#
+    do { try await model.replaceNodeConfig(node, text: edit); XCTFail("a hiding provider's server was edited") }
+    catch { XCTAssertEqual(error as? NodeConfigRefusal, .sharingDisabled, "\(error)") }
+    try await model.delete(source)
   }
 
   // Local imports join one local group, which an earlier run may have left behind.

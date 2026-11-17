@@ -15,7 +15,8 @@ uncommitted changes affect (on Linux, with the lint CI runs for Go and Rust), ru
 prints the failing output; `--base <commit>` also covers committed work and `--all` runs
 everything CI runs on this OS. It exits non-zero when a changed file has no local check
 (`android/`, `.github/`, ...): only CI covers those. A `FLAKY` line means a check passed only
-on its retry; report it. Each run writes `.build/check-results/<UTC time>-<id>/summary.json`
+on its retry; report it (`python scripts/flaky-report --ci 40` ranks the tests that failed and
+then passed, locally and in the last CI runs). Each run writes `.build/check-results/<UTC time>-<id>/summary.json`
 and `output.log`. [docs/TESTING.md](docs/TESTING.md) lists each suite.
 
 - Dart: analyze only the touched files (`flutter analyze --no-pub <files>`).
@@ -25,12 +26,6 @@ and `output.log`. [docs/TESTING.md](docs/TESTING.md) lists each suite.
   (`DesktopProxy(replyTimeout:, helperExitGrace:, automationProbeSeconds:)` in Dart,
   `splithttp.SetSetupTimeout` in Go).
 - Do not weaken assertions or skip failing tests to get a pass.
-
-## Safety
-
-Developers often run a live VPN. Do not run `check-windows-vpn`, `check-linux-vpn`,
-`check-linux-elevation`, `check-headless`, or `netsh`, `route` and DNS commands unless asked:
-they change routes, DNS or adapters and belong on disposable test hosts.
 
 ## Concurrency and remote runs
 
@@ -43,7 +38,9 @@ they change routes, DNS or adapters and belong on disposable test hosts.
   host: a second run is refused, not queued. Start one in the background and wait for it to
   exit; do not poll with `sleep`.
 - The CI runs on one self-hosted Linux runner and one Windows VM, so pull requests queue behind
-  main. Wait for a run with `gh run watch <id> --exit-status` in the background.
+  main. Wait for a run with `python scripts/ci-wait [run-id]` in the background, not with
+  repeated `gh run list` or `gh run view`: it exits when the run ends and prints each job's
+  result and the end of every failed job's log.
 
 ## Changes
 

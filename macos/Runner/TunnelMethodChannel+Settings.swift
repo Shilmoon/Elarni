@@ -127,6 +127,8 @@ struct AppTunnelSettings: Codable, Equatable {
   var fragmentLength: String?
   var fragmentInterval: String?
   var muxEnabled = false
+  /// The TLS hello of server connections; nil keeps the one each server's link names.
+  var tlsFingerprint: String?
   var preferredIP = "ipv4"
   var profilePreferredIP: String?
   var profileDNSMode: String?
@@ -228,6 +230,7 @@ struct AppTunnelSettings: Codable, Equatable {
           ["ipv4", "ipv6", "automatic"].contains(preferredIP),
           profilePreferredIP == nil || ["ipv4", "ipv6", "automatic"].contains(profilePreferredIP!),
           profileDNSMode == nil || ["inherit", "routing", "default"].contains(profileDNSMode!),
+          tlsFingerprint == nil || ["server", "chrome", "firefox", "safari", "random", "randomized"].contains(tlsFingerprint!),
           (memoryLimitMB == 0 || (51...4096).contains(memoryLimitMB)),
           (30...3_600).contains(idleTimeoutSeconds),
           (1...4_096).contains(tcpMaxConnections),
@@ -367,6 +370,7 @@ struct AppTunnelSettings: Codable, Equatable {
       "fragmentLength": fragmentLength ?? "100-200",
       "fragmentInterval": fragmentInterval ?? "0-1",
       "muxEnabled": muxEnabled,
+      "tlsFingerprint": tlsFingerprint ?? "server",
       "preferredIp": preferredIP,
       "connectionIdleSeconds": idleTimeoutSeconds,
       "sniffingEnabled": sniffingEnabled,

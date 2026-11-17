@@ -1,7 +1,9 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'platform_services.dart';
+import 'update_check.dart' show UpdateAsset;
 
 /// Connection recording exists only in builds made with
 /// `--dart-define=ELARNI_RECORDING=true`; release builds compile it out.
@@ -147,10 +149,33 @@ abstract interface class TunnelControl {
 
   /// Opens the https release page an update feed named.
   Future<void> openUpdateLink(String url);
+
+  /// Desktop core only (Windows and Linux): how this install replaces itself,
+  /// `{'kind': 'msi'|'deb'|'appimage'|'', 'silent': bool, 'ready'?: version,
+  /// 'failed'?: version}`. An empty kind cannot replace itself.
+  Future<Map<String, Object?>> updateStatus();
+
+  /// Desktop core only: downloads a release's files and verifies its
+  /// signature, checksum and version, `{'version', 'name', 'silent'}`.
+  Future<Map<String, Object?>> downloadUpdate(List<UpdateAsset> assets);
+
+  /// Desktop core only: installs the verified download. Windows answers
+  /// `{'exit': true}`: a helper installs once this app exits and, with
+  /// [relaunch], starts it again. Linux answers `{'restart': true}`: the new
+  /// build runs once the app starts again.
+  Future<Map<String, Object?>> installUpdate({required bool relaunch});
   Future<Map<String, Object?>> shareClient(
     String id, {
     bool subscription = false,
   });
+
+  /// [text] as a QR code: `{'png': base64}`, without it when it is too long.
+  Future<Map<String, Object?>> qrCode(String text);
+
+  /// The share links of [nodeIds] in a local group, one per line in group
+  /// order. A server without one is refused as `no_share_link`, with its name
+  /// as the details.
+  Future<String> shareLinks(String subscriptionId, List<String> nodeIds);
 
   /// The server's stored Xray JSON; refused where its provider hides it.
   Future<String> nodeConfig(String nodeId);
@@ -192,6 +217,10 @@ abstract interface class TunnelControl {
     String? profileId,
   );
   Future<RoutingSnapshot> refreshRoutingGeofiles(String id, {String? file});
+
+  /// Downloads a routing profile's managed domain lists again, or only
+  /// [sourceId]; a failed download keeps the list's last good copy.
+  Future<RoutingSnapshot> refreshManagedLists(String id, {String? sourceId});
   Future<String> connect();
   Future<String> disconnect();
   Future<String> state();
@@ -224,6 +253,10 @@ abstract interface class TunnelControl {
 
   /// Saves exported log text where the user chooses.
   Future<void> saveLogs(String text);
+
+  /// Saves [bytes] where the user chooses, a file of [kind] (text, png or
+  /// json); false when the user cancels the save panel.
+  Future<bool> saveFile(String kind, Uint8List bytes);
   Future<Map<String, Object?>> systemInfo();
   Future<Map<String, Object?>> routeTable();
   Future<Map<String, Object?>> setLaunchAtLogin(bool enabled);
@@ -430,10 +463,41 @@ final class NativeTunnelControl implements TunnelControl {
   }
 
   @override
+  Future<Map<String, Object?>> updateStatus() =>
+      _mapResult('updateStatus', <String, Object?>{});
+
+  @override
+  Future<Map<String, Object?>> downloadUpdate(List<UpdateAsset> assets) =>
+      _mapResult('downloadUpdate', <String, Object?>{
+        'assets': [
+          for (final asset in assets) {'name': asset.name, 'url': asset.url},
+        ],
+      });
+
+  @override
+  Future<Map<String, Object?>> installUpdate({required bool relaunch}) =>
+      _mapResult('installUpdate', <String, Object?>{'relaunch': relaunch});
+
+  @override
   Future<Map<String, Object?>> shareClient(
     String id, {
     bool subscription = false,
   }) => _mapResult('shareClient', {'id': id, 'subscription': subscription});
+
+  @override
+  Future<Map<String, Object?>> qrCode(String text) =>
+      _mapResult('qrCode', {'text': text});
+
+  @override
+  Future<String> shareLinks(
+    String subscriptionId,
+    List<String> nodeIds,
+  ) async =>
+      (await _mapResult('shareLinks', {
+            'subscriptionId': subscriptionId,
+            'nodeIds': nodeIds,
+          }))['text']!
+          as String;
 
   @override
   Future<String> nodeConfig(String nodeId) async =>
@@ -605,6 +669,17 @@ final class NativeTunnelControl implements TunnelControl {
   );
 
   @override
+  Future<RoutingSnapshot> refreshManagedLists(
+    String id, {
+    String? sourceId,
+  }) async => RoutingSnapshot.fromMap(
+    await _mapResult('refreshManagedLists', <String, Object?>{
+      'id': id,
+      'sourceId': sourceId,
+    }),
+  );
+
+  @override
   Future<TunnelSettings> tunnelSettings() async =>
       TunnelSettings.fromMap(await _mapResult('tunnelSettings'));
 
@@ -700,6 +775,11 @@ final class NativeTunnelControl implements TunnelControl {
   Future<void> saveLogs(String text) async {
     await _mapResult('saveLogs', {'content': text});
   }
+
+  @override
+  Future<bool> saveFile(String kind, Uint8List bytes) async =>
+      (await _mapResult('saveFile', {'kind': kind, 'bytes': bytes}))['saved'] ==
+      true;
 
   @override
   Future<Map<String, Object?>> exportEvidence({
@@ -922,6 +1002,7 @@ final class TunnelSettings {
     this.fragmentLength = '100-200',
     this.fragmentInterval = '0-1',
     this.muxEnabled = false,
+    this.tlsFingerprint = 'server',
     this.preferredIP = 'ipv4',
     this.profilePreferredIP = 'inherit',
     this.profileDNSMode = 'inherit',
@@ -966,6 +1047,7 @@ final class TunnelSettings {
     fragmentLength: value['fragmentLength'] as String? ?? '100-200',
     fragmentInterval: value['fragmentInterval'] as String? ?? '0-1',
     muxEnabled: value['muxEnabled'] as bool? ?? false,
+    tlsFingerprint: value['tlsFingerprint'] as String? ?? 'server',
     preferredIP: value['preferredIP'] as String? ?? 'ipv4',
     profilePreferredIP: value['profilePreferredIP'] as String? ?? 'inherit',
     profileDNSMode:
@@ -1040,6 +1122,18 @@ final class TunnelSettings {
   }
 
   final bool muxEnabled;
+
+  /// One of [tlsFingerprints]: the TLS hello of server connections. 'server' keeps
+  /// the one each server's link names.
+  final String tlsFingerprint;
+  static const tlsFingerprints = [
+    'server',
+    'chrome',
+    'firefox',
+    'safari',
+    'random',
+    'randomized',
+  ];
   final String preferredIP;
   final String profilePreferredIP;
   final String profileDNSMode;
@@ -1186,6 +1280,7 @@ final class TunnelSettings {
     'fragmentLength': fragmentLength,
     'fragmentInterval': fragmentInterval,
     'muxEnabled': muxEnabled,
+    'tlsFingerprint': tlsFingerprint,
     'preferredIP': preferredIP,
     'profilePreferredIP': profilePreferredIP == 'inherit'
         ? null
@@ -1230,6 +1325,7 @@ final class TunnelSettings {
     String? fragmentLength,
     String? fragmentInterval,
     bool? muxEnabled,
+    String? tlsFingerprint,
     String? preferredIP,
     String? profilePreferredIP,
     String? profileDNSMode,
@@ -1271,6 +1367,7 @@ final class TunnelSettings {
     fragmentLength: fragmentLength ?? this.fragmentLength,
     fragmentInterval: fragmentInterval ?? this.fragmentInterval,
     muxEnabled: muxEnabled ?? this.muxEnabled,
+    tlsFingerprint: tlsFingerprint ?? this.tlsFingerprint,
     preferredIP: preferredIP ?? this.preferredIP,
     profilePreferredIP: profilePreferredIP ?? this.profilePreferredIP,
     profileDNSMode: profileDNSMode ?? this.profileDNSMode,

@@ -251,6 +251,7 @@ private val LocalReselect = compositionLocalOf { 0 }
             "backup", "restore" -> listOf("backup-")
             "ping", "sourcePing" -> listOf("ping-body-")
             "sourceOptions" -> listOf("source-options-$id", "source-fallback-$id")
+            "nodeConfig" -> listOf("node-config-$id")
             else -> emptyList()
         }
         screenStates.removeState("$page/$detail/$id")
@@ -334,7 +335,7 @@ private val LocalReselect = compositionLocalOf { 0 }
                 val expanded = maxWidth >= 600.dp
                 val splitHome = maxWidth >= 840.dp || expanded && maxHeight < 480.dp
                 val destinations = listOf("home" to tr(R.string.home), "sources" to tr(R.string.subscriptions), "routing" to tr(R.string.routing), "settings" to tr(R.string.settings))
-                val title = when (detail) { "scanQR" -> tr(R.string.scan_qr_code); "backupSupport" -> tr(R.string.backup_and_repair); "source" -> catalog.sources.firstOrNull { it.string("id") == id }?.string("name") ?: tr(R.string.subscription); "node" -> tr(R.string.server_details); "route", "routeDNS" -> if (id.isEmpty()) tr(R.string.new_routing_profile) else tr(R.string.edit_routing); "routeJSON" -> tr(R.string.routing_json); "routeDetail" -> catalog.routes.firstOrNull { it.string("id") == id }?.string("name") ?: tr(R.string.routing); "shortcuts" -> tr(R.string.shortcuts); "perApp" -> tr(R.string.per_app_routing); "automation" -> tr(R.string.connection_recovery); "settingsEditor" -> Settings.sectionTitle(id); "credentials" -> tr(R.string.proxy_login); "backup" -> tr(R.string.export_encrypted_backup); "restore" -> tr(R.string.restore_backup); "ping" -> if (id.isEmpty()) tr(R.string.test_all_servers) else tr(R.string.test_this_server); "sourcePing" -> tr(R.string.test_subscription_servers); "sourceNodes" -> catalog.sources.firstOrNull { it.string("id") == id }?.string("name") ?: tr(R.string.subscription_servers); "sourceOptions" -> tr(R.string.download_options); "diagnostics" -> tr(R.string.troubleshooting); "logs" -> tr(R.string.logs); "systemInfo" -> tr(R.string.system_info); "routeTable" -> tr(R.string.route_table); "notices" -> tr(R.string.open_source_notices); else -> destinations.first { it.first == page }.second }
+                val title = when (detail) { "scanQR" -> tr(R.string.scan_qr_code); "backupSupport" -> tr(R.string.backup_and_repair); "source" -> catalog.sources.firstOrNull { it.string("id") == id }?.string("name") ?: tr(R.string.subscription); "node" -> tr(R.string.server_details); "nodeConfig" -> tr(R.string.configuration); "route", "routeDNS" -> if (id.isEmpty()) tr(R.string.new_routing_profile) else tr(R.string.edit_routing); "routeJSON" -> tr(R.string.routing_json); "routeDetail" -> catalog.routes.firstOrNull { it.string("id") == id }?.string("name") ?: tr(R.string.routing); "shortcuts" -> tr(R.string.shortcuts); "perApp" -> tr(R.string.per_app_routing); "automation" -> tr(R.string.connection_recovery); "settingsEditor" -> Settings.sectionTitle(id); "credentials" -> tr(R.string.proxy_login); "backup" -> tr(R.string.export_encrypted_backup); "restore" -> tr(R.string.restore_backup); "ping" -> if (id.isEmpty()) tr(R.string.test_all_servers) else tr(R.string.test_this_server); "sourcePing" -> tr(R.string.test_subscription_servers); "sourceNodes" -> catalog.sources.firstOrNull { it.string("id") == id }?.string("name") ?: tr(R.string.subscription_servers); "sourceOptions" -> tr(R.string.download_options); "diagnostics" -> tr(R.string.troubleshooting); "logs" -> tr(R.string.logs); "systemInfo" -> tr(R.string.system_info); "routeTable" -> tr(R.string.route_table); "notices" -> tr(R.string.open_source_notices); else -> destinations.first { it.first == page }.second }
                 Row(Modifier.fillMaxSize()) {
                     if (expanded) NavigationRail(Modifier.width(112.dp).fillMaxHeight().statusBarsPadding().verticalScroll(rememberScrollState()), containerColor = MaterialTheme.colorScheme.surfaceContainerLow) {
                         Image(painterResource(R.drawable.elarni_icon), null, Modifier.padding(16.dp).size(36.dp).clip(MaterialTheme.shapes.small))
@@ -369,6 +370,7 @@ private val LocalReselect = compositionLocalOf { 0 }
                                 "scanQR" -> QRImportScreen(activity, state.busy)
                                 "source" -> SourceScreen(catalog, id, activity, state.busy, state.pings, ::navigate) { titleText, text, button, action -> confirmation = Confirmation(titleText, text, action, button) }
                                 "node" -> NodeScreen(catalog, id, activity, state, ::navigate, ::back) { titleText, text, button, action -> confirmation = Confirmation(titleText, text, action, button) }
+                                "nodeConfig" -> NodeConfigEditor(catalog, id, state.busy, activity) { back() }
                                 "route" -> RoutingEditor(catalog.routes.firstOrNull { it.string("id") == id }, state.busy, activity) { back() }
                                 "routeDNS" -> RoutingEditor(catalog.routes.firstOrNull { it.string("id") == id }, state.busy, activity, initialSection = "dns") { back() }
                                 "routeJSON" -> RoutingEditor(catalog.routes.firstOrNull { it.string("id") == id }, state.busy, activity, initialSection = "json") { back() }
@@ -451,13 +453,28 @@ private val LocalReselect = compositionLocalOf { 0 }
         val feed = catalog.settings.string("updateFeedURL")
         val lifecycle = LocalLifecycleOwner.current.lifecycle
         // Each minute the app shows asks whether the day (or, while the feed is unreadable, the hour) has passed.
-        LaunchedEffect(feed, lifecycle) { lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) { do { UpdateCheck.refresh(feed); delay(60_000) } while (feed.isNotEmpty()) } }
+        val automatic = catalog.settings.optBoolean("autoUpdate", true)
+        val application = activity.application as ElarniApplication
+        // With automatic updates on, the release is downloaded while the app shows and installed once it does not.
+        LaunchedEffect(feed, automatic, lifecycle) { lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            do { UpdateCheck.refresh(feed); UpdateCheck.prepare(application, automatic); delay(60_000) } while (feed.isNotEmpty())
+        } }
         val update by UpdateCheck.available.collectAsStateWithLifecycle()
+        val installable by UpdateCheck.installable.collectAsStateWithLifecycle()
+        val updateStage by UpdateCheck.stage.collectAsStateWithLifecycle()
         var dismissedUpdate by remember { mutableStateOf(prefs.getString("dismissedUpdate", "") ?: "") }
         update?.takeIf { it.first != dismissedUpdate }?.let { (version, url) ->
-            HomeNotice(tr(R.string.elarni_is_available, version), tr(R.string.you_have_it_keeps_working_update, BuildConfig.VERSION_NAME),
-                tr(R.string.download) to { activity.openURL(url) },
-                tr(R.string.not_now) to { dismissedUpdate = version; prefs.edit().putString("dismissedUpdate", version).apply() })
+            val later = tr(R.string.not_now) to { dismissedUpdate = version; prefs.edit().putString("dismissedUpdate", version).apply() }
+            val title = tr(R.string.elarni_is_available, version)
+            when {
+                updateStage == "failed" -> HomeNotice(title, tr(R.string.android_did_not_install_the_update), tr(R.string.download) to { activity.openURL(url) }, later)
+                // A release Elarni cannot install itself keeps the link to its page.
+                !installable -> HomeNotice(title, tr(R.string.you_have_it_keeps_working_update, BuildConfig.VERSION_NAME), tr(R.string.download) to { activity.openURL(url) }, later)
+                updateStage == "downloading" -> HomeNotice(title, tr(R.string.downloading_the_update), later)
+                updateStage == "installing" -> HomeNotice(title, tr(R.string.installing_the_update))
+                else -> HomeNotice(title, tr(R.string.you_have_installing_restarts_elarni, BuildConfig.VERSION_NAME),
+                    tr(R.string.install) to { application.repository.scope.launch { UpdateCheck.installNow(application) } }, later)
+            }
         }
         val noTraffic = state.connection == "connected" && state.liveness == "noTraffic"
         val warning = if (MaterialTheme.colorScheme.surface == Color(0xFF202124)) Color(0xFFFDE047) else Color(0xFF854D0E)
@@ -472,6 +489,8 @@ private val LocalReselect = compositionLocalOf { 0 }
         Text(selected?.string("name") ?: tr(R.string.no_server_selected), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold, textAlign = TextAlign.Center, modifier = Modifier.heightIn(min = 48.dp).clickable(enabled = selected != null, onClick = scrollServers).wrapContentHeight(), color = if (selected != null) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant)
         Button(onClick = { if (active) activity.repository.requestStop() else if (state.busy) activity.repository.cancel() else activity.connect() }, enabled = active || state.busy || selected != null,
             modifier = Modifier.widthIn(max = 320.dp).fillMaxWidth().heightIn(min = 48.dp)) { Text(if (active) { if (state.connection == "connected") tr(R.string.disconnect) else tr(R.string.stop) } else if (state.busy) tr(R.string.stop) else tr(R.string.connect), style = MaterialTheme.typography.titleMedium) }
+        // As on the widget, whatever the monitoring setting.
+        state.rate?.takeIf { state.connection == "connected" }?.let { Text(tr(R.string.traffic_rates, bytes(it.down), bytes(it.up)), Modifier.testTag("traffic-rates"), style = MaterialTheme.typography.bodyMedium) }
         if (!catalog.settings.optBoolean("xrayTunEnabled")) Text("SOCKS 127.0.0.1:${catalog.settings.optInt("socksPort")}", style = MaterialTheme.typography.bodySmall)
         if (catalog.settings.optBoolean("monitoringEnabled") && state.connection == "connected") {
             val metrics = state.metrics
@@ -665,6 +684,12 @@ fun updatedAgo(seconds: Double): String = when {
                     if (country.isNotEmpty()) Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                         Text(countries.firstOrNull { it.code == country }?.name ?: tr(R.string.other_locations), Modifier.weight(1f), color = MaterialTheme.colorScheme.onSurfaceVariant)
                         TextButton({ country = "" }) { Text(tr(R.string.all_locations)) }
+                    }
+                    // As on the iPhone, a way back to the server that last worked; a tap on its row makes the same call.
+                    if (sourceId.isEmpty()) remember(catalog) { Catalog.lastSuccessful(catalog.nodes, catalog.selected) }?.let { last ->
+                        TextButton({ activity.run("select", obj("id" to last.string("id"))) }, Modifier.heightIn(min = 48.dp).testTag("use-last-successful"), enabled = !state.busy) {
+                            Text(tr(R.string.use_last_successful_server))
+                        }
                     }
                 } }
                 if (remote.isNotEmpty()) item(key = "freshness") {
@@ -1068,6 +1093,11 @@ private fun quota(metadata: JSONObject): Triple<String, String, Float?> {
         }
         SettingsGroup {
             SettingsTile(tr(R.string.share_profile_qr), enabled = !state.busy) { activity.run("share", obj("id" to id)) { activity.interaction.share = it } }
+            // Shown and refused as sharing is: not offered where the provider hides it, and refused until a refresh says whether it does.
+            val refusal = catalog.configRefusal(id)
+            if (refusal == null || refusal == "sharing_refresh_required") SettingsTile(tr(R.string.configuration), enabled = !state.busy) {
+                if (refusal == null) navigate("nodeConfig", id) else activity.repository.report(AppFailure(refusal))
+            }
             SettingsTile(if (remote) tr(R.string.hide_server_2) else tr(R.string.delete_server_2), enabled = !state.busy, titleColor = MaterialTheme.colorScheme.error) {
                 if (remote) confirm(tr(R.string.hide_server), tr(R.string.stays_hidden_after_refreshes_show_it, node.string("name")), tr(R.string.hide_2)) { activity.run("deleteNode", obj("id" to id)) { navigate("", "") } }
                 else confirm(tr(R.string.delete_server), tr(R.string.delete_2, node.string("name")), tr(R.string.delete)) { activity.run("deleteNode", obj("id" to id)) { navigate("", "") } }

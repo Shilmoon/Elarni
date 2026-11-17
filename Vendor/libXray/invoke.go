@@ -106,7 +106,7 @@ func InvokeRequest(request LibXrayInvokeRequest) string {
 		return invokePing(request.Payload)
 	case LibXrayMethodPrepareProbe, LibXrayMethodCancelProbe, LibXrayMethodReleaseProbe:
 		return invokeProbeOperation(request.Method, request.Payload)
-	case LibXrayMethodFetchSubscription, LibXrayMethodFetchResource, LibXrayMethodPrepareFetch, LibXrayMethodCancelFetch, LibXrayMethodReleaseFetch:
+	case LibXrayMethodFetchSubscription, LibXrayMethodFetchResource, LibXrayMethodDownloadUpdate, LibXrayMethodPrepareFetch, LibXrayMethodCancelFetch, LibXrayMethodReleaseFetch:
 		return invokeFetch(request.Method, request.Payload)
 	case "validateSubscriptionFetchOptions":
 		payload, err := decodePayload[share.SubscriptionFetchRequest](request.Payload)

@@ -4,8 +4,80 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
 
 ## Unreleased
 
+### Added
+
+- **TLS fingerprint** in Settings › Advanced chooses which browser a connection to a server
+  looks like: Chrome, Firefox, Safari, a random browser, or a randomized hello. The default,
+  **From the server**, keeps what each server's link names (Chrome when it names none), as
+  before. Until now the fingerprint came only from the link, so when a network began to block
+  one browser's hello, a server from a provider could not be switched to another. The choice
+  applies to TLS and Reality servers over TCP, to a provider profile's backup servers and to a
+  per-app server; Hysteria2, TUIC and WireGuard servers have no such fingerprint. All platforms.
+- **Live speed.** Home shows the download and upload speed under the Connect button while
+  connected, whatever the Monitoring setting. The counters are read only while the app is on
+  screen. All platforms; on iPhone the speed is that of the tunnel interface, packet headers
+  and directly routed traffic included.
+- **Windows, Linux and macOS: what the phone apps already had.** The server list has sort and
+  location menus next to its title and **Use last successful server**. A server's menu shares
+  that server as a link or QR code and sets its IP type (before, only the selected server's).
+  The routing editor edits the GeoIP and GeoSite addresses, managed domain lists and static
+  DNS hosts, which until now needed the JSON. A routing profile's menu shares it as text and
+  a QR code and exports its JSON to a file, and its details refresh its managed domain lists
+  on demand. The share dialog saves its text and its QR image to a file, and the selected
+  servers of a group without a subscription link are shared as links. A running latency test
+  can be cancelled. Subscriptions have **Refresh all**, the latency test settings are kept
+  between launches, and Settings › System opens the licenses.
+- **macOS: Shortcuts actions** Connect Elarni, Disconnect Elarni and Toggle Elarni, as on
+  iPhone. They ask for no confirmation and tell Shortcuts when they fail, for example with no
+  server selected.
+- **Android, iPhone and macOS: a server's configuration** can be viewed and replaced, as on
+  Windows and Linux; the edit must still be one Xray server, and a provider that hides its
+  servers hides this too.
+- **Android:** per-app routing gains presets for Discord, Telegram, Claude, Steam, browsers,
+  and social and video apps next to Russian apps; the routing editor gains the **Russian sites
+  direct** preset; Home offers **Use last successful server**.
+- **iPhone: a widget** for the Home Screen and the Lock Screen shows whether Elarni is
+  connected and to which server; the Home Screen one connects and disconnects. **Hide VPN
+  icon** is now in Settings, under Advanced network routes, as on macOS and Windows.
+- Elarni updates itself. An install from the Windows MSI, the Linux `.deb` or AppImage, or the
+  Android APK downloads the release its update feed names, in the background, and installs it
+  when that asks for nothing and interrupts nothing: on Windows at the app's next start (through
+  the ElarniVPN service, so without a consent prompt), for the AppImage in place (used from its
+  next start), on Android while the VPN is off once Elarni is allowed to install apps. Otherwise
+  the Home notice has **Install** instead of the link, and a tunnel that was connected comes back
+  after the update. A connected tunnel is never cut for an update nobody started. Turn it off with
+  Settings › General › **Install updates automatically**; the notice then asks first. The portable
+  ZIP and archive, macOS and iPhone keep the notice with the link. This starts with the release
+  after this one: an older build has to be updated by hand once.
+- Releases are signed with a release key (`SHA256SUMS.sig`). A build installs only a package
+  whose checksum list carries that signature and whose version is newer than its own, whatever
+  the update feed or the server behind it says; the installers check this again themselves
+  before they run anything with administrator rights. See docs/RELEASING.md.
+
+### Changed
+
+- **iPhone:** a new install requires a generated login on its local SOCKS and HTTP listeners,
+  as the other platforms do, so other apps on the phone cannot use them unasked. An install
+  that never saved its settings counts as new. Set your own login, or turn it off, in
+  Settings › Connection.
+- For contributors who use coding agents: the checked-in Claude Code settings no longer refuse the
+  VPN acceptance scripts and the route, DNS and adapter commands, and `AGENTS.md` no longer tells
+  agents to leave them alone. The rules matched any command that named one of the scripts, so
+  they also refused reading or searching them.
+- For contributors: `scripts/flaky-report` ranks the tests that failed and then passed, from
+  local check results and from the results CI uploads, and `scripts/ci-wait` waits for a CI run
+  and prints only each job's result and the end of the failed jobs' logs.
+
 ### Fixed
 
+- iPhone: when the VPN switch of iOS itself (Settings, or the VPN button in Control Center) stops
+  Elarni while On Demand is on, iOS starts the VPN again at once, and nothing said why. iOS gives
+  an app no way to prevent that restart, so Elarni now posts a notification after it with a
+  **Turn Off** action that stops the VPN and On Demand together, and Settings › General says
+  which controls keep the VPN off (the app, its own Control Center control, a shortcut).
+- **Android, app in Russian:** the routing editor showed the domain and address lists of
+  Direct, Proxy and Block as empty and lost what was typed into them, because it looked the
+  lists up by the translated name. They show and save now.
 - A change of per-app routing while connected no longer restarts the tunnel on Windows and
   Linux. Before, adding or removing an app, changing its target or switching the mode stopped
   the tunnel and started it again, which cut every connection of every app for about two
@@ -77,6 +149,16 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
   failed to import, a connection that stopped, the system proxy, a scheduled refresh, the
   system settings and occupied-port errors, a routing profile's geofile and managed-list
   failures, a per-app paste that is not JSON. Before, they were English in a Russian interface.
+- Tests: changes to four tests that failed in CI and passed on a rerun, and more output from a
+  fifth. The heap check of waiting UDP reads counted buffers that were on their way back
+  to the pool (Linux, race build). The split-HTTP keep-alive close test's relay reset the
+  connection where a network path would only close its half, which on Windows discarded the
+  server's last response. The Android untrusted Wi-Fi test waited 10 seconds for Wi-Fi to turn
+  on and did not wait for the leave watch before its last join. When an Android catalog test
+  failed and was rerun alone, the rerun wiped the catalog the restart tests read, so they
+  failed too; the test that leaves it now always runs apart, right before them. The Android
+  TUIC test's empty first reply is not explained yet: the failure now says which connection it
+  was, and the run prints the TUIC peer's log.
 
 ### Security
 

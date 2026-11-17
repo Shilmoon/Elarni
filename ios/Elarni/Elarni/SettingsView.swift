@@ -92,7 +92,10 @@ struct PreferencesEditor: View {
           }
           Toggle("Disconnect on sleep", isOn: setting(\.disconnectOnSleep))
         } header: { Text("Connection") } footer: {
+          VStack(alignment: .leading, spacing: 8) {
+          Text("On Demand lets iOS reconnect the VPN by itself. While it is on, iOS’s own VPN switch in Settings and Control Center cannot keep the VPN off: stop it in Elarni, with Elarni’s Control Center control or with a shortcut.")
           Text("Connect on untrusted Wi-Fi connects when iPhone joins a Wi-Fi network outside your trusted list, even before you tap Connect. Trusted Wi-Fi and mobile data leave the VPN as it is. Disconnect pauses it until your next Connect.")
+          }
         }
         Section {
           Picker("Auto-update", selection: $value.autoUpdateHours) {
@@ -186,19 +189,19 @@ struct ConnectionEditor: View {
     case .advanced: [\.fragmentationEnabled, \.muxEnabled, \.sniffingEnabled, \.monitoringEnabled]
     }
   }
-  private var flipped: [Bool?] { switches.map { Optional(value[keyPath: $0]) } + [value.recordDiagnostics] }
+  private var flipped: [Bool?] { switches.map { Optional(value[keyPath: $0]) } + [value.recordDiagnostics, value.hideVPNIcon] }
   /// The saved settings with the switches flipped here and, with `typed`, what was typed or picked here.
   private func merged(typed: Bool) -> IOSTunnelSettings {
     var next = model.settings
     func take<Value: Equatable>(_ key: WritableKeyPath<IOSTunnelSettings, Value>) { carry(key, from: value, since: base, to: &next) }
-    switches.forEach(take); take(\.recordDiagnostics)
+    switches.forEach(take); take(\.recordDiagnostics); take(\.hideVPNIcon)
     guard typed else { return next }
     switch kind {
     case .connection: take(\.profilePreferredIP); take(\.preferredIP); take(\.socksPort); take(\.httpPort)
     case .dns: take(\.profileDNSMode)
     case .routes: take(\.includedRoutes); take(\.excludedRoutes)
     case .advanced:
-      take(\.fragmentPackets); take(\.fragmentLength); take(\.fragmentInterval)
+      take(\.fragmentPackets); take(\.fragmentLength); take(\.fragmentInterval); take(\.tlsFingerprint)
       take(\.idleTimeoutSeconds); take(\.tcpMaxConnections); take(\.udpMaxConnections)
     }
     return next
@@ -216,9 +219,11 @@ struct ConnectionEditor: View {
       try await model.saveSettings(next)
       for key in switches { base[keyPath: key] = sent[keyPath: key] }
       base.recordDiagnostics = sent.recordDiagnostics
+      base.hideVPNIcon = sent.hideVPNIcon
     }, failed: {
       for key in switches where value[keyPath: key] == sent[keyPath: key] { value[keyPath: key] = base[keyPath: key] }
       if value.recordDiagnostics == sent.recordDiagnostics { value.recordDiagnostics = base.recordDiagnostics }
+      if value.hideVPNIcon == sent.hideVPNIcon { value.hideVPNIcon = base.hideVPNIcon }
     })
   }
   // Its own builder keeps the body within what the type checker solves in time.
@@ -229,10 +234,17 @@ struct ConnectionEditor: View {
     Section {
       DisclosureGroup("Advanced network routes") {
       Toggle("Enforce tunnel routes", isOn: $value.enforceRoutes)
+      Toggle("Hide VPN icon", isOn: Binding(get: { value.hideVPNIcon == true }, set: { value.hideVPNIcon = $0 ? true : nil }))
+        .accessibilityIdentifier("hideVPNIcon")
       LinesEditor(title: "Included routes", text: Binding(get: { value.includedRoutes.joined(separator: "\n") }, set: { value.includedRoutes = lines($0) }))
       LinesEditor(title: "Excluded routes", text: Binding(get: { value.excludedRoutes.joined(separator: "\n") }, set: { value.excludedRoutes = lines($0) }))
       }
-    } footer: { Text("Enforce routes is for specific networks and cannot be combined with Block traffic without VPN or a default /0 route.") }
+    } footer: {
+      VStack(alignment: .leading, spacing: 6) {
+        Text("Enforce routes is for specific networks and cannot be combined with Block traffic without VPN or a default /0 route.")
+        Text("Hide VPN icon adds the route exclusions of the hide-icon workaround: it changes excluded network routes, not only the icon. Hiding the VPN icon is not verified.")
+      }
+    }
   }
   var body: some View {
     AppForm {
@@ -268,7 +280,7 @@ struct ConnectionEditor: View {
       } else if kind == .routes {
         routeSections
       } else {
-        Section("Transport") {
+        Section {
           Toggle("Enable fragmentation", isOn: $value.fragmentationEnabled)
           if value.fragmentationEnabled {
             TextField("Packets (tlshello or range)", text: $value.fragmentPackets)
@@ -276,6 +288,13 @@ struct ConnectionEditor: View {
             TextField("Interval range (ms)", text: $value.fragmentInterval)
           }
           Toggle("Enable default VLESS mux", isOn: $value.muxEnabled)
+          Picker("TLS fingerprint", selection: Binding(get: { value.tlsFingerprint ?? "server" }, set: { value.tlsFingerprint = $0 == "server" ? nil : $0 })) {
+            Text("From the server").tag("server")
+            Text(verbatim: "Chrome").tag("chrome"); Text(verbatim: "Firefox").tag("firefox"); Text(verbatim: "Safari").tag("safari")
+            Text("Random browser").tag("random"); Text("Randomized").tag("randomized")
+          }
+        } header: { Text("Transport") } footer: {
+          Text("TLS fingerprint is which browser a connection to a server looks like. From the server uses what each server's link names, or Chrome when it names none. Choose another when a network blocks that one. It applies to TLS and Reality servers over TCP; Hysteria2, TUIC and WireGuard have no such fingerprint.")
         }.textInputAutocapitalization(.never).autocorrectionDisabled()
         Section {
           Picker("Connection idle timeout (seconds)", selection: $value.idleTimeoutSeconds) {

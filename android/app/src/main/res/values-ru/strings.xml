@@ -501,7 +501,14 @@
     <string name="included_and_excluded_ip_ranges">Включённые и исключённые диапазоны IP</string>
     <string name="server_addressing">Адресация серверов</string>
     <string name="updates">Обновления</string>
-    <string name="elarni_reads_this_address_once_a">Elarni раз в день читает этот адрес (во время подключения — через туннель) и показывает на главной уведомление, если там указана более новая версия. Elarni ничего не устанавливает. Используйте JSON-файл с \"version\" и \"url\" или адрес API GitHub releases/latest.</string>
+    <string name="elarni_reads_this_address_once_a">Elarni раз в день читает этот адрес (во время подключения — через туннель) и показывает на главной уведомление, если там указана более новая версия. Elarni устанавливает только выпуск, подписанный ключами Elarni. Используйте JSON-файл с \"version\" и \"url\" или адрес API GitHub releases/latest.</string>
+    <string name="install_updates_automatically">Устанавливать обновления автоматически</string>
+    <string name="elarni_downloads_a_new_release_on">Elarni скачивает новую версию по Wi-Fi и устанавливает её, пока VPN выключен. В первый раз Android попросит разрешение. Если выключено, уведомление на главной сначала спросит.</string>
+    <string name="install">Установить</string>
+    <string name="downloading_the_update">Загрузка обновления…</string>
+    <string name="installing_the_update">Установка обновления…</string>
+    <string name="you_have_installing_restarts_elarni">У вас версия %1$s. Установка перезапустит Elarni; активное подключение восстановится после неё.</string>
+    <string name="android_did_not_install_the_update">Android не установил обновление. Скачайте его со страницы выпуска.</string>
     <string name="open_server_list">Открыть список серверов</string>
     <string name="open">Открыть</string>
     <string name="android_manages_this_turn_on_always">Этим управляет Android: включите «Постоянный VPN» и «Блокировать подключения без VPN».</string>
@@ -543,6 +550,11 @@
     <string name="idle_timeout_seconds">Тайм-аут простоя (секунды)</string>
     <string name="memory_budget_mb_0_automatic">Лимит памяти (МБ, 0 = автоматически)</string>
     <string name="multiplexing">Мультиплексирование</string>
+    <string name="tls_fingerprint">Отпечаток TLS</string>
+    <string name="which_browser_a_connection_to_a">На какой браузер похоже подключение к серверу. «Как у сервера» берёт отпечаток из ссылки сервера, а если его там нет — Chrome. Выберите другой, если сеть блокирует этот. Для серверов с TLS и Reality поверх TCP.</string>
+    <string name="from_the_server">Как у сервера</string>
+    <string name="random_browser">Случайный браузер</string>
+    <string name="randomized">Случайный набор</string>
     <string name="fragment_interval">Интервал фрагментов</string>
     <string name="fragment_length">Длина фрагмента</string>
     <string name="packets_to_fragment">Фрагментируемые пакеты</string>
@@ -759,4 +771,11 @@
     <string name="reset_elarni_2">Сбросить Elarni?</string>
     <string name="this_deletes_every_subscription_server_and">Все подписки, серверы и настройки на этом устройстве будут удалены. Отменить это нельзя.</string>
     <string name="a_chosen_server_has_no_share">У выбранного сервера нет ссылки, которая сохраняет все его настройки. Поделитесь им с его страницы.</string>
+    <string name="russian_sites_direct">Российские сайты напрямую</string>
+    <string name="russian_sites_preset_help">.ru, .рф, .su и другие домены этих сервисов</string>
+    <string name="browsers">Браузеры</string>
+    <string name="social_and_video">Соцсети и видео</string>
+    <string name="use_last_successful_server">Последний успешный сервер</string>
+    <string name="configuration">Конфигурация</string>
+    <string name="next_refresh_replaces_your_edits">Следующее обновление «%1$s» заменит ваши правки.</string>
 </resources>

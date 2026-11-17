@@ -199,6 +199,7 @@ private enum ElarniDomainCompiler {
       "fragmentLength": settings.fragmentLength ?? "100-200",
       "fragmentInterval": settings.fragmentInterval ?? "0-1",
       "muxEnabled": settings.muxEnabled,
+      "tlsFingerprint": settings.tlsFingerprint ?? "server",
       "preferredIp": settings.preferredIP,
       "connectionIdleSeconds": settings.idleTimeoutSeconds,
       "sniffingEnabled": settings.sniffingEnabled,

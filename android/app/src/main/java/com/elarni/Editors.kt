@@ -196,7 +196,7 @@ private fun canonical(json: String) = JSONObject(json).let { value -> value.keys
     var localError by remember { mutableStateOf<String?>(null) }
     var routesOpen by rememberSaveable { mutableStateOf(false) }
     var askOpenProxy by rememberSaveable { mutableStateOf(false) }
-    val immediate = if (section == "General") setOf("onDemandEnabled", "disconnectOnSleep", "connectOnUntrustedWiFi", "expiryReminders", "allowExternalControl") else emptySet()
+    val immediate = if (section == "General") setOf("onDemandEnabled", "disconnectOnSleep", "connectOnUntrustedWiFi", "expiryReminders", "allowExternalControl", "autoUpdate") else emptySet()
     var namesAllowed by remember { mutableStateOf(true) }
     LifecycleResumeEffect(activity.wifiAnswers) { namesAllowed = WiFiRule.namesAllowed(activity); onPauseOrDispose {} }
     // Android's battery dialog answers with no result; back from it, the tile reads the answer again.
@@ -259,9 +259,13 @@ private fun canonical(json: String) = JSONObject(json).let { value -> value.keys
                     "probeMode" -> listOf(tr(R.string.proxy), tr(R.string.current_rules_active_tunnel), tr(R.string.direct_tcp_2), tr(R.string.direct_icmp_2))
                     "probeVariant" -> listOf(tr(R.string.single_request), tr(R.string.double_request), "Keep-alive")
                     "profileDNSMode" -> listOf(tr(R.string.provider_profile), "1.1.1.1", tr(R.string.routing_profile))
+                    "tlsFingerprint" -> listOf(tr(R.string.from_the_server), "Chrome", "Firefox", "Safari", tr(R.string.random_browser), tr(R.string.randomized))
                     else -> field.choices
                 }
-                SettingsChoice(field.title, value, field.choices, labels) {
+                val detail: (@Composable () -> Unit)? = if (field.detail.isEmpty()) null else {
+                    { Text(field.detail, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                }
+                SettingsChoice(field.title, value, field.choices, labels, below = detail) {
                     values[field.key] = it
                     if (field.key == "profilePreferredIP" && it != "inherit") values["preferredIP"] = it
                 }
@@ -282,7 +286,7 @@ private fun canonical(json: String) = JSONObject(json).let { value -> value.keys
             SettingsTile(tr(R.string.connection_recovery), if (catalog.data.mapObject("automation").optBoolean("enabled")) tr(R.string.on) else tr(R.string.off)) { navigate("automation", "") }
             SettingsTile(tr(R.string.run_in_the_background), if (batteryExempt) tr(R.string.allowed) else tr(R.string.android_may_stop_the_vpn_while),
                 trailing = if (batteryExempt) null else {{ TextButton({ activity.allowBackground() }) { Text(tr(R.string.allow)) } }})
-            fields.filter { it.key in immediate && it.key != "allowExternalControl" }.forEach { toggle(it) }
+            fields.filter { it.key in immediate && it.key != "allowExternalControl" && it.key != "autoUpdate" }.forEach { toggle(it) }
             if (saved.optBoolean("connectOnUntrustedWiFi")) {
                 SettingsText(tr(R.string.trusted_wi_fi_networks), values["trustedWiFiNetworks"] ?: "", lines(values["trustedWiFiNetworks"] ?: "").joinToString(", ")
                     .ifEmpty { tr(R.string.none_every_wi_fi_network_connects) }, tr(R.string.one_network_name_per_line), lines = 3) { values["trustedWiFiNetworks"] = it }
@@ -310,6 +314,8 @@ private fun canonical(json: String) = JSONObject(json).let { value -> value.keys
         }
         if (section == "General") SettingsGroup(tr(R.string.updates), tr(R.string.elarni_reads_this_address_once_a)) {
             fields.filter { it.key == "updateFeedURL" }.forEach { field(it) }
+            // A recording build never replaces itself.
+            if (!BuildConfig.ELARNI_RECORDING) fields.filter { it.key == "autoUpdate" }.forEach { toggle(it) }
         }
         if (section == "Connection") SettingsGroup(tr(R.string.server_addressing)) {
             fields.filter { it.key in addressing }.forEach { field(it) }
@@ -376,18 +382,34 @@ val RUSSIAN_APPS = listOf("ru.rostel" to "Gosuslugi", "ru.ozon.app.android" to "
     "ru.sberbankmobile" to "Sber", "com.idamob.tinkoff.android" to "T-Bank", "ru.vtb24.mobilebanking.android" to "VTB", "ru.alfabank.mobile.android" to "Alfa-Bank")
 // Instrumentation swaps in apps the emulator has.
 @Volatile var russianApps = RUSSIAN_APPS
+/** The desktop's presets and more, by store package; a preset's chip shows its first app's brand unless it names a group. */
+val APP_PRESETS = listOf("discord" to listOf("com.discord" to "Discord"),
+    "telegram" to listOf("org.telegram.messenger" to "Telegram", "org.telegram.messenger.web" to "Telegram (telegram.org)", "org.thunderdog.challegram" to "Telegram X"),
+    "claude" to listOf("com.anthropic.claude" to "Claude"),
+    "steam" to listOf("com.valvesoftware.android.steam.community" to "Steam"),
+    "browsers" to listOf("com.android.chrome" to "Google Chrome", "com.microsoft.emmx" to "Microsoft Edge", "org.mozilla.firefox" to "Firefox", "com.brave.browser" to "Brave",
+        "com.opera.browser" to "Opera", "com.vivaldi.browser" to "Vivaldi", "com.yandex.browser" to "Yandex Browser"),
+    "social" to listOf("com.google.android.youtube" to "YouTube", "com.instagram.android" to "Instagram", "com.twitter.android" to "X", "com.whatsapp" to "WhatsApp"))
+// Instrumentation swaps in apps the emulator has.
+@Volatile var appPresets = APP_PRESETS
 
-@Composable private fun ColumnScope.RussianAppsPreset(apps: List<JSONObject>, packages: List<String>, enabled: Boolean, add: (List<String>) -> Unit) {
-    var open by rememberSaveable { mutableStateOf(false) }
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Text(tr(R.string.presets), Modifier.weight(1f), color = MaterialTheme.colorScheme.onSurfaceVariant)
-        FilterChip(open, { open = !open }, { Text(tr(R.string.russian_apps)) }, enabled = enabled)
+/** Russian apps first, offered where listed apps bypass the tunnel; each preset offers its installed apps that are not listed yet. */
+@Composable private fun ColumnScope.AppPresets(apps: List<JSONObject>, packages: List<String>, russian: Boolean, enabled: Boolean, add: (String, List<String>) -> Unit) {
+    var open by rememberSaveable { mutableStateOf<String?>(null) }
+    val presets = (if (russian) listOf("russian" to russianApps) else emptyList()) + appPresets
+    fun label(key: String, members: List<Pair<String, String>>) = when (key) {
+        "russian" -> tr(R.string.russian_apps); "browsers" -> tr(R.string.browsers); "social" -> tr(R.string.social_and_video); else -> members.first().second
     }
-    if (!open) return
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(tr(R.string.presets), Modifier.align(Alignment.CenterVertically), color = MaterialTheme.colorScheme.onSurfaceVariant)
+        presets.forEach { (key, members) -> FilterChip(open == key, { open = if (open == key) null else key }, { Text(label(key, members)) }, enabled = enabled) }
+    }
+    val preset = open ?: return
+    val members = presets.firstOrNull { it.first == preset }?.second ?: return
     val installed = apps.map { it.string("package") }.toSet()
-    val candidates = russianApps.map { it.first }.filter { it in installed && it !in packages }
-    var chosen by rememberSaveable(candidates) { mutableStateOf(candidates) }
-    russianApps.forEach { (name, label) ->
+    val candidates = members.map { it.first }.filter { it in installed && it !in packages }
+    var chosen by rememberSaveable(preset, candidates) { mutableStateOf(candidates) }
+    members.forEach { (name, label) ->
         val available = enabled && name in candidates
         Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("preset-app-$name")
             .toggleable(name in chosen || name in packages, enabled = available, role = Role.Checkbox) { chosen = if (it) chosen + name else chosen - name },
@@ -398,9 +420,10 @@ val RUSSIAN_APPS = listOf("ru.rostel" to "Gosuslugi", "ru.ozon.app.android" to "
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
-    Button({ add(chosen); open = false }, Modifier.align(Alignment.End), enabled = enabled && chosen.isNotEmpty()) {
+    Button({ add(preset, chosen); open = null }, Modifier.align(Alignment.End), enabled = enabled && chosen.isNotEmpty()) {
         Text(trPlural(R.plurals.add_apps, chosen.size))
     }
+    if (preset != "russian") return
     val dark = MaterialTheme.colorScheme.surface == Color(0xFF202124)
     Text(tr(R.string.these_apps_connect_directly_but_they),
         Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(if (dark) Color(0xFF453810) else Color(0xFFFEF9C3)).padding(12.dp),
@@ -460,10 +483,10 @@ private fun targetMap(value: JSONObject?) = value?.let { map -> map.keys().asSeq
         OutlinedButton({ showConnections = true }, enabled = !busy, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("per-app-connections")) {
             Text(tr(R.string.recent_connections))
         }
-        // Only listed apps already sends the others directly.
-        if (mode != "proxyOnly") RussianAppsPreset(apps, packages, !busy && !loading) { added ->
+        // Only listed apps already sends the others directly, so it offers no Russian apps; they turn bypassing on.
+        AppPresets(apps, packages, russian = mode != "proxyOnly", !busy && !loading) { preset, added ->
             packages = (packages + added).distinct()
-            if (mode == "off") mode = "bypass"
+            if (preset == "russian" && mode == "off") mode = "bypass"
         }
         }
         }
@@ -661,6 +684,22 @@ private fun targetMap(value: JSONObject?) = value?.let { map -> map.keys().asSeq
     }
 }
 
+/** Russian national zones and the other domains these services use (v2fly domain-list-community); desktop and iPhone add the same list. */
+val RUSSIAN_SITES = listOf("domain:ru", "domain:xn--p1ai", "domain:su",
+    "domain:ozon.com", "domain:ozonusercontent.com", "domain:ozon.kz",
+    "domain:wbstatic.net", "domain:wbcontent.net", "domain:wb.kz", "domain:paywb.com",
+    "domain:yandex.net", "domain:yandex.com", "domain:yastatic.net", "domain:yastat.net", "domain:yandexcloud.net",
+    "domain:yandex.cloud", "domain:ya.cc", "domain:yadi.sk", "domain:naydex.net",
+    "domain:vk.com", "domain:vk.me", "domain:userapi.com", "domain:vkuser.net", "domain:vk-cdn.net", "domain:vkuseraudio.net",
+    "domain:vkuservideo.net", "domain:vkuserlive.net", "domain:vkcache.com", "domain:mycdn.me", "domain:mvk.com",
+    "domain:sberbank.com", "domain:tbank-online.com", "domain:tinkoff-group.com", "domain:tinkoffmobile.com",
+    "domain:vtb.com", "domain:vtb-direct.com", "domain:alfa.me", "domain:alfabank.st")
+/** The lines of [text], then each of [sites] it lacks, as the desktop adds a preset: the user's lines stay first. */
+fun withSites(text: String, sites: List<String>): String {
+    val current = text.lines().map(String::trim).filter(String::isNotEmpty)
+    return (current + sites.filter { it !in current }).joinToString("\n")
+}
+
 @Composable fun RoutingEditor(record: JSONObject?, busy: Boolean, activity: MainActivity, initialSection: String = "", done: () -> Unit) {
     val original = record?.mapObject("profile") ?: obj("Name" to "My routing", "GlobalProxy" to "true", "RouteOrder" to "block-direct-proxy", "DomainStrategy" to "AsIs", "RemoteDNSType" to "DoU", "RemoteDNSIP" to "1.1.1.1", "DomesticDNSType" to "DoU", "DomesticDNSIP" to "1.1.1.1", "UseChunkFiles" to "true")
     val id = record?.string("id") ?: ""
@@ -730,9 +769,17 @@ private fun targetMap(value: JSONObject?) = value?.let { map -> map.keys().asSeq
                 when (section) {
                     "rules" -> {
                         ToggleField(tr(R.string.proxy_unmatched_traffic), draft.string("GlobalProxy", "true") == "true", enabled = !busy) { flip("GlobalProxy") { put("GlobalProxy", it.toString()) } }
-                        listOf(tr(R.string.direct), tr(R.string.proxy), tr(R.string.block)).forEach { action ->
+                        // The lists are keyed by the English action; a translated title found none of them.
+                        listOf("Direct" to tr(R.string.direct), "Proxy" to tr(R.string.proxy), "Block" to tr(R.string.block)).forEach { (action, title) ->
                             HorizontalDivider()
-                            Text(action, style = MaterialTheme.typography.titleMedium)
+                            Text(title, style = MaterialTheme.typography.titleMedium)
+                            if (action == "Direct") {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(tr(R.string.presets), Modifier.weight(1f), color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    AssistChip({ inputs["DirectSites"] = withSites(inputs["DirectSites"] ?: "", RUSSIAN_SITES) }, { Text(tr(R.string.russian_sites_direct)) }, enabled = !busy)
+                                }
+                                Text(tr(R.string.russian_sites_preset_help), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
                             TextField(tr(R.string.domains), inputs[action + "Sites"] ?: "", 3) { inputs[action + "Sites"] = it }
                             TextField(tr(R.string.ip_addresses_and_networks), inputs[action + "Ip"] ?: "", 3) { inputs[action + "Ip"] = it }
                             Text(tr(R.string.one_target_per_line_domains_support), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -798,6 +845,25 @@ private fun targetMap(value: JSONObject?) = value?.let { map -> map.keys().asSeq
                 EditorActions(busy, done, { save() })
             }
         }
+    }
+}
+
+/** A server's stored Xray JSON, as on the desktop; saving checks that it is still one server the compiler takes. */
+@Composable fun NodeConfigEditor(catalog: Catalog, id: String, busy: Boolean, activity: MainActivity, done: () -> Unit) {
+    // A refresh can take the server away, or its provider can start hiding it, while this is open.
+    if (catalog.nodeOrNull(id) == null || catalog.configRefusal(id) != null) { EmptyDetail(); return }
+    val original = remember(id) { catalog.node(id).getJSONObject("config").toString(2) }
+    var text by rememberDraft(activity, "node-config-$id") { original }
+    FormColumn {
+        OutlinedTextField(text, { text = it }, Modifier.fillMaxWidth().testTag("node-config-json"), label = { Text("Xray JSON") }, minLines = 12, maxLines = 22,
+            textStyle = LocalTextStyle.current.copy(fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace), keyboardOptions = KeyboardOptions(autoCorrectEnabled = false))
+        val source = catalog.sourceFor(id)
+        if (source.has("url")) Text(tr(R.string.next_refresh_replaces_your_edits, source.string("name")), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        // It holds the server's keys, so Android 13 and later keep it out of the clipboard preview.
+        TextButton({ activity.copy(text, sensitive = true) }) { Text(tr(R.string.copy)) }
+        fun save(move: String? = null) = activity.saveReviewed("updateNodeConfig", obj("id" to id, "text" to text), move)
+        SaveOnLeave(activity, text != original) { move -> save(move) }
+        EditorActions(busy, done, { save() })
     }
 }
 

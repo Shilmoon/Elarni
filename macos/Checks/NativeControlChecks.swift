@@ -84,6 +84,14 @@ struct NativeControlChecks {
       throw Failure(message: "a routing link without a selected server was accepted")
     } catch let failure as Failure where failure.message == "importClientProfiles: no_selected_subscription" {}
     print("PASS a routing link without a selected server asks for one")
+    // Shortcuts reports this error (ConnectionIntents.swift) instead of a connection that never started.
+    let keptIntent = defaults.object(forKey: "ElarniConnectionIntentV1")
+    do {
+      try await controller.performConnectionAction("connect", confirm: false)
+      throw Failure(message: "a Shortcuts Connect without a selected server succeeded")
+    } catch RunnerTunnelError.notPrepared {}
+    defaults.set(keptIntent, forKey: "ElarniConnectionIntentV1")
+    print("PASS a Shortcuts Connect without a selected server fails instead of reporting success")
 
     let startingMessenger = ControlMessenger()
     var pendingLoad: CheckedContinuation<[NETunnelProviderManager], Error>?
@@ -201,6 +209,8 @@ struct NativeControlChecks {
     await record { try await crossSubscriptionRecoveryCheck(defaults: defaults) }
     await record { try await perAppTargetCheck(defaults: defaults) }
     await record { try await coreLogCheck(defaults: defaults) }
+    await record { try await nodeConfigCheck(defaults: defaults) }
+    await record { try await shareLinksCheck(defaults: defaults) }
     await record { try versionsFolderCheck() }
 
     // Call the actual socket probe without measureICMP, which requires an OS
@@ -220,7 +230,7 @@ struct NativeControlChecks {
     print("PASS production ICMP probe supports Automatic IPv4/IPv6, address fallback and explicit family")
     guard keychainCalls == 0 else { throw Failure(message: "fixture unexpectedly needed credentials") }
     guard selectionFailures.isEmpty else { throw Failure(message: selectionFailures.joined(separator: "; ")) }
-    print("22 native control checks passed; no VPN preferences or credentials used; ICMP uses loopback only")
+    print("24 native control checks passed; no VPN preferences or credentials used; ICMP uses loopback only")
   }
 
   // Claude Code as the Claude app installs it, claude-code/<version>/<build>/claude.app, gets a new
@@ -478,12 +488,13 @@ struct NativeControlChecks {
     print("PASS a switch to a server with another IP preference restarts the provider")
     // A settings change rebuilds the selected server's plan; global settings must not replace it.
     let savedSettings = defaults.data(forKey: "ElarniTunnelSettingsV1")
-    _ = try await restartingMessenger.call("updateTunnelSettings", arguments: ["muxEnabled": true])
+    _ = try await restartingMessenger.call("updateTunnelSettings", arguments: ["muxEnabled": true, "tlsFingerprint": "firefox"])
     let reapplied = try JSONSerialization.jsonObject(with:
       (restarting.protocolConfiguration as! NETunnelProviderProtocol).providerConfiguration!["planPayload"] as! Data) as! [String: Any]
     let reappliedSettings = reapplied["settings"] as? [String: Any]
     guard reapplied["backend"] == nil, reappliedSettings?["preferredIP"] as? String == "ipv6",
-          reappliedSettings?["muxEnabled"] as? Bool == true, restarting.fixtureSession.status == .connected else {
+          reappliedSettings?["muxEnabled"] as? Bool == true, reappliedSettings?["tlsFingerprint"] as? String == "firefox",
+          restarting.fixtureSession.status == .connected else {
       throw Failure(message: "a settings change replaced the selected server's plan with global settings")
     }
     defaults.set(savedSettings, forKey: "ElarniTunnelSettingsV1")
@@ -511,6 +522,7 @@ struct NativeControlChecks {
     defaults.set(savedSettings, forKey: "ElarniTunnelSettingsV1")
     print("PASS a settings change and an ICMP ping restart the provider themselves and keep On Demand")
     await record { try await untrustedWiFiCheck(store: store, defaults: defaults, plan: candidate) }
+    await record { try await shortcutConnectionCheck(store: store, defaults: defaults, plan: candidate) }
     // Back on the second server's plan, clearing the first server's preference changes no running plan,
     // which this fixture could not validate without the core helper.
     try store.commitSelection(nodeID: second)
@@ -612,8 +624,9 @@ struct NativeControlChecks {
     print("PASS while connected with Include all networks, Direct TCP and other servers' proxy tests ask for a disconnect")
   }
 
-  // Two servers in separate subscriptions, kept in an in-memory keychain; the first is selected.
-  static func twoSubscriptions(_ directory: URL) async throws
+  // Two servers in separate subscriptions, kept in an in-memory keychain; the first is selected unless
+  // [selecting] is false.
+  static func twoSubscriptions(_ directory: URL, selecting: Bool = true) async throws
     -> (store: SubscriptionStore, selected: (subscription: String, node: String), other: (subscription: String, node: String)) {
     var values: [String: Data] = [:]
     func key(_ query: CFDictionary) -> String { (query as NSDictionary)[kSecAttrAccount] as! String }
@@ -644,8 +657,110 @@ struct NativeControlChecks {
     let selected = try await importNode("socks://127.0.0.1:1080#Selected")
     // A hidden import keeps its own group, so this server is in another subscription.
     let other = try await importNode("#hide-url: yes\nsocks://127.0.0.1:1081#Other")
-    try store.commitSelection(nodeID: selected.node)
+    if selecting { try store.commitSelection(nodeID: selected.node) }
     return (store, selected, other)
+  }
+
+  // A server's Xray JSON shows and takes a hand edit under the rules sharing follows, with the
+  // Windows and Linux codes. No server is selected: a selected one's new plan needs the core helper.
+  static func nodeConfigCheck(defaults: UserDefaults) async throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent("elarni-node-config-\(UUID())")
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let (store, local, hidden) = try await twoSubscriptions(directory, selecting: false)
+    try TunnelCommandCoordinator(defaults: defaults).persist(.disconnected)
+    let messenger = ControlMessenger()
+    let controller = TunnelMethodChannel(messenger: messenger, defaults: defaults, observesSystem: false,
+      makeSubscriptions: { store }, loadPreferences: { [] })
+    defer { withExtendedLifetime(controller) {} }
+    func shown() async throws -> String {
+      guard let config = try await messenger.call("nodeConfig", arguments: ["id": local.node])["config"] as? [String: Any],
+            config["outbounds"] is [[String: Any]] else { throw Failure(message: "nodeConfig did not return the stored Xray JSON") }
+      return String(decoding: try JSONSerialization.data(withJSONObject: config, options: [.sortedKeys]), as: UTF8.self)
+    }
+    let stored = try await shown()
+    guard stored.contains("1080") else { throw Failure(message: "the shown config is not the imported server's: \(stored)") }
+    for (method, arguments) in [("nodeConfig", ["id": hidden.node]),
+                                ("updateNodeConfig", ["nodeId": hidden.node, "content": stored])] {
+      do { _ = try await messenger.call(method, arguments: arguments); throw Failure(message: "\(method) ignored a provider that hides configs") }
+      catch let failure as Failure where failure.message == "\(method): sharing_disabled" {}
+    }
+    let ref = try store.outboundRef(nodeID: local.node), revision = try store.configurationRevision(nodeID: local.node)
+    // Two servers, a Telegram proxy and text that is no server are not one Xray server.
+    for content in ["socks://127.0.0.1:1090#One\nsocks://127.0.0.1:1091#Two",
+                    "tg://proxy?server=127.0.0.1&port=443&secret=0123456789abcdef0123456789abcdef", "not a server"] {
+      do {
+        _ = try await messenger.call("updateNodeConfig", arguments: ["nodeId": local.node, "content": content])
+        throw Failure(message: "an edit that is not one Xray server was saved: \(content)")
+      } catch let failure as Failure where failure.message == "updateNodeConfig: unsupported_profile" {}
+      guard try store.outboundRef(nodeID: local.node) == ref, try await shown() == stored else {
+        throw Failure(message: "a refused edit changed the server")
+      }
+    }
+    // An edit that changes nothing keeps the server's secret and revision.
+    _ = try await messenger.call("updateNodeConfig", arguments: ["nodeId": local.node, "content": stored])
+    guard try store.outboundRef(nodeID: local.node) == ref else { throw Failure(message: "an unchanged edit replaced the secret") }
+    let edit = stored.replacingOccurrences(of: "1080", with: "1090")
+    let reply = try await messenger.call("updateNodeConfig", arguments: ["nodeId": local.node, "content": edit])
+    let saved = try await shown()
+    let catalog = try JSONSerialization.jsonObject(with: Data(contentsOf: directory.appendingPathComponent("subscriptions-v1.json"))) as? [String: Any]
+    let persisted = (catalog?["subscriptions"] as? [[String: Any]])?.flatMap { $0["nodes"] as? [[String: Any]] ?? [] }
+      .first { $0["id"] as? String == local.node }
+    let newRef = try store.outboundRef(nodeID: local.node)
+    guard reply["subscriptions"] is [[String: Any]], saved.contains("1090"), !saved.contains("1080"),
+          newRef != ref, persisted?["outboundRef"] as? String == newRef,
+          try store.configurationRevision(nodeID: local.node) != revision else {
+      throw Failure(message: "a valid edit was not saved as the server's config with a new revision: \(saved)")
+    }
+    print("PASS a server's config shows and takes one Xray server; hidden providers and other edits are refused")
+
+    guard try await messenger.call("qrCode", arguments: ["text": "elarni-check"])["png"] is String else {
+      throw Failure(message: "qrCode returned no image")
+    }
+    do {
+      _ = try await messenger.call("saveFile", arguments: ["kind": "zip", "bytes": FlutterStandardTypedData(bytes: Data([1]))])
+      throw Failure(message: "saveFile accepted a kind the app never saves")
+    } catch let failure as Failure where failure.message == "saveFile: invalid_request" {}
+    print("PASS qrCode draws any text, and saveFile refuses an unknown kind before a panel opens")
+  }
+
+  // A local group's servers share as the store's links. A server without one is refused by name and a
+  // hidden import's group not at all, with the Windows and Linux codes the Flutter side words.
+  static func shareLinksCheck(defaults: UserDefaults) async throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent("elarni-share-links-\(UUID())")
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let (store, local, hidden) = try await twoSubscriptions(directory, selecting: false)
+    // libXray writes no link for an HTTP proxy; it joins the first local group.
+    _ = try await store.refresh(id: try store.registerProfiles("http://127.0.0.1:8080#Web"))
+    let groups = store.snapshot()["subscriptions"] as? [[String: Any]] ?? []
+    let nodes = groups.first { $0["id"] as? String == local.subscription }?["nodes"] as? [[String: Any]] ?? []
+    guard let web = nodes.first(where: { $0["name"] as? String == "Web" })?["id"] as? String else {
+      throw Failure(message: "the HTTP proxy did not join the local group")
+    }
+    try TunnelCommandCoordinator(defaults: defaults).persist(.disconnected)
+    let messenger = ControlMessenger()
+    let controller = TunnelMethodChannel(messenger: messenger, defaults: defaults, observesSystem: false,
+      makeSubscriptions: { store }, loadPreferences: { [] })
+    defer { withExtendedLifetime(controller) {} }
+    let text = try await messenger.call("shareLinks",
+      arguments: ["subscriptionId": local.subscription, "nodeIds": [local.node]])["text"] as? String
+    guard let text, text == (try store.shareLinks(subscriptionID: local.subscription, nodeIDs: [local.node])),
+          text.hasPrefix("socks://"), text.hasSuffix("#Selected") else {
+      throw Failure(message: "shareLinks did not return the store's link of a local group's server: \(text ?? "none")")
+    }
+    let refusals: [(arguments: [String: Any], code: String, details: String?)] = [
+      (["subscriptionId": local.subscription, "nodeIds": [local.node, web]], "no_share_link", "Web"),
+      (["subscriptionId": hidden.subscription, "nodeIds": [hidden.node]], "sharing_disabled", nil),
+    ]
+    for (arguments, code, details) in refusals {
+      do {
+        _ = try await messenger.call("shareLinks", arguments: arguments)
+        throw Failure(message: "shareLinks shared a server it must refuse: \(arguments)")
+      } catch let failure as Failure where failure.message == "shareLinks: \(code)" {}
+      guard messenger.lastError?.details as? String == details else {
+        throw Failure(message: "shareLinks refused \(code) with details \(String(describing: messenger.lastError?.details))")
+      }
+    }
+    print("PASS a local group's servers share as links; one without a link is named and a hidden group refused")
   }
 
   // Recovery may list servers of any subscription, and a manual choice keeps them as backups.
@@ -906,6 +1021,45 @@ struct NativeControlChecks {
     print("PASS Connect on untrusted Wi-Fi arms On Demand while stopped, takes over its connection and pauses after a Stop")
   }
 
+  // A Shortcuts action runs a connection link's code: Connect reaches the state a link's Connect reaches,
+  // and Disconnect and Toggle stop without the link's confirmation, which would stall this check.
+  static func shortcutConnectionCheck(store: SubscriptionStore, defaults: UserDefaults, plan: Data) async throws {
+    let kept = ["ElarniConnectionIntentV1", TunnelMethodChannel.automationKey].map { ($0, defaults.object(forKey: $0)) }
+    defer { for (key, value) in kept { defaults.set(value, forKey: key) } }
+    defaults.removeObject(forKey: TunnelMethodChannel.automationKey)
+    try TunnelCommandCoordinator(defaults: defaults).persist(.disconnected)
+    let manager = SwitchManager(plan: plan)
+    manager.fixtureSession.fixtureStatus = .disconnected
+    manager.fixtureSession.startable = true
+    let messenger = ControlMessenger()
+    let controller = TunnelMethodChannel(messenger: messenger, defaults: defaults, observesSystem: false,
+      makeSubscriptions: { store }, loadPreferences: { [manager] })
+    defer { withExtendedLifetime(controller) {} }
+    func reached() -> [String] {
+      ["\(manager.fixtureSession.fixtureStatus.rawValue)", controller.commands.intent?.rawValue ?? "none",
+       "\(manager.isOnDemandEnabled)", "\(manager.onDemandRules?.map(\.action.rawValue) ?? [])"]
+    }
+    func stopped(_ action: String) throws {
+      guard manager.fixtureSession.fixtureStatus == .disconnected, controller.commands.intent == .disconnected else {
+        throw Failure(message: "a Shortcuts \(action) did not stop: \(reached())")
+      }
+    }
+    try await controller.performConnectionAction("connect", confirm: true)
+    let link = reached()
+    guard manager.fixtureSession.fixtureStatus == .connected, manager.fixtureSession.starts == 1 else {
+      throw Failure(message: "a link's Connect did not start the tunnel: \(link)")
+    }
+    try await controller.performConnectionAction("disconnect", confirm: false)
+    try stopped("Disconnect")
+    try await controller.performConnectionAction("connect", confirm: false)
+    guard reached() == link, manager.fixtureSession.starts == 2 else {
+      throw Failure(message: "a Shortcuts Connect reached \(reached()), a link's Connect \(link)")
+    }
+    try await controller.performConnectionAction("toggle", confirm: false)
+    try stopped("Toggle")
+    print("PASS a Shortcuts Connect reaches a link's state; its Disconnect and Toggle stop without the link's confirmation")
+  }
+
   // A manual server choice while connected under a pinned automation server switches to it.
   static func fixedAutomationSelectionCheck(store: SubscriptionStore, defaults: UserDefaults, plan: Data,
                                             pinned: String, other: String) async throws {
@@ -1084,6 +1238,8 @@ final class ControlMessenger: NSObject, FlutterBinaryMessenger {
   var handler: FlutterBinaryMessageHandler?
   /// Errors the handler showed through subscriptionsChanged.
   var notices: [String] = []
+  /// The last call's error, whose details the thrown failure leaves out.
+  var lastError: FlutterError?
   func send(onChannel channel: String, message: Data?) { note(message) }
   func send(onChannel channel: String, message: Data?, binaryReply callback: FlutterBinaryReply?) { note(message); callback?(nil) }
   private func note(_ message: Data?) {
@@ -1109,6 +1265,7 @@ final class ControlMessenger: NSObject, FlutterBinaryMessenger {
     }
     guard let response else { throw NativeControlChecks.Failure(message: "missing \(method) reply") }
     let value = codec.decodeEnvelope(response)
+    lastError = value as? FlutterError
     if let error = value as? FlutterError { throw NativeControlChecks.Failure(message: "\(method): \(error.code)") }
     guard let result = value as? [String: Any] else { throw NativeControlChecks.Failure(message: "invalid \(method) reply") }
     return result

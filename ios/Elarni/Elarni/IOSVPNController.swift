@@ -56,17 +56,23 @@ final class IOSVPNController {
     let matches = managers.filter { ($0.protocolConfiguration as? NETunnelProviderProtocol)?.providerBundleIdentifier == extensionID }
     guard matches.count <= 1 else { throw IOSAppError.providerUnavailable }
     manager = matches.first
+    // Covers a configuration saved before this note existed, and On Demand changed in iOS Settings.
+    IOSOnDemandRestart.setArmed(manager?.isOnDemandEnabled == true)
     updateStatus()
 #endif
   }
 
   private func updateStatus() {
-    let wasActive = active
+    let wasActive = active, wasStatus = status
     status = manager?.connection.status ?? .disconnected
     connectedAt = manager?.connection.connectedDate
     if !active { provider = [:] }
     // Control Center shows the toggle's last value until the app reloads it.
     if active != wasActive { ControlCenter.shared.reloadControls(ofKind: ConnectionControlIntent.kind) }
+    // The widget also tells connecting from connected.
+    if ConnectionWidgetStatus.state([status]) != ConnectionWidgetStatus.state([wasStatus]) {
+      WidgetCenter.shared.reloadTimelines(ofKind: ConnectionWidgetStatus.kind)
+    }
   }
 
   func persist(_ data: Data, settings: IOSTunnelSettings, allowOnDemand: Bool) async throws {
@@ -91,6 +97,7 @@ final class IOSVPNController {
       selected.isOnDemandEnabled = true
     } else { selected.onDemandRules = nil; selected.isOnDemandEnabled = false }
     try await selected.saveToPreferences()
+    IOSOnDemandRestart.setArmed(selected.isOnDemandEnabled)
     manager = selected
     try await selected.loadFromPreferences()
     try Task.checkCancellation()
@@ -149,6 +156,8 @@ final class IOSVPNController {
         throw error
       }
     }
+    // The extension reports a restart only after a stop that left On Demand armed.
+    IOSOnDemandRestart.setArmed(false)
     manager.connection.stopVPNTunnel()
     let deadline = Date().addingTimeInterval(20)
     while true {
@@ -163,6 +172,7 @@ final class IOSVPNController {
     guard let manager else { return }
     guard !active else { throw IOSAppError.busy }
     try await manager.removeFromPreferences()
+    IOSOnDemandRestart.setArmed(false)
     self.manager = nil
     updateStatus()
   }
@@ -176,6 +186,7 @@ final class IOSVPNController {
     }
     manager.isOnDemandEnabled = false; manager.onDemandRules = nil
     try await manager.saveToPreferences()
+    IOSOnDemandRestart.setArmed(false)
     try await manager.loadFromPreferences()
   }
 

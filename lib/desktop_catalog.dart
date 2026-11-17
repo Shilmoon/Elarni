@@ -1618,9 +1618,18 @@ final class DesktopCatalog {
 
   // Each list refreshes on its own: a failed one keeps its last download, and
   // the route records the first error and retries on the shared schedule.
-  Future<void> refreshManaged(String id, {String? proxy}) async {
+  // Only [sourceId], when given; its success says nothing of the other lists,
+  // so it leaves the route's error and schedule as they were. Returns the
+  // error this refresh recorded.
+  Future<String?> refreshManaged(
+    String id, {
+    String? sourceId,
+    String? proxy,
+  }) async {
     final item = route(id), profile = catalogMap(item['profile']);
     final sources = catalogList(profile['ManagedSources']);
+    if (sourceId != null && !sources.any((source) => source['id'] == sourceId))
+      throw desktopError('not_found');
     final previous = catalogMap(item['lists'] ?? {});
     final lists = <String, Object?>{
       for (final source in sources)
@@ -1629,6 +1638,7 @@ final class DesktopCatalog {
     };
     String? error;
     for (final source in sources) {
+      if (sourceId != null && source['id'] != sourceId) continue;
       try {
         final feed = await native('fetchSubscription', {
           'url': source['url'],
@@ -1661,10 +1671,13 @@ final class DesktopCatalog {
     putRoute({
       ...item,
       if (routeModel != null) ...{'lists': lists, 'routeModel': routeModel},
-      'nextManagedRefreshAt':
-          now + (error == null ? 86400 : retryDelay(failures)),
-      'managedError': error,
-      'managedFailures': failures,
+      if (sourceId == null || error != null) ...{
+        'nextManagedRefreshAt':
+            now + (error == null ? 86400 : retryDelay(failures)),
+        'managedError': error,
+        'managedFailures': failures,
+      },
     });
+    return error;
   }
 }

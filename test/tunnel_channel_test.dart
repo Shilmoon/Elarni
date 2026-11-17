@@ -80,6 +80,14 @@ void main() {
     },
   );
 
+  test('the TLS fingerprint defaults to the server\'s and round-trips', () {
+    expect(TunnelSettings.fromMap({}).tlsFingerprint, 'server');
+    final chosen = const TunnelSettings().copyWith(tlsFingerprint: 'firefox');
+    expect(chosen.toMap()['tlsFingerprint'], 'firefox');
+    expect(TunnelSettings.fromMap(chosen.toMap()).tlsFingerprint, 'firefox');
+    expect(chosen.copyWith(muxEnabled: true).tlsFingerprint, 'firefox');
+  });
+
   test(
     'connection recording: the switch is off by default and round-trips',
     () {

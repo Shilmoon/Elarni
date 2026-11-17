@@ -181,11 +181,13 @@ jobs:
       - name: Check the files against SHA256SUMS and the build provenance
         working-directory: dist
         # The signed APK differs from the attested unsigned one by its signature, so it is checked by checksum only.
+        # SHA256SUMS.sig is the release key's signature, which installed builds need to update themselves.
         run: |
           set -e
           sha256sum --quiet -c SHA256SUMS
+          test -s SHA256SUMS.sig
           for file in *; do
-            case "$file" in SHA256SUMS|*.apk|*.intoto.jsonl|*.sigstore.json) continue ;; esac
+            case "$file" in SHA256SUMS|SHA256SUMS.sig|*.apk|*.intoto.jsonl|*.sigstore.json) continue ;; esac
             gh attestation verify "$file" --repo "$GH_REPO" --signer-workflow "$GH_REPO/.github/workflows/release.yml" > /dev/null
             echo "attested: $file"
           done

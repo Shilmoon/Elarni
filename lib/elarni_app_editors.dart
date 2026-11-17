@@ -723,67 +723,206 @@ extension _HomeEditors on _ElarniHomeState {
     }
   }
 
-  Future<void> _shareSubscription(String id) async {
+  /// Shows the share link of a subscription, or of one server, as a QR code
+  /// to scan and text to copy.
+  Future<void> _shareSubscription(String id, {bool subscription = true}) async {
     _set(() => _busy = true);
     try {
       final shared = await widget.tunnelControl.shareClient(
         id,
-        subscription: true,
+        subscription: subscription,
       );
       final text = shared['text'] as String;
       final png = shared['png'] is String
           ? base64Decode(shared['png']! as String)
           : null;
       if (!mounted) return;
-      await showDialog<void>(
-        context: context,
-        builder: (context) => AlertDialog(
-          title: Text(l10n.shareSubscription),
-          scrollable: true,
-          content: SizedBox(
-            width: 384,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                if (png != null)
-                  Image.memory(
-                    png,
-                    width: 384,
-                    height: 384,
-                    semanticLabel: l10n.connectionQrCode,
-                  )
-                else
-                  Text(l10n.configTooLargeForQr),
-                const SizedBox(height: 12),
-                Text(l10n.anyoneCanUseDetails),
-              ],
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: Text(l10n.close),
-            ),
-            TextButton(
-              onPressed: () async {
-                try {
-                  await Clipboard.setData(ClipboardData(text: text));
-                  if (context.mounted) Navigator.pop(context);
-                  if (mounted) _set(() => _message = null);
-                } on Object {
-                  if (mounted) _set(() => _message = l10n.copyDetailsFailed);
-                }
-              },
-              child: Text(l10n.copy),
-            ),
-          ],
-        ),
+      await _showShared(
+        subscription ? l10n.shareSubscription : l10n.shareServer,
+        text,
+        [
+          if (png != null)
+            Image.memory(
+              png,
+              width: 384,
+              height: 384,
+              semanticLabel: l10n.connectionQrCode,
+            )
+          else
+            Text(l10n.configTooLargeForQr),
+          const SizedBox(height: 12),
+          Text(l10n.anyoneCanUseDetails),
+        ],
+        png: png,
       );
     } on Object {
       if (mounted) _set(() => _message = l10n.sharingUnavailable);
     } finally {
       if (mounted) _set(() => _busy = false);
     }
+  }
+
+  /// Shows a routing profile's JSON to copy, the text Android and iOS share,
+  /// and its QR code when the JSON fits one.
+  Future<void> _shareRouting(RoutingProfile profile) async {
+    Uint8List? png;
+    var tooLarge = false;
+    try {
+      final shared = await widget.tunnelControl.qrCode(profile.json);
+      if (shared['png'] case final String data) {
+        png = base64Decode(data);
+      } else {
+        tooLarge = true;
+      }
+    } on Object {
+      // The JSON is still there to copy or save.
+    }
+    if (!mounted) return;
+    await _showShared(l10n.shareRoutingProfile, profile.json, [
+      if (png != null) ...[
+        Image.memory(
+          png,
+          width: 384,
+          height: 384,
+          semanticLabel: l10n.connectionQrCode,
+        ),
+        const SizedBox(height: 12),
+      ] else if (tooLarge) ...[
+        Text(l10n.configTooLargeForQr),
+        const SizedBox(height: 12),
+      ],
+      Align(
+        alignment: AlignmentDirectional.centerStart,
+        child: Text(
+          profile.name,
+          style: Theme.of(context).textTheme.titleSmall,
+        ),
+      ),
+      const SizedBox(height: 8),
+      SelectableText(
+        profile.json,
+        key: const Key('shared-routing-json'),
+        style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
+      ),
+    ], png: png);
+  }
+
+  /// Saves [bytes] as a file of [kind] where the user chooses. A cancelled
+  /// save panel says nothing.
+  Future<bool> _saveFile(String kind, Uint8List bytes) async {
+    _set(() => _message = null);
+    try {
+      final saved = await widget.tunnelControl.saveFile(kind, bytes);
+      if (saved && mounted) _set(() => _message = l10n.fileSaved);
+      return saved;
+    } on Object catch (error) {
+      final code = error is PlatformException ? error.code : '';
+      if (!const {'cancelled', 'operation_cancelled'}.contains(code) && mounted)
+        _set(() => _message = l10n.fileNotSaved);
+      return false;
+    }
+  }
+
+  /// The share dialog: [content] above Close, buttons saving [text] and the
+  /// QR code [png] to a file, and a button copying [text].
+  Future<void> _showShared(
+    String title,
+    String text,
+    List<Widget> content, {
+    Uint8List? png,
+  }) => showDialog<void>(
+    context: context,
+    builder: (context) {
+      Future<void> save(String kind, Uint8List bytes) async {
+        if (await _saveFile(kind, bytes) && context.mounted)
+          Navigator.pop(context);
+      }
+
+      return AlertDialog(
+        title: Text(title),
+        scrollable: true,
+        content: SizedBox(
+          width: 384,
+          child: Column(mainAxisSize: MainAxisSize.min, children: content),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text(l10n.close),
+          ),
+          TextButton(
+            key: const Key('shared-save-text'),
+            onPressed: () => save('text', utf8.encode(text)),
+            child: Text(l10n.saveToFile),
+          ),
+          if (png != null)
+            TextButton(
+              key: const Key('shared-save-qr'),
+              onPressed: () => save('png', png),
+              child: Text(l10n.saveQrImage),
+            ),
+          TextButton(
+            onPressed: () async {
+              try {
+                await Clipboard.setData(ClipboardData(text: text));
+                if (context.mounted) Navigator.pop(context);
+                if (mounted) _set(() => _message = null);
+              } on Object {
+                if (mounted) _set(() => _message = l10n.copyDetailsFailed);
+              }
+            },
+            child: Text(l10n.copy),
+          ),
+        ],
+      );
+    },
+  );
+
+  /// Opens Flutter's license page, with the notices desktop packages ship.
+  void _openLicenses() {
+    registerShippedNotices();
+    final version = _systemInfo['appVersion'];
+    showLicensePage(
+      context: context,
+      applicationName: 'Elarni',
+      applicationVersion: version is String ? version : null,
+    );
+  }
+
+  /// Asks for one server's IP type, with the choices Settings offers for the
+  /// selected server.
+  Future<void> _chooseNodeIPPreference(SubscriptionNode node) async {
+    final current = node.ipPreference ?? 'default';
+    final choice = await showDialog<String>(
+      context: context,
+      builder: (context) => SimpleDialog(
+        title: Text(l10n.serverIpType),
+        children: [
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 24),
+            child: Text(ServerLocation.displayName(node.name)),
+          ),
+          const SizedBox(height: 8),
+          for (final (value, label) in [
+            ('default', l10n.useAppDefault),
+            ('automatic', l10n.automatic),
+            ('ipv4', 'IPv4'),
+            ('ipv6', 'IPv6'),
+          ])
+            ListTile(
+              key: ValueKey('server-ip-choice:$value'),
+              title: Text(label),
+              trailing: value == current
+                  ? const Icon(CupertinoIcons.checkmark_alt)
+                  : null,
+              selected: value == current,
+              onTap: () => Navigator.pop(context, value),
+            ),
+        ],
+      ),
+    );
+    if (!mounted || choice == null || choice == current || _busy) return;
+    await _setNodeIPPreference(node.id, choice == 'default' ? null : choice);
   }
 
   Future<void> _editSubscriptionFetch(SubscriptionGroup group) async {
@@ -1221,6 +1360,79 @@ extension _HomeEditors on _ElarniHomeState {
     }
   }
 
+  /// Shows the chosen servers of a local group, which has no subscription
+  /// link, as their share links, one per line in the group's order, with a
+  /// QR code when they fit one.
+  Future<void> _shareSelected(SubscriptionGroup group) async {
+    final ids = [
+      for (final node in group.nodes)
+        if (_selectedServers.contains(node.id)) node.id,
+    ];
+    if (ids.isEmpty || _busy) return;
+    _set(() {
+      _busy = true;
+      _message = null;
+    });
+    final String text;
+    Uint8List? png;
+    var tooLarge = false;
+    try {
+      text = await widget.tunnelControl.shareLinks(group.id, ids);
+      try {
+        final shared = await widget.tunnelControl.qrCode(text);
+        if (shared['png'] case final String data) {
+          png = base64Decode(data);
+        } else {
+          tooLarge = true;
+        }
+      } on Object {
+        // The links are still there to copy or save.
+      }
+    } on Object catch (error) {
+      if (mounted)
+        _set(
+          () => _message = switch (error) {
+            PlatformException(
+              code: 'no_share_link',
+              details: final String name,
+            ) =>
+              l10n.serverHasNoShareLink(name),
+            PlatformException(code: 'sharing_disabled') =>
+              l10n.sharingDisabledByProvider,
+            _ => l10n.sharingUnavailable,
+          },
+        );
+      return;
+    } finally {
+      if (mounted) _set(() => _busy = false);
+    }
+    if (!mounted) return;
+    await _showShared(l10n.shareServers, text, [
+      if (png != null) ...[
+        Image.memory(
+          png,
+          width: 384,
+          height: 384,
+          semanticLabel: l10n.connectionQrCode,
+        ),
+        const SizedBox(height: 12),
+      ] else if (tooLarge) ...[
+        Text(l10n.configTooLargeForQr),
+        const SizedBox(height: 12),
+      ],
+      Align(
+        alignment: AlignmentDirectional.centerStart,
+        child: SelectableText(
+          text,
+          key: const Key('shared-links'),
+          style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
+        ),
+      ),
+      const SizedBox(height: 12),
+      Text(l10n.anyoneCanUseDetails),
+    ], png: png);
+  }
+
   Future<void> _resetDeviceID(SubscriptionGroup group) async {
     final confirmed = await showDialog<bool>(
       context: context,
@@ -1433,6 +1645,10 @@ extension _HomeEditors on _ElarniHomeState {
                   ? null
                   : failureText(code)) ??
               message;
+          final managed = switch (_decodedProfile(profile.json)) {
+            {'ManagedSources': final List sources} => sources.isNotEmpty,
+            _ => false,
+          };
           return AlertDialog(
             title: Text(profile.name),
             content: SizedBox(
@@ -1525,6 +1741,22 @@ extension _HomeEditors on _ElarniHomeState {
               ),
             ),
             actions: [
+              if (managed)
+                TextButton(
+                  key: ValueKey('routing-refresh-lists:$id'),
+                  onPressed: _busy
+                      ? null
+                      : () async {
+                          final result = _runRouting(
+                            () => widget.tunnelControl.refreshManagedLists(id),
+                          );
+                          update(() {});
+                          await result;
+                          if (context.mounted)
+                            update(() => refreshError = _message);
+                        },
+                  child: Text(l10n.refreshLists),
+                ),
               TextButton(
                 onPressed: () => Navigator.pop(context),
                 child: Text(l10n.done),
@@ -1534,5 +1766,17 @@ extension _HomeEditors on _ElarniHomeState {
         },
       ),
     );
+  }
+
+  /// A routing profile's JSON as an object; null when it is not one.
+  Map<String, Object?>? _decodedProfile(String json) {
+    try {
+      return switch (jsonDecode(json)) {
+        final Map<String, Object?> value => value,
+        _ => null,
+      };
+    } on FormatException {
+      return null;
+    }
   }
 }
