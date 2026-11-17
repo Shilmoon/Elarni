@@ -382,7 +382,10 @@ class AndroidUIE2E {
             runBlocking { UpdateCheck.prepare(app, false) }
             assertEquals(1, installs.size)
             runBlocking { UpdateCheck.prepare(app, true) }
-            assertEquals(listOf(false, true), installs.toList()); assertEquals(1, downloads.size)
+            // Before Android 12 every install asks its user, so there Elarni starts none by itself.
+            assertEquals(if (android.os.Build.VERSION.SDK_INT >= 31) listOf(false, true) else listOf(false), installs.toList())
+            assertEquals(1, downloads.size)
+            val started = installs.size
             // Android refused the package: that release goes back to its page, in a later process too.
             UpdateCheck.failed(app)
             ui.waitUntil(5000) { ui.onAllNodesWithText("Android did not install the update. Download it from the release page.").fetchSemanticsNodes().isNotEmpty() }
@@ -395,7 +398,7 @@ class AndroidUIE2E {
             ui.waitUntil(5000) { downloads.size == 2 && ui.onAllNodes(hasText("Download") and hasClickAction()).fetchSemanticsNodes().isNotEmpty() }
             ui.onNode(hasText("Install") and hasClickAction()).assertDoesNotExist()
             runBlocking { UpdateCheck.prepare(app, true); UpdateCheck.installNow(app) }
-            assertEquals(2, downloads.size); assertEquals(2, installs.size)
+            assertEquals(2, downloads.size); assertEquals(started, installs.size)
         } finally {
             UpdateCheck.fetch = network; UpdateCheck.download = download; UpdateCheck.install = install
             UpdateCheck.allowed = allowed; UpdateCheck.unmetered = unmetered; UpdateCheck.foreground = true
