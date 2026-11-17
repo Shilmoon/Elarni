@@ -294,7 +294,7 @@ struct ConnectionEditor: View {
             Text("Random browser").tag("random"); Text("Randomized").tag("randomized")
           }
         } header: { Text("Transport") } footer: {
-          Text("TLS fingerprint is which browser a connection to a server looks like. From the server uses what each server's link names, or Chrome when it names none. Choose another when a network blocks that one. It applies to TLS and Reality servers over TCP; Hysteria2, TUIC and WireGuard have no such fingerprint.")
+          Text("TLS fingerprint is which browser a connection to a server looks like. From the server uses what each server's link names, or Chrome when it names none. Choose another when a network blocks that one. It applies to TLS and Reality servers over TCP; Hysteria2, TUIC, ShadowQUIC and WireGuard have no such fingerprint.")
         }.textInputAutocapitalization(.never).autocorrectionDisabled()
         Section {
           Picker("Connection idle timeout (seconds)", selection: $value.idleTimeoutSeconds) {

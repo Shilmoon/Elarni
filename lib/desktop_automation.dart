@@ -274,6 +274,7 @@ final class DesktopAutomation {
       return !{
             'hysteria',
             'tuic',
+            'shadowquic',
             'wireguard',
             'amneziawg',
           }.contains(outbound['protocol']) &&

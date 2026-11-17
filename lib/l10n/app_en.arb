@@ -699,7 +699,7 @@
   "defaultMuxHelp": "Imported mux settings take precedence. This preference applies only to VLESS; it does not enable mux for Hysteria.",
   "enableDefaultVlessMux": "Enable default VLESS mux",
   "tlsFingerprint": "TLS fingerprint",
-  "tlsFingerprintHelp": "Which browser a connection to a server looks like. From the server uses what each server's link names, or Chrome when it names none. Choose another when a network blocks that one. This applies to TLS and Reality servers over TCP; Hysteria2, TUIC and WireGuard have no such fingerprint.",
+  "tlsFingerprintHelp": "Which browser a connection to a server looks like. From the server uses what each server's link names, or Chrome when it names none. Choose another when a network blocks that one. This applies to TLS and Reality servers over TCP; Hysteria2, TUIC, ShadowQUIC and WireGuard have no such fingerprint.",
   "tlsFingerprintServer": "From the server",
   "tlsFingerprintRandom": "Random browser",
   "tlsFingerprintRandomized": "Randomized",

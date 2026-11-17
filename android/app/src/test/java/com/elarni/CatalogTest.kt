@@ -89,6 +89,8 @@ class CatalogTest {
         assertEquals("www.example.com", Catalog.probeKey(node("reality", "WWW.Example.com")))
         assertEquals("TLS without a name sends the address", "edge.example", Catalog.probeKey(node("tls", address = "Edge.Example")))
         assertNull("A plain server sends no SNI", Catalog.probeKey(node("none")))
+        assertEquals("ShadowQUIC keeps its name in its own settings", "cover.example", Catalog.probeKey(obj("config" to obj("outbounds" to JSONArray(listOf(obj(
+            "protocol" to "shadowquic", "settings" to obj("address" to "1.2.3.4", "port" to 443, "serverName" to "Cover.Example"))))))))
     }
 
     @Test fun perAppModesKeepAppsThatNeedNoTunnelOutOfIt() {

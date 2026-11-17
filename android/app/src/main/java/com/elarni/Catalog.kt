@@ -520,7 +520,7 @@ class Catalog(val data: JSONObject, private val snapshot: Boolean = false) {
     // Nor do the protocols libXray share/generate_share.go writes no link for, such as WireGuard and HTTP. For a server
     // whose link would lose settings, the converter returns no link either, but its JSON, which [shareLinks] refuses.
     fun linkable(node: JSONObject) = node.string("format") == "telegram" || node.mapObject("config").objects("outbounds").singleOrNull()
-        ?.string("protocol") in setOf("vless", "vmess", "trojan", "shadowsocks", "socks", "hysteria", "tuic")
+        ?.string("protocol") in setOf("vless", "vmess", "trojan", "shadowsocks", "socks", "hysteria", "tuic", "shadowquic")
     /** Servers of a local group, which has no subscription link, as share links in group order. */
     fun shareLinks(ids: List<String>): JSONObject {
         if (ids.isEmpty()) throw AppFailure("invalid_input")
@@ -601,12 +601,14 @@ class Catalog(val data: JSONObject, private val snapshot: Boolean = false) {
         private fun sha256(text: String) = java.security.MessageDigest.getInstance("SHA-256").digest(text.toByteArray())
             .joinToString("") { "%02x".format(it.toInt() and 255) }
         // The SNI a probe's handshake sends: bulk tests run at most two probes per SNI,
-        // as TSPU counts handshakes per SNI. TLS without a name sends the address.
+        // as TSPU counts handshakes per SNI. TLS without a name sends the address;
+        // ShadowQUIC keeps its name in its own settings.
         fun probeKey(node: JSONObject): String? {
             for (outbound in node.mapObject("config").objects("outbounds")) {
                 val stream = outbound.optJSONObject("streamSettings"); val settings = outbound.optJSONObject("settings")
                 val server = (settings?.optJSONArray("vnext") ?: settings?.optJSONArray("servers"))?.optJSONObject(0)
                 val key = listOf("realitySettings", "tlsSettings").firstNotNullOfOrNull { stream?.optJSONObject(it)?.optString("serverName")?.ifEmpty { null } }
+                    ?: settings?.optString("serverName")?.ifEmpty { null }?.takeIf { outbound.optString("protocol") == "shadowquic" }
                     ?: (settings?.optString("address")?.ifEmpty { null } ?: server?.optString("address")?.ifEmpty { null })
                         ?.takeIf { stream?.optString("security") in listOf("tls", "reality") }
                 if (key != null) return key.lowercase()

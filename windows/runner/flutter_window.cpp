@@ -49,7 +49,7 @@ bool RegistryText(const std::wstring& path, const wchar_t* name, const std::wstr
   return status == ERROR_SUCCESS;
 }
 
-constexpr const wchar_t* kSchemes[] = {L"elarni", L"happ", L"incy", L"vless", L"vmess", L"trojan", L"ss", L"socks", L"socks5", L"hy2", L"hysteria2", L"tuic", L"vpn", L"wireguard"};
+constexpr const wchar_t* kSchemes[] = {L"elarni", L"happ", L"incy", L"vless", L"vmess", L"trojan", L"ss", L"socks", L"socks5", L"hy2", L"hysteria2", L"tuic", L"sq", L"shadowquic", L"vpn", L"wireguard"};
 
 // A scheme stays Elarni's only while it keeps the marker and still opens
 // elarni.exe: an app that rewrote the command kept the marker but owns the scheme.

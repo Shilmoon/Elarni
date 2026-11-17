@@ -13,7 +13,7 @@ A cross-platform routing client on a forked Xray core.
 
 ## Features
 
-- VLESS, VMess, Trojan, Shadowsocks, SOCKS, Hysteria2, TUIC and WireGuard: links, subscriptions, QR codes and config files
+- VLESS, VMess, Trojan, Shadowsocks, SOCKS, Hysteria2, TUIC, ShadowQUIC and WireGuard: links, subscriptions, QR codes and config files
 - System VPN (TUN) or local SOCKS/HTTP proxy, with per-app routing
 - Routing profiles with rules, DNS and Happ-compatible provider routing
 - Encrypted profile storage and portable encrypted backups

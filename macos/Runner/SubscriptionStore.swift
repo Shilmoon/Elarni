@@ -1074,7 +1074,7 @@ final class SubscriptionStore {
       guard let config = try? outbound(nodeID: node.id) else { return false }
       let outbounds = node.format == "xrayProfile" ? config["outbounds"] as? [[String: Any]] ?? [] : [config]
       guard outbounds.count == 1 else { return false }
-      return ["vless", "vmess", "trojan", "shadowsocks", "socks", "hysteria", "tuic"].contains(outbounds[0]["protocol"] as? String ?? "")
+      return ["vless", "vmess", "trojan", "shadowsocks", "socks", "hysteria", "tuic", "shadowquic"].contains(outbounds[0]["protocol"] as? String ?? "")
     }.map(\.id) ?? [])
   }
 
@@ -1490,11 +1490,13 @@ final class SubscriptionStore {
       }
       let stream = outbound["streamSettings"] as? [String: Any]
       let names = ["vless": "VLESS", "vmess": "VMess", "trojan": "Trojan", "shadowsocks": "Shadowsocks",
-        "socks": "SOCKS", "http": "HTTP", "hysteria": "Hysteria2", "tuic": "TUIC", "wireguard": "WireGuard", "amneziawg": "AmneziaWG"]
+        "socks": "SOCKS", "http": "HTTP", "hysteria": "Hysteria2", "tuic": "TUIC", "shadowquic": "ShadowQUIC",
+        "wireguard": "WireGuard", "amneziawg": "AmneziaWG"]
       let displayProtocol = outbounds.count > 1 ? "Xray profile" : names[protocolName] ?? protocolName
       let wireguard = ["wireguard", "amneziawg"].contains(protocolName)
-      let transport = protocolName == "tuic" ? "QUIC" : (stream?["network"] as? String).flatMap(usableDisplayText) ?? (wireguard ? "UDP" : protocolName)
-      let security = protocolName == "tuic" ? "TLS" : (stream?["security"] as? String).flatMap(usableDisplayText) ?? (wireguard ? "encrypted" : "none")
+      let quic = ["tuic", "shadowquic"].contains(protocolName)
+      let transport = quic ? "QUIC" : (stream?["network"] as? String).flatMap(usableDisplayText) ?? (wireguard ? "UDP" : protocolName)
+      let security = quic ? "TLS" : (stream?["security"] as? String).flatMap(usableDisplayText) ?? (wireguard ? "encrypted" : "none")
       let name = (profile["name"] as? String).flatMap(usableDisplayText)
         ?? "\(displayProtocol) · \(transport) · \(security)"
       let encoded = try JSONSerialization.data(withJSONObject: config, options: [.sortedKeys])

@@ -167,6 +167,8 @@ class AutomationTest {
         assertTrue(Automation.tcp443(config("vless", 443)))
         assertFalse(Automation.tcp443(config("vless", 8443)))
         assertFalse(Automation.tcp443(config("hysteria", 443)))
+        // ShadowQUIC has no stream settings; its port is in its own settings.
+        assertFalse(Automation.tcp443(obj("outbounds" to JSONArray(listOf(obj("protocol" to "shadowquic", "settings" to obj("address" to "example.com", "port" to 443)))))))
         assertFalse(Automation.tcp443(config("vless", 443, network = "kcp")))
         assertFalse(Automation.tcp443(config("vless", 443, alpn = listOf("h3"))))
         assertTrue(Automation.tcp443(obj("outbounds" to JSONArray(listOf(obj("protocol" to "shadowsocks", "settings" to obj("servers" to JSONArray(listOf(obj("port" to 443))))))))))

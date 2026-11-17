@@ -251,6 +251,8 @@ final class DesktopProxy {
         'hy2',
         'hysteria2',
         'tuic',
+        'sq',
+        'shadowquic',
         'vpn',
         'wireguard',
         'incy',

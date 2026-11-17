@@ -2627,7 +2627,7 @@ abstract class AppLocalizations {
   /// No description provided for @tlsFingerprintHelp.
   ///
   /// In en, this message translates to:
-  /// **'Which browser a connection to a server looks like. From the server uses what each server\'s link names, or Chrome when it names none. Choose another when a network blocks that one. This applies to TLS and Reality servers over TCP; Hysteria2, TUIC and WireGuard have no such fingerprint.'**
+  /// **'Which browser a connection to a server looks like. From the server uses what each server\'s link names, or Chrome when it names none. Choose another when a network blocks that one. This applies to TLS and Reality servers over TCP; Hysteria2, TUIC, ShadowQUIC and WireGuard have no such fingerprint.'**
   String get tlsFingerprintHelp;
 
   /// No description provided for @tlsFingerprintServer.

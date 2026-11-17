@@ -478,6 +478,8 @@ struct CoreChecks {
       try expect(AutomationPolicy.tcp443(["outbounds": [server("trojan", 443, network: "xhttp")]]), "a profile's first outbound was ignored")
       try expect(!AutomationPolicy.tcp443(server("vless", 8443)), "another port counted as 443")
       try expect(!AutomationPolicy.tcp443(server("hysteria", 443, network: "hysteria")), "Hysteria counted as TCP")
+      try expect(!AutomationPolicy.tcp443(["protocol": "shadowquic", "settings": ["address": "server.test", "port": 443] as [String: Any]]),
+                 "ShadowQUIC counted as TCP")
       try expect(!AutomationPolicy.tcp443(server("vless", 443, network: "kcp")), "mKCP counted as TCP")
       try expect(!AutomationPolicy.tcp443(server("vless", 443, network: "xhttp", alpn: ["h3"])), "HTTP/3 counted as TCP")
       try expect(!AutomationPolicy.tcp443([:]), "an empty outbound counted as TCP 443")

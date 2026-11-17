@@ -43,7 +43,7 @@
                 <data android:scheme="elarni" /><data android:scheme="happ" /><data android:scheme="incy" />
                 <data android:scheme="vless" /><data android:scheme="vmess" /><data android:scheme="trojan" />
                 <data android:scheme="ss" /><data android:scheme="socks" /><data android:scheme="socks5" />
-                <data android:scheme="hy2" /><data android:scheme="hysteria2" /><data android:scheme="tuic" /><data android:scheme="vpn" /><data android:scheme="wireguard" />
+                <data android:scheme="hy2" /><data android:scheme="hysteria2" /><data android:scheme="tuic" /><data android:scheme="sq" /><data android:scheme="shadowquic" /><data android:scheme="vpn" /><data android:scheme="wireguard" />
             </intent-filter>
             <intent-filter><action android:name="android.intent.action.SEND" /><category android:name="android.intent.category.DEFAULT" /><data android:mimeType="text/plain" /><data android:mimeType="application/json" /><data android:mimeType="image/*" /></intent-filter>
         </activity>

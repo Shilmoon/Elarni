@@ -5629,12 +5629,12 @@
         }
       }
     },
-    "TLS fingerprint is which browser a connection to a server looks like. From the server uses what each server's link names, or Chrome when it names none. Choose another when a network blocks that one. It applies to TLS and Reality servers over TCP; Hysteria2, TUIC and WireGuard have no such fingerprint." : {
+    "TLS fingerprint is which browser a connection to a server looks like. From the server uses what each server's link names, or Chrome when it names none. Choose another when a network blocks that one. It applies to TLS and Reality servers over TCP; Hysteria2, TUIC, ShadowQUIC and WireGuard have no such fingerprint." : {
       "localizations" : {
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Отпечаток TLS — на какой браузер похоже подключение к серверу. «Как у сервера» берёт отпечаток из ссылки сервера, а если его там нет — Chrome. Выберите другой, если сеть блокирует этот. Действует для серверов с TLS и Reality поверх TCP; у Hysteria2, TUIC и WireGuard такого отпечатка нет."
+            "value" : "Отпечаток TLS — на какой браузер похоже подключение к серверу. «Как у сервера» берёт отпечаток из ссылки сервера, а если его там нет — Chrome. Выберите другой, если сеть блокирует этот. Действует для серверов с TLS и Reality поверх TCP; у Hysteria2, TUIC, ShadowQUIC и WireGuard такого отпечатка нет."
           }
         }
       }

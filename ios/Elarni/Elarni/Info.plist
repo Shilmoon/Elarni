@@ -43,6 +43,8 @@
 				<string>socks5</string>
 				<string>hysteria2</string>
 				<string>tuic</string>
+				<string>sq</string>
+				<string>shadowquic</string>
 				<string>hy2</string>
 				<string>vpn</string>
 				<string>wireguard</string>

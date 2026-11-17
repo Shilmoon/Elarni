@@ -575,6 +575,7 @@ final class DesktopCatalog {
     final protocol = outbound['protocol']! as String;
     final stream = catalogMap(outbound['streamSettings'] ?? {});
     final wireguard = {'wireguard', 'amneziawg'}.contains(protocol);
+    final quic = {'tuic', 'shadowquic'}.contains(protocol);
     return {
       'protocol': outbounds.length > 1
           ? 'Xray profile'
@@ -587,14 +588,15 @@ final class DesktopCatalog {
                   'http': 'HTTP',
                   'hysteria': 'Hysteria2',
                   'tuic': 'TUIC',
+                  'shadowquic': 'ShadowQUIC',
                   'wireguard': 'WireGuard',
                   'amneziawg': 'AmneziaWG',
                 }[protocol] ??
                 protocol,
-      'transport': protocol == 'tuic'
+      'transport': quic
           ? 'QUIC'
           : display(stream['network']) ?? (wireguard ? 'UDP' : protocol),
-      'security': protocol == 'tuic'
+      'security': quic
           ? 'TLS'
           : display(stream['security']) ?? (wireguard ? 'encrypted' : 'none'),
       'probeKey': _probeKey(outbounds),
@@ -602,7 +604,8 @@ final class DesktopCatalog {
   }
 
   // The SNI a probe's handshake sends: bulk tests run at most two probes per
-  // SNI, as TSPU counts handshakes per SNI. TLS without a name sends the address.
+  // SNI, as TSPU counts handshakes per SNI. TLS without a name sends the address;
+  // ShadowQUIC keeps its name in its own settings.
   static String? _probeKey(List<CatalogMap> outbounds) {
     Object? field(Object? map, String key) => map is Map ? map[key] : null;
     for (final outbound in outbounds) {
@@ -612,6 +615,9 @@ final class DesktopCatalog {
       final key =
           field(field(stream, 'realitySettings'), 'serverName') ??
           field(field(stream, 'tlsSettings'), 'serverName') ??
+          (outbound['protocol'] == 'shadowquic'
+              ? field(settings, 'serverName')
+              : null) ??
           (!{'tls', 'reality'}.contains(field(stream, 'security'))
               ? null
               : field(settings, 'address') ??
