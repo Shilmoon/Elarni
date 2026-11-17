@@ -4,6 +4,13 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
 
 ## Unreleased
 
+### Changed
+
+- For contributors who use coding agents: the checked-in Claude Code settings no longer refuse the
+  VPN acceptance scripts and the route, DNS and adapter commands, and `AGENTS.md` no longer tells
+  agents to leave them alone. The rules matched any command that named one of the scripts, so
+  they also refused reading or searching them.
+
 ### Fixed
 
 - A change of per-app routing while connected no longer restarts the tunnel on Windows and
