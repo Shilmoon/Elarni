@@ -26,6 +26,24 @@ extension _ProxyCommands on DesktopProxy {
       if (url is! String || !isHttpsURL(url)) throw desktopError('invalid_url');
       return _platformRequest('openURL', {'url': url});
     }
+    // Updates replace the app, not the catalog. The core checks each file.
+    if (method == 'updateStatus') return _native('updateStatus', {});
+    if (method == 'downloadUpdate') {
+      final assets = arguments?['assets'];
+      if (assets is! List || assets.any((asset) => asset is! Map))
+        throw desktopError('invalid_request');
+      // Through the tunnel while it is up, as the other downloads go.
+      final proxy = _tunnelFetchProxy();
+      return _native('downloadUpdate', {
+        'assets': assets,
+        if (proxy != null) 'proxy': proxy,
+      }, timeout: const Duration(minutes: 35));
+    }
+    if (method == 'installUpdate') {
+      return _native('installUpdate', {
+        'relaunch': arguments?['relaunch'] == true,
+      }, timeout: const Duration(minutes: 20));
+    }
     if (method == 'checkProcessRules') {
       // Rule checks read this computer's programs, not the catalog.
       final rules = arguments?['rules'];

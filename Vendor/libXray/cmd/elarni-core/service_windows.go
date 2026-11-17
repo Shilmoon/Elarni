@@ -34,6 +34,8 @@ var errVPNServiceUnavailable = errors.New("vpn_service_unavailable")
 type serviceRequest struct {
 	Action string `json:"action"`
 	Pipe   string `json:"pipe,omitempty"`
+	// The broker's download of a release, for "update" (update_windows.go).
+	Directory string `json:"directory,omitempty"`
 }
 
 type serviceReply struct {
@@ -42,9 +44,22 @@ type serviceReply struct {
 }
 
 type vpnServiceHooks struct {
-	own   string // this build's digest
-	start func(pipe string, broker uint32) (windows.Handle, error)
-	clear func() error
+	own    string // this build's digest
+	start  func(pipe string, broker uint32) (windows.Handle, error)
+	clear  func() error
+	update func(directory string) (windows.Handle, error)
+}
+
+// replyWithChild gives the broker a handle to the helper the service started for it.
+func replyWithChild(client, child windows.Handle) (serviceReply, windows.Handle) {
+	var target windows.Handle
+	if err := windows.DuplicateHandle(windows.CurrentProcess(), child, client, &target,
+		windows.SYNCHRONIZE|windows.PROCESS_TERMINATE|windows.PROCESS_QUERY_LIMITED_INFORMATION, false, 0); err != nil {
+		windows.TerminateProcess(child, 1)
+		windows.CloseHandle(child)
+		return serviceReply{Error: "vpn_service_failed"}, 0
+	}
+	return serviceReply{Handle: uint64(target)}, child
 }
 
 // canonicalUserSID admits only account SIDs (local, domain and Entra ID ones);
@@ -250,26 +265,33 @@ func answerServiceRequest(handle windows.Handle, users []string, hooks vpnServic
 		if err != nil {
 			return serviceReply{Error: "vpn_service_failed"}, 0
 		}
-		var target windows.Handle
-		if err := windows.DuplicateHandle(windows.CurrentProcess(), child, client, &target,
-			windows.SYNCHRONIZE|windows.PROCESS_TERMINATE|windows.PROCESS_QUERY_LIMITED_INFORMATION, false, 0); err != nil {
-			windows.TerminateProcess(child, 1)
-			windows.CloseHandle(child)
+		return replyWithChild(client, child)
+	case "update":
+		// The helper trusts nothing in the directory but the release key's signature.
+		if hooks.update == nil || !updateArgument(request.Directory) {
+			return rejected, 0
+		}
+		child, err := hooks.update(request.Directory)
+		if err != nil {
 			return serviceReply{Error: "vpn_service_failed"}, 0
 		}
-		return serviceReply{Handle: uint64(target)}, child
+		return replyWithChild(client, child)
 	}
 	return rejected, 0
 }
 
 // startVPNChild runs this helper for the broker, as the elevated prompt would.
 func startVPNChild(pipe string, broker uint32) (windows.Handle, error) {
+	return startHelperChild("--vpn-child", pipe, strconv.FormatUint(uint64(broker), 10))
+}
+
+func startHelperChild(arguments ...string) (windows.Handle, error) {
 	executable, err := os.Executable()
 	if err != nil {
 		return 0, err
 	}
 	application, _ := windows.UTF16PtrFromString(executable)
-	line, _ := windows.UTF16PtrFromString(windows.ComposeCommandLine([]string{executable, "--vpn-child", pipe, strconv.FormatUint(uint64(broker), 10)}))
+	line, _ := windows.UTF16PtrFromString(windows.ComposeCommandLine(append([]string{executable}, arguments...)))
 	directory, _ := windows.UTF16PtrFromString(filepath.Dir(executable))
 	startup := windows.StartupInfo{Cb: uint32(unsafe.Sizeof(windows.StartupInfo{}))}
 	var process windows.ProcessInformation
@@ -297,7 +319,7 @@ func (service vpnService) Execute(_ []string, requests <-chan svc.ChangeRequest,
 		return false, 1
 	}
 	defer windows.CloseHandle(stop)
-	hooks := vpnServiceHooks{own: own, start: startVPNChild, clear: func() error { return clearStaleGuard(releaseGuard) }}
+	hooks := vpnServiceHooks{own: own, start: startVPNChild, clear: func() error { return clearStaleGuard(releaseGuard) }, update: startUpdateChild}
 	ready := make(chan struct{})
 	done := make(chan error, 1)
 	go func() { done <- serveVPNService(vpnServicePipe, service.users, hooks, stop, func() { close(ready) }) }()

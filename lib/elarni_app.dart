@@ -94,6 +94,7 @@ class ElarniApp extends StatefulWidget {
     this.windows = false,
     this.linux = false,
     this.onDispose,
+    this.onQuit,
     this.navigatorKey,
   });
 
@@ -106,6 +107,9 @@ class ElarniApp extends StatefulWidget {
       ? 'Windows'
       : 'macOS';
   final Future<void> Function()? onDispose;
+
+  /// Ends the app for an update; with restart, starts it again after it exited.
+  final Future<void> Function({required bool restart})? onQuit;
   final GlobalKey<NavigatorState>? navigatorKey;
 
   @override
@@ -119,7 +123,12 @@ class _ElarniAppState extends State<ElarniApp> {
   @override
   void initState() {
     super.initState();
-    desktop.addListener(_desktopChanged);
+    // Windows and Linux replace themselves through the core; macOS links the
+    // page, and so does a recording build, which a release would end.
+    desktop
+      ..onQuit = widget.onQuit
+      ..updateControl = widget.desktopCore && !recordingBuild ? control : null
+      ..addListener(_desktopChanged);
     unawaited(desktop.load());
   }
 
@@ -310,6 +319,8 @@ class _ElarniHomeState extends State<ElarniHome> {
   SettingsCategory _settingsCategory = SettingsCategory.general;
   // The Routing page's tab: 0 routing profiles, 1 per-app routing.
   int _routingTab = 0;
+  // A connect asked for before the first load finished runs once it has.
+  bool _firstLoaded = false, _connectAfterLoad = false;
   bool get _canConnect =>
       !_busy &&
       _stateAvailable &&
@@ -333,6 +344,9 @@ class _ElarniHomeState extends State<ElarniHome> {
       if (action == 'settings' && mounted) {
         unawaited(_navigate(DesktopPage.settings));
       }
+      // Before the first load nothing says whether Connect is possible: the
+      // start after an update asks this early, and so may the tray.
+      if (action == 'connect' && !_firstLoaded) _connectAfterLoad = true;
       if (action == 'connect' && _canConnect) unawaited(_connect());
       if (action == 'disconnect' && _canDisconnect) unawaited(_disconnect());
     };
@@ -764,6 +778,18 @@ class _ElarniHomeState extends State<ElarniHome> {
             label: l10n.change,
             onPressed: widget.desktop.saving ? null : _editUpdateFeed,
           ),
+          // Only where the core can replace this install.
+          if (widget.desktop.updateSupport != null)
+            ElarniCheckboxTile(
+              title: ElarniHelpLabel(
+                l10n.autoUpdate,
+                help: l10n.autoUpdateHelp,
+              ),
+              value: widget.desktop.autoUpdate,
+              onChanged: widget.desktop.saving
+                  ? null
+                  : (value) => _saveDesktop(autoUpdate: value),
+            ),
         ],
       ],
       SettingsCategory.appearance: () => [

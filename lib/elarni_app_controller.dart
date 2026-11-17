@@ -10,6 +10,11 @@ extension _HomeController on _ElarniHomeState {
       _refreshSystemInfo(),
       _refreshAutomation(),
     ]);
+    _firstLoaded = true;
+    if (mounted && _connectAfterLoad) {
+      _connectAfterLoad = false;
+      if (_canConnect) unawaited(_connect());
+    }
     if (mounted && pingOnLoad)
       await _pingAllNodes(report: false, only: _openServerIds());
   }
@@ -343,6 +348,7 @@ extension _HomeController on _ElarniHomeState {
     Set<String>? pinned,
     bool? expiryReminders,
     bool? favoritesFirst,
+    bool? autoUpdate,
   }) async {
     try {
       await widget.desktop.update(
@@ -353,6 +359,7 @@ extension _HomeController on _ElarniHomeState {
         pinned: pinned,
         expiryReminders: expiryReminders,
         favoritesFirst: favoritesFirst,
+        autoUpdate: autoUpdate,
       );
     } on Object {
       /* The desktop owner publishes its fixed error beside the controls. */

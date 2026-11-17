@@ -21,6 +21,10 @@
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
+    <!-- Elarni installs its own releases. Android asks its user to allow that once; after it, an update of this app
+         itself needs no confirmation. -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <uses-permission android:name="android.permission.UPDATE_PACKAGES_WITHOUT_USER_ACTION" />
     <queries>
         <intent><action android:name="android.intent.action.MAIN" /><category android:name="android.intent.category.LAUNCHER" /></intent>
         <intent><action android:name="android.media.action.IMAGE_CAPTURE" /></intent>
@@ -66,6 +70,11 @@
         <receiver android:name=".WidgetToggle" android:exported="false" />
         <!-- While Connect on untrusted Wi-Fi is on, Android reports Wi-Fi changes here; an app update arms it again. -->
         <receiver android:name=".WiFiWatch" android:exported="false">
+            <intent-filter><action android:name="android.intent.action.MY_PACKAGE_REPLACED" /></intent-filter>
+        </receiver>
+        <!-- Android's answer to an update Elarni handed it, and the new build's first broadcast, which brings back
+             the connection its user was on when they tapped Install. -->
+        <receiver android:name=".UpdateReceiver" android:exported="false">
             <intent-filter><action android:name="android.intent.action.MY_PACKAGE_REPLACED" /></intent-filter>
         </receiver>
         <!-- Automation apps send explicit broadcasts here; a setting in General decides whether they count. -->

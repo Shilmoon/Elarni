@@ -2930,10 +2930,76 @@ abstract class AppLocalizations {
   /// **'Elarni {version} is available'**
   String updateAvailable(Object version);
 
+  /// No description provided for @updateReady.
+  ///
+  /// In en, this message translates to:
+  /// **'Elarni {version} is ready to install'**
+  String updateReady(String version);
+
+  /// No description provided for @updateInstall.
+  ///
+  /// In en, this message translates to:
+  /// **'Install'**
+  String get updateInstall;
+
+  /// No description provided for @updateDownloading.
+  ///
+  /// In en, this message translates to:
+  /// **'Downloading the update…'**
+  String get updateDownloading;
+
+  /// No description provided for @updateInstalling.
+  ///
+  /// In en, this message translates to:
+  /// **'Installing Elarni {version}…'**
+  String updateInstalling(String version);
+
+  /// No description provided for @updateInstalled.
+  ///
+  /// In en, this message translates to:
+  /// **'Elarni {version} is installed'**
+  String updateInstalled(String version);
+
+  /// No description provided for @updateRestartToUse.
+  ///
+  /// In en, this message translates to:
+  /// **'Restart Elarni to use it.'**
+  String get updateRestartToUse;
+
+  /// No description provided for @updateRestart.
+  ///
+  /// In en, this message translates to:
+  /// **'Restart'**
+  String get updateRestart;
+
+  /// No description provided for @updateReconnects.
+  ///
+  /// In en, this message translates to:
+  /// **'The VPN reconnects after the update.'**
+  String get updateReconnects;
+
+  /// No description provided for @updateFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Elarni {version} could not be installed. Download it from the release page.'**
+  String updateFailed(String version);
+
+  /// No description provided for @autoUpdate.
+  ///
+  /// In en, this message translates to:
+  /// **'Install updates automatically'**
+  String get autoUpdate;
+
+  /// No description provided for @autoUpdateHelp.
+  ///
+  /// In en, this message translates to:
+  /// **'Elarni downloads a new release in the background and checks its signature. It installs by itself only when nothing has to be approved and the VPN is off; otherwise Home offers Install.'**
+  String get autoUpdateHelp;
+
   /// No description provided for @updateFeedHelp.
   ///
   /// In en, this message translates to:
-  /// **'Elarni reads this address once a day and shows a notice on Home when it names a newer release. It never downloads or installs anything. Use a JSON file with \"version\" and \"url\", or a GitHub releases/latest API address; https only.'**
+  /// **'Elarni reads this address once a day and shows a notice on Home when it names a newer release. Only a release signed with Elarni\'s release key installs itself. Use a JSON file with \"version\" and \"url\", or a GitHub releases/latest API address; https only.'**
   String get updateFeedHelp;
 
   /// No description provided for @updateFeed.

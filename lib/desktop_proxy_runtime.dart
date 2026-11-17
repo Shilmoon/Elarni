@@ -444,6 +444,15 @@ extension _ProxyRuntime on DesktopProxy {
           'invalid_backup_password',
           'recording_empty',
           'recording_failed',
+          'update_unsigned',
+          'update_signature_invalid',
+          'update_invalid',
+          'update_package_missing',
+          'update_not_newer',
+          'update_checksum_mismatch',
+          'update_unsupported',
+          'update_unavailable',
+          'update_failed',
         };
         final failure = safe.contains(code)
             ? code! as String

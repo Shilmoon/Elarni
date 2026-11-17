@@ -125,6 +125,9 @@ class MainActivity : ComponentActivity() {
         val uri = interaction.camera; interaction.camera = null
         if (success && uri != null) read(uri, "qr")
     }
+    // An update installs by itself only while no screen of the app shows.
+    override fun onStart() { super.onStart(); UpdateCheck.foreground = true }
+    override fun onStop() { UpdateCheck.foreground = false; super.onStop() }
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()

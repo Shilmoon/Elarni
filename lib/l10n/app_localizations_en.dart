@@ -1672,8 +1672,50 @@ class AppLocalizationsEn extends AppLocalizations {
   }
 
   @override
+  String updateReady(String version) {
+    return 'Elarni $version is ready to install';
+  }
+
+  @override
+  String get updateInstall => 'Install';
+
+  @override
+  String get updateDownloading => 'Downloading the update…';
+
+  @override
+  String updateInstalling(String version) {
+    return 'Installing Elarni $version…';
+  }
+
+  @override
+  String updateInstalled(String version) {
+    return 'Elarni $version is installed';
+  }
+
+  @override
+  String get updateRestartToUse => 'Restart Elarni to use it.';
+
+  @override
+  String get updateRestart => 'Restart';
+
+  @override
+  String get updateReconnects => 'The VPN reconnects after the update.';
+
+  @override
+  String updateFailed(String version) {
+    return 'Elarni $version could not be installed. Download it from the release page.';
+  }
+
+  @override
+  String get autoUpdate => 'Install updates automatically';
+
+  @override
+  String get autoUpdateHelp =>
+      'Elarni downloads a new release in the background and checks its signature. It installs by itself only when nothing has to be approved and the VPN is off; otherwise Home offers Install.';
+
+  @override
   String get updateFeedHelp =>
-      'Elarni reads this address once a day and shows a notice on Home when it names a newer release. It never downloads or installs anything. Use a JSON file with \"version\" and \"url\", or a GitHub releases/latest API address; https only.';
+      'Elarni reads this address once a day and shows a notice on Home when it names a newer release. Only a release signed with Elarni\'s release key installs itself. Use a JSON file with \"version\" and \"url\", or a GitHub releases/latest API address; https only.';
 
   @override
   String get updateFeed => 'Update feed';

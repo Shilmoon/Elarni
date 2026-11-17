@@ -25,6 +25,7 @@ const (
 	LibXrayMethodReleaseProbe                LibXrayMethod = "releaseProbe"
 	LibXrayMethodFetchSubscription           LibXrayMethod = "fetchSubscription"
 	LibXrayMethodFetchResource               LibXrayMethod = "fetchResource"
+	LibXrayMethodDownloadUpdate              LibXrayMethod = "downloadUpdate"
 	LibXrayMethodPrepareFetch                LibXrayMethod = "prepareFetch"
 	LibXrayMethodCancelFetch                 LibXrayMethod = "cancelFetch"
 	LibXrayMethodReleaseFetch                LibXrayMethod = "releaseFetch"

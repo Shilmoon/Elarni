@@ -10,6 +10,7 @@ import (
 
 	"github.com/xtls/libxray/geo"
 	"github.com/xtls/libxray/share"
+	"github.com/xtls/libxray/update"
 )
 
 var fetchOperations = struct {
@@ -23,8 +24,11 @@ func invokeFetch(method LibXrayMethod, payload json.RawMessage) string {
 		share.SubscriptionFetchRequest
 		OperationID  string `json:"operationId"`
 		ResourceKind string `json:"resourceKind"`
-		// A geofile's body goes to this file as it arrives (Elarni).
+		// A geofile's body goes to this file as it arrives (Elarni). An update's files go to
+		// this directory, which holds nothing else.
 		Destination string `json:"destination"`
+		// The files of the release an update feed names, for downloadUpdate.
+		Assets []update.Asset `json:"assets"`
 	}
 	if json.Unmarshal(payload, &request) != nil || len(request.OperationID) != 36 {
 		return encodeInvokeResponse(nil, errors.New("invalid_fetch_operation"))
@@ -38,6 +42,12 @@ func invokeFetch(method LibXrayMethod, payload json.RawMessage) string {
 	if request.ResourceKind == "geofile" {
 		limit, timeout = geo.MaxSourceBytes, 180*time.Second
 	}
+	if request.ResourceKind == "update" {
+		timeout = 30 * time.Minute
+	}
+	if method == LibXrayMethodDownloadUpdate && (request.ResourceKind != "update" || !filepath.IsAbs(request.Destination)) {
+		return encodeInvokeResponse(nil, errors.New("invalid_fetch_options"))
+	}
 	if method == LibXrayMethodFetchResource && request.ResourceKind != "geofile" && request.ResourceKind != "domains" {
 		return encodeInvokeResponse(nil, errors.New("invalid_resource_kind"))
 	}
@@ -45,7 +55,7 @@ func invokeFetch(method LibXrayMethod, payload json.RawMessage) string {
 		request.Destination != "" && !filepath.IsAbs(request.Destination)) {
 		return encodeInvokeResponse(nil, errors.New("invalid_fetch_options"))
 	}
-	fetching := method == LibXrayMethodFetchSubscription || method == LibXrayMethodFetchResource
+	fetching := method == LibXrayMethodFetchSubscription || method == LibXrayMethodFetchResource || method == LibXrayMethodDownloadUpdate
 	fetchOperations.Lock()
 	op := fetchOperations.items[request.OperationID]
 	if method == LibXrayMethodPrepareFetch {
@@ -85,6 +95,11 @@ func invokeFetch(method LibXrayMethod, payload json.RawMessage) string {
 		op.cancel()
 		delete(fetchOperations.items, request.OperationID)
 	}()
+	if method == LibXrayMethodDownloadUpdate {
+		// Android installs only an APK signed like the installed one; the release key's
+		// signature also keeps a damaged or foreign download from reaching the installer.
+		return encodeInvokeResponse(share.DownloadUpdate(op.ctx, update.Request{Assets: request.Assets, Kind: update.APK, Directory: request.Destination}, request.Proxy))
+	}
 	if method == LibXrayMethodFetchResource && request.Destination != "" {
 		return encodeInvokeResponse(share.FetchResourceToFile(op.ctx, request.SubscriptionFetchRequest, limit, timeout, request.Destination))
 	}

@@ -40,6 +40,10 @@ func dispatch(raw string) (result response) {
 		result.text = nativeResponse(data, err)
 		return
 	}
+	if data, err, handled := updateRequest(string(request.Method), request.Payload); handled {
+		result.text = nativeResponse(data, err)
+		return
+	}
 	if data, err, handled := platformRequest(string(request.Method), request.Payload); handled {
 		result.text = nativeResponse(data, err)
 		result.hold = string(request.Method) == "acquireCatalog" && err == nil

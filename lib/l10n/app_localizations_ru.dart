@@ -1691,8 +1691,51 @@ class AppLocalizationsRu extends AppLocalizations {
   }
 
   @override
+  String updateReady(String version) {
+    return 'Elarni $version готова к установке';
+  }
+
+  @override
+  String get updateInstall => 'Установить';
+
+  @override
+  String get updateDownloading => 'Обновление загружается…';
+
+  @override
+  String updateInstalling(String version) {
+    return 'Устанавливается Elarni $version…';
+  }
+
+  @override
+  String updateInstalled(String version) {
+    return 'Elarni $version установлена';
+  }
+
+  @override
+  String get updateRestartToUse =>
+      'Перезапустите Elarni, чтобы перейти на неё.';
+
+  @override
+  String get updateRestart => 'Перезапустить';
+
+  @override
+  String get updateReconnects => 'После обновления VPN подключится снова.';
+
+  @override
+  String updateFailed(String version) {
+    return 'Не удалось установить Elarni $version. Скачайте её со страницы выпуска.';
+  }
+
+  @override
+  String get autoUpdate => 'Устанавливать обновления автоматически';
+
+  @override
+  String get autoUpdateHelp =>
+      'Elarni загружает новую версию в фоне и проверяет её подпись. Сама она устанавливается, только когда не нужно ничего подтверждать и VPN выключен; иначе на главной появится кнопка «Установить».';
+
+  @override
   String get updateFeedHelp =>
-      'Elarni раз в день читает этот адрес и показывает на главной уведомление, если там указана более новая версия. Elarni ничего не скачивает и не устанавливает. Используйте JSON-файл с \"version\" и \"url\" или адрес API GitHub releases/latest; только https.';
+      'Elarni раз в день читает этот адрес и показывает на главной уведомление, если там указана более новая версия. Сама устанавливается только версия, подписанная ключом выпусков Elarni. Используйте JSON-файл с \"version\" и \"url\" или адрес API GitHub releases/latest; только https.';
 
   @override
   String get updateFeed => 'Источник обновлений';

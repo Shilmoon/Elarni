@@ -501,7 +501,14 @@
     <string name="included_and_excluded_ip_ranges">Включённые и исключённые диапазоны IP</string>
     <string name="server_addressing">Адресация серверов</string>
     <string name="updates">Обновления</string>
-    <string name="elarni_reads_this_address_once_a">Elarni раз в день читает этот адрес (во время подключения — через туннель) и показывает на главной уведомление, если там указана более новая версия. Elarni ничего не устанавливает. Используйте JSON-файл с \"version\" и \"url\" или адрес API GitHub releases/latest.</string>
+    <string name="elarni_reads_this_address_once_a">Elarni раз в день читает этот адрес (во время подключения — через туннель) и показывает на главной уведомление, если там указана более новая версия. Elarni устанавливает только выпуск, подписанный ключами Elarni. Используйте JSON-файл с \"version\" и \"url\" или адрес API GitHub releases/latest.</string>
+    <string name="install_updates_automatically">Устанавливать обновления автоматически</string>
+    <string name="elarni_downloads_a_new_release_on">Elarni скачивает новую версию по Wi-Fi и устанавливает её, пока VPN выключен. В первый раз Android попросит разрешение. Если выключено, уведомление на главной сначала спросит.</string>
+    <string name="install">Установить</string>
+    <string name="downloading_the_update">Загрузка обновления…</string>
+    <string name="installing_the_update">Установка обновления…</string>
+    <string name="you_have_installing_restarts_elarni">У вас версия %1$s. Установка перезапустит Elarni; активное подключение восстановится после неё.</string>
+    <string name="android_did_not_install_the_update">Android не установил обновление. Скачайте его со страницы выпуска.</string>
     <string name="open_server_list">Открыть список серверов</string>
     <string name="open">Открыть</string>
     <string name="android_manages_this_turn_on_always">Этим управляет Android: включите «Постоянный VPN» и «Блокировать подключения без VPN».</string>

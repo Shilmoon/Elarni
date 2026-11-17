@@ -42,6 +42,7 @@ object Settings {
         SettingField("inboundAuthEnabled", tr(R.string.allow_apps_without_a_login_2), false, "Connection", detail = tr(R.string.in_local_proxy_mode_any_app_2)),
         SettingField("subscriptionAutoUpdateHours", tr(R.string.refresh_interval), 4, "General", detail = tr(R.string.t_1_168_hours_background_work_follows)),
         SettingField("updateFeedURL", tr(R.string.update_feed), if (BuildConfig.DEBUG) "" else UpdateCheck.ELARNI_RELEASES, "General", detail = tr(R.string.leave_empty_to_turn_the_check)),
+        SettingField("autoUpdate", tr(R.string.install_updates_automatically), true, "General", detail = tr(R.string.elarni_downloads_a_new_release_on)),
         SettingField("allowExternalControl", tr(R.string.let_other_apps_control_the_connection), false, "General", detail = tr(R.string.automation_apps_such_as_tasker_can)),
         SettingField("useDNSFromJSON", tr(R.string.use_profile_dns), true, "DNS"),
         SettingField("profileDNSMode", tr(R.string.dns_override), "inherit", "DNS", listOf("inherit", "default", "routing")),
@@ -71,7 +72,7 @@ object Settings {
     )
     // The running core does not read these, so changing one keeps every connection.
     private val preferenceKeys = setOf("theme", "accent", "sort", "favoritesFirst", "expiryReminders", "subscriptionAutoUpdateHours",
-        "onDemandEnabled", "disconnectOnSleep", "monitoringEnabled", "launchAtBoot", "logLevel", "updateFeedURL", "allowExternalControl",
+        "onDemandEnabled", "disconnectOnSleep", "monitoringEnabled", "launchAtBoot", "logLevel", "updateFeedURL", "autoUpdate", "allowExternalControl",
         "connectOnUntrustedWiFi", "trustedWiFiNetworks") + fields.filter { it.section == "Server tests" }.map { it.key }
     fun runtime(value: JSONObject) = value.copy().apply { preferenceKeys.forEach(::remove) }
     fun probeArgs(value: JSONObject, ids: List<String>) = obj("ids" to JSONArray(ids),

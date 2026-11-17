@@ -1,4 +1,5 @@
 import 'package:elarni/tunnel_channel.dart';
+import 'package:elarni/update_check.dart' show UpdateAsset;
 
 const fixtureSubscriptions = SubscriptionSnapshot(
   selectedNodeId: 'a',
@@ -423,6 +424,44 @@ class FakeTunnelControl implements TunnelControl {
   final openedUpdateLinks = <String>[];
   @override
   Future<void> openUpdateLink(String url) async => openedUpdateLinks.add(url);
+
+  /// The core's update replies; by default an install that cannot replace itself.
+  Map<String, Object?> updateStatusValue = const {'kind': ''};
+  Object? updateStatusError;
+  int updateStatusCalls = 0;
+  Map<String, Object?> downloadUpdateValue = const {};
+  Object? downloadUpdateError;
+  final downloadedAssets = <List<UpdateAsset>>[];
+
+  /// Runs before a download or install answers, so a test can hold it or
+  /// read the preferences saved at that moment.
+  Future<void> Function()? onDownloadUpdate, onInstallUpdate;
+  Map<String, Object?> installUpdateValue = const {'exit': true};
+  Object? installUpdateError;
+  final installRelaunches = <bool>[];
+
+  @override
+  Future<Map<String, Object?>> updateStatus() async {
+    updateStatusCalls++;
+    if (updateStatusError case final Object error) throw error;
+    return updateStatusValue;
+  }
+
+  @override
+  Future<Map<String, Object?>> downloadUpdate(List<UpdateAsset> assets) async {
+    downloadedAssets.add(assets);
+    await onDownloadUpdate?.call();
+    if (downloadUpdateError case final Object error) throw error;
+    return downloadUpdateValue;
+  }
+
+  @override
+  Future<Map<String, Object?>> installUpdate({required bool relaunch}) async {
+    installRelaunches.add(relaunch);
+    await onInstallUpdate?.call();
+    if (installUpdateError case final Object error) throw error;
+    return installUpdateValue;
+  }
 
   @override
   Future<void> openTelegramProxy(String id) async {

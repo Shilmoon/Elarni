@@ -16,6 +16,8 @@ import (
 // --diagnostics-export switch. Set by the diagnostic builder, without changing the release app's identity.
 var diagnosticBuild = "0"
 
+const diagnosticsBuild = true
+
 func diagnosticsMain() (bool, int) {
 	directory := os.Getenv("ELARNI_DIAGNOSTICS_DIR")
 	if directory == "" {

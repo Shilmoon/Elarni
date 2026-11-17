@@ -325,6 +325,85 @@ class AndroidUIE2E {
         } finally { UpdateCheck.fetch = network }
     }
 
+    // A feed that lists the release's files lets Elarni install it: by itself only with no screen of the app showing, on Install otherwise.
+    // A release the core refuses, or Android does, keeps the link to its page.
+    @Test fun updateInstallsTheReleaseItsFeedLists() {
+        fun reply(version: String) = """{"tag_name":"v$version","html_url":"https://github.com/o/elarni/releases/tag/v$version","assets":[
+            {"name":"Elarni-$version-1-android-arm64.apk","browser_download_url":"https://github.com/o/elarni/releases/download/v$version/Elarni-$version-1-android-arm64.apk"},
+            {"name":"SHA256SUMS","browser_download_url":"http://github.com/o/elarni/releases/download/v$version/SHA256SUMS"},{"name":"notes"}]}"""
+        // Only https files count.
+        assertEquals("""[{"name":"Elarni-998.0.0-1-android-arm64.apk","url":"https://github.com/o/elarni/releases/download/v998.0.0/Elarni-998.0.0-1-android-arm64.apk"}]""",
+            UpdateCheck.assets(reply("998.0.0")).toString().replace("\\/", "/"))
+        assertEquals("""[{"name":"a.apk","url":"https://mirror.example/a.apk"}]""",
+            UpdateCheck.assets("""{"version":"1.0.0","url":"https://mirror.example/","assets":[{"name":"a.apk","url":"https://mirror.example/a.apk"}]}""").toString().replace("\\/", "/"))
+        assertEquals(0, UpdateCheck.assets("""{"version":"1.0.0","url":"https://mirror.example/"}""").length())
+        val app = ui.activity.application as ElarniApplication
+        val prefs = ui.activity.getSharedPreferences("ui", android.content.Context.MODE_PRIVATE)
+        // The mark that brings the connection back counts once, and only for the update it was set for.
+        prefs.edit().putLong("reconnectAfterUpdate", System.currentTimeMillis()).commit()
+        assertTrue(UpdateCheck.reconnects(app)); assertFalse(UpdateCheck.reconnects(app))
+        prefs.edit().putLong("reconnectAfterUpdate", System.currentTimeMillis() - 3_600_000).commit()
+        assertFalse(UpdateCheck.reconnects(app))
+        prefs.edit().remove("dismissedUpdate").remove("failedUpdate").commit()
+        val (network, download, install) = Triple(UpdateCheck.fetch, UpdateCheck.download, UpdateCheck.install)
+        val (allowed, unmetered) = UpdateCheck.allowed to UpdateCheck.unmetered
+        val downloads = java.util.concurrent.CopyOnWriteArrayList<String>()
+        val installs = java.util.concurrent.CopyOnWriteArrayList<Boolean>()
+        val version = java.util.concurrent.atomic.AtomicReference("998.0.0")
+        UpdateCheck.fetch = { reply(version.get()) }
+        UpdateCheck.download = { assets, directory ->
+            val name = assets.getJSONObject(0).getString("name")
+            downloads.add(name)
+            if (version.get() != "998.0.0") throw AppFailure("update_signature_invalid")
+            directory.mkdirs(); java.io.File(directory, name).writeText("apk"); name
+        }
+        UpdateCheck.install = { _, apk, quiet -> assertEquals("apk", apk.readText()); installs.add(quiet) }
+        UpdateCheck.allowed = { true }; UpdateCheck.unmetered = { false }
+        try {
+            call("settings", obj("settings" to obj("updateFeedURL" to "https://mirror.example/releases.json")))
+            ui.waitUntil(5000) { ui.onAllNodesWithText("Elarni 998.0.0 is available").fetchSemanticsNodes().isNotEmpty() }
+            // Automatic updates are on, but nothing is downloaded over a metered network.
+            ui.waitForIdle()
+            assertTrue(snapshot().settings.getBoolean("autoUpdate")); assertTrue(downloads.isEmpty())
+            ui.onNodeWithText("Installing restarts Elarni", substring = true).assertExists()
+            click("Install")
+            ui.waitUntil(5000) { installs.toList() == listOf(false) }
+            assertEquals(listOf("Elarni-998.0.0-1-android-arm64.apk"), downloads.toList())
+            ui.waitUntil(5000) { ui.onAllNodesWithText("Installing the update…").fetchSemanticsNodes().isNotEmpty() }
+            // No tunnel ran, so none comes back.
+            assertFalse(prefs.contains("reconnectAfterUpdate"))
+            // Android asked and its user said no: Install is back, and the download is kept.
+            UpdateCheck.waiting(app, false)
+            ui.waitUntil(5000) { ui.onAllNodes(hasText("Install") and hasClickAction()).fetchSemanticsNodes().isNotEmpty() }
+            // By itself Elarni installs only while none of its screens shows, and never with automatic updates off.
+            runBlocking { UpdateCheck.prepare(app, true) }
+            assertEquals(1, installs.size)
+            UpdateCheck.foreground = false
+            runBlocking { UpdateCheck.prepare(app, false) }
+            assertEquals(1, installs.size)
+            runBlocking { UpdateCheck.prepare(app, true) }
+            assertEquals(listOf(false, true), installs.toList()); assertEquals(1, downloads.size)
+            // Android refused the package: that release goes back to its page, in a later process too.
+            UpdateCheck.failed(app)
+            ui.waitUntil(5000) { ui.onAllNodesWithText("Android did not install the update. Download it from the release page.").fetchSemanticsNodes().isNotEmpty() }
+            ui.onNode(hasText("Download") and hasClickAction()).assertExists()
+            assertEquals("998.0.0", prefs.getString("failedUpdate", ""))
+            // A release the core refuses is downloaded once, on an unmetered network by itself, and keeps the link.
+            UpdateCheck.foreground = true; UpdateCheck.unmetered = { true }; version.set("999.5.0")
+            call("settings", obj("settings" to obj("updateFeedURL" to "https://mirror.example/other.json")))
+            ui.waitUntil(5000) { ui.onAllNodesWithText("Elarni 999.5.0 is available").fetchSemanticsNodes().isNotEmpty() }
+            ui.waitUntil(5000) { downloads.size == 2 && ui.onAllNodes(hasText("Download") and hasClickAction()).fetchSemanticsNodes().isNotEmpty() }
+            ui.onNode(hasText("Install") and hasClickAction()).assertDoesNotExist()
+            runBlocking { UpdateCheck.prepare(app, true); UpdateCheck.installNow(app) }
+            assertEquals(2, downloads.size); assertEquals(2, installs.size)
+        } finally {
+            UpdateCheck.fetch = network; UpdateCheck.download = download; UpdateCheck.install = install
+            UpdateCheck.allowed = allowed; UpdateCheck.unmetered = unmetered; UpdateCheck.foreground = true
+            prefs.edit().remove("failedUpdate").commit()
+            java.io.File(app.cacheDir, "update").deleteRecursively()
+        }
+    }
+
     // Elarni ships no servers, so an empty Home says where one comes from and adds it from there.
     @Test fun emptyHomeWalksThroughTheFirstServer() {
         val steps = hasText("Get connected in three steps")
