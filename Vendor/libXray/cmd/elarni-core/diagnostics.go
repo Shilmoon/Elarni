@@ -139,7 +139,7 @@ func recordRuntimeConfig(configJSON string, memoryLimitMB, tcpMaxConnections, ud
 	}
 	for _, outbound := range config.Outbounds {
 		switch outbound.Protocol {
-		case "vless", "vmess", "wireguard", "amneziawg", "hysteria", "tuic", "trojan", "shadowsocks", "freedom", "blackhole", "dns":
+		case "vless", "vmess", "wireguard", "amneziawg", "hysteria", "tuic", "shadowquic", "trojan", "shadowsocks", "freedom", "blackhole", "dns":
 			values["outbound_"+outbound.Protocol]++
 		}
 		switch outbound.StreamSettings.Network {

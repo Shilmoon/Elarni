@@ -57,7 +57,7 @@ def main():
         else:
             original = args.app
         require_files(original, ['Contents/Info.plist', 'Contents/MacOS/Elarni',
-            'Contents/MacOS/elarni-core', 'Contents/MacOS/elarni-cli',
+            'Contents/MacOS/elarni-core', 'Contents/MacOS/elarni-shadowquic', 'Contents/MacOS/elarni-cli',
             'Contents/Resources/elarni-cli',
             'Contents/Helpers/ElarniCLI.app/Contents/Info.plist',
             'Contents/Helpers/ElarniCLI.app/Contents/MacOS/elarni-cli',
@@ -81,7 +81,7 @@ def main():
             info = plistlib.loads((original / relative).read_bytes())
             if (info.get('CFBundleShortVersionString'), info.get('CFBundleVersion')) != (expected_version, expected_build):
                 raise ValueError('Bundle version differs from pubspec.yaml: ' + relative)
-        for relative in ['Contents/MacOS/Elarni', 'Contents/MacOS/elarni-core',
+        for relative in ['Contents/MacOS/Elarni', 'Contents/MacOS/elarni-core', 'Contents/MacOS/elarni-shadowquic',
                          'Contents/Helpers/ElarniCLI.app/Contents/MacOS/elarni-cli',
                          'Contents/Frameworks/App.framework/Versions/A/App',
                          'Contents/Frameworks/FlutterMacOS.framework/Versions/A/FlutterMacOS',

@@ -125,6 +125,29 @@ void main() {
     expect(notices, ['links_failed']);
   });
 
+  // Both ShadowQUIC schemes the system hands over are offered for import, as
+  // the other client links are; a scheme Elarni does not take is not.
+  test('ShadowQUIC links from the system are offered for import', () async {
+    final asked = <String>[];
+    final proxy = DesktopProxy(
+      corePath: 'unused-core',
+      domainPath: 'unused-domain',
+      catalogIO: (_, _) async => throw PlatformException(code: 'storage_busy'),
+      platformIO: (_, _) async => {},
+      confirmLink: (prompt) async {
+        asked.add(prompt);
+        return false;
+      },
+    );
+    addTearDown(proxy.dispose);
+    await proxy.handleLinks([
+      'sq://user:secret@127.0.0.1:443?sni=fixture.example#One',
+      'SHADOWQUIC://user:secret@127.0.0.1:443?sni=fixture.example#Two',
+      'unknown://user:secret@127.0.0.1:443#Three',
+    ]);
+    expect(asked, ['importClient', 'importClient']);
+  });
+
   // The proxy setting and its backup belong to the instance that holds the
   // catalog; a second one is refused before it may "recover" them.
   test('a refused second instance leaves the system proxy alone', () async {

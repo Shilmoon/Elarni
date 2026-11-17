@@ -20,6 +20,12 @@ import (
 
 type helperFile struct{ name, source, digest string }
 
+// shadowquicSHA256 is the digest of the ShadowQUIC client program built with this core
+// (-ldflags "-X main.shadowquicSHA256=<hex>", as the app builds do). The helper copies
+// and starts only that program, like its pinned Wintun. A core built without it has no
+// ShadowQUIC in its helper.
+var shadowquicSHA256 string
+
 func fileDigest(path string) (string, error) {
 	file, err := os.Open(path)
 	if err != nil {

@@ -37,7 +37,7 @@ def main():
         parser.error('Output must be outside the input bundle')
     # A clean Windows lacks the VC++ runtime that elarni.exe and elarni_domain.dll import.
     vc_runtime = ['msvcp140.dll', 'vcruntime140.dll', 'vcruntime140_1.dll']
-    binaries = ['elarni.exe', 'elarni-core.exe', 'elarni-cli.exe', 'elarni_domain.dll',
+    binaries = ['elarni.exe', 'elarni-core.exe', 'elarni-shadowquic.exe', 'elarni-cli.exe', 'elarni_domain.dll',
                 'flutter_windows.dll', 'wintun.dll'] + vc_runtime
     diagnostic_files = ['Export diagnostics.cmd', 'DIAGNOSTICS.txt', 'BUILD-INFO.json']
     if args.diagnostics:
@@ -72,8 +72,10 @@ def main():
             for binary in sorted(staged.rglob('*')):
                 if binary.suffix.lower() not in ('.exe', '.dll'):
                     continue
-                # Keep the official Wintun and Microsoft publisher signatures unchanged.
-                if args.certificate_thumbprint and binary.name.lower() not in ['wintun.dll'] + vc_runtime:
+                # Keep the official Wintun and Microsoft publisher signatures unchanged, and the
+                # ShadowQUIC client's bytes: the core's helper accepts only the digest it was built
+                # with, so a signed package needs that client signed before its core is built.
+                if args.certificate_thumbprint and binary.name.lower() not in ['wintun.dll', 'elarni-shadowquic.exe'] + vc_runtime:
                     subprocess.run([args.signtool, 'sign', '/sha1', args.certificate_thumbprint,
                                     '/fd', 'SHA256', '/tr', args.timestamp_url, '/td', 'SHA256', str(binary)], check=True)
                 subprocess.run([args.signtool, 'verify', '/pa', '/all', str(binary)], check=True)

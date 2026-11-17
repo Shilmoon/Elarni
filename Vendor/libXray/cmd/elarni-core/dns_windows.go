@@ -363,6 +363,19 @@ func protectDNS(luid uint64, protected []netip.Prefix) error {
 		return syscall.Errno(code)
 	}
 	defer wfpFree.Call(uintptr(unsafe.Pointer(&appID)))
+	// The ShadowQUIC client is a program of its own, started from this one's folder. Its
+	// QUIC socket leaves on the physical link, like the sockets of the core's other servers.
+	outside := []*wfpBlob{appID}
+	if client := filepath.Join(filepath.Dir(executable), shadowquicProgram); helperInstalled(filepath.Dir(executable), shadowquicProgram) {
+		clientPath, _ := windows.UTF16PtrFromString(client)
+		var clientID *wfpBlob
+		code, _, _ := wfpAppID.Call(uintptr(unsafe.Pointer(clientPath)), uintptr(unsafe.Pointer(&clientID)))
+		if code != 0 {
+			return syscall.Errno(code)
+		}
+		defer wfpFree.Call(uintptr(unsafe.Pointer(&clientID)))
+		outside = append(outside, clientID)
+	}
 	sublayer := wfpSublayer{Key: guardSublayer, Display: display, Weight: 65535}
 	code, _, _ = wfpBegin.Call(engine, 0)
 	if code != 0 {
@@ -402,8 +415,10 @@ func protectDNS(luid uint64, protected []netip.Prefix) error {
 	}
 	for _, layer := range []windows.GUID{wfpGUID("c38d57d1-05a7-4c33-904f-7fbceee60e82"), wfpGUID("4a72393b-319f-44bc-84c3-ba54dcb3b6b4")} {
 		if len(protected) > 0 {
-			if err := add(layer, []wfpCondition{{Field: application, Value: wfpValue{Type: 12, Value: uintptr(unsafe.Pointer(appID))}}}, 0x1002, 2); err != nil {
-				return err
+			for _, id := range outside {
+				if err := add(layer, []wfpCondition{{Field: application, Value: wfpValue{Type: 12, Value: uintptr(unsafe.Pointer(id))}}}, 0x1002, 2); err != nil {
+					return err
+				}
 			}
 		}
 		for _, proto := range []uintptr{6, 17} {
@@ -454,7 +469,7 @@ func protectDNS(luid uint64, protected []netip.Prefix) error {
 			return err
 		}
 	}
-	runtime.KeepAlive(appID)
+	runtime.KeepAlive(outside)
 	// Written first, so a crash right after the commit still leaves it for Repair.
 	// Rewriting an empty marker left by an earlier boot may keep its old time.
 	if marker := guardMarker(); os.WriteFile(marker, nil, 0o644) == nil {

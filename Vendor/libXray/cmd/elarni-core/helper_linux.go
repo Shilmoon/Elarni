@@ -12,6 +12,16 @@ import (
 
 const linuxHelperRoot = "/opt/elarni-vpn-helper"
 
+// shadowquicProgram is the ShadowQUIC client the core starts from its own folder.
+const shadowquicProgram = "elarni-shadowquic"
+
+// linuxHelperTrusted reports whether helper is a complete protected copy: the core and,
+// in a build with one, its ShadowQUIC client.
+func linuxHelperTrusted(helper string) bool {
+	return linuxTrusted(helper) &&
+		(shadowquicSHA256 == "" || linuxTrusted(filepath.Join(filepath.Dir(helper), shadowquicProgram)))
+}
+
 // linuxTrusted reports whether only root can replace path: it and every
 // ancestor directory are root-owned real files that group and others cannot write.
 func linuxTrusted(path string) bool {
@@ -43,7 +53,7 @@ func linuxHelper(executable string) (string, error) {
 		return "", errors.New("native_unavailable")
 	}
 	helper := filepath.Join(helperDirectory(linuxHelperRoot, digest), "elarni-core")
-	if !linuxTrusted(helper) {
+	if !linuxHelperTrusted(helper) {
 		installer := executable
 		if linuxFUSE(executable) {
 			// A running AppImage is a FUSE mount that root cannot open, so pkexec
@@ -60,7 +70,7 @@ func linuxHelper(executable string) (string, error) {
 		if errors.As(err, &exit) && (exit.ExitCode() == 126 || exit.ExitCode() == 127) {
 			return "", errors.New("elevation_denied")
 		}
-		if err != nil || !linuxTrusted(helper) {
+		if err != nil || !linuxHelperTrusted(helper) {
 			return "", errors.New("elevation_failed")
 		}
 	}
@@ -73,8 +83,9 @@ func linuxFUSE(path string) bool {
 	return syscall.Statfs(path, &fs) == nil && fs.Type == 0x65735546
 }
 
-// stageLinuxInstaller copies executable into a new directory under the user's
-// cache, where root can run it, and returns the copy's path.
+// stageLinuxInstaller copies executable, and the ShadowQUIC client next to it, into a new
+// directory under the user's cache, where root can run and read them, and returns the
+// executable's copy.
 func stageLinuxInstaller(executable, digest string) (string, error) {
 	cache, err := os.UserCacheDir()
 	if err != nil {
@@ -91,6 +102,13 @@ func stageLinuxInstaller(executable, digest string) (string, error) {
 	if copied, err := copyHelperFile(executable, staged); err != nil || copied != digest {
 		_ = os.RemoveAll(directory)
 		return "", errors.New("helper_copy_mismatch")
+	}
+	if shadowquicSHA256 != "" {
+		client := filepath.Join(filepath.Dir(executable), shadowquicProgram)
+		if copied, err := copyHelperFile(client, filepath.Join(directory, shadowquicProgram)); err != nil || copied != shadowquicSHA256 {
+			_ = os.RemoveAll(directory)
+			return "", errors.New("helper_copy_mismatch")
+		}
 	}
 	return staged, nil
 }
@@ -109,5 +127,15 @@ func installLinuxHelper() error {
 	if !linuxTrusted(linuxHelperRoot) {
 		return errors.New("helper_root_untrusted")
 	}
-	return installHelper(linuxHelperRoot, digest, []helperFile{{"elarni-core", "/proc/self/exe", digest}})
+	files := []helperFile{{"elarni-core", "/proc/self/exe", digest}}
+	if shadowquicSHA256 != "" {
+		// The client is read from the folder this image was started from, which its user
+		// may be able to write; the copy is kept only when it is the one built with this core.
+		executable, err := os.Executable()
+		if err != nil {
+			return err
+		}
+		files = append(files, helperFile{shadowquicProgram, filepath.Join(filepath.Dir(executable), shadowquicProgram), shadowquicSHA256})
+	}
+	return installHelper(linuxHelperRoot, digest, files)
 }

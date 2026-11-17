@@ -135,6 +135,18 @@ void main() {
         DesktopAutomation.tcp443(server('hysteria', 443, network: 'hysteria')),
         false,
       );
+      // ShadowQUIC has no stream settings; its port is in its own settings.
+      expect(
+        DesktopAutomation.tcp443({
+          'outbounds': [
+            {
+              'protocol': 'shadowquic',
+              'settings': {'address': 'server.test', 'port': 443},
+            },
+          ],
+        }),
+        false,
+      );
       expect(
         DesktopAutomation.tcp443(server('vless', 443, network: 'kcp')),
         false,

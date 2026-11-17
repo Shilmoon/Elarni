@@ -12,7 +12,7 @@ class AppDelegate: FlutterAppDelegate {
     super.applicationWillFinishLaunching(notification)
   }
   override func application(_ application: NSApplication, open urls: [URL]) {
-    for url in urls where ["elarni", "happ", "incy", "vless", "vmess", "trojan", "ss", "socks", "socks5", "hy2", "hysteria2", "tuic", "vpn", "wireguard"].contains(url.scheme?.lowercased() ?? "") {
+    for url in urls where ["elarni", "happ", "incy", "vless", "vmess", "trojan", "ss", "socks", "socks5", "hy2", "hysteria2", "tuic", "sq", "shadowquic", "vpn", "wireguard"].contains(url.scheme?.lowercased() ?? "") {
       RoutingDeepLinkInbox.push(url.absoluteString)
     }
   }

@@ -1,0 +1,23 @@
+[package]
+name = "elarni-shadowquic"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+# The ShadowQUIC client for the Xray core: one running client behind a loopback SOCKS5
+# listener. The core reaches it through the C interface (same process, where the core is
+# linked with cgo) or through the `elarni-shadowquic` program (a child of a pure-Go core).
+[lib]
+crate-type = ["lib", "staticlib", "cdylib"]
+
+[[bin]]
+name = "elarni-shadowquic"
+path = "src/bin/elarni-shadowquic.rs"
+
+[dependencies]
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = "=1.0.154"
+shadowquic = { path = "../../Vendor/shadowquic/shadowquic", default-features = false, features = ["shadowquic-quinn", "ring"] }
+tokio = { version = "=1.54.1", features = ["macros", "net", "rt-multi-thread", "sync", "time"] }
+tracing = "=0.1.44"

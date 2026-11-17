@@ -120,6 +120,9 @@ class PackageReleaseChecks(unittest.TestCase):
                              'Vendor/Xray-core/proxy/tuic/client.go',
                              'Vendor/Xray-core/infra/conf/tuic.go',
                              'Vendor/libXray/share/tuic_traffic_test.go',
+                             'Vendor/shadowquic/LICENSE', 'Vendor/shadowquic/shadowquic/src/lib.rs',
+                             'native/elarni-shadowquic/src/lib.rs', 'Vendor/Xray-core/proxy/shadowquic/client.go',
+                             'scripts/build-core.cmake',
                              'Vendor/Xray-core/transport/internet/websocket/connection_test.go',
                              'assets/branding/elarni-mark.png',
                              'assets/branding/elarni-app-icon.png'):
@@ -146,7 +149,7 @@ class PackageReleaseChecks(unittest.TestCase):
         struct.pack_into('<I', pe, 60, 64)
         pe[64:68] = b'PE\0\0'
         struct.pack_into('<H', pe, 68, 0x8664)
-        for name in ('elarni.exe', 'elarni-core.exe', 'elarni-cli.exe',
+        for name in ('elarni.exe', 'elarni-core.exe', 'elarni-shadowquic.exe', 'elarni-cli.exe',
                      'elarni_domain.dll', 'flutter_windows.dll', 'wintun.dll', *VC_RUNTIME):
             (bundle / name).write_bytes(pe)
         (bundle / 'elarni.exe').write_bytes(pe + product_version(version()))

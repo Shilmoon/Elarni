@@ -1047,7 +1047,7 @@ pub fn profile_endpoints(config: &Value) -> Result<Vec<ProfileEndpoint>, Compile
             .to_ascii_lowercase();
         endpoint.supports_tcp_probe = !matches!(
             outbound["protocol"].as_str(),
-            Some("hysteria" | "tuic" | "wireguard" | "amneziawg")
+            Some("hysteria" | "tuic" | "shadowquic" | "wireguard" | "amneziawg")
         ) && matches!(
             network.as_str(),
             "raw" | "tcp" | "ws" | "websocket" | "httpupgrade" | "grpc" | "xhttp" | "splithttp"

@@ -81,7 +81,7 @@ func buildOutbound(outbound *conf.OutboundDetourConfig) (err error) {
 // colon; no share link can name it and the profile compiler refuses it.
 func invalidServer(outbound *conf.OutboundDetourConfig) bool {
 	switch outbound.Protocol {
-	case "vless", "vmess", "trojan", "shadowsocks", "socks", "http", "hysteria", "tuic":
+	case "vless", "vmess", "trojan", "shadowsocks", "socks", "http", "hysteria", "tuic", "shadowquic":
 	default:
 		return false
 	}

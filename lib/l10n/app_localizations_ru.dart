@@ -1522,7 +1522,7 @@ class AppLocalizationsRu extends AppLocalizations {
 
   @override
   String get tlsFingerprintHelp =>
-      'На какой браузер похоже подключение к серверу. «Как у сервера» берёт отпечаток из ссылки сервера, а если его там нет — Chrome. Выберите другой, если сеть блокирует этот. Действует для серверов с TLS и Reality поверх TCP; у Hysteria2, TUIC и WireGuard такого отпечатка нет.';
+      'На какой браузер похоже подключение к серверу. «Как у сервера» берёт отпечаток из ссылки сервера, а если его там нет — Chrome. Выберите другой, если сеть блокирует этот. Действует для серверов с TLS и Reality поверх TCP; у Hysteria2, TUIC, ShadowQUIC и WireGuard такого отпечатка нет.';
 
   @override
   String get tlsFingerprintServer => 'Как у сервера';

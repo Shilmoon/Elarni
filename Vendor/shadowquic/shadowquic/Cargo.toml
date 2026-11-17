@@ -1,0 +1,82 @@
+# Elarni's copy of shadowquic v0.4.12 with the patches listed in ../ELARNI_PATCHES.md.
+# Only what the ShadowQUIC client needs is declared: the upstream features for the TUN,
+# transparent-proxy, HTTP, DNS-server, Lua-router, REST and SunnyQUIC parts, their
+# dependencies, the command-line program and the examples are left out, so that the
+# lock file of the application does not carry crates it never builds. Their sources stay
+# in src/ unchanged and are compiled out.
+[package]
+name = "shadowquic"
+version = "0.4.12"
+edition = "2024"
+authors = ["spongebob888"]
+repository = "https://github.com/spongebob888/shadowquic.git"
+homepage = "https://github.com/spongebob888/shadowquic"
+description = "A 0-RTT QUIC Proxy with SNI camouflage"
+license = "MIT"
+autobins = false
+autoexamples = false
+
+[features]
+default = ["shadowquic-quinn", "ring", "global-allocator"]
+shadowquic-quinn = ["dep:quinn", "dep:rustls_jls", "dep:quinn_proto"]
+ring = [
+    "dep:ring",
+    "quinn?/rustls-ring",
+    "quinn_proto?/rustls-ring",
+    "rustls_jls?/ring",
+    "rcgen/ring",
+]
+# Upstream always installs its own global allocator (an allocation counter for its profiler).
+# A library linked into another program must leave that choice to the program.
+global-allocator = []
+# Profiling passthroughs; never enabled by default.
+hotpath = ["hotpath/hotpath"]
+hotpath-alloc = ["hotpath", "hotpath/hotpath-alloc"]
+
+[lints.rust]
+# The sources name upstream features this manifest does not declare (see the top).
+unexpected_cfgs = "allow"
+dead_code = "allow"
+
+[dependencies]
+thiserror = "2.0.18"
+tokio = { version = "1.52.3", features = ["io-util", "net", "rt", "macros", "rt-multi-thread", "signal", "time"] }
+tracing = "0.1.44"
+time = { version = "0.3.47", features = ["macros", "local-offset"] }
+quinn = { package = "quinn-jls", version = "0.4.0", default-features = false, features = ["runtime-tokio"], optional = true }
+quinn_proto = { package = "quinn-proto-jls", version = "0.4.0", default-features = false, optional = true }
+brutal-core = { version = "0.1.0" }
+rustls_jls = { package = "rustls-jls", version = "1.3.7", default-features = false, features = ["std"], optional = true }
+rcgen = { version = "0.14", default-features = false, features = ["crypto"] }
+bytes = "1.11.0"
+async-trait = "0.1.89"
+webpki-roots = "1.0.11"
+shadowquic-macros = { path = "../shadowquic-macros", version = ">=0.3.11" }
+serde = { version = "1.0.228", features = ["derive"] }
+educe = "0.8.1"
+socket2 = "0.6.2"
+arc-swap = { version = "1.9.1" }
+serde-saphyr = "1.1.0"
+ring = { version = "0.17.14", optional = true }
+hotpath = { version = "0.31.2", features = ["tokio"] }
+
+[target.'cfg(target_os="android")'.dependencies]
+sendfd = { version = "0.4.4", features = ["tokio"] }
+
+[target.'cfg(target_os="windows")'.dependencies]
+windows = { version = "0.62.2", features = [
+    "Win32_Foundation",
+    "Win32_Networking_WinSock",
+    "Win32_NetworkManagement_IpHelper",
+] }
+
+[target.'cfg(target_os="macos")'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+hotpath = { version = "0.31.2", features = ["tokio"] }
+tokio = { version = "1.52.3", features = ["test-util"] }
+tempfile = "3"
+fast-socks5 = "1.0.0"
+rand = "0.10.1"
+tracing-subscriber = { version = "0.3.22", features = ["env-filter", "fmt", "ansi", "time", "local-time"] }

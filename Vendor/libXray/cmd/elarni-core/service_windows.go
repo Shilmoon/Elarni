@@ -521,7 +521,7 @@ func changeVPNService(add bool, account string) error {
 	}
 	directory := helperDirectory(root, digest)
 	helper := filepath.Join(directory, "elarni-core.exe")
-	if add && !helperInstalled(directory, "elarni-core.exe", "wintun.dll") {
+	if add && !windowsHelperInstalled(directory) {
 		return errors.New("helper_missing")
 	}
 	manager, service, line, release, err := installedVPNService()

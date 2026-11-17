@@ -15,14 +15,18 @@ IPHONEOS_DEPLOYMENT_TARGET=18.0 cargo build --locked --profile native-dev \
   -p elarni-domain -p elarni-packet-bridge
 cp "$root/.build/ios/rust/$target/native-dev/libelarni_domain.a" "$output/"
 cp "$root/.build/ios/rust/$target/native-dev/libelarni_packet_bridge.a" "$output/"
+# The ShadowQUIC client, which the app and its network extension link next to the core.
+IPHONEOS_DEPLOYMENT_TARGET=18.0 cargo build --locked --profile native-dev \
+  --target "$target" --target-dir "$root/.build/ios/rust" -p elarni-shadowquic --lib
+cp "$root/.build/ios/rust/$target/native-dev/libelarni_shadowquic.a" "$output/"
 sdk=$(xcrun --sdk "$platform" --show-sdk-path)
 compiler=$(xcrun --sdk "$platform" --find clang)
 flags="-target $triple -isysroot $sdk"
 go_command=${ELARNI_GO:-go}
 # ELARNI_RECORDING=1 builds the core with its connection recorder; the app then needs
 # the ELARNI_RECORDING Swift condition too (docs/DIAGNOSTICS.md).
-tags=
-[ "${ELARNI_RECORDING:-}" != 1 ] || tags=-tags=elarni_recording
+tags=-tags=elarni_shadowquic_static
+[ "${ELARNI_RECORDING:-}" != 1 ] || tags=-tags=elarni_shadowquic_static,elarni_recording
 cd "$root/Vendor/libXray"
 GOWORK="$root/go.work" GOTOOLCHAIN=local GOFLAGS= GOOS=ios GOARCH=arm64 CGO_ENABLED=1 \
   CC="$compiler" CGO_CFLAGS="$flags" CGO_CXXFLAGS="$flags" CGO_LDFLAGS="$flags" \

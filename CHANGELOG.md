@@ -4,15 +4,29 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
 
 ## Unreleased
 
+## 0.6.2 - 2026-11-17
+
 ### Added
 
+- **ShadowQUIC servers.** `sq://` and `shadowquic://` links, subscriptions that carry them and
+  Clash `type: shadowquic` proxies are imported, and a ShadowQUIC server is shared as an
+  `sq://` link. A server has a user name and password, the server name its TLS hello shows,
+  ALPN, UDP over streams or datagrams, 0-RTT, the congestion control (BBR, CUBIC or New Reno)
+  and the packet size; without a packet size the client keeps its own (1300 bytes at first,
+  1290 at least). The client is ShadowQUIC v0.4.12 with fixes that change nothing on the wire
+  (`Vendor/shadowquic/ELARNI_PATCHES.md`), so it works with a stock server. A ShadowQUIC server
+  connects directly, not through another server, and has no TLS fingerprint, multiplexing or
+  fragmentation settings. All platforms: on Windows
+  and Linux the client is a program next to the core (`elarni-shadowquic`), which the
+  elevated helper starts only when it is the build its core was made with; on Android,
+  iPhone and in the macOS tunnel it runs inside the core.
 - **TLS fingerprint** in Settings › Advanced chooses which browser a connection to a server
   looks like: Chrome, Firefox, Safari, a random browser, or a randomized hello. The default,
   **From the server**, keeps what each server's link names (Chrome when it names none), as
   before. Until now the fingerprint came only from the link, so when a network began to block
   one browser's hello, a server from a provider could not be switched to another. The choice
   applies to TLS and Reality servers over TCP, to a provider profile's backup servers and to a
-  per-app server; Hysteria2, TUIC and WireGuard servers have no such fingerprint. All platforms.
+  per-app server; Hysteria2, TUIC, ShadowQUIC and WireGuard servers have no such fingerprint. All platforms.
 - **Live speed.** Home shows the download and upload speed under the Connect button while
   connected, whatever the Monitoring setting. The counters are read only while the app is on
   screen. All platforms; on iPhone the speed is that of the tunnel interface, packet headers

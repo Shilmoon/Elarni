@@ -72,6 +72,8 @@ get_filename_component(ELARNI_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/.." ABSOLUTE)
 set(ELARNI_NATIVE "${CMAKE_CURRENT_BINARY_DIR}/native")
 set(ELARNI_DOMAIN "${ELARNI_NATIVE}/rust/release/libelarni_domain.so")
 set(ELARNI_CORE "${ELARNI_NATIVE}/elarni-core")
+# The ShadowQUIC client the core starts from its own folder.
+set(ELARNI_SHADOWQUIC "${ELARNI_NATIVE}/rust/release/elarni-shadowquic")
 set(ELARNI_CLI "${ELARNI_NATIVE}/elarni-cli")
 # The CLI uses the Dart of the Flutter SDK building this app, whose path only the flutter directory sets.
 get_directory_property(FLUTTER_ROOT DIRECTORY "${FLUTTER_MANAGED_DIR}" DEFINITION FLUTTER_ROOT)
@@ -89,12 +91,13 @@ add_custom_target(elarni_native
   COMMAND ${CMAKE_COMMAND} -E make_directory "${ELARNI_NATIVE}"
   COMMAND "${CARGO_EXECUTABLE}" build -p elarni-domain --locked --release
     --target-dir "${ELARNI_NATIVE}/rust"
-  COMMAND ${CMAKE_COMMAND} -E env CGO_ENABLED=0
-    "${GO_EXECUTABLE}" build -trimpath ${ELARNI_GO_TAGS} -o "${ELARNI_CORE}"
-    ./Vendor/libXray/cmd/elarni-core
+  COMMAND "${CARGO_EXECUTABLE}" build -p elarni-shadowquic --bin elarni-shadowquic --locked --release
+    --target-dir "${ELARNI_NATIVE}/rust"
+  COMMAND ${CMAKE_COMMAND} "-DGO=${GO_EXECUTABLE}" "-DROOT=${ELARNI_ROOT}" "-DCLIENT=${ELARNI_SHADOWQUIC}"
+    "-DOUTPUT=${ELARNI_CORE}" "-DTAGS=${ELARNI_GO_TAGS}" -P "${ELARNI_ROOT}/scripts/build-core.cmake"
   COMMAND "${DART_EXECUTABLE}" compile exe ${ELARNI_CLI_DEFINES} bin/elarni.dart -o "${ELARNI_CLI}"
   WORKING_DIRECTORY "${ELARNI_ROOT}"
-  BYPRODUCTS "${ELARNI_DOMAIN}" "${ELARNI_CORE}" "${ELARNI_CLI}"
+  BYPRODUCTS "${ELARNI_DOMAIN}" "${ELARNI_SHADOWQUIC}" "${ELARNI_CORE}" "${ELARNI_CLI}"
   VERBATIM
 )
 add_dependencies(${BINARY_NAME} elarni_native)
@@ -133,6 +136,7 @@ set(INSTALL_BUNDLE_LIB_DIR "${CMAKE_INSTALL_PREFIX}/lib")
 install(TARGETS ${BINARY_NAME} RUNTIME DESTINATION "${CMAKE_INSTALL_PREFIX}"
   COMPONENT Runtime)
 install(PROGRAMS "${ELARNI_CORE}" DESTINATION "${CMAKE_INSTALL_PREFIX}" COMPONENT Runtime)
+install(PROGRAMS "${ELARNI_SHADOWQUIC}" DESTINATION "${CMAKE_INSTALL_PREFIX}" COMPONENT Runtime)
 install(PROGRAMS "${ELARNI_CLI}" DESTINATION "${CMAKE_INSTALL_PREFIX}" COMPONENT Runtime)
 install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/elarni.png" DESTINATION "${INSTALL_BUNDLE_DATA_DIR}" COMPONENT Runtime)
 install(FILES "${ELARNI_DOMAIN}" DESTINATION "${INSTALL_BUNDLE_LIB_DIR}" COMPONENT Runtime)

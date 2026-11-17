@@ -53,6 +53,7 @@ var (
 		"trojan":      func() interface{} { return new(TrojanClientConfig) },
 		"hysteria":    func() interface{} { return new(HysteriaClientConfig) },
 		"tuic":        func() interface{} { return new(TUICClientConfig) },
+		"shadowquic":  func() interface{} { return new(ShadowQUICClientConfig) },
 		"dns":         func() interface{} { return new(DNSOutboundConfig) },
 		"wireguard":   func() interface{} { return &WireGuardConfig{IsClient: true} },
 		"amneziawg":   func() interface{} { return &WireGuardConfig{IsClient: true, IsAmnezia: true} },
@@ -325,6 +326,11 @@ func validateXDrive(ts proto.Message, ss *internet.StreamConfig, ms *proxyman.Mu
 func (c *OutboundDetourConfig) Build() (*core.OutboundHandlerConfig, error) {
 	if c.Protocol == "tuic" {
 		if err := validateTUICTransport(c); err != nil {
+			return nil, err
+		}
+	}
+	if c.Protocol == "shadowquic" {
+		if err := validateShadowQUICOutbound(c); err != nil {
 			return nil, err
 		}
 	}

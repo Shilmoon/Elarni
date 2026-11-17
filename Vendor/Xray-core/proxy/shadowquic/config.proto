@@ -1,0 +1,23 @@
+syntax = "proto3";
+
+package xray.proxy.shadowquic;
+option go_package = "github.com/xtls/xray-core/proxy/shadowquic";
+
+import "common/net/address.proto";
+
+message ClientConfig {
+  xray.common.net.IPOrDomain address = 1;
+  uint32 port = 2;
+  string username = 3;
+  string password = 4;
+  string server_name = 5;
+  // Empty keeps the client's own list.
+  repeated string alpn = 6;
+  // Empty keeps the client's own choice.
+  string congestion_control = 7;
+  bool zero_rtt = 8;
+  bool udp_over_stream = 9;
+  // Zero keeps the client's own value.
+  uint32 initial_mtu = 10;
+  uint32 min_mtu = 11;
+}

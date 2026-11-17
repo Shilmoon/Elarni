@@ -145,6 +145,9 @@ func (proxy *ClashProxy) UnmarshalYAML(node *yaml.Node) error {
 	if err := node.Decode((*plain)(proxy)); err != nil {
 		return err
 	}
+	if proxy.Type == "shadowquic" {
+		return proxy.decodeShadowQUIC(node)
+	}
 	if proxy.Type != "tuic" {
 		return nil
 	}

@@ -18,6 +18,7 @@ import time
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / 'scripts'))
 from check_report import record_check
+from shadowquic_fixture import redirecting_socks, shadowquic_peer
 from tuic_fixture import android_tuic_peer
 record_check(ROOT)
 
@@ -48,7 +49,7 @@ adb = sdk / 'platform-tools/adb'
 RUNNER = 'com.elarni.debug.test/androidx.test.runner.AndroidJUnitRunner'
 # Tests per class (the catalog's without its large-geofile test, with the one that runs apart before the restart tests);
 # shards of one AVD must add up to them.
-EXPECTED = {'com.elarni.AndroidE2E': 74, 'com.elarni.AndroidUIE2E': 47, 'com.elarni.AndroidVpnE2E': 23}
+EXPECTED = {'com.elarni.AndroidE2E': 74, 'com.elarni.AndroidUIE2E': 47, 'com.elarni.AndroidVpnE2E': 24}
 out = ROOT / '.build/android-development'
 native_env = env.copy()
 host = 'darwin-x86_64' if sys.platform == 'darwin' else 'linux-x86_64'
@@ -72,6 +73,9 @@ def run(*command, capture=False, timeout=240):
 
 def build():
     run(sys.executable, 'scripts/build-android-native', '--abi', abi, timeout=600)
+    if args.case in ('all', 'vpn'):
+        # The host's ShadowQUIC peer for the vpn suite.
+        run('cargo', 'build', '--locked', '-p', 'elarni-shadowquic', '--examples', timeout=600)
     run('android/gradlew', '-p', 'android', ':app:testDebugUnitTest', ':app:assembleDebug', ':app:assembleDebugAndroidTest',
         ':traffic-fixture:assembleADebug', ':traffic-fixture:assembleBDebug', f'-Pelarni.abi={abi}', '--no-daemon', '--console=plain', timeout=600)
     if args.case in ('all', 'native'):
@@ -349,9 +353,12 @@ if args.case != 'native':
             try:
                 out.mkdir(parents=True, exist_ok=True)
                 tuic_log, failed_before = out / f'tuic-server-{args.serial}.log', len(failures)
-                with android_tuic_peer(ROOT, proxy_http.server_port, proxy_udp.server_address[1], log_path=tuic_log) as (tuic_port, certificate):
+                with android_tuic_peer(ROOT, proxy_http.server_port, proxy_udp.server_address[1], log_path=tuic_log) as (tuic_port, certificate), \
+                     redirecting_socks(ROOT, proxy_http.server_port, proxy_udp.server_address[1]) as socks, \
+                     shadowquic_peer(ROOT, socks=socks) as shadowquic_port:
                     peers = ('-e', 'httpPort', str(http_peer.server_port), '-e', 'udpPort', str(udp.server_address[1]),
-                             '-e', 'tuicPort', str(tuic_port), '-e', 'tuicCertificate', certificate)
+                             '-e', 'tuicPort', str(tuic_port), '-e', 'tuicCertificate', certificate,
+                             '-e', 'shadowquicPort', str(shadowquic_port))
                     instrumentation('com.elarni.AndroidVpnE2E', options=(*peers, '-e', 'sleepMinutes', str(args.sleep_minutes)),
                                     timeout=600 + 60 * args.sleep_minutes, sharded=True)
                     if not args.test_method and first_shard:

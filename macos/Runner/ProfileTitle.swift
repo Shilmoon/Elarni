@@ -13,7 +13,8 @@ func decodedBase64Text(_ encoded: String) -> String? {
 }
 
 /// The SNI a probe's handshake sends: bulk tests run at most two probes per SNI,
-/// as TSPU counts handshakes per SNI. TLS without a name sends the address.
+/// as TSPU counts handshakes per SNI. TLS without a name sends the address;
+/// ShadowQUIC keeps its name in its own settings.
 func probeKey(outbound data: Data) -> String? {
   guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
   for outbound in root["outbounds"] as? [[String: Any]] ?? [root] {
@@ -24,7 +25,8 @@ func probeKey(outbound data: Data) -> String? {
       .compactMap { (stream?[$0] as? [String: Any])?["serverName"] as? String }.first { !$0.isEmpty }
     let address = ["tls", "reality"].contains(stream?["security"] as? String ?? "")
       ? settings?["address"] as? String ?? server?["address"] as? String : nil
-    if let key = named ?? address, !key.isEmpty { return key.lowercased() }
+    let own = outbound["protocol"] as? String == "shadowquic" ? settings?["serverName"] as? String : nil
+    if let key = named ?? own.flatMap({ $0.isEmpty ? nil : $0 }) ?? address, !key.isEmpty { return key.lowercased() }
   }
   return nil
 }

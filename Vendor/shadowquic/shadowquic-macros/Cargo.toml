@@ -1,0 +1,17 @@
+[package]
+name = "shadowquic-macros"
+version = "0.4.12"
+edition = "2024"
+authors = ["spongebob888"]
+repository = "https://github.com/spongebob888/shadowquic.git"
+homepage = "https://github.com/spongebob888/shadowquic"
+description = "A 0-RTT QUIC Proxy with SNI camouflage"
+license = "MIT"
+
+[lib]
+proc-macro = true
+
+[dependencies]
+proc-macro2 = "1.0.106"
+quote = "1.0.44"
+syn = { version = "3.0.3", features = ["extra-traits"] }

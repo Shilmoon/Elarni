@@ -362,7 +362,7 @@ struct AutomationPolicy {
     let stream = outbound["streamSettings"] as? [String: Any] ?? [:]
     let server = ((settings["vnext"] ?? settings["servers"]) as? [[String: Any]])?.first
     guard let protocolName = outbound["protocol"] as? String,
-          !["hysteria", "tuic", "wireguard", "amneziawg"].contains(protocolName),
+          !["hysteria", "tuic", "shadowquic", "wireguard", "amneziawg"].contains(protocolName),
           !["kcp", "mkcp", "quic", "hysteria"].contains(stream["network"] as? String ?? ""),
           (stream["tlsSettings"] as? [String: Any])?["alpn"] as? [String] != ["h3"] else { return false }
     return (server?["port"] ?? settings["port"]).map { "\($0)" } == "443"

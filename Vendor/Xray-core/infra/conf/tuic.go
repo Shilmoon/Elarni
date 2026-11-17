@@ -83,16 +83,24 @@ func (c *OutboundDetourConfig) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, (*plain)(c)); err != nil {
 		return err
 	}
-	if c.Protocol != "tuic" {
+	name := "TUIC"
+	switch c.Protocol {
+	case "tuic":
+	case "shadowquic":
+		name = "ShadowQUIC"
+	default:
 		return nil
 	}
 	if err := uniqueTUICJSON(json.NewDecoder(bytes.NewReader(data))); err != nil {
-		return err
+		if c.Protocol == "tuic" {
+			return err
+		}
+		return errors.New("invalid " + name + " JSON")
 	}
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode((*plain)(c)); err != nil {
-		return errors.New("unsupported or invalid TUIC outbound field")
+		return errors.New("unsupported or invalid " + name + " outbound field")
 	}
 	return nil
 }
@@ -154,7 +162,7 @@ func (c *Config) ValidateTUICChains() error {
 			}
 			seen[tag] = true
 			switch upstream.Protocol {
-			case "freedom", "direct", "socks", "shadowsocks", "vless", "vmess", "trojan", "hysteria", "tuic", "wireguard", "amneziawg":
+			case "freedom", "direct", "socks", "shadowsocks", "vless", "vmess", "trojan", "hysteria", "tuic", "shadowquic", "wireguard", "amneziawg":
 			default:
 				return errors.New("TUIC upstream must carry UDP datagrams")
 			}

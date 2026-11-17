@@ -1,0 +1,512 @@
+use std::{collections::HashMap, net::SocketAddr, sync::Arc};
+
+use tokio::{
+    io::AsyncReadExt,
+    net::{TcpSocket, TcpStream},
+    sync::Mutex,
+};
+use tracing::{instrument, trace};
+
+use crate::{
+    Outbound, UdpSession,
+    config::{DirectOutCfg, DnsStrategy},
+    dns::{DnsService, ResolverManager, resolve_destination},
+    error::SError,
+    msgs::socks5::{AddrOrDomain, SocksAddr},
+    utils::{
+        dual_socket::DualSocket,
+        socket_opt::{SocketFactory, TcpSocketFactory, UdpSocketFactory},
+    },
+};
+use async_trait::async_trait;
+
+#[cfg(all(test, feature = "shadowquic-quinn"))]
+#[path = "udp_failure_tests.rs"]
+mod udp_failure_tests;
+
+#[cfg(all(
+    test,
+    target_os = "linux",
+    feature = "tproxy",
+    feature = "shadowquic-quinn",
+    feature = "dns-server",
+    feature = "statistics"
+))]
+#[path = "tproxy_udp_failure_tests.rs"]
+mod tproxy_udp_failure_tests;
+
+#[derive(Clone)]
+pub struct DirectOut {
+    pub cfg: DirectOutCfg,
+    pub(crate) dns: Arc<dyn DnsService>,
+}
+
+impl std::fmt::Debug for DirectOut {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DirectOut").field("cfg", &self.cfg).finish()
+    }
+}
+
+impl Default for DirectOut {
+    fn default() -> Self {
+        Self::new(DirectOutCfg::default(), Arc::new(ResolverManager::new()))
+    }
+}
+
+#[async_trait]
+impl Outbound for DirectOut {
+    #[instrument(name = "outbound", skip_all, fields(tag = %self.cfg.tag))]
+    async fn handle(&self, req: crate::ProxyRequest) -> Result<(), crate::error::SError> {
+        let dns_strategy = req
+            .user_context()
+            .dns_strategy
+            .or(self.cfg.dns_strategy)
+            .unwrap_or_default();
+        let self_clone = self.clone();
+
+        match req {
+            crate::ProxyRequest::Tcp(mut tcp_session) => {
+                let dns = self.dns.clone();
+                let fut = async move {
+                    trace!(
+                        event = "direct:tcp_connection_started",
+                        dst = %tcp_session.dst,
+                        "connecting direct tcp"
+                    );
+                    // If dns field is set, Direct outbound will be wrapped with ResolvingOutbound.
+                    // Here is mainly for backward compatibilty if dns-servers feature is disabled or dns field not set.
+                    let dst =
+                        resolve_destination(&*dns, &tcp_session.dst, Some(&dns_strategy)).await?;
+                    trace!(event = "dns:address_resolved", "resolved to {}", dst);
+
+                    let mut upstream = self_clone.connect_tcp(dst).await?;
+                    let _ = upstream.set_nodelay(true);
+                    let u = crate::utils::copy::copy_bidirectional(
+                        &mut tcp_session.stream,
+                        &mut upstream,
+                        1024 * 16,
+                        1024 * 16,
+                        self_clone.cfg.half_close_timeout,
+                    )
+                    .await?;
+
+                    tracing::info!(
+                        upload = %format!("{} bytes", u.1),
+                        download = %format!("{} bytes", u.0),
+                        event = "direct:tcp_request_completed",
+                        "request finished",
+                    );
+                    Ok(()) as Result<(), SError>
+                };
+                fut.await?;
+            }
+
+            crate::ProxyRequest::Udp(udp_session) => {
+                let fut = async move {
+                    self_clone.handle_udp(udp_session).await?;
+                    Ok(()) as Result<(), SError>
+                };
+                fut.await?;
+            }
+        }
+
+        Ok(())
+    }
+}
+
+#[derive(Clone)]
+struct DnsResolve(
+    Arc<Mutex<HashMap<SocksAddr, SocketAddr>>>,
+    Arc<dyn DnsService>,
+);
+impl DnsResolve {
+    async fn resolve(
+        &self,
+        socks: &SocksAddr,
+        strategy: &DnsStrategy,
+    ) -> Result<SocketAddr, SError> {
+        if let AddrOrDomain::Domain(_) = socks.addr {
+            if let Some(v) = self.0.lock().await.get(socks) {
+                Ok(*v)
+            } else {
+                let s = resolve_destination(&*self.1, socks, Some(strategy)).await?;
+                tracing::trace!(
+                    event = "dns:address_resolved",
+                    "{} resolved to {}",
+                    socks,
+                    s
+                );
+                self.0.lock().await.insert(socks.clone(), s);
+                Ok(s)
+            }
+        } else {
+            Ok(resolve_destination(&*self.1, socks, Some(strategy)).await?)
+        }
+    }
+    async fn inv_resolve(&self, addr: &SocketAddr) -> SocksAddr {
+        if let Some(add) = self.0.lock().await.iter().find(|x| x.1 == addr) {
+            add.0.clone()
+        } else {
+            (*addr).into()
+        }
+    }
+}
+
+impl DirectOut {
+    pub fn new(cfg: DirectOutCfg, resolver_manager: Arc<ResolverManager>) -> Self {
+        #[cfg(feature = "dns-server")]
+        let tag = cfg
+            .dns
+            .as_deref()
+            .unwrap_or(crate::dns::DEFAULT_SYSTEM_DNS_TAG);
+        #[cfg(not(feature = "dns-server"))]
+        let tag = "";
+        let dns = resolver_manager
+            .resolver(tag)
+            .expect("default system resolver exists");
+        Self { cfg, dns }
+    }
+
+    #[hotpath::measure(impl_type = "DirectOut")]
+    async fn connect_tcp(&self, dst: SocketAddr) -> Result<TcpStream, SError> {
+        let socket = TcpSocketFactory {
+            addr: dst.to_string(),
+            keep_alive: self.cfg.tcp_keep_alive,
+            interface: self.cfg.socket_opt.bind_interface.clone(),
+            fw_mark: self.cfg.socket_opt.fw_mark,
+            protect_path: None,
+            resolver: self.dns.clone(),
+        }
+        .create_socket()
+        .await?;
+        let socket = TcpSocket::from_std_stream(socket.into());
+        Ok(socket.connect(dst).await?)
+    }
+
+    /// The socket of an association. Its local address comes from this
+    /// outbound's configuration alone: the address an association request
+    /// carries is the client's own (RFC 1928, section 6), named by the client,
+    /// possibly a remote one, and is neither bound nor looked up here.
+    async fn bind_udp(&self, dst: SocksAddr) -> Result<DualSocket, SError> {
+        let socket = UdpSocketFactory {
+            addr: dst.to_string(),
+            interface: self.cfg.socket_opt.bind_interface.clone(),
+            fw_mark: self.cfg.socket_opt.fw_mark,
+            protect_path: None,
+            try_dual_stack: true,
+            resolver: self.dns.clone(),
+        }
+        .create_socket()
+        .await?;
+        Ok(DualSocket::from_socket(socket)?)
+    }
+
+    async fn handle_udp(&self, udp_session: UdpSession) -> Result<(), SError> {
+        trace!(event = "direct:udp_association_started", bind_addr = %udp_session.bind_addr,"associating udp");
+        let socket = self.bind_udp(udp_session.dst).await?;
+        let upstream = Arc::new(socket);
+        let upstream_clone = upstream.clone();
+        let mut downstream = udp_session.recv;
+
+        let dns_cache = DnsResolve(Default::default(), self.dns.clone());
+        let dns_cache_clone = dns_cache.clone();
+        let dns_strategy = udp_session
+            .user_context
+            .dns_strategy
+            .or(self.cfg.dns_strategy)
+            .unwrap_or_default();
+        let mut upload: u64 = 0;
+        let mut download: u64 = 0;
+        let fut1 = async {
+            loop {
+                //trace!("recv upstream");
+                let (buf, dst) = upstream.recv_datagram().await?;
+                let len = buf.len();
+                //trace!("udp request reply from:{}", dst);
+                let dst = dns_cache_clone.inv_resolve(&dst).await;
+                //trace!("udp source inverse resolved to:{}", dst);
+                //trace!("udp recved:{} bytes", len);
+                let _ = udp_session.send.send_to(buf, dst).await?;
+                download += len as u64;
+            }
+            #[allow(unreachable_code)]
+            (Ok(()) as Result<(), SError>)
+        };
+        let fut2 = async {
+            loop {
+                let (buf, dst) = downstream.recv_from().await?;
+
+                //trace!("udp request to:{}", dst);
+                let dst = dns_cache.resolve(&dst, &dns_strategy).await?;
+                //trace!("udp resolve to:{}", dst);
+                let siz = upstream_clone.send_to(&buf, &dst).await?;
+                //trace!("udp request sent:{}bytes", siz);
+                upload += siz as u64;
+            }
+            #[allow(unreachable_code)]
+            (Ok(()) as Result<(), SError>)
+        };
+        let fut3 = async {
+            let Some(mut s) = udp_session.stream else {
+                return Ok(());
+            };
+            let mut buf = [0u8];
+            s.read_exact(&mut buf).await?;
+            Err(SError::UDPSessionClosed(
+                "udp session closed by control stream".into(),
+            ))
+        };
+        // We can use spawn, but it requirs communication to shutdown the other
+        // Flatten spawn handle using try_join! doesn't work. Don't know why
+        let result = tokio::try_join!(fut1, fut2, fut3);
+        tracing::info!(
+            upload = %format!("{} bytes", upload),
+            download = %format!("{} bytes", download),
+            event = "direct:udp_association_completed",
+            "udp association finished",
+        );
+        result?;
+        Ok(())
+    }
+}
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    struct DualStackDns;
+
+    #[async_trait]
+    impl DnsService for DualStackDns {
+        #[cfg(feature = "dns-server")]
+        async fn exchange(&self, _: &[u8]) -> Result<Vec<u8>, SError> {
+            unreachable!("test DNS uses resolve directly")
+        }
+
+        async fn resolve(&self, _: &str) -> Result<Vec<std::net::IpAddr>, SError> {
+            Ok(vec!["::1".parse().unwrap(), "127.0.0.1".parse().unwrap()])
+        }
+    }
+
+    #[test]
+    fn dns_strategy_config_is_optional() {
+        for (field, expected) in [
+            ("", None),
+            ("dns-strategy: null", None),
+            ("dns-strategy: prefer-ipv4", Some(DnsStrategy::PreferIpv4)),
+            ("dns-strategy: ipv6-only", Some(DnsStrategy::Ipv6Only)),
+        ] {
+            let cfg: DirectOutCfg =
+                serde_saphyr::from_str(&format!("tag: direct\n{field}")).unwrap();
+            assert_eq!(cfg.dns_strategy, expected);
+        }
+    }
+
+    #[tokio::test]
+    async fn dns_strategy_uses_request_then_config_for_tcp_and_udp() {
+        use crate::{ProxyRequest, TcpSession, UserContext};
+        use tokio::time::{Duration, timeout};
+        use tokio::{net::TcpListener, net::UdpSocket, sync::mpsc};
+
+        assert_eq!(DirectOutCfg::default().dns_strategy, None);
+        assert_eq!(UserContext::default().dns_strategy, None);
+        for (config, request, ip) in [
+            (None, None, "127.0.0.1"),
+            (None, Some(DnsStrategy::Ipv6Only), "::1"),
+            (None, Some(DnsStrategy::PreferIpv6), "::1"),
+            (Some(DnsStrategy::Ipv6Only), None, "::1"),
+            (
+                Some(DnsStrategy::Ipv4Only),
+                Some(DnsStrategy::Ipv6Only),
+                "::1",
+            ),
+            (
+                Some(DnsStrategy::Ipv6Only),
+                Some(DnsStrategy::Ipv4Only),
+                "127.0.0.1",
+            ),
+        ] {
+            timeout(Duration::from_secs(5), async {
+                let ip: std::net::IpAddr = ip.parse().unwrap();
+                let direct = DirectOut {
+                    cfg: DirectOutCfg {
+                        dns_strategy: config,
+                        ..Default::default()
+                    },
+                    dns: Arc::new(DualStackDns),
+                };
+                let context = UserContext {
+                    dns_strategy: request,
+                    ..Default::default()
+                };
+                let listener = TcpListener::bind(SocketAddr::new(ip, 0)).await.unwrap();
+                let dst = SocksAddr::from_domain("strategy.test".into(), listener.local_addr().unwrap().port());
+                let (stream, peer) = tokio::io::duplex(64);
+                let (read, write) = tokio::io::split(stream);
+                drop(peer);
+                let tcp = direct.handle(ProxyRequest::Tcp(TcpSession {
+                    stream: Box::new(crate::squic::inbound::Unsplit { s: write, r: read }),
+                    dst,
+                    src_addr: None,
+                    user_context: context.clone(),
+                }));
+                let (result, ()) = tokio::join!(tcp, async {
+                    let (stream, _) = listener.accept().await.unwrap();
+                    drop(stream);
+                });
+                result.unwrap();
+
+                let receiver = UdpSocket::bind(SocketAddr::new(ip, 0)).await.unwrap();
+                let (packets, recv) = mpsc::channel(2);
+                let (send, mut replies) = mpsc::channel(2);
+                let dst = SocksAddr::from_domain("strategy.test".into(), receiver.local_addr().unwrap().port());
+                let session: UdpSession = UdpSession {
+                    recv: Box::new(recv),
+                    send: Arc::new(send),
+                    stream: None,
+                    bind_addr: "[::]:0".parse().unwrap(),
+                    dst: dst.clone(),
+                    src_addr: None,
+                    user_context: context,
+                };
+                let exchange = async {
+                    for _ in 0..2 {
+                        packets.send((bytes::Bytes::from_static(b"ping"), dst.clone())).await.unwrap();
+                        let mut buf = [0; 4];
+                        let (len, peer) = receiver.recv_from(&mut buf).await.unwrap();
+                        assert_eq!(&buf[..len], b"ping");
+                        receiver.send_to(b"pong", peer).await.unwrap();
+                        let (bytes, addr) = replies.recv().await.unwrap();
+                        assert_eq!(&bytes[..], b"pong");
+                        assert_eq!(addr, dst);
+                    }
+                };
+                tokio::select! {
+                    result = direct.handle(ProxyRequest::Udp(session)) => panic!("UDP outbound stopped: {result:?}"),
+                    () = exchange => {}
+                }
+            }).await.unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn tcp_keep_alive_defaults_to_disabled_and_applies_to_connected_sockets() {
+        assert!(!DirectOutCfg::default().tcp_keep_alive);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        for (field, expected) in [
+            ("", false),
+            ("tcp-keep-alive: false", false),
+            ("tcp-keep-alive: true", true),
+        ] {
+            let crate::config::OutboundCfg::Direct(cfg) =
+                serde_saphyr::from_str(&format!("type: direct\ntag: direct\n{field}")).unwrap()
+            else {
+                panic!("expected direct outbound")
+            };
+            assert_eq!(cfg.tcp_keep_alive, expected);
+            let direct = DirectOut::new(cfg, Arc::new(ResolverManager::new()));
+            let stream = tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                direct.connect_tcp(listener.local_addr().unwrap()),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+            assert_eq!(
+                socket2::SockRef::from(&stream).keepalive().unwrap(),
+                expected
+            );
+            listener.accept().await.unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn udp_domain_cache_preserves_each_destination_port() {
+        let cache = DnsResolve(Default::default(), DirectOut::default().dns);
+        for port in [1234, 5678, 1234] {
+            let domain = SocksAddr::from_domain("localhost".into(), port);
+            let resolved = cache
+                .resolve(&domain, &DnsStrategy::Ipv4Only)
+                .await
+                .unwrap();
+            assert_eq!(resolved.port(), port);
+            assert_eq!(cache.inv_resolve(&resolved).await, domain);
+        }
+    }
+
+    #[tokio::test]
+    #[cfg(target_os = "linux")]
+    async fn tcp_and_udp_use_configured_source_address() {
+        use crate::config::{Interface, SocketOpt};
+        use std::net::IpAddr;
+        use tokio::net::{TcpListener, UdpSocket};
+        use tokio::time::{Duration, timeout};
+
+        let source: IpAddr = "127.0.0.2".parse().unwrap();
+        let direct = DirectOut::new(
+            DirectOutCfg {
+                socket_opt: SocketOpt {
+                    bind_interface: Some(Interface::Address(SocketAddr::new(source, 0))),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            Arc::new(ResolverManager::new()),
+        );
+        timeout(Duration::from_secs(5), async {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let stream = direct
+                .connect_tcp(listener.local_addr().unwrap())
+                .await
+                .unwrap();
+            assert_eq!(stream.local_addr().unwrap().ip(), source);
+            let (_, peer) = listener.accept().await.unwrap();
+            assert_eq!(peer.ip(), source);
+
+            let receiver = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+            let socket = direct
+                .bind_udp(SocksAddr::from(receiver.local_addr().unwrap()))
+                .await
+                .unwrap();
+            assert_eq!(socket.local_addr().unwrap().ip(), source);
+            socket
+                .send_to(b"ping", &receiver.local_addr().unwrap())
+                .await
+                .unwrap();
+            let mut buf = [0; 4];
+            let (_, peer) = receiver.recv_from(&mut buf).await.unwrap();
+            assert_eq!(peer.ip(), source);
+            receiver.send_to(b"pong", peer).await.unwrap();
+            let (_, peer) = socket.recv_from(&mut buf).await.unwrap();
+            assert_eq!(&buf, b"pong");
+            assert_eq!(peer, receiver.local_addr().unwrap());
+        })
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn default_udp_socket_maps_ipv4_replies() {
+        use tokio::net::UdpSocket;
+        use tokio::time::{Duration, timeout};
+
+        timeout(Duration::from_secs(5), async {
+            let receiver = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+            let socket = DirectOut::default()
+                .bind_udp(SocksAddr::from(receiver.local_addr().unwrap()))
+                .await
+                .unwrap();
+            socket
+                .send_to(b"ping", &receiver.local_addr().unwrap())
+                .await
+                .unwrap();
+            let mut buf = [0; 4];
+            let (_, peer) = receiver.recv_from(&mut buf).await.unwrap();
+            receiver.send_to(b"pong", peer).await.unwrap();
+            let (_, peer) = socket.recv_from(&mut buf).await.unwrap();
+            assert_eq!(&buf, b"pong");
+            assert_eq!(peer, receiver.local_addr().unwrap());
+        })
+        .await
+        .unwrap();
+    }
+}

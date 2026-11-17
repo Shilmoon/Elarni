@@ -9,10 +9,12 @@ SOURCE="$ROOT/Vendor/libXray"
 BUILD="$ROOT/.build/libxray-macos-arm64"
 OUTPUT="$ROOT/artifacts/libxray/LibXray.xcframework"
 DEV_MODE=0
-TAGS=darwin
+# elarni_shadowquic_static: the app and its network extension link the ShadowQUIC client
+# (libelarni_shadowquic.a) next to this archive.
+TAGS=darwin,elarni_shadowquic_static
 case "${1:-}" in
   --dev) DEV_MODE=1 ;;
-  --diagnostics) DEV_MODE=1; BUILD="$BUILD-diagnostics"; TAGS=darwin,elarni_diagnostics ;;
+  --diagnostics) DEV_MODE=1; BUILD="$BUILD-diagnostics"; TAGS="$TAGS,elarni_diagnostics" ;;
   "") ;;
   *) printf '%s\n' "usage: $0 [--dev|--diagnostics]" >&2; exit 2 ;;
 esac

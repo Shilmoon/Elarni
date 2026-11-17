@@ -175,6 +175,15 @@ void main() {
                 'protocol': 'vless',
                 'settings': {'address': '192.0.2.3', 'port': 80},
               }),
+              // ShadowQUIC has no stream settings; its name is in its own.
+              node('shadowquic', {
+                'protocol': 'shadowquic',
+                'settings': {
+                  'address': '192.0.2.4',
+                  'port': 443,
+                  'serverName': 'Shared.Example',
+                },
+              }),
             ],
           },
         ],
@@ -190,6 +199,7 @@ void main() {
       'shared.example',
       'address.example',
       null,
+      'shared.example',
     ]);
   });
 

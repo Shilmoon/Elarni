@@ -115,7 +115,8 @@ def main():
                      query([str(root / '.toolchains/cbindgen/bin/cbindgen'), '--version'])]
         command = ['sh', 'scripts/build-rust-macos.sh', '--dev-release' if args.release else '--dev']
         outputs = [root / name for name in ('include/elarni_ffi.h', 'include/elarni_packet_bridge.h',
-                   '.build/rust-macos/current/libelarni_domain.a', '.build/rust-macos/current/libelarni_packet_bridge.a')]
+                   '.build/rust-macos/current/libelarni_domain.a', '.build/rust-macos/current/libelarni_packet_bridge.a',
+                   '.build/rust-macos/current/libelarni_shadowquic.a', '.build/rust-macos/current/elarni-shadowquic')]
         cargo_home = Path(os.environ.get('CARGO_HOME', Path.home() / '.cargo'))
         external_config = any((base / name).exists() for base in [cargo_home, *[p / '.cargo' for p in root.parents]]
                               for name in ('config', 'config.toml'))

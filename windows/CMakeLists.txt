@@ -65,6 +65,10 @@ get_filename_component(ELARNI_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/.." ABSOLUTE)
 set(ELARNI_NATIVE "${CMAKE_CURRENT_BINARY_DIR}/native")
 set(ELARNI_DOMAIN "${ELARNI_NATIVE}/rust/x86_64-pc-windows-msvc/release/elarni_domain.dll")
 set(ELARNI_CORE "${ELARNI_NATIVE}/elarni-core.exe")
+# The ShadowQUIC client the core starts from its own folder. The helper's protected copy of
+# that folder holds no VC++ runtime, so the client links it statically, in its own target
+# directory: the flag would otherwise rebuild elarni_domain.dll's dependencies each time.
+set(ELARNI_SHADOWQUIC "${ELARNI_NATIVE}/rust-static/x86_64-pc-windows-msvc/release/elarni-shadowquic.exe")
 set(ELARNI_CLI "${ELARNI_NATIVE}/elarni-cli.exe")
 # The CLI uses the Dart of the Flutter SDK building this app, whose path only the flutter directory sets.
 get_directory_property(FLUTTER_ROOT DIRECTORY "${FLUTTER_MANAGED_DIR}" DEFINITION FLUTTER_ROOT)
@@ -94,12 +98,15 @@ add_custom_target(elarni_native
   COMMAND ${CMAKE_COMMAND} -E make_directory "${ELARNI_NATIVE}"
   COMMAND "${CARGO_EXECUTABLE}" build -p elarni-domain --locked --release
     --target x86_64-pc-windows-msvc --target-dir "${ELARNI_NATIVE}/rust"
-  COMMAND ${CMAKE_COMMAND} -E env GOOS=windows GOARCH=amd64 CGO_ENABLED=0
-    "${GO_EXECUTABLE}" build -trimpath ${ELARNI_GO_TAGS} -o "${ELARNI_CORE}"
-    ./Vendor/libXray/cmd/elarni-core
+  COMMAND ${CMAKE_COMMAND} -E env "RUSTFLAGS=-Ctarget-feature=+crt-static"
+    "${CARGO_EXECUTABLE}" build -p elarni-shadowquic --bin elarni-shadowquic --locked --release
+    --target x86_64-pc-windows-msvc --target-dir "${ELARNI_NATIVE}/rust-static"
+  COMMAND ${CMAKE_COMMAND} "-DGO=${GO_EXECUTABLE}" "-DROOT=${ELARNI_ROOT}" "-DCLIENT=${ELARNI_SHADOWQUIC}"
+    "-DOUTPUT=${ELARNI_CORE}" "-DTAGS=${ELARNI_GO_TAGS}" -DGOOS=windows -DGOARCH=amd64
+    -P "${ELARNI_ROOT}/scripts/build-core.cmake"
   COMMAND "${DART_EXECUTABLE}" compile exe ${ELARNI_CLI_DEFINES} bin/elarni.dart -o "${ELARNI_CLI}"
   WORKING_DIRECTORY "${ELARNI_ROOT}"
-  BYPRODUCTS "${ELARNI_DOMAIN}" "${ELARNI_CORE}" "${ELARNI_CLI}"
+  BYPRODUCTS "${ELARNI_DOMAIN}" "${ELARNI_SHADOWQUIC}" "${ELARNI_CORE}" "${ELARNI_CLI}"
   VERBATIM
 )
 add_dependencies(${BINARY_NAME} elarni_native)
@@ -125,7 +132,7 @@ set(INSTALL_BUNDLE_LIB_DIR "${CMAKE_INSTALL_PREFIX}")
 
 install(TARGETS ${BINARY_NAME} RUNTIME DESTINATION "${CMAKE_INSTALL_PREFIX}"
   COMPONENT Runtime)
-install(FILES "${ELARNI_DOMAIN}" "${ELARNI_CORE}" "${ELARNI_CLI}"
+install(FILES "${ELARNI_DOMAIN}" "${ELARNI_CORE}" "${ELARNI_SHADOWQUIC}" "${ELARNI_CLI}"
   "${ELARNI_NATIVE}/wintun/bin/amd64/wintun.dll"
   "${CMAKE_CURRENT_SOURCE_DIR}/GOZXING_LICENSE.txt"
   "${CMAKE_CURRENT_SOURCE_DIR}/XERRORS_LICENSE.txt"

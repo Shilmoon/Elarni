@@ -30,6 +30,7 @@ USER_ID = '00000000-0000-4000-8000-000000000001'
 FIXTURE_FREEDOM = {'finalRules': [{'action':'allow','ip':[TARGET4+'/32',TARGET6+'/128',PEER4+'/32']}]}
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / 'scripts'))
+from shadowquic_fixture import shadowquic_outbound, shadowquic_peer
 from tuic_fixture import android_tuic_peer
 
 
@@ -183,6 +184,8 @@ def peer_main(core, protocol='vless'):
                     'streamSettings': {'security': 'tls', 'tlsSettings': {
                         'serverName': 'tuic-fixture.example', 'alpn': ['h3'], 'disableSystemRoot': True,
                         'certificates': [{'usage': 'verify', 'certificate': base64.b64decode(certificate).decode().splitlines()}]}}}
+            if protocol == 'shadowquic':
+                outbound = shadowquic_outbound(PEER4, fixtures.enter_context(shadowquic_peer(ROOT, PEER4)))
             print(json.dumps({'ready': True, 'outbound': outbound}), flush=True)
             for line in sys.stdin:
                 if line.strip() == 'counts': print(json.dumps(counts), flush=True)
@@ -355,7 +358,7 @@ def isolated_main(core, selected, protocol='vless'):
         ],
         'dns': {'servers': [{'address': PEER4, 'port': 15353}]},
     }
-    if protocol.startswith('tuic-'):
+    if protocol != 'vless':
         config['outbounds'][0] = json.loads(initial)['outbound']
     print('Tunnel protocol: ' + protocol, flush=True)
     policy = {'includedRoutes':[TARGET4+'/32',TARGET6+'/128'], 'excludedRoutes':[], 'includeAllNetworks':False,'enforceRoutes':False,'hideVPNIcon':False}
@@ -565,7 +568,7 @@ if __name__ == '__main__':
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--core',type=Path,default=ROOT/'build/linux/x64/release/bundle/elarni-core')
     parser.add_argument('--case',choices=cases,action='append')
-    parser.add_argument('--protocol',choices=['vless','tuic-native','tuic-quic'],default='vless')
+    parser.add_argument('--protocol',choices=['vless','tuic-native','tuic-quic','shadowquic'],default='vless')
     parser.add_argument('--trace',action='store_true')
     parser.add_argument('--isolated',action='store_true',help=argparse.SUPPRESS)
     parser.add_argument('--peer',action='store_true',help=argparse.SUPPRESS)

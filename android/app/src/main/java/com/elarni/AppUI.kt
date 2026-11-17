@@ -594,7 +594,7 @@ fun updatedAgo(seconds: Double): String = when {
                         val location = locationByName[node.string("name")]
                         val outbound = node.mapObject("config").objects("outbounds").firstOrNull { it.string("protocol") !in listOf("freedom", "blackhole", "dns") }
                         val stream = outbound?.mapObject("streamSettings")
-                        val matches = listOf(source.string("name"), node.string("name"), location?.name.orEmpty(), outbound?.string("protocol").orEmpty(), if (outbound?.string("protocol") == "tuic") "QUIC" else stream?.string("network").orEmpty(), stream?.string("security").orEmpty()).any { it.contains(search, true) }
+                        val matches = listOf(source.string("name"), node.string("name"), location?.name.orEmpty(), outbound?.string("protocol").orEmpty(), if (outbound?.string("protocol") in listOf("tuic", "shadowquic")) "QUIC" else stream?.string("network").orEmpty(), stream?.string("security").orEmpty()).any { it.contains(search, true) }
                         matches && (country.isEmpty() || country == (location?.code ?: "other")) && when (filter) { "favorites" -> node.optBoolean("favorite"); "recent" -> node.optDouble("lastSuccessAt", 0.0) > 0; else -> true }
                     }
                 rows = if (filter == "recent") rows.sortedWith(compareBy<Pair<JSONObject, JSONObject>> { !it.first.optBoolean("pinned") }.thenByDescending { it.second.optDouble("lastSuccessAt", 0.0) })
@@ -792,8 +792,9 @@ private fun protocolParts(node: JSONObject): List<String> {
     val outbound = node.mapObject("config").objects("outbounds").firstOrNull { it.string("protocol") !in listOf("freedom", "blackhole", "dns") }
     val protocol = if (node.string("format") == "telegram") "Telegram" else outbound?.string("protocol").orEmpty()
     val stream = outbound?.mapObject("streamSettings")
-    val transport = if (protocol == "tuic") "QUIC" else stream?.string("network").orEmpty()
-    val security = if (protocol == "tuic") "TLS" else stream?.string("security").orEmpty().takeUnless { it == "none" }.orEmpty()
+    val quic = protocol in listOf("tuic", "shadowquic")
+    val transport = if (quic) "QUIC" else stream?.string("network").orEmpty()
+    val security = if (quic) "TLS" else stream?.string("security").orEmpty().takeUnless { it == "none" }.orEmpty()
     return listOf(protocol, transport, security)
 }
 

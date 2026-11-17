@@ -97,8 +97,8 @@ follows the new rules, so restart the app, or let it reconnect, to move what it 
 app the change puts into the tunnel has the connections it opened outside the tunnel closed,
 as when the tunnel starts (see below). The other exception is a server that the change
 leaves without any rule: it is closed, and with it the connections that shared one session to
-it (WireGuard, TUIC, XHTTP or a multiplexed transport). A change of anything else (the server,
-the routing profile, routes, DNS, listeners) restarts the tunnel.
+it (WireGuard, TUIC, ShadowQUIC, XHTTP or a multiplexed transport). A change of anything
+else (the server, the routing profile, routes, DNS, listeners) restarts the tunnel.
 
 ## Apps that were running before you connected
 

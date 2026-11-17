@@ -2,9 +2,10 @@
 members = [
     "native/elarni-domain",
     "native/elarni-packet-bridge",
+    "native/elarni-shadowquic",
 ]
 resolver = "3"
-exclude = ["Vendor/tun2proxy/ipstack"]
+exclude = ["Vendor/tun2proxy/ipstack", "Vendor/shadowquic"]
 
 [workspace.package]
 edition = "2024"

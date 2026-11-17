@@ -65,6 +65,10 @@ PACKET_HEADER_TMP=$(mktemp "$ROOT/include/.elarni_packet_bridge.XXXXXX")
   --output "$PACKET_HEADER_TMP"
 cargo build --profile "$PROFILE" --locked --target aarch64-apple-darwin \
   --target-dir "$ROOT/target" -p elarni-domain -p elarni-packet-bridge
+# The ShadowQUIC client: the archive the app and its network extension link next to the core,
+# and the program the app's unlinked core (elarni-core) starts from its own folder.
+cargo build --profile "$PROFILE" --locked --target aarch64-apple-darwin \
+  --target-dir "$ROOT/target" -p elarni-shadowquic --lib --bin elarni-shadowquic
 if cmp -s "$DOMAIN_HEADER_TMP" include/elarni_ffi.h; then
   rm -f "$DOMAIN_HEADER_TMP"
 else
@@ -80,21 +84,29 @@ PACKET_HEADER_TMP=""
 
 [ "$(lipo -archs "$ROOT/target/aarch64-apple-darwin/$PROFILE/libelarni_domain.a")" = arm64 ]
 [ "$(lipo -archs "$ROOT/target/aarch64-apple-darwin/$PROFILE/libelarni_packet_bridge.a")" = arm64 ]
+[ "$(lipo -archs "$ROOT/target/aarch64-apple-darwin/$PROFILE/libelarni_shadowquic.a")" = arm64 ]
+[ "$(lipo -archs "$ROOT/target/aarch64-apple-darwin/$PROFILE/elarni-shadowquic")" = arm64 ]
 
 if [ "$DEV_MODE" -eq 1 ]; then
   DOMAIN_HASH=$(shasum -a 256 "$ROOT/target/aarch64-apple-darwin/$PROFILE/libelarni_domain.a" | awk '{print $1}')
   PACKET_HASH=$(shasum -a 256 "$ROOT/target/aarch64-apple-darwin/$PROFILE/libelarni_packet_bridge.a" | awk '{print $1}')
-  GENERATION=$(printf '%s%s' "$DOMAIN_HASH" "$PACKET_HASH" | shasum -a 256 | awk '{print $1}')
+  SHADOWQUIC_HASH=$(cat "$ROOT/target/aarch64-apple-darwin/$PROFILE/libelarni_shadowquic.a" \
+    "$ROOT/target/aarch64-apple-darwin/$PROFILE/elarni-shadowquic" | shasum -a 256 | awk '{print $1}')
+  GENERATION=$(printf '%s%s%s' "$DOMAIN_HASH" "$PACKET_HASH" "$SHADOWQUIC_HASH" | shasum -a 256 | awk '{print $1}')
   GENERATION_ROOT="$DEV_ROOT/generations/$GENERATION"
   mkdir -p "$DEV_ROOT/generations"
   if [ ! -d "$GENERATION_ROOT" ]; then
     STAGING_ROOT=$(mktemp -d "$DEV_ROOT/generations/.build.XXXXXX")
     cp "$ROOT/target/aarch64-apple-darwin/$PROFILE/libelarni_domain.a" "$STAGING_ROOT/libelarni_domain.a"
     cp "$ROOT/target/aarch64-apple-darwin/$PROFILE/libelarni_packet_bridge.a" "$STAGING_ROOT/libelarni_packet_bridge.a"
+    cp "$ROOT/target/aarch64-apple-darwin/$PROFILE/libelarni_shadowquic.a" "$STAGING_ROOT/libelarni_shadowquic.a"
+    cp "$ROOT/target/aarch64-apple-darwin/$PROFILE/elarni-shadowquic" "$STAGING_ROOT/elarni-shadowquic"
     mv "$STAGING_ROOT" "$GENERATION_ROOT"
   fi
   cmp "$ROOT/target/aarch64-apple-darwin/$PROFILE/libelarni_domain.a" "$GENERATION_ROOT/libelarni_domain.a"
   cmp "$ROOT/target/aarch64-apple-darwin/$PROFILE/libelarni_packet_bridge.a" "$GENERATION_ROOT/libelarni_packet_bridge.a"
+  cmp "$ROOT/target/aarch64-apple-darwin/$PROFILE/libelarni_shadowquic.a" "$GENERATION_ROOT/libelarni_shadowquic.a"
+  cmp "$ROOT/target/aarch64-apple-darwin/$PROFILE/elarni-shadowquic" "$GENERATION_ROOT/elarni-shadowquic"
   if [ "$(readlink "$DEV_ROOT/current" 2>/dev/null || true)" != "generations/$GENERATION" ]; then
     NEXT_LINK="$DEV_ROOT/.current.$$"
     ln -s "generations/$GENERATION" "$NEXT_LINK"

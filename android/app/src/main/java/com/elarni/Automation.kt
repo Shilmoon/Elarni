@@ -120,7 +120,7 @@ class Automation(saved: JSONObject) {
             val outbound = config.objects("outbounds").first()
             val settings = outbound.mapObject("settings"); val stream = outbound.mapObject("streamSettings")
             val server = (settings.optJSONArray("vnext") ?: settings.optJSONArray("servers"))?.optJSONObject(0)
-            outbound.string("protocol") !in listOf("hysteria", "tuic", "wireguard", "amneziawg") &&
+            outbound.string("protocol") !in listOf("hysteria", "tuic", "shadowquic", "wireguard", "amneziawg") &&
                 stream.string("network") !in listOf("kcp", "mkcp", "quic", "hysteria") &&
                 stream.mapObject("tlsSettings").strings("alpn") != listOf("h3") && (server ?: settings).opt("port")?.toString() == "443"
         }.getOrDefault(false)

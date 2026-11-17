@@ -167,7 +167,7 @@ func WindowsTunnelConfig(raw []byte, adapter string, policies ...*WindowsRoutePo
 		return nil, invalid
 	}
 	protocols := map[string]bool{"vless": true, "vmess": true, "shadowsocks": true, "trojan": true, "socks": true, "http": true,
-		"hysteria": true, "tuic": true, "wireguard": true, "amneziawg": true, "freedom": true, "blackhole": true, "dns": true, "loopback": true}
+		"hysteria": true, "tuic": true, "shadowquic": true, "wireguard": true, "amneziawg": true, "freedom": true, "blackhole": true, "dns": true, "loopback": true}
 	for _, item := range outbounds {
 		outbound, ok := item.(map[string]any)
 		if !ok {

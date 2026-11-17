@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/netip"
 	"net/url"
@@ -34,6 +35,11 @@ func ConvertXrayJsonToShareLinks(xrayBytes []byte) (string, error) {
 			// The callers tell the profile from links by its first character.
 			return string(bytes.TrimSpace(xrayBytes)), nil
 		}
+		// A ShadowQUIC server whose settings its link cannot carry is shared as its profile when it is
+		// alone; beside other servers it is left out, as a server without a link is.
+		if outbound.Protocol == "shadowquic" && len(outbounds) == 1 && errors.Is(err, errShadowQUICLinkLoses) {
+			return string(bytes.TrimSpace(xrayBytes)), nil
+		}
 		if err != nil || link == nil {
 			continue
 		}
@@ -59,6 +65,11 @@ func shareLink(proxy conf.OutboundDetourConfig) (*url.URL, error) {
 	switch proxy.Protocol {
 	case "tuic":
 		if err := tuicLink(proxy, shareUrl); err != nil {
+			return nil, err
+		}
+		return shareUrl, nil
+	case "shadowquic":
+		if err := shadowQUICLink(proxy, shareUrl); err != nil {
 			return nil, err
 		}
 		return shareUrl, nil

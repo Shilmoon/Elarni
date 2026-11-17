@@ -1,0 +1,756 @@
+use std::{
+    collections::HashMap,
+    future::Future,
+    net::SocketAddr,
+    sync::{Arc, Weak},
+};
+
+use bytes::Bytes;
+use error::SError;
+use msgs::socks5::SocksAddr;
+use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::net::TcpStream;
+
+use async_trait::async_trait;
+use tokio::sync::mpsc::{Receiver, Sender};
+use tokio::sync::watch;
+use tokio::task::JoinSet;
+use tracing::{Instrument, error, info, info_span};
+
+// CountingAllocator is a pure pass-through to jemalloc unless the
+// `hotpath-alloc` feature is enabled, in which case it counts allocations
+// per function while still serving them from jemalloc.
+#[cfg(all(
+    feature = "jemalloc",
+    any(
+        target_os = "android",
+        all(
+            any(target_os = "linux", target_os = "macos"),
+            any(target_arch = "x86_64", target_arch = "aarch64")
+        )
+    )
+))]
+#[global_allocator]
+static ALLOCATOR: hotpath::CountingAllocator<tikv_jemallocator::Jemalloc> =
+    hotpath::CountingAllocator::with(tikv_jemallocator::Jemalloc);
+
+// Without jemalloc, allocation tracking wraps the system allocator instead.
+// Elarni: only with the `global-allocator` feature, which a program that links this
+// crate as a library leaves off to keep its own allocator.
+#[cfg(all(
+    feature = "global-allocator",
+    not(all(
+        feature = "jemalloc",
+        any(
+            target_os = "android",
+            all(
+                any(target_os = "linux", target_os = "macos"),
+                any(target_arch = "x86_64", target_arch = "aarch64")
+            )
+        )
+    ))
+))]
+#[global_allocator]
+static ALLOCATOR: hotpath::CountingAllocator = hotpath::CountingAllocator::new();
+
+// jemalloc reads this before main. By default it keeps freed pages for ten
+// seconds in four arenas per CPU, which a relay that frees its buffers on many
+// threads pays for with a resident size several times its live heap. One arena
+// (threads still allocate from their own caches) and pages returned after one
+// second keep the resident size near the live heap, at the same throughput and
+// CPU cost. `_RJEM_MALLOC_CONF` in the environment overrides these settings.
+#[cfg(all(
+    feature = "jemalloc",
+    any(
+        target_os = "android",
+        all(
+            any(target_os = "linux", target_os = "macos"),
+            any(target_arch = "x86_64", target_arch = "aarch64")
+        )
+    )
+))]
+#[unsafe(export_name = "_rjem_malloc_conf")]
+static MALLOC_CONF: Option<&'static std::ffi::c_char> = {
+    // With `mem-profile`, profiling starts here to include startup allocations.
+    let conf = if cfg!(feature = "mem-profile") {
+        c"narenas:1,dirty_decay_ms:1000,muzzy_decay_ms:0,prof:true,prof_active:true"
+    } else {
+        c"narenas:1,dirty_decay_ms:1000,muzzy_decay_ms:0"
+    };
+    // SAFETY: The NUL-terminated configuration has static storage duration.
+    Some(unsafe { &*conf.as_ptr() })
+};
+
+#[cfg(feature = "restful-api")]
+pub mod api;
+pub mod config;
+pub mod direct;
+pub mod dns;
+mod drop_outbound;
+pub mod error;
+#[cfg(feature = "mixed")]
+pub mod http;
+#[cfg(feature = "mixed")]
+pub mod mixed;
+pub mod msgs;
+mod observe;
+#[cfg(feature = "plugin")]
+pub mod plugin;
+pub mod quic;
+pub mod selector;
+pub mod shadowquic;
+pub mod socks;
+pub mod squic;
+pub mod sunnyquic;
+#[cfg(all(feature = "tproxy", target_os = "linux"))]
+pub mod tproxy;
+#[cfg(all(
+    feature = "tun",
+    any(
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "windows",
+        target_os = "android"
+    )
+))]
+pub mod tun;
+pub mod utils;
+
+pub use msgs::SDecode;
+pub use msgs::SEncode;
+pub use selector::Selectable;
+
+use crate::{
+    observe::Observer,
+    utils::{dual_socket::to_ipv4_mapped, log::fetch_add_req_cnt},
+};
+#[cfg(all(
+    test,
+    feature = "jemalloc",
+    any(
+        target_os = "android",
+        all(
+            any(target_os = "linux", target_os = "macos"),
+            any(target_arch = "x86_64", target_arch = "aarch64")
+        )
+    )
+))]
+mod alloc_conf_test;
+#[cfg(test)]
+mod manager_tests;
+pub enum ProxyRequest<T = AnyTcp, I = AnyUdpRecv, O = AnyUdpSend> {
+    Tcp(TcpSession<T>),
+    Udp(UdpSession<I, O>),
+}
+
+impl ProxyRequest {
+    pub fn user_context(&self) -> &UserContext {
+        match self {
+            ProxyRequest::Tcp(TcpSession { user_context, .. }) => user_context,
+            ProxyRequest::Udp(UdpSession { user_context, .. }) => user_context,
+        }
+    }
+    pub fn user_context_mut(&mut self) -> &mut UserContext {
+        match self {
+            ProxyRequest::Tcp(TcpSession { user_context, .. }) => user_context,
+            ProxyRequest::Udp(UdpSession { user_context, .. }) => user_context,
+        }
+    }
+    pub fn dst(&self) -> &SocksAddr {
+        match self {
+            ProxyRequest::Tcp(TcpSession { dst, .. }) => dst,
+            ProxyRequest::Udp(UdpSession { dst, .. }) => dst,
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn dst_mut(&mut self) -> &mut SocksAddr {
+        match self {
+            ProxyRequest::Tcp(TcpSession { dst, .. }) => dst,
+            ProxyRequest::Udp(UdpSession { dst, .. }) => dst,
+        }
+    }
+
+    pub fn src_addr(&self) -> &Option<SocketAddr> {
+        match self {
+            ProxyRequest::Tcp(TcpSession { src_addr, .. }) => src_addr,
+            ProxyRequest::Udp(UdpSession { src_addr, .. }) => src_addr,
+        }
+    }
+}
+/// Udp socket only use immutable reference to self
+/// So it can be safely wrapped by Arc and cloned to work in duplex way.
+#[async_trait]
+pub trait UdpSend: Send + Sync + Unpin {
+    async fn send_to(&self, buf: Bytes, addr: SocksAddr) -> Result<usize, SError>; // addr is proxy addr
+}
+/// Nonblocking sender
+#[async_trait]
+pub trait UdpSendExt: UdpSend {
+    async fn try_send_to(&self, buf: Bytes, addr: SocksAddr) -> Result<usize, SError> {
+        let mut fut = std::pin::pin!(self.send_to(buf, addr.clone()));
+        // Use nonblocking style incase it blocks quic datagram dispatcher.
+        match std::future::poll_fn(|x| std::task::Poll::Ready(fut.as_mut().poll(x))).await {
+            std::task::Poll::Ready(x) => x,
+            std::task::Poll::Pending => {
+                // For Sender, it may falsely trigger this even whey channel is empty if tokio budget is not enough.
+                // But it is rare
+                Err(SError::UdpSenderBusy("sender buffer may be full".into()))
+            }
+        }
+    }
+}
+impl<T: UdpSend + ?Sized> UdpSendExt for T {}
+
+#[async_trait]
+pub trait UdpRecv: Send + Sync + Unpin {
+    async fn recv_from(&mut self) -> Result<(Bytes, SocksAddr), SError>; // socksaddr is proxy addr
+}
+pub trait Stoppable: Send + Sync {
+    fn stop(&self);
+}
+pub type UserName = String;
+pub struct TcpSession<IO = AnyTcp> {
+    pub stream: IO,
+    pub dst: SocksAddr,
+    /// Address of the client that opened this session, when available.
+    pub src_addr: Option<SocketAddr>,
+    #[allow(dead_code)]
+    user_context: UserContext,
+}
+
+pub struct UdpSession<I = AnyUdpRecv, O = AnyUdpSend> {
+    pub recv: I,
+    pub send: O,
+    /// Control stream, should be kept alive during session.
+    stream: Option<AnyTcp>,
+    bind_addr: SocksAddr,
+    /// Destination of the first received datagram.
+    /// Only used for routing. The true sending destination is determined per-datagram by UdpRecv.
+    dst: SocksAddr,
+    /// Address of the client that opened this session, when available.
+    /// It is the address of the TCP control stream and
+    /// may differs from the source address of the first datagram
+    pub src_addr: Option<SocketAddr>,
+    #[allow(dead_code)]
+    user_context: UserContext,
+}
+impl UdpSession {
+    /// Wait for the first datagram and retain it for the outbound receiver.
+    pub(crate) async fn wait_first_packet(mut self) -> Result<Self, SError> {
+        let first: (Bytes, SocksAddr) = match self.stream.as_mut() {
+            // The association ends with its control stream, also when that
+            // happens before the first datagram.
+            Some(control) => tokio::select! {
+                first = self.recv.recv_from() => first?,
+                _ = control_stream_event(control) => {
+                    return Err(SError::UDPSessionClosed(
+                        "udp session closed by control stream".into(),
+                    ));
+                }
+            },
+            None => self.recv.recv_from().await?,
+        };
+        Ok(Self {
+            dst: first.1.clone(),
+            src_addr: self.src_addr,
+            recv: Box::new(FirstPacketUdpRecv {
+                first: Some(first),
+                inner: self.recv,
+            }),
+            send: self.send,
+            stream: self.stream,
+            bind_addr: self.bind_addr,
+            user_context: self.user_context,
+        })
+    }
+}
+
+/// Resolves when the control stream of a UDP association closes, fails or
+/// carries data. Each of them ends the association, as it does once the
+/// association is running.
+async fn control_stream_event(control: &mut AnyTcp) {
+    use tokio::io::AsyncReadExt;
+    let mut buf = [0u8; 1];
+    let _ = control.read(&mut buf).await;
+}
+
+struct FirstPacketUdpRecv {
+    first: Option<(Bytes, SocksAddr)>,
+    inner: AnyUdpRecv,
+}
+
+#[async_trait]
+impl UdpRecv for FirstPacketUdpRecv {
+    async fn recv_from(&mut self) -> Result<(Bytes, SocksAddr), SError> {
+        if let Some(packet) = self.first.take() {
+            Ok(packet)
+        } else {
+            self.inner.recv_from().await
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct DnsQuery {
+    pub name: String,
+    pub record_type: u16,
+}
+
+/// Per-session context, present even when statistics are not tracked.
+#[derive(Clone)]
+pub struct UserContext {
+    #[cfg(feature = "sniffer")]
+    pub sniffer: Option<plugin::sniffer::SniffResult>,
+    pub inbound_tag: String,
+    pub observer: Weak<Observer>,
+    /// Outbound preference stamped by the accepting inbound on every request.
+    /// A router script may honor or override it; without one it selects the
+    /// outbound, and `None` falls back to the global default.
+    pub preferred_outbound: Option<String>,
+    /// DNS strategy for this request, overriding the selected outbound's strategy.
+    pub dns_strategy: Option<config::DnsStrategy>,
+    pub dns_query: Vec<DnsQuery>,
+    pub stats: Option<StatsContext>,
+    pub req_id: u32,
+}
+impl Default for UserContext {
+    fn default() -> Self {
+        Self {
+            #[cfg(feature = "sniffer")]
+            sniffer: None,
+            inbound_tag: Default::default(),
+            observer: Weak::new(),
+            preferred_outbound: None,
+            dns_strategy: None,
+            dns_query: Vec::new(),
+            stats: None,
+            req_id: fetch_add_req_cnt(),
+        }
+    }
+}
+
+impl Stoppable for () {
+    fn stop(&self) {}
+}
+/// User metadata used for statistics and optional connection control.
+#[derive(Clone)]
+pub struct StatsContext {
+    pub username: UserName,
+    pub conn_handle: Weak<dyn Stoppable>,
+    pub conn_id: u64,
+}
+impl Default for StatsContext {
+    fn default() -> Self {
+        Self {
+            username: Default::default(),
+            conn_handle: Weak::<()>::new(),
+            conn_id: Default::default(),
+        }
+    }
+}
+
+pub type AnyTcp = Box<dyn TcpTrait>;
+pub type AnyUdpSend = Arc<dyn UdpSend>;
+pub type AnyUdpRecv = Box<dyn UdpRecv>;
+pub trait TcpTrait: AsyncRead + AsyncWrite + Unpin + Send + Sync {
+    fn peer_addr(&self) -> Option<SocketAddr> {
+        None
+    }
+}
+impl<T: TcpTrait + ?Sized> TcpTrait for Box<T> {
+    fn peer_addr(&self) -> Option<SocketAddr> {
+        (**self).peer_addr()
+    }
+}
+
+impl TcpTrait for TcpStream {
+    fn peer_addr(&self) -> Option<SocketAddr> {
+        TcpStream::peer_addr(self).ok().map(to_ipv4_mapped)
+    }
+}
+
+#[async_trait]
+pub trait Inbound<T = AnyTcp, I = AnyUdpRecv, O = AnyUdpSend>: Send + Sync + Unpin {
+    /// Return a request with its inbound tag and routing preference populated.
+    /// Return `SError::InboundClosed` when no more requests will be produced.
+    async fn accept(&mut self) -> Result<ProxyRequest<T, I, O>, SError>;
+    async fn init(&self) -> Result<(), SError> {
+        Ok(())
+    }
+    /// Called once on graceful shutdown or inbound completion; flush persistent state here.
+    async fn shutdown(&self) -> Result<(), SError> {
+        Ok(())
+    }
+}
+
+#[async_trait]
+pub trait Outbound<T = AnyTcp, I = AnyUdpRecv, O = AnyUdpSend>: Send + Sync + Unpin {
+    async fn handle(&self, req: ProxyRequest<T, I, O>) -> Result<(), SError>;
+}
+
+#[async_trait]
+impl UdpSend for Sender<(Bytes, SocksAddr)> {
+    async fn send_to(&self, buf: Bytes, addr: SocksAddr) -> Result<usize, SError> {
+        let siz = buf.len();
+        self.send((buf, addr))
+            .await
+            .map_err(|_| SError::InboundUnavailable)?;
+        Ok(siz)
+    }
+}
+#[async_trait]
+impl UdpRecv for Receiver<(Bytes, SocksAddr)> {
+    async fn recv_from(&mut self) -> Result<(Bytes, SocksAddr), SError> {
+        let r = self.recv().await.ok_or(SError::OutboundUnavailable)?;
+        Ok(r)
+    }
+}
+pub struct Manager {
+    pub inbounds: HashMap<String, Box<dyn Inbound>>,
+    /// Observers for client inbounds; internal request queues are omitted.
+    pub observers: HashMap<String, Arc<Observer>>,
+    pub outbounds: HashMap<String, Arc<dyn Outbound>>,
+    /// Selection controls sharing the outbound instances used for dispatch.
+    pub selectable_outbounds: HashMap<String, Arc<dyn Selectable>>,
+    /// Fallback outbound tag, used when no router script is configured and the
+    /// request carries no `preferred_outbound` from its inbound.
+    pub default_outbound: String,
+    #[cfg(feature = "restful-api")]
+    pub api_config: Option<config::ApiConfig>,
+    /// Statistics views of the original QUIC clients, before DNS wrapping.
+    #[cfg(feature = "restful-api")]
+    pub sq_outbounds: HashMap<String, Arc<dyn api::SQStatsTrait>>,
+    #[cfg(feature = "plugin")]
+    pub router: Option<Arc<plugin::router::Router>>,
+
+    #[cfg(feature = "dns-server")]
+    pub resolver_manager: Option<Arc<dns::ResolverManager>>,
+}
+
+/// Shared routing state for independently scheduled requests.
+struct RequestDispatcher {
+    outbounds: HashMap<String, Arc<dyn Outbound>>,
+    default_outbound: String,
+    #[cfg(feature = "plugin")]
+    router: Option<Arc<plugin::router::Router>>,
+}
+
+impl RequestDispatcher {
+    #[hotpath::measure(impl_type = "RequestDispatcher")]
+    async fn dispatch(&self, mut req: ProxyRequest) {
+        let preferred = &mut req.user_context_mut().preferred_outbound;
+        if preferred.is_none() {
+            *preferred = Some(self.default_outbound.clone());
+        }
+        #[cfg(feature = "plugin")]
+        let outbound_tag = match self.router.as_ref() {
+            Some(router) => {
+                #[cfg(feature = "sniffer")]
+                if let Some(sniffer) = &router.sniffer {
+                    req = match sniffer.sniff(req).await {
+                        Ok(req) => req,
+                        Err(error) => {
+                            error!(event = "sniffer:request_failed", %error, "sniffing request failed");
+                            return;
+                        }
+                    };
+                }
+                let mut context = plugin::router::RouteContext::from_request(&req);
+                match router
+                    .route(&mut context)
+                    .instrument(info_span!("route"))
+                    .await
+                {
+                    Ok(outbound_tag) => match context.destination() {
+                        Ok(dst) => {
+                            plugin::router::rewrite_dst(&mut req, dst);
+                            req.user_context_mut().dns_strategy = context.dns_strategy;
+                            outbound_tag
+                        }
+                        Err(error) => {
+                            error!(event = "routing:invalid_destination", %error, "invalid rewritten destination");
+                            return;
+                        }
+                    },
+                    Err(error) => {
+                        error!(event = "routing:request_failed", %error, "routing request failed");
+                        return;
+                    }
+                }
+            }
+            None => self.fallback_outbound_tag(&req),
+        };
+        #[cfg(not(feature = "plugin"))]
+        let outbound_tag = self.fallback_outbound_tag(&req);
+        let Some(outbound) = self.outbounds.get(&outbound_tag).cloned() else {
+            error!(event = "routing:unknown_outbound", outbound = %outbound_tag, "selected an unknown outbound");
+            return;
+        };
+        if let Some(observer) = req.user_context().observer.upgrade() {
+            req = observer.wrap_request(req, outbound_tag.clone()).await;
+        }
+        tracing::debug!(event = "routing:outbound_selected", outbound = %outbound_tag, dst = %req.dst(), "routing request");
+        if let Err(error) = outbound.handle(req).await {
+            error!(event = "proxy:request_failed", outbound = %outbound_tag, %error, "error handling request");
+        }
+    }
+
+    /// Outbound for a request with no router script: the inbound's preferred
+    /// outbound, else the global default.
+    fn fallback_outbound_tag(&self, req: &ProxyRequest) -> String {
+        req.user_context()
+            .preferred_outbound
+            .as_deref()
+            .unwrap_or(self.default_outbound.as_str())
+            .to_owned()
+    }
+}
+
+/// Resolves when a shutdown signal is received (Ctrl-C, plus SIGTERM on unix).
+async fn shutdown_signal() {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{SignalKind, signal};
+        let mut sigterm =
+            signal(SignalKind::terminate()).expect("failed to install SIGTERM handler");
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {}
+            _ = sigterm.recv() => {}
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = tokio::signal::ctrl_c().await;
+    }
+}
+
+impl Manager {
+    /// Construct a manager for one inbound/outbound pair.
+    pub fn single(inbound: Box<dyn Inbound>, outbound: Arc<dyn Outbound>) -> Self {
+        Self {
+            inbounds: HashMap::from([("inbound".into(), inbound)]),
+            observers: HashMap::new(),
+            outbounds: HashMap::from([("outbound".into(), outbound)]),
+            selectable_outbounds: HashMap::new(),
+            default_outbound: "outbound".into(),
+            #[cfg(feature = "restful-api")]
+            api_config: None,
+            #[cfg(feature = "restful-api")]
+            sq_outbounds: HashMap::new(),
+            #[cfg(feature = "plugin")]
+            router: None,
+            #[cfg(feature = "dns-server")]
+            resolver_manager: None,
+        }
+    }
+
+    pub async fn run(self) -> Result<(), SError> {
+        self.run_until(shutdown_signal()).await
+    }
+
+    /// Run listeners and dispatch accepted requests concurrently until shutdown.
+    /// Pending dispatch tasks are cancelled before shutting down their inbound.
+    pub async fn run_until(self, shutdown: impl Future<Output = ()>) -> Result<(), SError> {
+        #[cfg(feature = "restful-api")]
+        let api_listener = match &self.api_config {
+            Some(config) => Some(api::bind(config).await?),
+            None => None,
+        };
+        self.init_inbounds().await?;
+        #[cfg(feature = "restful-api")]
+        let api_manager = Arc::new(
+            api::ApiManager::new(
+                self.api_config
+                    .as_ref()
+                    .and_then(|config| config.secret.clone()),
+                self.outbounds
+                    .iter()
+                    .filter(|(_tag, _)| {
+                        #[cfg(feature = "dns-server")]
+                        if let Some(resolvers) = &self.resolver_manager {
+                            return resolvers.resolver(_tag).is_none();
+                        }
+                        true
+                    })
+                    .map(|(tag, outbound)| (tag.clone(), outbound.clone()))
+                    .collect(),
+                self.sq_outbounds,
+                self.selectable_outbounds,
+                self.observers,
+                #[cfg(feature = "dns-server")]
+                self.resolver_manager
+                    .as_ref()
+                    .map(|manager| manager.cache()),
+            )
+            .with_ui_path(self.api_config.and_then(|config| config.ui_path)),
+        );
+        let dispatcher = Arc::new(RequestDispatcher {
+            outbounds: self.outbounds,
+            default_outbound: self.default_outbound,
+            #[cfg(feature = "plugin")]
+            router: self.router,
+        });
+        let (stop, stopped) = watch::channel(false);
+        let mut tasks = JoinSet::new();
+        #[cfg(feature = "restful-api")]
+        if let Some(listener) = api_listener {
+            let stopped = stopped.clone();
+            tasks.spawn(async move {
+                api_manager
+                    .serve(listener, stopped)
+                    .await
+                    .map_err(SError::Io)
+            });
+        }
+        for (tag, inbound) in self.inbounds {
+            let span = info_span!("inbound", tag = %tag);
+            tasks.spawn(
+                run_inbound(tag, inbound, dispatcher.clone(), stopped.clone()).instrument(span),
+            );
+        }
+        supervise_tasks(tasks, stop, shutdown).await
+    }
+
+    /// Roll back all inbounds if any initialization fails, including the failed one.
+    async fn init_inbounds(&self) -> Result<(), SError> {
+        for (tag, inbound) in &self.inbounds {
+            if let Err(error) = inbound.init().await {
+                error!(event = "proxy:inbound_initialization_failed", inbound = %tag, %error, "inbound initialization failed");
+                for (tag, inbound) in &self.inbounds {
+                    if let Err(error) = inbound.shutdown().await {
+                        error!(event = "proxy:inbound_shutdown_failed", inbound = %tag, %error, "inbound shutdown failed");
+                    }
+                }
+                return Err(error);
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Own one listener's requests so they are cancelled before its shutdown hook runs.
+#[hotpath::measure]
+async fn run_inbound(
+    tag: String,
+    mut inbound: Box<dyn Inbound>,
+    dispatcher: Arc<RequestDispatcher>,
+    mut stopped: watch::Receiver<bool>,
+) -> Result<(), SError> {
+    let mut requests = JoinSet::new();
+    'accepting: loop {
+        // Keep accept pinned while reaping requests: cancelling it can lose a
+        // partially accepted request. Only shutdown may interrupt it.
+        let req = {
+            let accept = inbound.accept();
+            tokio::pin!(accept);
+            loop {
+                tokio::select! {
+                    biased;
+                    _ = stopped.changed() => break 'accepting,
+                    Some(result) = requests.join_next(), if !requests.is_empty() => {
+                        if let Err(error) = result {
+                            error!(event = "proxy:request_task_failed", inbound = %tag, %error, "request task failed");
+                        }
+                    }
+                    req = &mut accept => break req,
+                }
+            }
+        };
+        match req {
+            Ok(req) => {
+                assert!(req.user_context().inbound_tag == tag);
+                let span = request_span(&req);
+                span.in_scope(|| {
+                    tracing::info!(event = "proxy:request_accepted", "accepted request");
+                });
+                let dispatcher = dispatcher.clone();
+                requests.spawn(async move { dispatcher.dispatch(req).await }.instrument(span));
+            }
+            Err(SError::InboundClosed) => break,
+            Err(error) => {
+                error!(event = "proxy:request_accept_failed", inbound = %tag, %error, "error accepting request");
+                tokio::select! {
+                    biased;
+                    _ = stopped.changed() => break,
+                    _ = tokio::time::sleep(std::time::Duration::from_millis(100)) => {}
+                }
+            }
+        }
+    }
+    requests.shutdown().await;
+    inbound.shutdown().await
+}
+
+fn request_span(req: &ProxyRequest) -> tracing::Span {
+    // Recorded fields are appended by the fmt layer. Keep them on a request
+    // span so they cannot accumulate on the long-lived inbound span.
+    let span = match req {
+        ProxyRequest::Tcp(_) => info_span!(
+            "tcp_req",
+            src = tracing::field::Empty,
+            user = tracing::field::Empty,
+            dst = %req.dst(),
+            req_id = %req.user_context().req_id,
+        ),
+        ProxyRequest::Udp(_) => info_span!(
+            "udp_req",
+            src = tracing::field::Empty,
+            user = tracing::field::Empty,
+            dst = %req.dst(),
+            req_id = %req.user_context().req_id,
+        ),
+    };
+    // Leave absent addresses and anonymous users out of the formatted fields.
+    if let Some(addr) = req.src_addr() {
+        span.record("src", tracing::field::display(addr));
+    }
+    if let Some(stats) = req.user_context().stats.as_ref()
+        && !stats.username.is_empty()
+    {
+        span.record("user", tracing::field::display(&stats.username));
+    }
+    span
+}
+
+/// Stop on a signal, the first task failure, or completion of all tasks, then
+/// join every remaining task while preserving the first error.
+async fn supervise_tasks(
+    mut tasks: JoinSet<Result<(), SError>>,
+    stop: watch::Sender<bool>,
+    shutdown: impl Future<Output = ()>,
+) -> Result<(), SError> {
+    tokio::pin!(shutdown);
+    let mut result = Ok(());
+    loop {
+        tokio::select! {
+            _ = &mut shutdown => {
+                info!(event = "application:shutdown_requested", "shutdown requested, persisting users and stats");
+                break;
+            }
+            task = tasks.join_next() => {
+                match task {
+                    Some(Ok(Ok(()))) => continue,
+                    Some(Ok(Err(error))) => result = Err(error),
+                    Some(Err(error)) => result = Err(SError::Io(std::io::Error::other(error))),
+                    None => break,
+                }
+                break;
+            }
+        }
+    }
+    let _ = stop.send(true);
+    while let Some(task) = tasks.join_next().await {
+        let task_result = match task {
+            Ok(result) => result,
+            Err(error) => Err(SError::Io(std::io::Error::other(error))),
+        };
+        if let Err(error) = task_result {
+            error!(event = "proxy:inbound_shutdown_failed", %error, "inbound shutdown failed");
+            if result.is_ok() {
+                result = Err(error);
+            }
+        }
+    }
+    result
+}

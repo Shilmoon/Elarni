@@ -226,6 +226,31 @@ class AndroidVpnE2E {
             }
         }
     }
+    /** The ShadowQUIC client runs inside the app's process, loaded by the core when the tunnel starts. */
+    @Test fun shadowquicProtectedTransportBothUdpModesAndRestart() {
+        for (mode in listOf("stream", "datagram")) {
+            call("import", obj("text" to shadowquicFixtureProfile("ShadowQUIC $mode fixture", mode == "stream").toString()))
+            val node = snapshot().nodes.single { it.string("name") == "ShadowQUIC $mode fixture" }
+            assertEquals(mode == "stream", node.getJSONObject("config").objects("outbounds").first().getJSONObject("settings").getBoolean("udpOverStream"))
+            call("select", obj("id" to node.getString("id")))
+            call("settings", obj("settings" to obj("monitoringEnabled" to true)))
+            repeat(2) { pass ->
+                connect()
+                // The physical ShadowQUIC endpoint is excluded; the controlled payload
+                // destinations are different IPs and must traverse VpnService.
+                traffic("a", "tcp", httpPort, "198.18.0.81").let { assertTrue("ShadowQUIC $mode connection ${pass + 1} IPv4 TCP body: $it", it.contains("proxy:elarni-synthetic")) }
+                assertEquals("proxy:elarni-udp-fixture", traffic("b", "udp", udpPort, "198.18.0.81"))
+                traffic("b", "tcp", httpPort, "fdfe:dcba:9876::10").let { assertTrue("ShadowQUIC $mode IPv6 TCP body: $it", it.contains("proxy:elarni-synthetic")) }
+                assertEquals("proxy:elarni-udp-fixture", traffic("a", "udp", udpPort, "fdfe:dcba:9876::10"))
+                assertEquals("198.18.0.81", traffic("a", "dns", udpPort, "198.18.0.81"))
+                assertTrue(traffic("b", "systemDns", udpPort).contains("198.18.0.81"))
+                ui.waitUntil(6000) { repo.state.value.metrics.optLong("uplinkBytes") > 0 && repo.state.value.metrics.optLong("downlinkBytes") > 0 }
+                repo.requestStop(); ui.waitUntil(10_000) { repo.state.value.connection == "disconnected" }
+                assertFalse(Native.call("getXrayState").getBoolean("running"))
+                assertTrue(traffic("a", "tcp", httpPort).contains("direct:elarni-synthetic"))
+            }
+        }
+    }
     @Test fun vpnUidRoutingRollbackAndLocalProxy() {
         val installed = call("apps").objects("apps").map { it.getString("package") }
         assertTrue("Network apps without launcher activities must be selectable", installed.containsAll(listOf("com.elarni.traffic.a", "com.elarni.traffic.b")))
@@ -1105,6 +1130,13 @@ private fun tuicFixtureProfile(name: String, mode: String): JSONObject {
         "streamSettings" to obj("security" to "tls", "tlsSettings" to obj("serverName" to "tuic-fixture.example", "alpn" to JSONArray(listOf("h3")), "disableSystemRoot" to true,
             "certificates" to JSONArray(listOf(obj("usage" to "verify", "certificate" to JSONArray(certificate.lines()))))))))))
 }
+
+/** The host's disposable ShadowQUIC peer: the test server's one user, under the server name it serves. */
+private fun shadowquicFixtureProfile(name: String, udpOverStream: Boolean): JSONObject =
+    obj("remarks" to name, "outbounds" to JSONArray(listOf(obj("protocol" to "shadowquic", "tag" to "proxy",
+        "settings" to obj("address" to "10.0.2.2", "port" to InstrumentationRegistry.getArguments().getString("shadowquicPort")!!.toInt(),
+            "username" to "user", "password" to "pass", "serverName" to "localhost", "alpn" to JSONArray(listOf("h3")),
+            "zeroRtt" to false, "udpOverStream" to udpOverStream)))))
 
 /** Pairs of processes. The system kills the first with the VPN up, as battery managers do in sleep, and the next process start restores it
  *  without the user; a process that dies after its service ended leaves the VPN down. A crash is restored too, but not a second one soon after. */

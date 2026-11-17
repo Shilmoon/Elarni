@@ -104,6 +104,8 @@ struct SubscriptionChecks {
       try expect(key(["outbounds": [["protocol": "vmess", "settings": ["vnext": [["address": "Address.Example"]]],
         "streamSettings": ["security": "tls"]]]]) == "address.example", "TLS without a name did not key by its address")
       try expect(key(["protocol": "vless", "settings": ["address": "192.0.2.3"]]) == nil, "a plain server got an SNI key")
+      try expect(key(["protocol": "shadowquic", "settings": ["address": "192.0.2.4", "port": 443, "serverName": "Cover.Example"]]) == "cover.example",
+        "ShadowQUIC's server name is not the probe key")
       var lanes = ProbeLanes(Array(0..<8)) { $0 < 6 ? "shared" : "other" }
       var started: [Int] = []
       while let next = lanes.next() { started.append(next.item) }
