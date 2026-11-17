@@ -772,6 +772,10 @@ class AndroidVpnE2E {
             listOf("ACCESS_FINE_LOCATION", "ACCESS_COARSE_LOCATION", "ACCESS_BACKGROUND_LOCATION").forEach { shell("pm grant ${context.packageName} android.permission.$it") }
             shell("cmd location set-location-enabled true")
             assertTrue(WiFiRule.namesAllowed(context))
+            // The emulator's Google app asks for mobile data of its own, at times for minutes after Wi-Fi changes; that
+            // keeps mobile data foreground, and the rule cannot ask to be told of leaving Wi-Fi until it is not.
+            val google = "com.google.android.googlequicksearchbox"
+            shell("pm disable-user --user 0 $google")
             // The emulator's access point; Wi-Fi coming back joins it again as a new network.
             fun network() = Regex("connected to \"(.+?)\"").find(shell("cmd wifi status"))?.groupValues?.get(1)
             ui.waitUntil(30_000) { network() != null }
@@ -791,6 +795,12 @@ class AndroidVpnE2E {
                 wifiOn()
                 return before
             }
+            // The watch is set once mobile data is in the background, and it stays foreground while any app asks for it:
+            // a timeout names who did.
+            fun leaveWatch() = try { ui.waitUntil(125_000) { WiFiRule.watching == "leave" } } catch (error: androidx.compose.ui.test.ComposeTimeoutException) {
+                val asking = shell("dumpsys connectivity").lineSequence().filter { " REQUEST id=" in it && "Transports: CELLULAR" in it }.joinToString("\n") { it.trim() }
+                throw AssertionError("The leave watch was not set (watching=${WiFiRule.watching}); mobile data is asked for by:\n$asking", error)
+            }
             fun rule(on: Boolean, trusted: List<String>) = call("settings", obj("settings" to obj("connectOnUntrustedWiFi" to on, "trustedWiFiNetworks" to JSONArray(trusted))))
             try {
                 // Turning it on counts the network already joined; a trusted one stays as it is.
@@ -800,7 +810,7 @@ class AndroidVpnE2E {
                 // On Wi-Fi, Android reports leaving it; that report asks for the next join. Both reach a killed process.
                 // Mobile data stays foreground for a while after Wi-Fi comes back, as after an earlier run's last join;
                 // WiFiRule.arm looks again every 5 s for up to 2 minutes, so wait as long as it does.
-                ui.waitUntil(125_000) { WiFiRule.watching == "leave" }
+                leaveWatch()
                 rule(true, emptyList())
                 var before = rejoin()
                 ui.waitUntil(15_000) { join() != before }
@@ -815,7 +825,7 @@ class AndroidVpnE2E {
                 assertEquals("disconnected", repo.state.value.connection)
                 // In the background, the next join connects: VPN consent allows the service to start. Mobile data
                 // stays foreground for a while after a join, and leaving is watched once it drops back.
-                ui.waitUntil(125_000) { WiFiRule.watching == "leave" }
+                leaveWatch()
                 shell("input keyevent KEYCODE_HOME")
                 before = rejoin()
                 ui.waitUntil(15_000) { join() != before }
@@ -823,7 +833,7 @@ class AndroidVpnE2E {
                 repo.requestStop(); ui.waitUntil(10_000) { repo.state.value.connection == "disconnected" }
                 rule(true, listOf(ssid))
                 // As before the joins above: the next join is asked for when Android reports leaving this one.
-                ui.waitUntil(125_000) { WiFiRule.watching == "leave" }
+                leaveWatch()
                 before = rejoin()
                 ui.waitUntil(15_000) { join() != before }
                 Thread.sleep(2000)
@@ -841,6 +851,7 @@ class AndroidVpnE2E {
             } finally {
                 // Later tests need Wi-Fi joined; the test's own failure, if any, stays the one reported.
                 runCatching { wifiOn() }
+                shell("pm enable --user 0 $google")
                 rule(false, emptyList())
                 // ActivityScenario tracks lifecycle by its MAIN/LAUNCHER launch Intent.
                 shell("am start -W -a android.intent.action.MAIN -c android.intent.category.LAUNCHER -n ${context.packageName}/com.elarni.MainActivity")
