@@ -1,4 +1,4 @@
-//go:build cgo && darwin
+//go:build cgo && darwin && !elarni_shadowquic_static
 
 package shadowquic
 

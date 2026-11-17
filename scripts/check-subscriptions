@@ -16,5 +16,6 @@ swiftc -swift-version 5 -parse-as-library \
   macos/Runner/CatalogImportPanels.swift \
   macos/Runner/ProfileTitle.swift macos/Checks/SubscriptionChecks.swift \
   .build/libxray-macos-arm64/libXray.a .build/rust-macos/current/libelarni_domain.a \
+  .build/rust-macos/current/libelarni_shadowquic.a \
   -framework SystemConfiguration -lresolv -o .build/checks/subscriptions
 python3 macos/Checks/SubscriptionFixture.py .build/checks/subscriptions "$@"

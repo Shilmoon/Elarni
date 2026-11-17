@@ -32,6 +32,7 @@ swiftc -swift-version 5 -D DEBUG -D ELARNI_CONTROL_CHECKS -parse-as-library \
   macos/ElarniPacketTunnel/DiagnosticLog.swift \
   macos/Checks/NativeControlChecks.swift \
   .build/libxray-macos-arm64/libXray.a .build/rust-macos/current/libelarni_domain.a \
+  .build/rust-macos/current/libelarni_shadowquic.a \
   -framework SystemConfiguration -lresolv -o .build/checks/native-control
 .build/checks/native-control
 "$flutter_root/bin/dart" compile exe macos/Checks/HeadlessTransportFixture.dart \

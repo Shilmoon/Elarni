@@ -36,5 +36,6 @@ swiftc -swift-version 5 -parse-as-library \
   .build/libxray-macos-arm64/libXray.a \
   .build/rust-macos/current/libelarni_domain.a \
   .build/rust-macos/current/libelarni_packet_bridge.a \
+  .build/rust-macos/current/libelarni_shadowquic.a \
   -framework SystemConfiguration -lresolv -o .build/checks/live-tunnel
 .build/checks/live-tunnel

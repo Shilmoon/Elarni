@@ -28,9 +28,11 @@ if not clang.is_file() or not gomobile:
 output = root / '.build/android-native'
 libraries = output / 'jniLibs' / abi
 libraries.mkdir(parents=True, exist_ok=True)
+# The ShadowQUIC client's cryptography (ring) compiles C for the target as well.
 environment = dict(os.environ, ANDROID_HOME=str(sdk), ANDROID_NDK_HOME=str(ndk),
     GOTOOLCHAIN='go1.27.4', CARGO_TARGET_DIR=str(output / 'rust'),
-    **{f'CARGO_TARGET_{target.upper().replace("-", "_")}_LINKER': str(clang)})
+    **{f'CARGO_TARGET_{target.upper().replace("-", "_")}_LINKER': str(clang),
+       f'CC_{target.replace("-", "_")}': str(clang), f'AR_{target.replace("-", "_")}': str(clang.parent / 'llvm-ar')})
 # gomobile runs go in a temporary module, where a mise shim finds no pinned version: put the real go first.
 goroot = subprocess.run(['go', 'env', 'GOROOT'], cwd=root, env=environment, check=True, capture_output=True, text=True).stdout.strip()
 environment['PATH'] = os.pathsep.join([str(Path(gomobile).parent), str(Path(goroot) / 'bin'), environment['PATH']])
@@ -38,6 +40,9 @@ def run(command):
     subprocess.run(command, cwd=root, env=environment, check=True)
 run(['cargo', 'build', '--locked', '-p', 'elarni-domain', '--target', target, '--release'])
 shutil.copy2(output / f'rust/{target}/release/libelarni_domain.so', libraries)
+# The ShadowQUIC client, which the core loads when the first ShadowQUIC server is used.
+run(['cargo', 'build', '--locked', '-p', 'elarni-shadowquic', '--lib', '--target', target, '--release'])
+shutil.copy2(output / f'rust/{target}/release/libelarni_shadowquic.so', libraries)
 # ELARNI_RECORDING=1 builds the core with its connection recorder; Gradle reads the same switch.
 recording = ['-tags=elarni_recording'] if os.environ.get('ELARNI_RECORDING') == '1' else []
 # Go returns freed heap with MADV_FREE on GOOS=android (MADV_DONTNEED only on linux), so the kernel keeps it

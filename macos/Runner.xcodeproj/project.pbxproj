@@ -456,7 +456,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "set -e\necho \"$PRODUCT_NAME.app\" > \"$PROJECT_DIR\"/Flutter/ephemeral/.app_filename\n\"$FLUTTER_ROOT\"/packages/flutter_tools/bin/macos_assemble.sh embed\ncp \"$SRCROOT/../docs/HEADLESS.md\" \"$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/HEADLESS.md\"\ncli_bundle=\"$TARGET_BUILD_DIR/$CONTENTS_FOLDER_PATH/Helpers/ElarniCLI.app\"\nmkdir -p \"$cli_bundle/Contents/MacOS\"\ncp \"$SRCROOT/Runner/CLI-Info.plist\" \"$cli_bundle/Contents/Info.plist\"\n/usr/bin/plutil -replace CFBundleVersion -string \"${FLUTTER_BUILD_NUMBER:-1}\" \"$cli_bundle/Contents/Info.plist\"\ncli=\"$cli_bundle/Contents/MacOS/elarni-cli\"\n\"$FLUTTER_ROOT/bin/dart\" compile exe \"$SRCROOT/../bin/elarni.dart\" -o \"$cli\"\ncp \"$SRCROOT/Runner/elarni-cli\" \"$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/elarni-cli\"\nchmod 755 \"$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/elarni-cli\"\nln -sfn ../Resources/elarni-cli \"$TARGET_BUILD_DIR/$EXECUTABLE_FOLDER_PATH/elarni-cli\"\nhelper=\"$TARGET_BUILD_DIR/$EXECUTABLE_FOLDER_PATH/elarni-core\"\ncp \"$SRCROOT/../.build/libxray-macos-arm64${ELARNI_DIAGNOSTICS_SUFFIX:-}/elarni-core\" \"$helper\"\nif [ \"$CODE_SIGNING_ALLOWED\" != NO ]; then\n  entitlements=\"$DERIVED_FILE_DIR/CLI.entitlements\"\n  /usr/bin/plutil -convert xml1 -o \"$entitlements\" \"$SRCROOT/Runner/CLI.entitlements\"\n  /usr/bin/codesign --force --options runtime --entitlements \"$entitlements\" --sign \"${EXPANDED_CODE_SIGN_IDENTITY:--}\" \"$cli_bundle\"\n  \"$cli\" --help > /dev/null\n  entitlements=\"$DERIVED_FILE_DIR/ProbeProcess.entitlements\"\n  /usr/bin/plutil -convert xml1 -o \"$entitlements\" \"$SRCROOT/Runner/ProbeProcess.entitlements\"\n  /usr/bin/codesign --force --options runtime --entitlements \"$entitlements\" --sign \"${EXPANDED_CODE_SIGN_IDENTITY:--}\" \"$helper\"\nfi\n";
+			shellScript = "set -e\necho \"$PRODUCT_NAME.app\" > \"$PROJECT_DIR\"/Flutter/ephemeral/.app_filename\n\"$FLUTTER_ROOT\"/packages/flutter_tools/bin/macos_assemble.sh embed\ncp \"$SRCROOT/../docs/HEADLESS.md\" \"$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/HEADLESS.md\"\ncli_bundle=\"$TARGET_BUILD_DIR/$CONTENTS_FOLDER_PATH/Helpers/ElarniCLI.app\"\nmkdir -p \"$cli_bundle/Contents/MacOS\"\ncp \"$SRCROOT/Runner/CLI-Info.plist\" \"$cli_bundle/Contents/Info.plist\"\n/usr/bin/plutil -replace CFBundleVersion -string \"${FLUTTER_BUILD_NUMBER:-1}\" \"$cli_bundle/Contents/Info.plist\"\ncli=\"$cli_bundle/Contents/MacOS/elarni-cli\"\n\"$FLUTTER_ROOT/bin/dart\" compile exe \"$SRCROOT/../bin/elarni.dart\" -o \"$cli\"\ncp \"$SRCROOT/Runner/elarni-cli\" \"$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/elarni-cli\"\nchmod 755 \"$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/elarni-cli\"\nln -sfn ../Resources/elarni-cli \"$TARGET_BUILD_DIR/$EXECUTABLE_FOLDER_PATH/elarni-cli\"\nhelper=\"$TARGET_BUILD_DIR/$EXECUTABLE_FOLDER_PATH/elarni-core\"\ncp \"$SRCROOT/../.build/libxray-macos-arm64${ELARNI_DIAGNOSTICS_SUFFIX:-}/elarni-core\" \"$helper\"\n# The ShadowQUIC client that elarni-core starts from its own folder.\nclient=\"$TARGET_BUILD_DIR/$EXECUTABLE_FOLDER_PATH/elarni-shadowquic\"\ncp \"$SRCROOT/../.build/rust-macos/current/elarni-shadowquic\" \"$client\"\nif [ \"$CODE_SIGNING_ALLOWED\" != NO ]; then\n  entitlements=\"$DERIVED_FILE_DIR/CLI.entitlements\"\n  /usr/bin/plutil -convert xml1 -o \"$entitlements\" \"$SRCROOT/Runner/CLI.entitlements\"\n  /usr/bin/codesign --force --options runtime --entitlements \"$entitlements\" --sign \"${EXPANDED_CODE_SIGN_IDENTITY:--}\" \"$cli_bundle\"\n  \"$cli\" --help > /dev/null\n  entitlements=\"$DERIVED_FILE_DIR/ProbeProcess.entitlements\"\n  /usr/bin/plutil -convert xml1 -o \"$entitlements\" \"$SRCROOT/Runner/ProbeProcess.entitlements\"\n  /usr/bin/codesign --force --options runtime --entitlements \"$entitlements\" --sign \"${EXPANDED_CODE_SIGN_IDENTITY:--}\" \"$helper\"\n  /usr/bin/codesign --force --options runtime --entitlements \"$entitlements\" --sign \"${EXPANDED_CODE_SIGN_IDENTITY:--}\" \"$client\"\nfi\n";
 		};
 		33CC111E2044C6BF0003C045 /* ShellScript */ = {
 			isa = PBXShellScriptBuildPhase;
@@ -497,6 +497,8 @@
 				"$(SRCROOT)/../include/elarni_packet_bridge.h",
 				"$(SRCROOT)/../.build/rust-macos/current/libelarni_domain.a",
 				"$(SRCROOT)/../.build/rust-macos/current/libelarni_packet_bridge.a",
+				"$(SRCROOT)/../.build/rust-macos/current/libelarni_shadowquic.a",
+				"$(SRCROOT)/../.build/rust-macos/current/elarni-shadowquic",
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
@@ -829,6 +831,7 @@
 					"$(inherited)",
 					"$(PROJECT_DIR)/../.build/libxray-macos-arm64$(ELARNI_DIAGNOSTICS_SUFFIX)/libXray.a",
 					"$(PROJECT_DIR)/../.build/rust-macos/current/libelarni_domain.a",
+					"$(PROJECT_DIR)/../.build/rust-macos/current/libelarni_shadowquic.a",
 					"-lresolv",
 					"-framework",
 					SystemConfiguration,
@@ -864,6 +867,7 @@
 					"$(inherited)",
 					"$(PROJECT_DIR)/../.build/libxray-macos-arm64$(ELARNI_DIAGNOSTICS_SUFFIX)/libXray.a",
 					"$(PROJECT_DIR)/../.build/rust-macos/current/libelarni_domain.a",
+					"$(PROJECT_DIR)/../.build/rust-macos/current/libelarni_shadowquic.a",
 					"-lresolv",
 					"-framework",
 					SystemConfiguration,
@@ -936,6 +940,7 @@
 					"$(inherited)",
 					"$(PROJECT_DIR)/../.build/libxray-macos-arm64$(ELARNI_DIAGNOSTICS_SUFFIX)/libXray.a",
 					"$(PROJECT_DIR)/../.build/rust-macos/current/libelarni_domain.a",
+					"$(PROJECT_DIR)/../.build/rust-macos/current/libelarni_shadowquic.a",
 					"$(PROJECT_DIR)/../.build/rust-macos/current/libelarni_packet_bridge.a",
 					"-lresolv",
 					"-framework",
@@ -999,6 +1004,7 @@
 					"$(inherited)",
 					"$(PROJECT_DIR)/../.build/libxray-macos-arm64$(ELARNI_DIAGNOSTICS_SUFFIX)/libXray.a",
 					"$(PROJECT_DIR)/../.build/rust-macos/current/libelarni_domain.a",
+					"$(PROJECT_DIR)/../.build/rust-macos/current/libelarni_shadowquic.a",
 					"$(PROJECT_DIR)/../.build/rust-macos/current/libelarni_packet_bridge.a",
 					"-lresolv",
 					"-framework",
@@ -1061,6 +1067,7 @@
 					"$(inherited)",
 					"$(PROJECT_DIR)/../.build/libxray-macos-arm64$(ELARNI_DIAGNOSTICS_SUFFIX)/libXray.a",
 					"$(PROJECT_DIR)/../.build/rust-macos/current/libelarni_domain.a",
+					"$(PROJECT_DIR)/../.build/rust-macos/current/libelarni_shadowquic.a",
 					"$(PROJECT_DIR)/../.build/rust-macos/current/libelarni_packet_bridge.a",
 					"-lresolv",
 					"-framework",
