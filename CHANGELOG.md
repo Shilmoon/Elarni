@@ -4,7 +4,7 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
 
 ## Unreleased
 
-## 0.6.2 - 2026-11-17
+## 0.6.2 - 2026-11-18
 
 ### Added
 
@@ -81,6 +81,20 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
 - For contributors: `scripts/flaky-report` ranks the tests that failed and then passed, from
   local check results and from the results CI uploads, and `scripts/ci-wait` waits for a CI run
   and prints only each job's result and the end of the failed jobs' logs.
+
+- **Windows and Linux: testing many servers no longer copies the whole server list for each
+  one.** Every server test through its own proxy made a full copy of the catalog first, so a
+  **Test all** of a large subscription did work that grew with the square of its size and
+  held up the window. A test now reads the one server it needs.
+
+- **A release is published only when its draft is one build's whole set of files.** The publish
+  stage checked the files that were in the draft, each on its own, so a draft with a package
+  left out, or with an authentic package of another build, passed. It now requires every file
+  the build attested, all from one run at the draft's commit, the tag of the version that was
+  built, and a signed APK whose contents are the build's unsigned one.
+
+- **`elarni-cli status` no longer builds the server list to read the selected server.** A
+  monitor that asks for the status every few seconds repeated that work for every server.
 
 ### Fixed
 
@@ -173,6 +187,52 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
   failed too; the test that leaves it now always runs apart, right before them. The Android
   TUIC test's empty first reply is not explained yet: the failure now says which connection it
   was, and the run prints the TUIC peer's log.
+
+- **Apps sent to the same server or local proxy share one connection handler.** Per-app routing
+  made a separate outbound and rule for every app, even when several apps had the same target,
+  because it compared a new target with ones it had already tagged. Desktop and Android.
+- **A provider's routing rule named like a per-app rule no longer stops the connection.** A
+  provider profile may name its rules (`ruleTag`). One named `elarni-per-app-listed-0`, or any
+  other name per-app routing gives its own rules, made the core refuse the whole configuration
+  once per-app routing was on, and was shown as a per-app decision in recent connections. Such
+  a rule is renamed when the profile is compiled. All platforms.
+- **A Clash profile in global mode follows the server chosen in it.** Such a profile (Remnawave's
+  default Mihomo template is one) was imported without its rules and with nothing in their
+  place, so the first server of the file carried everything, whatever was chosen in its
+  groups. It now has the **GLOBAL** group Clash gives global mode: the file's own, or one that
+  offers every group, every server and DIRECT and starts on the file's first group. A
+  subscription gets it at its next refresh; a file or pasted profile has to be imported again.
+  All platforms.
+- **A reset device ID stays reset on macOS and iOS.** The refresh right after a reset sent the
+  new ID and then dropped it, so every later refresh sent the old ID again; choosing a server in
+  a profile's group dropped it too. The new ID now stays with the subscription.
+- **A subscription that could not be deleted keeps its connection on macOS and iOS.** Deleting
+  the subscription of the connected server stopped the tunnel, removed its saved plan and
+  turned reconnecting off before the deletion was written; when the write failed, the
+  subscription stayed and the connection was gone. The tunnel is now stopped once the deletion
+  is on disk, and comes back if the deletion fails after that.
+- **Desktop: testing with "Current rules / active tunnel" no longer marks other servers
+  unavailable.** That test measures the selected server's tunnel, but **Test all** asked for
+  every server, got the selected one's result each time, and showed the rest as failed. It now
+  tests the selected server once and leaves the other rows alone; a row's own test button
+  tests the selected server too.
+- **Desktop: a subscription's page shows and copies the device ID its next download sends.**
+  The ID depends on the address the subscription is downloaded from, but the page kept the
+  one it looked up first: after the provider moved the subscription, or after a switch to a
+  download format served from another address, **Copy** gave the old ID. A lookup that failed
+  stayed "Unavailable" until the app was restarted; it is now tried again.
+
+- **iPhone: a pasted or file import says which servers it left out.** The notice about servers
+  Elarni does not support, and the ones about routing rules or DNS it could not apply, were
+  shown only for subscriptions with a link. A local import now shows them on its page too.
+
+- **"Resolve if no rule matches" no longer lets an IP rule take a name that a later domain rule
+  matches.** The compiled rules end in a catch-all, which would have ended the first pass for
+  every connection, so this setting was compiled as "resolve when needed": a name was resolved
+  at the first IP rule, and a direct rule for an address range won over a proxy rule for the
+  name itself further down. The setting now does what it says, in a routing profile and in a
+  provider's own profile: the rules are read by name first, then with the name's addresses,
+  and only then does the catch-all apply. All platforms.
 
 ### Security
 

@@ -70,7 +70,14 @@ class FakeTunnelControl implements TunnelControl {
       '3f9a12c8d0e1f2a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8a9c21e';
   final resetDeviceIDs = <String>[];
   @override
-  Future<String> subscriptionDeviceID(String id) async => deviceID;
+  Future<String> subscriptionDeviceID(String id) async {
+    deviceIDLookups++;
+    if (deviceIDFails) throw StateError('device ID fixture');
+    return deviceID;
+  }
+
+  bool deviceIDFails = false;
+  int deviceIDLookups = 0;
 
   final checkedRules = <List<String>>[];
   ProcessRuleChecks ruleChecks = const ProcessRuleChecks({});

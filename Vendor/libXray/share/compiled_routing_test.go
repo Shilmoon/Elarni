@@ -65,6 +65,9 @@ func TestCompiledRoutingMatchesIPRulesForHostnames(t *testing.T) {
 		{xnet.DomainAddress("blocked.test"), "elarni-block"},
 		{xnet.ParseAddress("198.51.100.20"), "elarni-direct"},
 		{xnet.DomainAddress("direct-range.test"), "elarni-direct"},
+		// "Resolve if no rule matches": the name's own rule decides, though an IP rule ahead of it
+		// holds the address it resolves to.
+		{xnet.DomainAddress("named-in-range.test"), "elarni-proxy"},
 		{xnet.DomainAddress("outside.test"), "elarni-proxy"},
 		{xnet.ParseAddress("203.0.113.10"), "elarni-proxy"},
 	} {
@@ -110,6 +113,7 @@ func TestCompiledProviderReentryMatchesIPRulesForHostnames(t *testing.T) {
 		{"elarni-socks", xnet.DomainAddress("blocked.test"), "elarni-block"},
 		{"elarni-socks", xnet.DomainAddress("loopback-range.test"), "elarni-proxy"},
 		{"elarni-provider", xnet.DomainAddress("loopback-range.test"), "direct"},
+		{"elarni-provider", xnet.DomainAddress("named-loopback.test"), "proxy"},
 		{"elarni-provider", xnet.ParseAddress("192.0.2.10"), "proxy"},
 	} {
 		if got := pickCompiledRoute(t, router, fixture.inbound, fixture.target); got != fixture.want {
@@ -125,7 +129,7 @@ func TestCompiledProviderReentryMatchesIPRulesForHostnames(t *testing.T) {
 }
 
 // Xray refuses two routing rules with one tag, so per-app routing with several targets, each
-// with a rule of its own, must still start.
+// with a rule of its own, must still start; so must a provider's rule that came with one of their names.
 func TestCompiledPerAppRoutingWithSeveralTargetsStarts(t *testing.T) {
 	config := compiledRoutingFixture(t, "per-app")
 	listed := 0

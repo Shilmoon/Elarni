@@ -208,6 +208,7 @@ struct NativeControlChecks {
     await record { try await otherSubscriptionAssetsCheck(defaults: defaults) }
     await record { try await crossSubscriptionRecoveryCheck(defaults: defaults) }
     await record { try await perAppTargetCheck(defaults: defaults) }
+    await record { try await failedDeletionCheck(defaults: defaults) }
     await record { try await coreLogCheck(defaults: defaults) }
     await record { try await nodeConfigCheck(defaults: defaults) }
     await record { try await shareLinksCheck(defaults: defaults) }
@@ -230,7 +231,7 @@ struct NativeControlChecks {
     print("PASS production ICMP probe supports Automatic IPv4/IPv6, address fallback and explicit family")
     guard keychainCalls == 0 else { throw Failure(message: "fixture unexpectedly needed credentials") }
     guard selectionFailures.isEmpty else { throw Failure(message: selectionFailures.joined(separator: "; ")) }
-    print("24 native control checks passed; no VPN preferences or credentials used; ICMP uses loopback only")
+    print("25 native control checks passed; no VPN preferences or credentials used; ICMP uses loopback only")
   }
 
   // Claude Code as the Claude app installs it, claude-code/<version>/<build>/claude.app, gets a new
@@ -801,6 +802,64 @@ struct NativeControlChecks {
     print("PASS recovery lists servers of any subscription, and a manual choice keeps them as backups")
   }
 
+  // Deleting the selected server's subscription stops the tunnel, but only once the deletion is written:
+  // one that fails leaves the subscription, so the connection, its saved plan and the wish to stay
+  // connected must be left too.
+  static func failedDeletionCheck(defaults: UserDefaults) async throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent("elarni-failed-deletion-\(UUID())")
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let (store, selected, _) = try await twoSubscriptions(directory)
+    try TunnelCommandCoordinator(defaults: defaults).persist(.connected)
+    defer { try? TunnelCommandCoordinator(defaults: defaults).persist(.disconnected) }
+    let plan = Data("{}".utf8)
+    let manager = SwitchManager(plan: plan)
+    var removals = 0
+    manager.removed = { removals += 1 }
+    let messenger = ControlMessenger()
+    let controller = TunnelMethodChannel(messenger: messenger, defaults: defaults, observesSystem: false,
+      makeSubscriptions: { store }, loadPreferences: { [manager] })
+    defer { withExtendedLifetime(controller) {} }
+    // The deletion's journal cannot be written while a folder that is not empty has its name.
+    let journal = directory.appendingPathComponent("refresh-transaction-v1.json")
+    try FileManager.default.createDirectory(at: journal, withIntermediateDirectories: false)
+    try Data().write(to: journal.appendingPathComponent("held"))
+    do {
+      _ = try await messenger.call("deleteSubscription", arguments: ["id": selected.subscription])
+      throw Failure(message: "a deletion without its journal was accepted")
+    } catch let failure as Failure where failure.message.hasPrefix("deleteSubscription: ") {}
+    func savedPlan() -> Data? {
+      (manager.protocolConfiguration as? NETunnelProviderProtocol)?.providerConfiguration?["planPayload"] as? Data
+    }
+    guard store.selectedNodeID() == selected.node, manager.fixtureSession.status == .connected, removals == 0,
+          savedPlan() == plan, TunnelCommandCoordinator(defaults: defaults).intent == .connected else {
+      throw Failure(message: "a deletion that failed stopped the tunnel, removed its saved plan or forgot the wish to stay connected: " +
+        "status \(manager.fixtureSession.status.rawValue), \(removals) removals, " +
+        "intent \(String(describing: TunnelCommandCoordinator(defaults: defaults).intent))")
+    }
+    try FileManager.default.removeItem(at: journal)
+    // A failure after the tunnel stopped: the store puts the subscription back, and the connection returns.
+    manager.removeError = Failure(message: "saved plan removal fixture")
+    manager.fixtureSession.startable = true
+    do {
+      _ = try await messenger.call("deleteSubscription", arguments: ["id": selected.subscription])
+      throw Failure(message: "a deletion that could not remove the saved plan was accepted")
+    } catch let failure as Failure where failure.message.hasPrefix("deleteSubscription: ") {}
+    guard store.selectedNodeID() == selected.node, manager.fixtureSession.status == .connected,
+          manager.fixtureSession.starts == 1, TunnelCommandCoordinator(defaults: defaults).intent == .connected else {
+      throw Failure(message: "a deletion that failed after stopping the tunnel did not bring the connection back: " +
+        "status \(manager.fixtureSession.status.rawValue), \(manager.fixtureSession.starts) starts, " +
+        "intent \(String(describing: TunnelCommandCoordinator(defaults: defaults).intent))")
+    }
+    manager.removeError = nil
+    removals = 0
+    _ = try await messenger.call("deleteSubscription", arguments: ["id": selected.subscription])
+    guard store.selectedNodeID() == nil, manager.fixtureSession.status == .disconnected, removals == 1,
+          TunnelCommandCoordinator(defaults: defaults).intent == .disconnected else {
+      throw Failure(message: "deleting the selected server's subscription left its tunnel, saved plan or intent")
+    }
+    print("PASS a deletion that fails leaves or restores the tunnel, its saved plan and intent; one that succeeds stops and removes them")
+  }
+
   // A per-app server target names its server's keychain entry in the saved plan. A deleted one fails
   // the next Connect, not catalog changes while nothing runs, and a restore keeps the target.
   static func perAppTargetCheck(defaults: UserDefaults) async throws {
@@ -1151,7 +1210,12 @@ final class SwitchManager: NETunnelProviderManager {
   }
   func resumeSave() { let callback = pendingSave; pendingSave = nil; callback?(nil) }
   override func loadFromPreferences(completionHandler: @escaping (Error?) -> Void) { completionHandler(nil) }
-  override func removeFromPreferences(completionHandler: ((Error?) -> Void)? = nil) { completionHandler?(nil) }
+  var removed: (() -> Void)?
+  var removeError: Error?
+  override func removeFromPreferences(completionHandler: ((Error?) -> Void)? = nil) {
+    if removeError == nil { removed?() }
+    completionHandler?(removeError)
+  }
 }
 
 final class SwitchSession: NETunnelProviderSession {

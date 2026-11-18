@@ -19,9 +19,14 @@ nothing they build is published.
    write `SHA256SUMS`, sign it (below) and upload a draft release at the run's commit with every file
    of the run plus `SHA256SUMS` and `SHA256SUMS.sig`. The maintainer's scripts for this step
    (`assemble.sh`, `gh_release.py`) live on that machine, not in this repository.
-3. Run the workflow with stage `publish` and the tag. It checks every file against `SHA256SUMS` and,
-   except for the signed APK, against the build provenance; then it signs `SHA256SUMS` (Sigstore,
-   keyless) and publishes the release.
+3. Run the workflow with stage `publish` and the tag. It publishes only a draft that is one build's
+   whole set of files (`scripts/release_draft.py`): the draft's target is a commit; every file is in
+   `SHA256SUMS` and matches it; every package has build provenance from this workflow at that commit
+   and from the same run; no file that run attested is left out; the tag names the version it built;
+   and the signed APK holds, entry by entry, what the run's unsigned APK holds, plus its signature.
+   Files may be renamed in step 2, since they are matched by digest. Then it signs `SHA256SUMS`
+   (Sigstore, keyless) and publishes the release. The unsigned APK is read from the build run's
+   artifacts, which are kept for 30 days: publish within that time.
 
 Users can check a download:
 

@@ -168,29 +168,33 @@ jobs:
       contents: write
       id-token: write
       attestations: read
+      # The unsigned APK of the build, which the signed one is compared with.
+      actions: read
     env:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
       TAG: ${{ inputs.tag }}
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: scripts
       - name: Download the draft
+        id: draft
         run: |
           set -e
           test "$(gh release view "$TAG" --json isDraft --jq .isDraft)" = true
+          echo "commit=$(gh release view "$TAG" --json targetCommitish --jq .targetCommitish)" >> "$GITHUB_OUTPUT"
           gh release download "$TAG" --dir dist
-      - name: Check the files against SHA256SUMS and the build provenance
-        working-directory: dist
-        # The signed APK differs from the attested unsigned one by its signature, so it is checked by checksum only.
-        # SHA256SUMS.sig is the release key's signature, which installed builds need to update themselves.
-        run: |
-          set -e
-          sha256sum --quiet -c SHA256SUMS
-          test -s SHA256SUMS.sig
-          for file in *; do
-            case "$file" in SHA256SUMS|SHA256SUMS.sig|*.apk|*.intoto.jsonl|*.sigstore.json) continue ;; esac
-            gh attestation verify "$file" --repo "$GH_REPO" --signer-workflow "$GH_REPO/.github/workflows/release.yml" > /dev/null
-            echo "attested: $file"
-          done
+      - name: Check that the draft is one build's whole set of files
+        # scripts/release_draft.py: every file is in SHA256SUMS; every package has provenance from this workflow at
+        # the draft's commit and from one run; nothing that run attested is left out; the tag names the version it
+        # built. The signed APK differs from the attested unsigned one by its signature, so it is compared entry by
+        # entry with the run's unsigned APK. SHA256SUMS.sig is the release key's signature, which installed builds
+        # need to update themselves.
+        env:
+          COMMIT: ${{ steps.draft.outputs.commit }}
+        run: python3 scripts/release_draft.py dist --repo "$GH_REPO" --tag "$TAG" --commit "$COMMIT"
       - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
       - name: Sign SHA256SUMS
         # Keyless: the signature names this workflow; check it with cosign verify-blob (docs/RELEASING.md).
@@ -198,5 +202,5 @@ jobs:
       - name: Publish
         # Immutable releases lock the tag and the files once the draft is published.
         run: |
-          gh release upload "$TAG" dist/SHA256SUMS.sigstore.json
+          gh release upload "$TAG" dist/SHA256SUMS.sigstore.json --clobber
           gh release edit "$TAG" --draft=false --latest

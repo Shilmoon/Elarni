@@ -128,6 +128,40 @@ final class DesktopCatalog {
   DesktopCatalog copy() =>
       DesktopCatalog(copyCatalog(data), native, domain, clock: clock);
 
+  /// What a compile of one server reads: that server alone in its
+  /// subscription, the routing profile assigned to it, and this catalog's
+  /// other values with [overrides] in their place. The server, the profile and
+  /// those values are this catalog's own objects, so the result is only read.
+  DesktopCatalog only(String nodeId, CatalogMap overrides) {
+    for (final Map source in data['subscriptions'] as List? ?? const []) {
+      for (final Map node in source['nodes'] as List? ?? const []) {
+        if (node['id'] != nodeId) continue;
+        final route = (data['assignments'] as Map?)?[source['id']];
+        return DesktopCatalog(
+          {
+            ...data,
+            'subscriptions': [
+              {
+                ...catalogMap(source),
+                'nodes': [node],
+                'hiddenNodes': const <Object?>[],
+              },
+            ],
+            'profiles': [
+              for (final Map profile in data['profiles'] as List? ?? const [])
+                if (profile['id'] == route) profile,
+            ],
+            ...overrides,
+          },
+          native,
+          domain,
+          clock: clock,
+        );
+      }
+    }
+    throw desktopError('invalid_profile');
+  }
+
   CatalogMap backup() {
     for (final source in sources) {
       if (catalogMap(source['metadata'] ?? {})['hideURL'] == true ||

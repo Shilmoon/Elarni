@@ -59,6 +59,10 @@ message RoutingRule {
 
   // List of operating systems for matching the one Xray itself is running on.
   repeated string local_os = 23;
+
+  // Elarni: the rule stands for "no rule matched". With IPIfNonMatch the rules ahead of it are tried again
+  // with the target's resolved addresses before it applies. The number keeps clear of upstream's.
+  bool fallback = 1001;
 }
 
 message WebhookConfig {

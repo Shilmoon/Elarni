@@ -18,6 +18,8 @@ type Rule struct {
 	Webhook   *WebhookNotifier
 	// Elarni: the rule has a process condition.
 	matchesProcess bool
+	// Elarni: the rule stands for "no rule matched" (RoutingRule.fallback).
+	fallback bool
 }
 
 func (r *Rule) GetTag() (string, error) {

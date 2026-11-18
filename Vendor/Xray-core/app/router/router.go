@@ -149,6 +149,7 @@ func (r *Router) ReloadRules(config *Config, shouldAppend bool) error {
 			Tag:            rule.GetTag(),
 			RuleTag:        rule.GetRuleTag(),
 			matchesProcess: len(rule.Process) > 0,
+			fallback:       rule.GetFallback(),
 		}
 		if rr.RuleTag != "" && existTags[rr.RuleTag] {
 			return errors.New("duplicate ruleTag ", rr.RuleTag)
@@ -232,13 +233,26 @@ func (r *Router) pickRouteInternal(ctx routing.Context) (*Rule, routing.Context,
 
 	rules := *r.rules.Load()
 
-	for _, rule := range rules {
+	secondPass := r.domainStrategy == Config_IpIfNonMatch && len(ctx.GetTargetDomain()) != 0 && !skipDNSResolve
+
+	for index, rule := range rules {
 		if rule.Apply(ctx) {
-			return rule, ctx, nil
+			if !rule.fallback || !secondPass {
+				return rule, ctx, nil
+			}
+			// Elarni: a generated catch-all would end the first pass for every connection, so IP rules
+			// would never see a name's addresses. The rules ahead of it take their second pass first.
+			resolved := routing_dns.ContextWithDNSClient(ctx, r.dns)
+			for _, earlier := range rules[:index] {
+				if earlier.Apply(resolved) {
+					return earlier, resolved, nil
+				}
+			}
+			return rule, resolved, nil
 		}
 	}
 
-	if r.domainStrategy != Config_IpIfNonMatch || len(ctx.GetTargetDomain()) == 0 || skipDNSResolve {
+	if !secondPass {
 		return nil, ctx, common.ErrNoClue
 	}
 

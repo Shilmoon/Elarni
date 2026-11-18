@@ -42,7 +42,7 @@ func importClashProfiles(text string) (*ClientImport, error) {
 	if err := yaml.Unmarshal([]byte(text), &source); err != nil || len(source.Proxies) == 0 || len(source.Proxies) > 1024 {
 		return nil, fmt.Errorf("invalid Clash profile")
 	}
-	// Global mode sends everything through the selected proxy: the file's rules do not apply.
+	// Global mode sends everything through what the GLOBAL group selects: the file's rules do not apply.
 	global := source.Mode == "global"
 	if source.Mode != "" && source.Mode != "rule" && !global {
 		return nil, fmt.Errorf("unsupported Clash mode")
@@ -130,6 +130,26 @@ func importClashProfiles(text string) (*ClientImport, error) {
 		// Group aliases are resolved from the selected member by the profile compiler.
 		outbounds = append(outbounds, map[string]any{"tag": group.Name, "protocol": "blackhole", "settings": map[string]any{}})
 	}
+	globalGroup := "GLOBAL"
+	if global && !slices.ContainsFunc(groups, func(group clashGroup) bool { return group.Name == globalGroup }) {
+		// A file without a GLOBAL group gets the one mihomo builds: every proxy, every group and DIRECT.
+		// mihomo's starts on DIRECT, which a client that cannot store a choice before the import would
+		// keep; this one starts on the file's first group, or on its first proxy when it has none.
+		for names[globalGroup] {
+			globalGroup += "_" // a proxy by that name
+		}
+		options := make([]string, 0, len(groups)+len(outbounds)+1)
+		for _, group := range groups {
+			options = append(options, group.Name)
+		}
+		for _, outbound := range outbounds[:len(outbounds)-len(groups)] {
+			options = append(options, outbound["tag"].(string))
+		}
+		options = append(options, "DIRECT")
+		groups = append([]clashGroup{{Name: globalGroup, Type: "select", Options: options, Selected: options[0]}}, groups...)
+		names[globalGroup] = true
+		outbounds = append(outbounds, map[string]any{"tag": globalGroup, "protocol": "blackhole", "settings": map[string]any{}})
+	}
 	outbounds = append(outbounds, map[string]any{"tag": "DIRECT", "protocol": "freedom", "settings": map[string]any{}},
 		map[string]any{"tag": "REJECT", "protocol": "blackhole", "settings": map[string]any{}},
 		map[string]any{"tag": "REJECT-DROP", "protocol": "blackhole", "settings": map[string]any{}})
@@ -139,6 +159,15 @@ func importClashProfiles(text string) (*ClientImport, error) {
 	}
 	rules := []map[string]any{}
 	ipRules, unresolvedIPRules := 0, 0
+	if global {
+		// The one rule of global mode. Without it the first proxy would carry everything, whatever
+		// the groups select.
+		matchAll, err := clashRoutingRule("MATCH,"+globalGroup, names)
+		if err != nil {
+			return nil, err
+		}
+		rules = append(rules, matchAll)
+	}
 	for _, rule := range source.Rules {
 		if global {
 			break

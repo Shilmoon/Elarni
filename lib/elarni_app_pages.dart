@@ -422,9 +422,23 @@ extension _HomePages on _ElarniHomeState {
       (_, final int hours) => (hours, l10n.setByYourProvider),
       _ => (_settings.subscriptionAutoUpdateHours, l10n.appSetting),
     };
-    final key = '${group.id}|${group.fetchOptions['httpHost'] ?? ''}';
-    final deviceID = _deviceIDs[key] ??= widget.tunnelControl
-        .subscriptionDeviceID(group.id);
+    // The ID belongs to the origin the downloads go to, and a refresh or
+    // another format can move the subscription to another one.
+    final key =
+        '${group.id}|${group.fetchOptions['httpHost'] ?? ''}|${group.format}|'
+        '${group.lastSuccessfulFetch ?? ''}';
+    _deviceIDs.removeWhere(
+      (other, _) => other != key && other.startsWith('${group.id}|'),
+    );
+    final deviceID = _deviceIDs[key] ??=
+        widget.tunnelControl.subscriptionDeviceID(group.id)
+          // A failed lookup is not kept: the next time the page is drawn asks again.
+          ..then<void>(
+            (_) {},
+            onError: (Object _) {
+              _deviceIDs.remove(key);
+            },
+          );
     return [
       _detailRow(
         l10n.refreshes,

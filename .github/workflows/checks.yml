@@ -255,6 +255,9 @@ jobs:
       - name: Packaging process checks
         if: matrix.checks
         run: python scripts/check_report.py -- python -m unittest discover -s scripts -p package_release_test.py -v
+      - name: Release draft checks
+        if: matrix.checks
+        run: python scripts/check_report.py -- python -m unittest discover -s scripts -p release_draft_test.py -v
       - name: Flutter analysis and widget checks
         if: matrix.checks
         run: sh scripts/check-tests flutter

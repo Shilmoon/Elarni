@@ -263,6 +263,141 @@ fn compile_per_app(runtime: &RuntimeOptions) -> Result<Value, crate::compiler::C
     Ok(config)
 }
 
+// Apps sent to the same server or local proxy share one outbound and one rule; a second
+// handler for the same target would open its own connections to it.
+#[test]
+fn per_app_targets_that_are_the_same_share_one_outbound() {
+    let server = json!({"outbounds":[node("proxy", "nl.example.com")]});
+    let config = compile_per_app(&per_app_runtime(json!([
+        {"process":"curl", "target":"proxy", "proxy":"socks://127.0.0.1:1088"},
+        {"process":"telegram", "target":"server", "server": server},
+        {"process":"browser", "target":"proxy", "proxy":"socks5://localhost:1088"},
+        {"process":"steam", "target":"server", "server": server},
+        {"process":"game.exe", "target":"proxy", "proxy":"http://127.0.0.1:1088"},
+    ])))
+    .unwrap();
+    let rules = after_own_subnet_block(&config);
+    let listed: Vec<(&Value, &str)> = rules
+        .iter()
+        .filter(|rule| {
+            rule["ruleTag"]
+                .as_str()
+                .is_some_and(|tag| tag.starts_with("elarni-per-app-listed"))
+        })
+        .map(|rule| (&rule["process"], rule["outboundTag"].as_str().unwrap()))
+        .collect();
+    assert_eq!(
+        listed,
+        [
+            (&json!(["curl", "browser"]), "elarni-app-0"),
+            (&json!(["telegram", "steam"]), "elarni-app-1"),
+            // The same address over another protocol is another target.
+            (&json!(["game.exe"]), "elarni-app-2"),
+        ]
+    );
+    let app_tags: Vec<&str> = config["outbounds"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|outbound| outbound["tag"].as_str())
+        .filter(|tag| tag.starts_with("elarni-app-"))
+        .collect();
+    assert_eq!(app_tags, ["elarni-app-0", "elarni-app-1", "elarni-app-2"]);
+}
+
+// Xray refuses a config with two rules of one tag, and the connections view and the live rule
+// reload tell Elarni's per-app rules by their tags, so a provider's rule cannot carry one.
+#[test]
+fn provider_rule_tags_stay_out_of_the_per_app_names() {
+    let tagged = |tag: &str| json!({"type": "field", "domain": [format!("full:{tag}.example")], "outboundTag": "direct", "ruleTag": tag});
+    let profile = json!({"outbounds": [node("proxy", "edge.example.com"),
+            {"tag": "direct", "protocol": "freedom", "settings": {}}],
+        "routing": {"rules": [tagged("elarni-per-app-listed-0"), tagged("elarni-per-app-other"),
+            tagged("elarni-per-app-dns"), tagged("provider-elarni-per-app-dns"), tagged("ads")]}});
+    let per_app: RuntimeOptions = serde_json::from_value(json!({
+        "perAppMode": "bypass", "perAppProcesses": ["curl", "steam"],
+        "perAppTargets": [{"process": "steam", "target": "block"}]}))
+    .unwrap();
+    for (runtime, own) in [
+        (RuntimeOptions::default(), vec![]),
+        (
+            per_app,
+            vec![
+                "elarni-per-app-dns",
+                "elarni-per-app-listed-0",
+                "elarni-per-app-listed-1",
+                "elarni-per-app-other",
+            ],
+        ),
+    ] {
+        let result = compile_profile(
+            profile.clone(),
+            None,
+            1080,
+            PacketBackend::XrayTun,
+            1500,
+            &runtime,
+            None,
+        )
+        .unwrap();
+        let config: Value = serde_json::from_slice(&result.config).unwrap();
+        let rules = config["routing"]["rules"].as_array().unwrap();
+        let tag_of = |domain: &str| {
+            rules
+                .iter()
+                .find(|rule| rule["domain"] == json!([format!("full:{domain}.example")]))
+                .unwrap()["ruleTag"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        };
+        // A provider's own rules keep a name, away from Elarni's and from each other's.
+        assert_eq!(tag_of("ads"), "ads");
+        assert_eq!(
+            tag_of("provider-elarni-per-app-dns"),
+            "provider-elarni-per-app-dns"
+        );
+        let mut tags: Vec<&str> = rules
+            .iter()
+            .filter_map(|rule| rule["ruleTag"].as_str())
+            .collect();
+        let generated: Vec<&str> = rules
+            .iter()
+            .filter(|rule| rule.get("domain").is_none())
+            .filter_map(|rule| rule["ruleTag"].as_str())
+            .collect();
+        assert_eq!(generated, own);
+        assert_eq!(
+            tags.iter()
+                .filter(|tag| tag.starts_with("elarni-per-app-"))
+                .count(),
+            own.len(),
+            "{tags:?}"
+        );
+        let count = tags.len();
+        tags.sort_unstable();
+        tags.dedup();
+        assert_eq!(tags.len(), count, "{tags:?}");
+        assert_eq!(count, own.len() + 5);
+    }
+    // Xray reads the key in any case, so another spelling would pass by the check.
+    let mut miscased = profile.clone();
+    miscased["routing"]["rules"][0] = json!({"type": "field", "domain": ["full:a.example"],
+        "outboundTag": "direct", "RuleTag": "elarni-per-app-other"});
+    assert!(
+        compile_profile(
+            miscased,
+            None,
+            1080,
+            PacketBackend::XrayTun,
+            1500,
+            &RuntimeOptions::default(),
+            None
+        )
+        .is_err()
+    );
+}
+
 // Each listed app can have its own target; the others keep the mode's.
 #[test]
 fn per_app_targets_send_each_listed_app_to_its_own_outbound() {
@@ -2146,10 +2281,11 @@ fn shared_host_endpoints_pin_and_fail_independently_by_address_family() {
     assert_eq!(prepared["outbounds"][1]["protocol"], "blackhole");
 }
 
-// The explicit first-outbound fallback always matches, so a provider's
-// IPIfNonMatch retry never runs; IP rules must resolve hostnames on demand.
+// The explicit first-outbound fallback always matches, which would end the first pass of a
+// provider's IPIfNonMatch. It is marked as the fallback instead of changing the strategy:
+// IPOnDemand would let an IP rule take a name that a later domain rule matches.
 #[test]
-fn provider_ip_rules_resolve_hostnames_ahead_of_the_explicit_fallback() {
+fn provider_strategy_is_kept_and_the_explicit_fallback_is_marked() {
     let ip_rule = json!({"type": "field", "ip": ["192.0.2.0/24"], "outboundTag": "direct"});
     let domain_rule =
         json!({"type": "field", "domain": ["full:direct.example"], "outboundTag": "direct"});
@@ -2160,16 +2296,47 @@ fn provider_ip_rules_resolve_hostnames_ahead_of_the_explicit_fallback() {
     let mut listed_ip = ip_rule.clone();
     listed_ip["ip"] = json!("192.0.2.0/24");
     for (strategy, rule, expected) in [
-        ("IPIfNonMatch", &ip_rule, "IPOnDemand"),
-        ("ipifnonmatch", &ip_rule, "IPOnDemand"),
-        ("IPIfNonMatch", &listed_ip, "IPOnDemand"),
+        ("IPIfNonMatch", &ip_rule, "IPIfNonMatch"),
+        ("ipifnonmatch", &ip_rule, "ipifnonmatch"),
+        ("IPIfNonMatch", &listed_ip, "IPIfNonMatch"),
         ("IPIfNonMatch", &domain_rule, "IPIfNonMatch"),
         ("AsIs", &ip_rule, "AsIs"),
     ] {
+        let compiled = compile(profile(strategy, rule), None);
         assert_eq!(
-            compile(profile(strategy, rule), None)["routing"]["domainStrategy"],
-            expected,
+            compiled["routing"]["domainStrategy"], expected,
             "{strategy} {rule}"
+        );
+        let rules = compiled["routing"]["rules"].as_array().unwrap();
+        assert_eq!(
+            rules.last().unwrap(),
+            &json!({"type": "field", "network": "tcp,udp", "outboundTag": "proxy", "fallback": true})
+        );
+        // Only that rule: a provider rule cannot make itself one.
+        assert_eq!(
+            rules
+                .iter()
+                .filter(|rule| rule.get("fallback").is_some())
+                .count(),
+            1
+        );
+    }
+    // Xray reads the key in any case; a spelling outside ASCII is refused as a whole.
+    for key in ["fallback", "Fallback", "FALLBACK"] {
+        let mut marked = domain_rule.clone();
+        marked[key] = json!(true);
+        let compiled = compile(profile("IPIfNonMatch", &marked), None);
+        let rules = compiled["routing"]["rules"].as_array().unwrap();
+        let unmarked = |rule: &Value| {
+            rule.as_object().unwrap().keys().all(|key| {
+                !key.chars()
+                    .flat_map(char::to_lowercase)
+                    .eq("fallback".chars())
+            })
+        };
+        assert!(
+            rules[..rules.len() - 1].iter().all(unmarked),
+            "{key} {rules:?}"
         );
     }
     let routes: RouteModel = serde_json::from_value(
@@ -2179,7 +2346,7 @@ fn provider_ip_rules_resolve_hostnames_ahead_of_the_explicit_fallback() {
     .unwrap();
     assert_eq!(
         compile(profile("AsIs", &domain_rule), Some(&routes))["routing"]["domainStrategy"],
-        "IPOnDemand"
+        "IPIfNonMatch"
     );
     // Xray reads these keys case-insensitively; the check above reads them exactly.
     for rejected in [

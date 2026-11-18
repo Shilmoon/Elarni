@@ -14,24 +14,29 @@ const _node = SubscriptionNode(
   selected: true,
 );
 
-SubscriptionSnapshot _subscriptions({Map<String, String> options = const {}}) =>
-    SubscriptionSnapshot(
-      selectedNodeId: 'a',
-      subscriptions: [
-        SubscriptionGroup(
-          id: 'acme',
-          name: 'Acme VPN',
-          status: 'ready',
-          nodes: const [_node],
-          fetchOptions: options,
-          metadata: const {
-            'deviceRegistered': true,
-            'updateIntervalHours': 12,
-            'hideSettings': true,
-          },
-        ),
-      ],
-    );
+SubscriptionSnapshot _subscriptions({
+  Map<String, String> options = const {},
+  String format = 'source',
+  double? fetched,
+}) => SubscriptionSnapshot(
+  selectedNodeId: 'a',
+  subscriptions: [
+    SubscriptionGroup(
+      id: 'acme',
+      name: 'Acme VPN',
+      status: 'ready',
+      nodes: const [_node],
+      fetchOptions: options,
+      format: format,
+      lastSuccessfulFetch: fetched,
+      metadata: const {
+        'deviceRegistered': true,
+        'updateIntervalHours': 12,
+        'hideSettings': true,
+      },
+    ),
+  ],
+);
 
 Future<void> _openSubscription(
   WidgetTester tester,
@@ -263,6 +268,75 @@ void main() {
       expect(find.text('Every 3 h'), findsOneWidget);
       expect(find.text('Your override'), findsOneWidget);
       expect(find.text('Set by your provider'), findsOneWidget);
+    },
+  );
+
+  // The ID belongs to the origin the downloads go to. A refresh can move the
+  // subscription there (a new URL from the provider), and so can another format.
+  testWidgets(
+    'the device ID shown is the one the next download sends, and a failed lookup is asked again',
+    (tester) async {
+      final copied = <String>[];
+      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        SystemChannels.platform,
+        (call) async {
+          if (call.method == 'Clipboard.setData') {
+            copied.add((call.arguments as Map)['text'] as String);
+          }
+          return null;
+        },
+      );
+      final control = FakeTunnelControl()
+        ..snapshot = _subscriptions(fetched: 1000)
+        ..deviceIDFails = true;
+      await _openSubscription(tester, control);
+      await tester.tap(
+        find.byKey(const PageStorageKey('subscription-details:acme')),
+      );
+      await tester.pumpAndSettle();
+      Future<void> refresh() async {
+        await tester.tap(
+          find.byKey(const ValueKey('refresh-subscription:acme')),
+        );
+        await tester.pumpAndSettle();
+      }
+
+      expect(find.text('3f9a12c8…c21e'), findsNothing);
+      expect(
+        tester
+            .widget<TextButton>(
+              find.byKey(const ValueKey('copy-device-id:acme')),
+            )
+            .onPressed,
+        isNull,
+      );
+      control.deviceIDFails = false;
+      await refresh();
+      expect(find.text('3f9a12c8…c21e'), findsOneWidget);
+      // A page that is drawn again does not ask again.
+      final lookups = control.deviceIDLookups;
+      await refresh();
+      expect(control.deviceIDLookups, lookups);
+
+      const moved =
+          'aaaaaaaa00000000000000000000000000000000000000000000000000001111';
+      const other =
+          'bbbbbbbb00000000000000000000000000000000000000000000000000002222';
+      control
+        ..deviceID = moved
+        ..snapshot = _subscriptions(fetched: 2000);
+      await refresh();
+      expect(find.text('aaaaaaaa…1111'), findsOneWidget);
+      await tester.tap(find.byKey(const ValueKey('copy-device-id:acme')));
+      await tester.pumpAndSettle();
+      control
+        ..deviceID = other
+        ..snapshot = _subscriptions(fetched: 2000, format: 'json');
+      await refresh();
+      expect(find.text('bbbbbbbb…2222'), findsOneWidget);
+      await tester.tap(find.byKey(const ValueKey('copy-device-id:acme')));
+      await tester.pumpAndSettle();
+      expect(copied, [moved, other]);
     },
   );
 }

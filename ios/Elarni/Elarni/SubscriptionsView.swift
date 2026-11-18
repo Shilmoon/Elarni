@@ -51,6 +51,10 @@ struct SubscriptionDetailView: View {
   private var source: ServerSubscription? { model.subscriptions.first { $0.id == sourceID } }
   private var chosenCount: Int { source?.nodes.filter { chosen.contains($0.id) }.count ?? 0 }
   private func servers(_ count: Int) -> String { String(localized: "\(count) servers") }
+  private func hasNotices(_ source: ServerSubscription) -> Bool {
+    ["announcement", "directiveNotice", "dnsNotice", "bannerText"].contains { (source.metadata[$0] as? String)?.isEmpty == false } ||
+      (source.metadata["skippedServers"] as? Int ?? 0) > 0
+  }
   // Which interval schedules this subscription, as on desktop and Android.
   private func refreshes(_ source: ServerSubscription) -> (value: String, caption: String) {
     if let hours = (source.raw["fetchOptions"] as? [String: String])?["refreshHours"].flatMap(Int.init) { return (String(localized: "Every \(hours) h"), String(localized: "Your override")) }
@@ -76,7 +80,8 @@ struct SubscriptionDetailView: View {
           if let error = source.refreshErrorText { Text(error).foregroundStyle(AppPalette.secondary) }
           if !source.local { QuotaView(source: source) }
         }
-        if !source.local { Section {
+        // A file or pasted import has no provider, but its import can leave the same notices.
+        if !source.local || hasNotices(source) { Section {
           ForEach([("announcement", String(localized: "Notice")), ("directiveNotice", String(localized: "Configuration notice")), ("dnsNotice", "DNS"), ("bannerText", String(localized: "Message"))], id: \.0) { key, title in
             if let text = source.metadata[key] as? String, !text.isEmpty { VStack(alignment: .leading, spacing: 4) { Text(title).font(.caption).foregroundStyle(AppPalette.secondary); Text(text) } }
           }
@@ -87,19 +92,21 @@ struct SubscriptionDetailView: View {
           ForEach([("enabled", String(localized: "Account enabled")), ("online", String(localized: "Online"))], id: \.0) { key, title in
             if let value = source.metadata[key] as? Bool { LabeledContent(title, value: value ? String(localized: "Yes") : String(localized: "No")) }
           }
-          LabeledContent("Device ID") {
-            VStack(alignment: .trailing) {
-              Text(deviceID.map { "\($0.prefix(8))…\($0.suffix(4))" } ?? String(localized: "Loading")).monospaced()
-              if source.metadata["deviceRegistered"] as? Bool == true { Text("Registered · set by your provider").font(.caption) }
+          if !source.local {
+            LabeledContent("Device ID") {
+              VStack(alignment: .trailing) {
+                Text(deviceID.map { "\($0.prefix(8))…\($0.suffix(4))" } ?? String(localized: "Loading")).monospaced()
+                if source.metadata["deviceRegistered"] as? Bool == true { Text("Registered · set by your provider").font(.caption) }
+              }
             }
+            HStack {
+              Button("Copy", systemImage: "doc.on.doc") {
+                if let deviceID { UIPasteboard.general.setItems([[UIPasteboard.typeAutomatic: deviceID]], options: [.localOnly: true]) }
+              }.disabled(deviceID == nil)
+              Spacer()
+              Button("Reset device ID", role: .destructive) { resettingDevice = true }.disabled(model.busy)
+            }.buttonStyle(.borderless)
           }
-          HStack {
-            Button("Copy", systemImage: "doc.on.doc") {
-              if let deviceID { UIPasteboard.general.setItems([[UIPasteboard.typeAutomatic: deviceID]], options: [.localOnly: true]) }
-            }.disabled(deviceID == nil)
-            Spacer()
-            Button("Reset device ID", role: .destructive) { resettingDevice = true }.disabled(model.busy)
-          }.buttonStyle(.borderless)
           if source.metadata["routingEnabled"] as? Bool == false { LabeledContent("Provider routing", value: String(localized: "Disabled")) }
           if source.metadata["hideSettings"] as? Bool == true { Text("Your provider asks you to keep its settings. You can still change them.").font(.footnote).foregroundStyle(AppPalette.secondary) }
           ForEach(source.actions.filter { ["support", "account", "banner"].contains($0) }, id: \.self) { action in
@@ -107,8 +114,8 @@ struct SubscriptionDetailView: View {
               do { openURL(try model.providerURL(source, action: action)) } catch { model.show(error) }
             }
           }
-        } header: { Text("Provider") } footer: {
-          Text("Elarni sends each provider a different device ID, made from a random key on this device. Providers can't link your IDs to each other. A renamed subscription, a changed refresh interval and your routing choice stay after a refresh.")
+        } header: { Text(source.local ? "Import" : "Provider") } footer: {
+          if !source.local { Text("Elarni sends each provider a different device ID, made from a random key on this device. Providers can't link your IDs to each other. A renamed subscription, a changed refresh interval and your routing choice stay after a refresh.") }
         } }
         Section {
           RoutingAssignment(sourceID: source.id)

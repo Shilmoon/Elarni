@@ -21,7 +21,8 @@ These use loopback fixtures and never change routes, DNS or adapters.
 | Go under `Vendor/` | `sh scripts/check-tests go` |
 | Rust under `native/`, `Vendor/tun2proxy` or `Vendor/shadowquic` | `sh scripts/check-tests rust` (the ShadowQUIC client also `go`) |
 | Dart under `lib/`, `bin/`, `test/` | `sh scripts/check-tests flutter` |
-| Swift (macOS only) | `sh scripts/check-tests swift` |
+| Swift under `macos/` (macOS only) | `sh scripts/check-tests swift`, and the iPhone build below: the iPhone app links these sources |
+| Swift under `ios/` (macOS only) | `sh scripts/check-ios --build` compiles the app, its extensions and its tests; a simulator runs them (below) |
 | Kotlin logic under `android/` (needs the Android SDK and native build) | `android/gradlew -p android :app:testDebugUnitTest` |
 | Tooling in `scripts/` | `python -m unittest discover -s scripts -p '*_test.py'` |
 | Windows local proxy | `python scripts/check-windows` |

@@ -7,10 +7,19 @@ if [ -z "${ELARNI_CHECK_REPORT:-}" ]; then
   exec "$elarni_python" scripts/check_report.py -- sh "$root/scripts/check-ios" "$@"
 fi
 if [ "$#" -ne 1 ]; then
-  echo 'usage: scripts/check-ios SIMULATOR-UDID' >&2
+  echo 'usage: scripts/check-ios SIMULATOR-UDID | --build' >&2
   exit 2
 fi
 sh scripts/build-ios-native iphonesimulator
+if [ "$1" = --build ]; then
+  # What scripts/check-changed runs: the app, its extensions and both test targets compile; no simulator is used.
+  xcodebuild -quiet -project ios/Elarni/Elarni.xcodeproj -scheme Elarni \
+    -configuration Debug -destination 'generic/platform=iOS Simulator' \
+    -derivedDataPath .build/ios/DerivedData ARCHS=arm64 ONLY_ACTIVE_ARCH=YES \
+    CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=- build-for-testing
+  echo 'iOS: the app and its tests compile; scripts/check-ios SIMULATOR-UDID runs them'
+  exit 0
+fi
 mkdir -p .build/ios/checks
 run=$(mktemp -d "$root/.build/ios/checks/run-XXXXXX")
 xcodebuild -quiet -project ios/Elarni/Elarni.xcodeproj -scheme Elarni \

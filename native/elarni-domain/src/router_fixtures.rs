@@ -21,10 +21,14 @@ fn compiled_fixtures() -> Value {
     let routes: RouteModel = serde_json::from_value(json!({
         "rules": [
             {"action": "block", "domains": ["full:blocked.test"], "ips": []},
-            {"action": "direct", "domains": [], "ips": ["198.51.100.0/24"]}],
+            {"action": "direct", "domains": [], "ips": ["198.51.100.0/24"]},
+            // After the IP rule whose range its address is in: with "resolve if no rule
+            // matches" the name's own rule still decides.
+            {"action": "proxy", "domains": ["full:named-in-range.test"], "ips": []}],
         "dnsServers": ["192.0.2.53"],
         "dnsPolicy": {"remote": {"address": "192.0.2.53"}, "domestic": {"address": "192.0.2.54"}},
-        "staticHosts": {"direct-range.test": ["198.51.100.7"], "outside.test": ["203.0.113.9"]},
+        "staticHosts": {"direct-range.test": ["198.51.100.7"], "outside.test": ["203.0.113.9"],
+            "named-in-range.test": ["198.51.100.8"]},
         "fallbackAction": "proxy", "domainStrategy": "IPIfNonMatch"}))
     .unwrap();
     let (outbound, _) = compile_xray_outbound_config_with_options(
@@ -45,9 +49,11 @@ fn compiled_fixtures() -> Value {
         json!({
             "outbounds": [client("proxy"),
                 {"tag": "direct", "protocol": "freedom", "settings": {"domainStrategy": "UseIPv4"}}],
-            "dns": {"servers": ["192.0.2.53"], "hosts": {"loopback-range.test": "127.0.0.1"}},
+            "dns": {"servers": ["192.0.2.53"], "hosts": {"loopback-range.test": "127.0.0.1",
+                "named-loopback.test": "127.0.0.1"}},
             "routing": {"domainStrategy": "IPIfNonMatch", "rules": [
-                {"type": "field", "ip": ["127.0.0.0/8"], "outboundTag": "direct"}]}}),
+                {"type": "field", "ip": ["127.0.0.0/8"], "outboundTag": "direct"},
+                {"type": "field", "domain": ["full:named-loopback.test"], "outboundTag": "proxy"}]}}),
         Some(&overlay),
         10890,
         PacketBackend::NativeTun2Proxy,
@@ -107,8 +113,11 @@ fn compiled_fixtures() -> Value {
     // Per-app routing with several targets: each target's apps share a rule of their own, and
     // a "children:" rule adds one more.
     let per_app = compile_profile(
+        // The provider's rule carries a name the per-app rules use.
         json!({"outbounds": [client("proxy"),
-            {"tag": "direct", "protocol": "freedom", "settings": {}}]}),
+            {"tag": "direct", "protocol": "freedom", "settings": {}}],
+            "routing": {"rules": [{"type": "field", "domain": ["full:tagged.test"],
+                "outboundTag": "direct", "ruleTag": "elarni-per-app-listed-0"}]}}),
         None,
         10890,
         PacketBackend::XrayTun,
