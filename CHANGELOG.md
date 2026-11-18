@@ -39,6 +39,12 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
   one it looked up first: after the provider moved the subscription, or after a switch to a
   download format served from another address, **Copy** gave the old ID. A lookup that failed
   stayed "Unavailable" until the app was restarted; it is now tried again.
+### Changed
+
+- **Windows and Linux: testing many servers no longer copies the whole server list for each
+  one.** Every server test through its own proxy made a full copy of the catalog first, so a
+  **Test all** of a large subscription did work that grew with the square of its size and
+  held up the window. A test now reads the one server it needs.
 
 ## 0.6.2 - 2026-11-17
 

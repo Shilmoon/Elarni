@@ -163,31 +163,31 @@ extension _ProxyProbes on DesktopProxy {
             await socket.close();
           } while (!_probePorts.add(port));
           reserved = port;
-          final probe = catalog.copy();
           // Other local apps, including ones the VPN excludes, must not
           // borrow this listener while the probe runs.
           final username = desktopID(), password = desktopID();
-          probe.data['selectedNodeId'] = id;
-          probe.data['inboundCredentials'] = {
-            'username': username,
-            'password': password,
-          };
-          probe.data['settings'] = catalog.settings
-              .copyWith(
-                xrayTunEnabled: false,
-                systemProxyEnabled: false,
-                perAppMode: 'off',
-                socksPort: port,
-                httpInboundEnabled: false,
-                allowLAN: false,
-                inboundAuthEnabled: true,
-                // The VPN blocks DNS outside the tunnel, so the probe core
-                // dials the address the app resolved through it.
-                resolveServer:
-                    catalog.settings.resolveServer ||
-                    _state == 'connected' && catalog.settings.xrayTunEnabled,
-              )
-              .toMap();
+          // A bulk test runs this for every server: the probe reads the
+          // catalog's server in place instead of copying the catalog.
+          final probe = catalog.only(id, {
+            'selectedNodeId': id,
+            'inboundCredentials': {'username': username, 'password': password},
+            'settings': catalog.settings
+                .copyWith(
+                  xrayTunEnabled: false,
+                  systemProxyEnabled: false,
+                  perAppMode: 'off',
+                  socksPort: port,
+                  httpInboundEnabled: false,
+                  allowLAN: false,
+                  inboundAuthEnabled: true,
+                  // The VPN blocks DNS outside the tunnel, so the probe core
+                  // dials the address the app resolved through it.
+                  resolveServer:
+                      catalog.settings.resolveServer ||
+                      _state == 'connected' && catalog.settings.xrayTunEnabled,
+                )
+                .toMap(),
+          });
           payload.addAll(DesktopProxy._runtimeAssets(probe));
           payload['configJSON'] = await _prepareConfig(probe, probe.node(id));
           payload['proxy'] = 'socks5://$username:$password@127.0.0.1:$port';
