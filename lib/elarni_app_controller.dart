@@ -1213,9 +1213,6 @@ extension _HomeController on _ElarniHomeState {
       for (final group in _subscriptions.subscriptions) group.id,
     };
     try {
-      final previousRouting = _routing.profiles
-          .map((profile) => profile.id)
-          .toSet();
       final clipboard = source == 'clipboard'
           ? (await Clipboard.getData(Clipboard.kTextPlain))?.text?.trim()
           : null;
@@ -1230,16 +1227,8 @@ extension _HomeController on _ElarniHomeState {
       );
       if (await _applySubscriptionOperation(result)) {
         await _refreshRouting();
-        if (mounted)
-          _set(() {
-            _routingTab = 0;
-            _page =
-                _routing.profiles.any(
-                  (profile) => !previousRouting.contains(profile.id),
-                )
-                ? DesktopPage.routing
-                : DesktopPage.home;
-          });
+        // An import lands on Home, even when it brings a routing profile.
+        if (mounted) _set(() => _page = DesktopPage.home);
       }
     } on Object catch (error) {
       if (mounted &&

@@ -751,7 +751,7 @@ void main() {
     });
 
     testWidgets(
-      'pending import blocks duplicates and selects newly imported routing ($windows)',
+      'pending import blocks duplicates and stays on Home after importing routing ($windows)',
       (tester) async {
         final pending = Completer<SubscriptionOperationResult>();
         final control = FakeTunnelControl()
@@ -773,8 +773,8 @@ void main() {
           SubscriptionOperationResult(snapshot: control.snapshot),
         );
         await tester.pumpAndSettle();
-        expect(find.byKey(const ValueKey('routing-list')), findsOneWidget);
-        expect(find.text('Everyday routing'), findsOneWidget);
+        expect(find.byKey(const ValueKey('home-list')), findsOneWidget);
+        expect(find.byKey(const ValueKey('routing-list')), findsNothing);
         expect(tester.takeException(), isNull);
       },
     );

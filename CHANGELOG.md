@@ -4,6 +4,11 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
 
 ## Unreleased
 
+### Changed
+
+- Desktop: adding a subscription stays on Home, even when it brings a routing profile; until
+  now such an import opened the Routing page.
+
 ## 0.6.2 - 2026-11-18
 
 ### Added
