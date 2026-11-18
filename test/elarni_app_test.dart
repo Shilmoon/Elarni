@@ -2622,6 +2622,34 @@ void main() {
     expect(find.byKey(const Key('per-app-routing-mode')), findsOneWidget);
   });
 
+  testWidgets('a narrow window gives the per-app editor the page width', (
+    tester,
+  ) async {
+    const desktop = MethodChannel('com.elarni/desktop');
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    messenger.setMockMethodCallHandler(
+      desktop,
+      (call) async => call.method == 'routingApplications' ? [] : null,
+    );
+    addTearDown(() => messenger.setMockMethodCallHandler(desktop, null));
+    await pumpApp(tester, FakeTunnelControl(), windows: true);
+    for (final (width, editor) in [(400.0, 368.0), (1200.0, 832.0)]) {
+      await tester.binding.setSurfaceSize(Size(width, 900));
+      await tester.pumpAndSettle();
+      await openRouting(tester);
+      // The test font is wider than a real one: the second tab starts off screen.
+      await tester.ensureVisible(find.widgetWithText(Tab, 'Per-app routing'));
+      await tester.tap(find.widgetWithText(Tab, 'Per-app routing'));
+      await tester.pumpAndSettle();
+      expect(
+        tester.getSize(find.byKey(const Key('per-app-routing-mode'))).width,
+        editor,
+        reason: '$width',
+      );
+    }
+  });
+
   // "No matching servers" offered a Clear search that did nothing.
   for (final status in ['pending', 'failed']) {
     testWidgets('Home says an empty $status subscription has no servers yet', (

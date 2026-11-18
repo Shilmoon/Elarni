@@ -1659,4 +1659,69 @@ void main() {
       'children:/opt/claude/claude',
     ]);
   });
+
+  testWidgets('a selected app keeps its name on one line in a narrow window', (
+    tester,
+  ) async {
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    Future<void> pump(double width) async {
+      await tester.binding.setSurfaceSize(Size(width, 900));
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SingleChildScrollView(
+              padding: const EdgeInsets.all(16),
+              child: PerAppRoutingEditor(
+                settings: const TunnelSettings(
+                  xrayTunEnabled: true,
+                  perAppMode: 'proxyOnly',
+                  perAppProcesses: ['RiotClientServices.exe'],
+                ),
+                windows: true,
+                servers: const [('de-1', 'DE-Vision')],
+                onSave: (_) async {},
+                readConnections: ({int epoch = 0, int after = 0}) async =>
+                    throw StateError('not opened'),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+    }
+
+    final name = find.text('RiotClientServices.exe');
+    final target = find.byKey(
+      const Key('per-app-target:RiotClientServices.exe'),
+    );
+    for (final width in [360.0, 420.0]) {
+      await pump(width);
+      // One line of 15 px text, not one letter per line.
+      expect(tester.getSize(name).height, lessThan(30), reason: '$width');
+      expect(tester.getSize(name).width, greaterThan(80), reason: '$width');
+      expect(tester.getSize(find.text('Selected apps')).height, lessThan(30));
+      // The target takes the row's width under the name.
+      expect(tester.getSize(target).width, greaterThan(width - 100));
+      expect(
+        tester.getTopLeft(target).dy,
+        greaterThan(tester.getBottomLeft(name).dy),
+      );
+      expect(find.text('Details'), findsOneWidget);
+      expect(find.byTooltip('Remove RiotClientServices.exe'), findsOneWidget);
+      expect(find.text('Recent connections'), findsOneWidget);
+      expect(find.text('Add apps'), findsOneWidget);
+    }
+
+    // A wide window keeps the single-line row.
+    await pump(1100);
+    expect(tester.getSize(target).width, 240);
+    expect(
+      tester.getCenter(target).dy,
+      closeTo(tester.getCenter(find.text('Details')).dy, 1),
+    );
+    expect(
+      tester.getTopLeft(target).dx,
+      greaterThan(tester.getTopRight(name).dx),
+    );
+  });
 }

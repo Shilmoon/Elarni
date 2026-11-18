@@ -4,6 +4,15 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
 
 ## Unreleased
 
+### Fixed
+
+- **Desktop: Routing › Per-app routing in a narrow window.** A selected app's name was squeezed
+  to one letter per line by its target menu, "Details" and the remove button. Below 620 px the
+  name keeps one line (cut with an ellipsis, whole in its tooltip) with "Details" and remove
+  beside it and the target menu across the width under it; the "Selected apps" heading has its
+  own line above "Add apps" and "Recent connections". The Subscriptions and Routing pages use
+  16 px side margins below 700 px instead of 24, and the per-app editor loses its extra 20.
+
 ## 0.6.2 - 2026-11-18
 
 ### Added
