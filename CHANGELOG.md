@@ -4,6 +4,13 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
 
 ## Unreleased
 
+### Changed
+
+- **Desktop: a narrow window has its pages at the bottom.** Below 700 px the Home,
+  Subscriptions, Routing and Settings icons are a bar along the bottom edge, where the phone
+  apps have their tabs, instead of a row under the title bar. The back arrow in the title bar
+  is gone: every page is one click away. A wider window keeps the sidebar.
+
 ### Fixed
 
 - **Desktop: Routing › Per-app routing in a narrow window.** A selected app's name was squeezed

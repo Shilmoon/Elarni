@@ -893,16 +893,6 @@ class ElarniShell extends StatelessWidget {
               ),
               child: Row(
                 children: [
-                  // The sidebar already switches pages in a wide window.
-                  if (page != DesktopPage.home && compact) ...[
-                    IconButton(
-                      key: const Key('settings-back'),
-                      tooltip: l10n.backToHome,
-                      onPressed: () => onNavigate(DesktopPage.home),
-                      icon: const Icon(CupertinoIcons.chevron_left, size: 20),
-                    ),
-                    const SizedBox(width: 8),
-                  ],
                   Expanded(
                     child: Row(
                       children: [
@@ -934,46 +924,45 @@ class ElarniShell extends StatelessWidget {
                 ],
               ),
             );
-            final content = Column(
-              children: [
-                if (compact)
-                  Container(
-                    color: scheme.surfaceContainerLow,
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        destination(
-                          DesktopPage.home,
-                          CupertinoIcons.house,
-                          l10n.home,
-                        ),
-                        destination(
-                          DesktopPage.subscriptions,
-                          CupertinoIcons.rectangle_stack,
-                          l10n.subscriptions,
-                        ),
-                        destination(
-                          DesktopPage.routing,
-                          CupertinoIcons.arrow_branch,
-                          l10n.routing,
-                        ),
-                        destination(
-                          DesktopPage.settings,
-                          CupertinoIcons.gear_alt,
-                          l10n.settings,
-                        ),
-                      ],
+            // As on the phone apps, a narrow window keeps its pages in reach
+            // of the bottom edge.
+            final bottomBar = Container(
+              decoration: BoxDecoration(
+                color: scheme.surfaceContainerLow,
+                border: Border(top: BorderSide(color: scheme.outlineVariant)),
+              ),
+              child: Row(
+                children: [
+                  for (final (target, icon, label) in [
+                    (DesktopPage.home, CupertinoIcons.house, l10n.home),
+                    (
+                      DesktopPage.subscriptions,
+                      CupertinoIcons.rectangle_stack,
+                      l10n.subscriptions,
                     ),
-                  ),
-                Expanded(child: child),
-              ],
+                    (
+                      DesktopPage.routing,
+                      CupertinoIcons.arrow_branch,
+                      l10n.routing,
+                    ),
+                    (
+                      DesktopPage.settings,
+                      CupertinoIcons.gear_alt,
+                      l10n.settings,
+                    ),
+                  ])
+                    Expanded(
+                      child: Center(child: destination(target, icon, label)),
+                    ),
+                ],
+              ),
             );
             return Column(
               children: [
                 toolbar,
                 Expanded(
                   child: compact
-                      ? content
+                      ? child
                       : Row(
                           children: [
                             Container(
@@ -1016,10 +1005,11 @@ class ElarniShell extends StatelessWidget {
                                 ],
                               ),
                             ),
-                            Expanded(child: content),
+                            Expanded(child: child),
                           ],
                         ),
                 ),
+                if (compact) bottomBar,
               ],
             );
           },

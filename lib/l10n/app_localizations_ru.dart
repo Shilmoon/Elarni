@@ -468,9 +468,6 @@ class AppLocalizationsRu extends AppLocalizations {
   String get home => 'Главная';
 
   @override
-  String get backToHome => 'Назад на главную';
-
-  @override
   String get settingsGroupSupport => 'Поддержка';
 
   @override
