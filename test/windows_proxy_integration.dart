@@ -1154,41 +1154,51 @@ rules:
   );
 
   // A revision follows the compiled configuration, so it shows the setting reached the compiler.
-  test('the TLS fingerprint setting changes a TLS server\'s configuration', () async {
-    final imported = await backend.control.importClientProfiles(
-      content: profile.replaceFirst(
-        'security=none&type=tcp',
-        'security=tls&type=tcp&sni=fixture.test',
-      ),
-    );
-    final id = imported.snapshot.subscriptions.single.nodes.single.id;
-    await backend.control.selectNode(id);
-    Future<String?> revision() async => (await backend.control.subscriptions())
-        .subscriptions
-        .single
-        .nodes
-        .single
-        .configurationRevision;
-    final settings = await backend.control.tunnelSettings();
-    expect(settings.tlsFingerprint, 'server');
-    final first = await revision();
-    final chosen = await backend.control.updateTunnelSettings(
-      settings.copyWith(tlsFingerprint: 'firefox'),
-    );
-    expect(chosen.tlsFingerprint, 'firefox');
-    final second = await revision();
-    expect(second, isNot(first));
-    expect((await backend.control.tunnelSettings()).tlsFingerprint, 'firefox');
-    // A hello the app does not offer is refused and the choice stays.
-    await expectLater(
-      backend.control.updateTunnelSettings(
-        settings.copyWith(tlsFingerprint: 'edge'),
-      ),
-      throwsA(isA<PlatformException>()),
-    );
-    expect((await backend.control.tunnelSettings()).tlsFingerprint, 'firefox');
-    expect(await revision(), second);
-  });
+  test(
+    'the TLS fingerprint setting changes a TLS server\'s configuration',
+    () async {
+      final imported = await backend.control.importClientProfiles(
+        content: profile.replaceFirst(
+          'security=none&type=tcp',
+          'security=tls&type=tcp&sni=fixture.test',
+        ),
+      );
+      final id = imported.snapshot.subscriptions.single.nodes.single.id;
+      await backend.control.selectNode(id);
+      Future<String?> revision() async =>
+          (await backend.control.subscriptions())
+              .subscriptions
+              .single
+              .nodes
+              .single
+              .configurationRevision;
+      final settings = await backend.control.tunnelSettings();
+      expect(settings.tlsFingerprint, 'server');
+      final first = await revision();
+      final chosen = await backend.control.updateTunnelSettings(
+        settings.copyWith(tlsFingerprint: 'firefox'),
+      );
+      expect(chosen.tlsFingerprint, 'firefox');
+      final second = await revision();
+      expect(second, isNot(first));
+      expect(
+        (await backend.control.tunnelSettings()).tlsFingerprint,
+        'firefox',
+      );
+      // A hello the app does not offer is refused and the choice stays.
+      await expectLater(
+        backend.control.updateTunnelSettings(
+          settings.copyWith(tlsFingerprint: 'edge'),
+        ),
+        throwsA(isA<PlatformException>()),
+      );
+      expect(
+        (await backend.control.tunnelSettings()).tlsFingerprint,
+        'firefox',
+      );
+      expect(await revision(), second);
+    },
+  );
 
   test('configuration revisions follow each compiled-settings edit', () async {
     await prepare();
@@ -3001,6 +3011,69 @@ rules:
       await backend.releaseSystemProxy();
       expect(os.current, {'user': 'pac'});
       expect(await backend.control.state(), 'connected');
+    },
+  );
+
+  // System proxy mode runs no elevated helper, so its kill switch is the OS
+  // proxy setting itself, left on the closed listener.
+  test(
+    'System proxy mode keeps the OS proxy on its closed listener under the kill switch',
+    () async {
+      final os = FakeSystemProxy();
+      final backup = File.fromUri(temporary.uri.resolve('system-proxy.json'));
+      await backend.dispose();
+      backend = createBackend(systemProxy: SystemProxySession(os, backup));
+      await prepare();
+      final messages = <String>[];
+      backend.control.setImportListener((message) {
+        if (message != null) messages.add(message);
+      });
+      final settings = (await backend.control.tunnelSettings()).copyWith(
+        systemProxyEnabled: true,
+        blockWithoutVPN: true,
+      );
+      await backend.control.updateTunnelSettings(settings);
+      expect(await backend.control.connect(), 'connected');
+      expect(os.current, {'port': settings.httpPort});
+      lastProcess!.kill();
+      await lastProcess!.exitCode;
+      await Future<void>.delayed(Duration.zero);
+      expect(messages, contains('connection_stopped_proxy_blocked'));
+      expect(messages, isNot(contains('connection_stopped')));
+      // A catalog edit moves the setting to where the state puts it, as the
+      // next tick does: failed, or already starting again, it stays.
+      final id = (await backend.control.subscriptions()).selectedNodeId!;
+      await backend.control.setNodeFavorite(id, true);
+      expect(os.current, {'port': settings.httpPort});
+      expect(await backup.exists(), isTrue);
+
+      // Disconnecting lifts the block.
+      expect(await backend.control.disconnect(), 'disconnected');
+      expect(os.current, {'user': 'pac'});
+      expect(await backup.exists(), isFalse);
+
+      // A port another program holds is never made the system proxy.
+      final occupied = await ServerSocket.bind(
+        InternetAddress.loopbackIPv4,
+        settings.httpPort,
+      );
+      try {
+        await expectLater(
+          backend.control.connect(),
+          throwsA(
+            isA<PlatformException>().having(
+              (e) => e.code,
+              'code',
+              'listener_unavailable',
+            ),
+          ),
+        );
+        expect(await backend.control.state(), 'failed');
+        expect(os.current, {'user': 'pac'});
+      } finally {
+        await occupied.close();
+      }
+      expect(await backend.control.disconnect(), 'disconnected');
     },
   );
 

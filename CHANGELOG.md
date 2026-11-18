@@ -32,6 +32,14 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
   settings from every category, grouped by category, as the working controls themselves: a
   setting is found by its label, its help text, the text under it, the heading it stands under
   or its category's name. Clearing the field or choosing a category ends the search.
+- **Windows, Linux: the kill switch works in System proxy mode.** It was available only with
+  System-wide VPN. With it on in System proxy mode, the computer's proxy setting stays on
+  Elarni when the connection stops by itself, fails to start or restarts, so the apps that
+  follow the system proxy get no connection instead of a direct one. Reconnecting, disconnecting,
+  "Lift block" on Home, turning the kill switch off or quitting gives your own proxy setting
+  back. Apps that ignore the system proxy are not covered in this mode, as they were not
+  while connected; "Local proxy only" has no kill switch. A port that another program holds is
+  never made the system proxy.
 
 ### Fixed
 

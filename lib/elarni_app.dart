@@ -1042,7 +1042,11 @@ class _ElarniHomeState extends State<ElarniHome> {
           value: widget.desktopCore
               ? _settings.blockWithoutVPN
               : _settings.includeAllNetworks,
-          onChanged: _busy || widget.desktopCore && !_settings.xrayTunEnabled
+          onChanged:
+              _busy ||
+                  widget.desktopCore &&
+                      !_settings.xrayTunEnabled &&
+                      !_settings.systemProxy
               ? null
               : (value) {
                   final next = widget.desktopCore

@@ -163,6 +163,10 @@ final class DesktopProxy {
   // The addresses each server name last resolved to, for starts under a kept
   // kill switch.
   final _hostAddresses = <String, List<InternetAddress>>{};
+  // Where the OS proxy was last sent, and whether the last start found a
+  // listener port taken by another program.
+  int? _proxyPort;
+  var _listenerTaken = false;
   Future<CatalogMap>? _disconnecting;
   Future<Process>? _process, _lease;
   StreamIterator<List<int>>? _leaseOutput;
@@ -783,17 +787,29 @@ final class DesktopProxy {
   }
 
   // The OS proxy follows a running System proxy session; any other state gives
-  // the user's own setting back.
+  // the user's own setting back. No elevated helper runs in this mode, so its
+  // kill switch is the setting itself: it stays on the listener, closed or
+  // not, while the session is down against the user's wish. Apps that follow
+  // the setting then get no connection instead of a direct one, until a
+  // reconnect, a disconnect or a quit.
   Future<void> _syncSystemProxy() async {
     final settings = _catalog?.settings;
+    final wanted =
+        !_disposed &&
+        !_proxyReleased &&
+        settings != null &&
+        settings.systemProxy &&
+        switch (_state) {
+          'connected' || 'reconnecting' || 'reasserting' => true,
+          // A restart keeps the setting; a first start waits for its listener.
+          'connecting' => settings.blockWithoutVPN && _proxyPort != null,
+          // Never a port another program holds: the setting would hand it
+          // this user's traffic.
+          'failed' => settings.blockWithoutVPN && !_listenerTaken,
+          _ => false,
+        };
     final code = await _systemProxy?.sync(
-      !_disposed &&
-              !_proxyReleased &&
-              settings != null &&
-              settings.systemProxy &&
-              {'connected', 'reconnecting', 'reasserting'}.contains(_state)
-          ? settings.httpPort
-          : null,
+      _proxyPort = wanted ? settings.httpPort : null,
     );
     if (code != null) _listener?.call(code);
   }
