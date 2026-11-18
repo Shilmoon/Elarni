@@ -265,8 +265,8 @@
     <string name="checking_exit">Checking exit…</string>
     <string name="search_results">Search results</string>
     <string name="favorites">Favorites</string>
-    <string name="recent_servers">Recent servers</string>
     <string name="all_servers">All servers</string>
+    <string name="by_country">By country</string>
     <string name="no_servers_match_this_filter">No servers match this filter.</string>
     <string name="test_server">Test server</string>
     <string name="remove_favorite">Remove favorite</string>
@@ -287,7 +287,6 @@
     <string name="country">Country</string>
     <string name="server_options">Server options</string>
     <string name="all">All</string>
-    <string name="recent">Recent</string>
     <string name="press_connect_only_apps_set_to">Press Connect. Only apps set to use the local proxy go through it; turn on System VPN in Settings &gt; Connection to connect all apps.</string>
     <string name="press_connect_android_asks_once_to">Press Connect. Android asks once to allow the VPN connection.</string>
     <string name="open_file">Open file</string>

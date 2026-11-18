@@ -19,6 +19,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
@@ -578,15 +579,19 @@ fun updatedAgo(seconds: Double): String = when {
     val locationByName = remember(catalog.nodes.map { it.string("name") }) { catalog.nodes.map { it.string("name") }.distinct().associateWith(locations::fromName) }
     var search by rememberSaveable { mutableStateOf("") }
     var filter by rememberSaveable { mutableStateOf("all") }
-    val expandedGroups = rememberSaveable(saver = androidx.compose.runtime.saveable.mapSaver(
-        save = { it.toMap() }, restore = { saved -> mutableStateMapOf<String, Boolean>().apply { saved.forEach { (key, value) -> put(key, value as Boolean) } } }
-    )) { mutableStateMapOf<String, Boolean>() }
+    // Every subscription and country starts open; the closed ones are remembered across restarts.
+    val prefs = remember { activity.getSharedPreferences("ui", android.content.Context.MODE_PRIVATE) }
+    var closed by remember { mutableStateOf(prefs.getStringSet("closedGroups", null).orEmpty().toSet()) }
+    val toggle: (String) -> Unit = { group ->
+        closed = Catalog.toggledGroup(group, closed, catalog.sources.map { it.string("id") })
+        prefs.edit().putStringSet("closedGroups", closed).apply()
+    }
     var country by rememberSaveable { mutableStateOf("") }
     var options by remember { mutableStateOf(false) }
     val sort = catalog.settings.string("sort")
     val favoritesFirst = catalog.settings.optBoolean("favoritesFirst", true)
     // Clock ticks and test progress recompose Home often; its list changes only with these.
-    val (sources, countries, rows, groups) = remember(catalog, sourceId, search, country, filter, if (sort == "latency") state.pings to clock else null) {
+    val (sources, countries, rows, bySource, byCountry) = remember(catalog, sourceId, search, country, filter, if (sort == "latency") state.pings to clock else null) {
     val sources = catalog.sources.filter { sourceId.isEmpty() || it.string("id") == sourceId }
     val countries = sources.flatMap { it.objects("nodes") }.mapNotNull { locationByName[it.string("name")] }.distinct().sortedBy { it.name }
                 var rows = sources.sortedByDescending { it.optBoolean("pinned") }.flatMap { source -> source.objects("nodes").map { source to it } }
@@ -595,10 +600,9 @@ fun updatedAgo(seconds: Double): String = when {
                         val outbound = node.mapObject("config").objects("outbounds").firstOrNull { it.string("protocol") !in listOf("freedom", "blackhole", "dns") }
                         val stream = outbound?.mapObject("streamSettings")
                         val matches = listOf(source.string("name"), node.string("name"), location?.name.orEmpty(), outbound?.string("protocol").orEmpty(), if (outbound?.string("protocol") in listOf("tuic", "shadowquic")) "QUIC" else stream?.string("network").orEmpty(), stream?.string("security").orEmpty()).any { it.contains(search, true) }
-                        matches && (country.isEmpty() || country == (location?.code ?: "other")) && when (filter) { "favorites" -> node.optBoolean("favorite"); "recent" -> node.optDouble("lastSuccessAt", 0.0) > 0; else -> true }
+                        matches && (country.isEmpty() || country == (location?.code ?: "other")) && (filter != "favorites" || node.optBoolean("favorite"))
                     }
-                rows = if (filter == "recent") rows.sortedWith(compareBy<Pair<JSONObject, JSONObject>> { !it.first.optBoolean("pinned") }.thenByDescending { it.second.optDouble("lastSuccessAt", 0.0) })
-                else when (sort) {
+                rows = when (sort) {
                     "alphabet" -> rows.sortedWith(compareBy<Pair<JSONObject, JSONObject>> { !it.first.optBoolean("pinned") }.thenBy { it.second.string("name").lowercase() })
                     "latency" -> rows.sortedWith(compareBy<Pair<JSONObject, JSONObject>> { !it.first.optBoolean("pinned") }.thenBy { (_, node) -> state.pings[node.string("id")]?.takeIf { pingFresh(node, it, clock) && it.string("status") == "success" }?.optLong("latencyMs", Long.MAX_VALUE) ?: Long.MAX_VALUE })
                     else -> rows
@@ -606,10 +610,24 @@ fun updatedAgo(seconds: Double): String = when {
                     // Stable, so the order chosen above holds among favorites and among the rest.
                     if (favoritesFirst) sorted.sortedWith(compareBy<Pair<JSONObject, JSONObject>> { !it.first.optBoolean("pinned") }.thenBy { !it.second.optBoolean("favorite") }) else sorted
                 }
-    val grouped = rows.groupBy { locationByName[it.second.string("name")] }
-    HomeList(sources, countries, rows, grouped.keys.sortedWith(compareBy<ServerLocation?> { it == null }.thenBy { it?.name.orEmpty() }).map { it to grouped.getValue(it) })
+    fun countryGroups(entries: List<Pair<JSONObject, JSONObject>>, owner: String): List<CountryGroup> {
+        val grouped = entries.groupBy { locationByName[it.second.string("name")] }
+        return grouped.keys.sortedWith(compareBy<ServerLocation?> { it == null }.thenBy { it?.name.orEmpty() }).map { CountryGroup("$owner:${it?.code ?: "other"}", it, grouped.getValue(it)) }
     }
-    val eligibleIds = rows.map { it.second }.filter { it.string("format") == "xrayProfile" }.map { it.string("id") }
+    // Home's "all" lists each subscription with its countries; "country" and a subscription's own
+    // list group by country alone; the favorites are one list without groups.
+    val nested = sourceId.isEmpty() && filter == "all"
+    HomeList(sources, countries, rows,
+        if (nested) sources.sortedByDescending { it.optBoolean("pinned") }.mapNotNull { source ->
+            rows.filter { it.first === source }.takeIf { it.isNotEmpty() }?.let { SourceGroup(source, countryGroups(it, source.string("id"))) }
+        } else emptyList(),
+        if (nested || filter == "favorites") emptyList() else countryGroups(rows, sourceId))
+    }
+    // A search shows what it found, also in a closed group.
+    val open: (String) -> Boolean = { search.isNotBlank() || it !in closed }
+    val shown = if (filter == "favorites") rows
+        else (bySource.filter { open(it.source.string("id")) }.flatMap { it.countries } + byCountry).filter { open(it.key) }.flatMap { it.entries }
+    val eligibleIds = shown.map { it.second }.filter { it.string("format") == "xrayProfile" }.map { it.string("id") }
     val listState = tabListState()
     val scope = rememberCoroutineScope()
     val scrollServers: () -> Unit = { scope.launch { listState.animateScrollToItem(if (!expanded && sourceId.isEmpty()) 1 else 0) } }
@@ -621,7 +639,6 @@ fun updatedAgo(seconds: Double): String = when {
         if (!state.busy && !refreshing && refreshable.isNotEmpty()) scope.launch { refreshing = true; try { activity.refreshAll(refreshable).join() } finally { refreshing = false } }
     }
     // The freshness line says "pull down" until the user has pulled once.
-    val prefs = remember { activity.getSharedPreferences("ui", android.content.Context.MODE_PRIVATE) }
     var pulled by remember { mutableStateOf(prefs.getBoolean("pulledToRefresh", false)) }
     PullToRefreshBox(isRefreshing = refreshing, onRefresh = {
         if (!pulled) { pulled = true; prefs.edit().putBoolean("pulledToRefresh", true).apply() }
@@ -649,7 +666,8 @@ fun updatedAgo(seconds: Double): String = when {
                 }
             } else {
                 item { Column(Modifier.padding(horizontal = 16.dp).padding(bottom = 4.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    val filters = listOf("all" to tr(R.string.all), "favorites" to tr(R.string.favorites), "recent" to tr(R.string.recent))
+                    // A subscription's own list is one subscription, so it has no list by country.
+                    val filters = listOf("all" to tr(R.string.all), "favorites" to tr(R.string.favorites)) + if (sourceId.isEmpty()) listOf("country" to tr(R.string.by_country)) else emptyList()
                     // The filters take the place of a "Servers" title, which screen readers still hear.
                     Row(Modifier.semantics { heading(); contentDescription = tr(R.string.servers) }, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         if (LocalDensity.current.fontScale > 1.2f) FlowRow(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -657,7 +675,9 @@ fun updatedAgo(seconds: Double): String = when {
                         } else SingleChoiceSegmentedButtonRow(Modifier.weight(1f)) {
                             filters.forEachIndexed { index, (key, title) -> SegmentedButton(filter == key, { filter = key }, shape = SegmentedButtonDefaults.itemShape(index, filters.size), label = { Text(title, maxLines = 1, softWrap = false) }) }
                         }
-                        Box {
+                        // Home keeps just the lists; search, sort and favorites-first are on a subscription's server list and in Settings.
+                        if (sourceId.isEmpty()) IconButton({ activity.testServers(eligibleIds, sourceId) }, enabled = !state.busy && eligibleIds.isNotEmpty()) { RouteIcon("ping", tr(R.string.test_visible_servers), MaterialTheme.colorScheme.primary) }
+                        else Box {
                             IconButton({ options = true }) { RouteIcon("settings", tr(R.string.server_options), MaterialTheme.colorScheme.primary) }
                             DropdownMenu(options, { options = false }) {
                                 Text(tr(R.string.country), Modifier.padding(horizontal = 16.dp, vertical = 8.dp), style = MaterialTheme.typography.labelLarge)
@@ -674,7 +694,7 @@ fun updatedAgo(seconds: Double): String = when {
                             }
                         }
                     }
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (sourceId.isNotEmpty()) Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         TextField(search, { search = it }, label = { Text(tr(R.string.search_servers)) }, leadingIcon = { RouteIcon("search", color = MaterialTheme.colorScheme.onSurfaceVariant) },
                             singleLine = true, shape = MaterialTheme.shapes.medium,
                             trailingIcon = if (search.isEmpty()) null else {{ IconButton({ search = "" }) { RouteIcon("clear", tr(R.string.clear_search)) } }},
@@ -697,40 +717,35 @@ fun updatedAgo(seconds: Double): String = when {
                     val fetched = if (remote.all { it.has("lastSuccessfulFetch") }) remote.minOf { it.optDouble("lastSuccessfulFetch") } else null
                     FreshnessLine(fetched, clock, refreshing, hint = !pulled, enabled = !state.busy && !refreshing, refresh = refresh)
                 }
-                groups.forEach { (location, entries) ->
-                    val code = location?.code ?: "other"
-                    val open = search.isNotBlank() || filter != "all" || (expandedGroups[code] ?: (location == null || entries.any { it.second.string("id") == catalog.selected }))
-                    val best = entries.mapNotNull { (_, node) -> state.pings[node.string("id")]?.takeIf { pingFresh(node, it, clock) && it.string("status") == "success" && it.optLong("latencyMs", -1) >= 0 }?.getLong("latencyMs") }.minOrNull()
-                    // A country and its servers are one rounded group, as in Settings, so each header starts a visible block.
-                    val count = if (open) entries.size + 1 else 1
-                    // The gaps sit outside each ListItem so its bounds, and TalkBack's outline, are the visible tile.
-                    item(key = "country-$code") { Box(Modifier.padding(start = 16.dp, end = 16.dp, top = 12.dp)) {
-                        ListItem(headlineContent = { Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                                Text(location?.name ?: tr(R.string.other_locations), Modifier.weight(1f, fill = false), style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                Text("· " + trPlural(R.plurals.server_count, entries.size), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
-                                if (best != null) LatencyBadge(best, Modifier.testTag("country-ping-$code"), trPlural(R.plurals.lowest_latency_ms, best.toInt()))
-                            } },
-                            leadingContent = {
-                                val flag = location?.let { locations.flagImage(it.code) }
-                                // A hairline keeps dark flag edges visible on the dark tile.
-                                if (flag != null) Image(flag, null, Modifier.size(28.dp, 21.dp).clip(MaterialTheme.shapes.extraSmall)
-                                    .border(0.5.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.16f), MaterialTheme.shapes.extraSmall))
-                                else RouteIcon("dns")
-                            },
-                            trailingContent = { RouteIcon(if (open) "collapse" else "expand") },
-                            colors = ListItemDefaults.colors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh),
-                            modifier = Modifier.clip(segmentShape(0, count)).clickable { expandedGroups[code] = !open })
-                    } }
-                    if (open) itemsIndexed(entries, key = { _, entry -> entry.second.string("id") }) { index, (source, node) ->
+                // A plain row: ListItem's 72dp two-line minimum made the list too tall.
+                fun LazyListScope.serverItems(entries: List<Pair<JSONObject, JSONObject>>, first: Int, count: Int, provider: Boolean, flag: Boolean = false) =
+                    itemsIndexed(entries, key = { _, entry -> entry.second.string("id") }) { index, (source, node) ->
                         val selected = node.string("id") == catalog.selected
                         val ping = state.pings[node.string("id")]
                         var menu by remember { mutableStateOf(false) }
                         val exit = state.exits[node.string("id")]
-                        Box(Modifier.padding(start = 16.dp, end = 16.dp, top = 2.dp)) {
-                        ListItem(headlineContent = { Text(locations.displayName(node.string("name")), fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal) },
-                            supportingContent = { if (exit == null) ServerProtocol(node, source.string("name")) else Column { ServerProtocol(node, source.string("name")); ExitLine(node, exit, locations) } },
+                        Box(Modifier.padding(start = 16.dp, end = 16.dp, top = if (index + first == 0) 12.dp else 2.dp)) {
+                        Row(Modifier.clip(segmentShape(index + first, count)).background(if (selected) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surfaceContainerHigh).semantics { this.selected = selected }
+                            .clickable(enabled = !state.busy) { if (node.string("format") == "telegram") activity.openURL(node.mapObject("config").string("url"), true) else activity.run("select", obj("id" to node.string("id"))) }
+                            .padding(start = 16.dp, end = 4.dp, top = 6.dp, bottom = 6.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                            RadioButton(selected, null)
+                            Column(Modifier.weight(1f)) {
+                                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    Text(locations.displayName(node.string("name")), Modifier.weight(1f, fill = false), style = MaterialTheme.typography.bodyLarge, fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal)
+                                    // Without a country above it, a favorite says where it is itself.
+                                    val location = if (flag) locationByName[node.string("name")] else null
+                                    location?.let { locations.flagImage(it.code) }?.let { image ->
+                                        Image(image, location.name, Modifier.size(20.dp, 15.dp).clip(MaterialTheme.shapes.extraSmall)
+                                            .border(0.5.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.16f), MaterialTheme.shapes.extraSmall).testTag("server-flag-${location.code}"))
+                                    }
+                                }
+                                CompositionLocalProvider(LocalContentColor provides MaterialTheme.colorScheme.onSurfaceVariant, LocalTextStyle provides MaterialTheme.typography.bodyMedium) {
+                                    // Under its subscription a server leaves the name out; across subscriptions it tells them apart.
+                                    ServerProtocol(node, if (provider) source.string("name") else null); if (exit != null) ExitLine(node, exit, locations)
+                                }
+                            }
                             // As on the iPhone, only a current test result shows, beside the menu.
-                            leadingContent = { RadioButton(selected, null) }, trailingContent = { Row(verticalAlignment = Alignment.CenterVertically) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
                                 if (ping != null && pingFresh(node, ping, clock)) {
                                     if (ping.string("status") == "success" && ping.optLong("latencyMs", -1) >= 0)
                                         LatencyBadge(ping.getLong("latencyMs"), Modifier.testTag("server-ping-${node.string("id")}"), trPlural(R.plurals.latency_with_scope, ping.getLong("latencyMs").toInt(), ping.getLong("latencyMs"), pingScope(ping)))
@@ -747,15 +762,57 @@ fun updatedAgo(seconds: Double): String = when {
                                         DropdownMenuItem({ Text(tr(R.string.share)) }, { menu = false; activity.run("share", obj("id" to node.string("id"))) { activity.interaction.share = it } }, enabled = !state.busy)
                                     }
                                 }
-                            } },
-                            colors = ListItemDefaults.colors(containerColor = if (selected) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surfaceContainerHigh),
-                            modifier = Modifier.clip(segmentShape(index + 1, count)).semantics { this.selected = selected }.clickable(enabled = !state.busy) { if (node.string("format") == "telegram") activity.openURL(node.mapObject("config").string("url"), true) else activity.run("select", obj("id" to node.string("id"))) })
+                            }
+                        }
                         }
                     }
+                fun LazyListScope.countryItems(group: CountryGroup, provider: Boolean) {
+                    val (key, location, entries) = group
+                    val code = location?.code ?: "other"
+                    val isOpen = open(key)
+                    val best = entries.mapNotNull { (_, node) -> state.pings[node.string("id")]?.takeIf { pingFresh(node, it, clock) && it.string("status") == "success" && it.optLong("latencyMs", -1) >= 0 }?.getLong("latencyMs") }.minOrNull()
+                    // A country and its servers are one rounded group, as in Settings, so each header starts a visible block.
+                    val count = if (isOpen) entries.size + 1 else 1
+                    // The gaps sit outside each ListItem so its bounds, and TalkBack's outline, are the visible tile.
+                    item(key = "country-$key") { Box(Modifier.padding(start = 16.dp, end = 16.dp, top = 12.dp)) {
+                        ListItem(headlineContent = { Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Text(location?.name ?: tr(R.string.other_locations), Modifier.weight(1f, fill = false), style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Text("· " + trPlural(R.plurals.server_count, entries.size), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
+                                if (best != null) LatencyBadge(best, Modifier.testTag("country-ping-$code"), trPlural(R.plurals.lowest_latency_ms, best.toInt()))
+                            } },
+                            leadingContent = {
+                                val flag = location?.let { locations.flagImage(it.code) }
+                                // A hairline keeps dark flag edges visible on the dark tile.
+                                if (flag != null) Image(flag, null, Modifier.size(28.dp, 21.dp).clip(MaterialTheme.shapes.extraSmall)
+                                    .border(0.5.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.16f), MaterialTheme.shapes.extraSmall))
+                                else RouteIcon("dns")
+                            },
+                            trailingContent = { RouteIcon(if (isOpen) "collapse" else "expand") },
+                            colors = ListItemDefaults.colors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh),
+                            modifier = Modifier.clip(segmentShape(0, count)).testTag("country-$key").clickable { toggle(key) })
+                    } }
+                    if (isOpen) serverItems(entries, 1, count, provider)
                 }
+                if (filter == "favorites") serverItems(rows, 0, rows.size, provider = sourceId.isEmpty(), flag = true)
+                bySource.forEach { (source, groups) ->
+                    val id = source.string("id")
+                    val isOpen = open(id)
+                    item(key = "source-$id") {
+                        Row(Modifier.padding(start = 16.dp, end = 16.dp, top = 12.dp).clip(MaterialTheme.shapes.medium).clickable { toggle(id) }.heightIn(min = 48.dp)
+                            .padding(start = 16.dp, end = 24.dp).testTag("source-$id"), verticalAlignment = Alignment.CenterVertically) {
+                            Column(Modifier.weight(1f)) {
+                                Text(source.string("name"), Modifier.semantics { heading() }, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Text(trPlural(R.plurals.server_count, groups.sumOf { it.entries.size }), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                            RouteIcon(if (isOpen) "collapse" else "expand")
+                        }
+                    }
+                    if (isOpen) groups.forEach { countryItems(it, provider = false) }
+                }
+                byCountry.forEach { countryItems(it, provider = sourceId.isEmpty()) }
                 if (rows.isEmpty()) item { Text(tr(R.string.no_servers_match_this_filter), Modifier.padding(24.dp), color = MaterialTheme.colorScheme.onSurfaceVariant) }
                 item { Row(Modifier.fillMaxWidth().padding(24.dp)) {
-                    Text(if (search.isNotEmpty()) tr(R.string.search_results) else when (filter) { "favorites" -> tr(R.string.favorites); "recent" -> tr(R.string.recent_servers); else -> tr(R.string.all_servers) }, Modifier.weight(1f), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(if (search.isNotEmpty()) tr(R.string.search_results) else when (filter) { "favorites" -> tr(R.string.favorites); "country" -> tr(R.string.by_country); else -> tr(R.string.all_servers) }, Modifier.weight(1f), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Text(trPlural(R.plurals.server_count, rows.size), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 } }
             }
@@ -764,8 +821,12 @@ fun updatedAgo(seconds: Double): String = when {
     }
 }
 
+// A country's servers, each with its subscription. `key` is what a closed group is remembered by:
+// `<subscription>:<code>` under a subscription, `:<code>` in Home's list by country.
+private data class CountryGroup(val key: String, val location: ServerLocation?, val entries: List<Pair<JSONObject, JSONObject>>)
+private data class SourceGroup(val source: JSONObject, val countries: List<CountryGroup>)
 private data class HomeList(val sources: List<JSONObject>, val countries: List<ServerLocation>, val rows: List<Pair<JSONObject, JSONObject>>,
-    val groups: List<Pair<ServerLocation?, List<Pair<JSONObject, JSONObject>>>>)
+    val bySource: List<SourceGroup>, val byCountry: List<CountryGroup>)
 
 // A provider's name is a label and the trace is evidence, so a disagreement is said.
 @Composable private fun ExitLine(node: JSONObject, exit: JSONObject, locations: ServerLocations) {

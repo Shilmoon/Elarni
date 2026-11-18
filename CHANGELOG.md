@@ -6,19 +6,28 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
 
 ### Changed
 
-- **Favorites as one list.** The Favorites filter on Home shows the favorite servers of every
-  subscription in one list, without subscription and country groups to open; each server has
-  its country's flag after its name, and showing the list tests the servers not tested lately.
-- **Home shows every server.** Every subscription and country on Home starts open. A group
-  you close stays closed the next time the app starts, until you open it. On Windows, macOS
-  and Linux a start therefore tests the servers of every group left open, not only the
-  selected country's.
+- **Home shows every server.** On every platform Home lists the servers by subscription and,
+  under it, by country (Android and iPhone had the countries alone), and every subscription
+  and country starts open. A group you close stays closed the next time the app starts, until
+  you open it. On Windows, macOS and Linux a start therefore tests the servers of every group
+  left open, not only the selected country's; on Android and iPhone **Test visible servers**
+  tests the servers of the open groups.
 - **By country in place of Recent.** The third list on Home is By country: the servers of all
   subscriptions under one header for each country, each with its subscription's name. All
-  stays the list a start opens. The Recent list is gone; a server's last connection is still
-  in the tooltip of its test button.
+  stays the list a start opens. The Recent list is gone on every platform; **Use last
+  successful server** on Android and iPhone and the tooltip of a server's test button on
+  desktop still lead to the last connection.
+- **Favorites as one list.** The Favorites filter on Home shows the favorite servers of every
+  subscription in one list, without subscription and country groups to open. Each server names
+  its subscription and shows its country's flag: after its name on desktop and Android, before
+  it on iPhone, where every server row has one. On desktop, showing the list tests the servers
+  not tested lately.
 - **Server rows under a subscription** show the transport and security after the protocol, not
-  the subscription's name again.
+  the subscription's name again. All platforms.
+- **Android and iPhone: a compact Home.** Home drops the server search field and the server
+  options menu, and its server rows are shorter, so more servers fit on a screen. A
+  subscription's server list keeps the search (on Android also the country filter, the sort and
+  favorites first); the sort and favorites first are in Settings › General as before.
 
 ## 0.6.2 - 2026-11-18
 

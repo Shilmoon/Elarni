@@ -148,6 +148,13 @@ class CatalogTest {
         assertNull("Nothing worked yet", Catalog.lastSuccessful(listOf(node("never", null), node("unrecorded", 400.0, success = null)), ""))
     }
 
+    @Test fun closedServerGroupsToggleAndForgetRemovedSubscriptions() {
+        assertEquals(setOf("s:NL"), Catalog.toggledGroup("s:NL", emptySet(), listOf("s")))
+        assertEquals(setOf("s", "s:NL"), Catalog.toggledGroup("s", setOf("s:NL"), listOf("s")))
+        assertEquals("Opening removes the group; a removed subscription's groups go with it, the list by country's stay",
+            setOf(":DE"), Catalog.toggledGroup("s:NL", setOf("s:NL", ":DE", "gone", "gone:NL"), listOf("s")))
+    }
+
     @Test fun retryDelayAndCanonicalForm() {
         assertEquals(listOf(60, 60, 300, 1800, 1800), listOf(0, 1, 2, 3, 9).map(Catalog::retryDelay))
         assertEquals(Catalog.canonical(JSONObject("""{"b":[1,{"y":2,"x":"s"}],"a":null}""")), Catalog.canonical(JSONObject("""{"a":null,"b":[1,{"x":"s","y":2}]}""")))
