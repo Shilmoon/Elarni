@@ -312,7 +312,13 @@ void main() {
         await tester.pumpAndSettle();
         final field = kind == 'download'
             ? find.widgetWithText(TextField, 'Fallback hosts')
-            : find.byType(TextField).first;
+            // The dialog's own first field: Settings has a search field behind it.
+            : find
+                  .descendant(
+                    of: find.byType(AlertDialog),
+                    matching: find.byType(TextField),
+                  )
+                  .first;
         final value = kind == 'download'
             ? 'fallback.example.com'
             : 'Example draft';

@@ -560,6 +560,8 @@
   "showAgain": "Показать снова",
   "hiddenServersCount": "Скрытые серверы · {count}",
   "noMatchingServers": "Нет подходящих серверов",
+  "searchSettings": "Поиск настроек",
+  "noMatchingSettings": "Нет подходящих настроек",
   "noServersInSubscription": "В этой подписке нет серверов",
   "delete": "Удалить",
   "selectUnreachable": "Выбрать недоступные",
