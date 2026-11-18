@@ -483,7 +483,7 @@ fn authenticated_bridge_logs_in_and_returns_the_reply() {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
     let server = thread::spawn(move || {
-        let (mut stream, _) = listener.accept().unwrap();
+        let (mut stream, _) = accept_within(&listener, Duration::from_secs(10)).unwrap();
         stream
             .set_read_timeout(Some(Duration::from_secs(5)))
             .unwrap();
@@ -557,6 +557,28 @@ fn authenticated_bridge_logs_in_and_returns_the_reply() {
     }
 }
 
+// The SOCKS side of a test waits this long for the bridge's connection. A bridge that is freed before
+// it dials (a loaded machine) would otherwise leave the test waiting in accept() for ever.
+fn accept_within(
+    listener: &std::net::TcpListener,
+    limit: Duration,
+) -> std::io::Result<(std::net::TcpStream, std::net::SocketAddr)> {
+    listener.set_nonblocking(true)?;
+    let deadline = Instant::now() + limit;
+    loop {
+        match listener.accept() {
+            Ok((stream, peer)) => {
+                stream.set_nonblocking(false)?;
+                return Ok((stream, peer));
+            }
+            Err(error) if error.kind() == ErrorKind::WouldBlock && Instant::now() < deadline => {
+                thread::sleep(Duration::from_millis(2));
+            }
+            Err(error) => return Err(error),
+        }
+    }
+}
+
 fn udp_datagram(source: [u8; 4], destination: [u8; 4], source_port: u16, port: u16) -> Vec<u8> {
     udp_datagram_with(source, destination, source_port, port, b"elarni")
 }
@@ -603,7 +625,7 @@ fn sessions_refused_at_the_limit_are_counted() {
     let (release, wait) = std::sync::mpsc::channel::<()>();
     // Hold the first session's SOCKS connection without answering, so it stays active.
     let server = thread::spawn(move || {
-        let held = listener.accept();
+        let held = accept_within(&listener, Duration::from_secs(10));
         let _ = wait.recv_timeout(Duration::from_secs(10));
         drop(held);
     });
@@ -657,7 +679,7 @@ fn packets_to_many_hosts_open_no_sessions() {
     let (release, wait) = std::sync::mpsc::channel::<()>();
     // Hold the SOCKS connection of the one session there is room for, so it stays active.
     let server = thread::spawn(move || {
-        let held = listener.accept();
+        let held = accept_within(&listener, Duration::from_secs(10));
         let _ = wait.recv_timeout(Duration::from_secs(10));
         drop(held);
     });
@@ -1011,7 +1033,7 @@ fn a_dns_session_ends_once_every_query_is_answered() {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
     let server = thread::spawn(move || -> std::io::Result<(bool, Duration)> {
-        let (mut control, _) = listener.accept()?;
+        let (mut control, _) = accept_within(&listener, Duration::from_secs(10))?;
         control.set_read_timeout(Some(Duration::from_secs(5)))?;
         let mut header = [0; 2];
         control.read_exact(&mut header)?;
