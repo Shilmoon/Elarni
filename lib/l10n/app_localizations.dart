@@ -263,13 +263,13 @@ abstract class AppLocalizations {
   /// No description provided for @issueInvalidRouteEnforcementRemedy.
   ///
   /// In en, this message translates to:
-  /// **'Replace 0.0.0.0/0 and ::/0 with specific routes, or turn enforcement off. For a full tunnel, turn enforcement off and use Block traffic without VPN.'**
+  /// **'Replace 0.0.0.0/0 and ::/0 with specific routes, or turn enforcement off. For a full tunnel, turn enforcement off and use the kill switch.'**
   String get issueInvalidRouteEnforcementRemedy;
 
   /// No description provided for @issueInvalidRouteEnforcement.
   ///
   /// In en, this message translates to:
-  /// **'Enforce tunnel routes needs specific included routes and cannot be combined with Block traffic without VPN.'**
+  /// **'Enforce tunnel routes needs specific included routes and cannot be combined with the kill switch.'**
   String get issueInvalidRouteEnforcement;
 
   /// No description provided for @issueRouteModelTooLargeRemedy.
@@ -719,7 +719,7 @@ abstract class AppLocalizations {
   /// No description provided for @routeEnforcementWithBlock.
   ///
   /// In en, this message translates to:
-  /// **'Enforce tunnel routes cannot be combined with Block traffic without VPN. Turn one of them off.'**
+  /// **'Enforce tunnel routes cannot be combined with the kill switch. Turn one of them off.'**
   String get routeEnforcementWithBlock;
 
   /// No description provided for @routeEnforcementDefaultRoutes.
@@ -1967,7 +1967,7 @@ abstract class AppLocalizations {
   /// No description provided for @connectionStoppedBlocked.
   ///
   /// In en, this message translates to:
-  /// **'Connection stopped unexpectedly. Block traffic without VPN keeps traffic blocked until you reconnect, or use Repair VPN setup to lift the block.'**
+  /// **'Connection stopped unexpectedly. The kill switch keeps traffic blocked until you reconnect, or use Repair VPN setup to lift the block.'**
   String get connectionStoppedBlocked;
 
   /// No description provided for @windowsDnsNotRestored.
@@ -2864,23 +2864,23 @@ abstract class AppLocalizations {
   /// **'Server addressing'**
   String get serverAddressing;
 
-  /// No description provided for @blockTrafficMacHelp.
+  /// No description provided for @killSwitchMacHelp.
   ///
   /// In en, this message translates to:
   /// **'macOS keeps all traffic inside the tunnel, including while it reconnects. Route exclusions do not apply.'**
-  String get blockTrafficMacHelp;
+  String get killSwitchMacHelp;
 
-  /// No description provided for @blockTrafficDesktopHelp.
+  /// No description provided for @killSwitchDesktopHelp.
   ///
   /// In en, this message translates to:
   /// **'If the VPN stops unexpectedly, nothing leaves this device outside it until you reconnect or use Repair VPN setup. Disconnecting lifts the block. Needs System-wide VPN; cannot be combined with Enforce tunnel routes.'**
-  String get blockTrafficDesktopHelp;
+  String get killSwitchDesktopHelp;
 
-  /// No description provided for @blockTrafficWithoutVpn.
+  /// No description provided for @killSwitch.
   ///
   /// In en, this message translates to:
-  /// **'Block traffic without VPN'**
-  String get blockTrafficWithoutVpn;
+  /// **'Kill switch'**
+  String get killSwitch;
 
   /// No description provided for @connectWithoutAdminApprovalHelp.
   ///
@@ -3239,7 +3239,7 @@ abstract class AppLocalizations {
   /// No description provided for @enforceRoutesMacHelp.
   ///
   /// In en, this message translates to:
-  /// **'Enforcement requires specific included routes; default routes such as 0.0.0.0/0 and ::/0 are unsupported. For a full tunnel, turn enforcement off and use Block traffic without VPN in Connection settings.'**
+  /// **'Enforcement requires specific included routes; default routes such as 0.0.0.0/0 and ::/0 are unsupported. For a full tunnel, turn enforcement off and use the kill switch in Connection settings.'**
   String get enforceRoutesMacHelp;
 
   /// No description provided for @enforceRoutesDesktopHelp.

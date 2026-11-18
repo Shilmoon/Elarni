@@ -1034,10 +1034,10 @@ class _ElarniHomeState extends State<ElarniHome> {
         // macOS has no guard of its own: the switch is Include all networks.
         ElarniCheckboxTile(
           title: ElarniHelpLabel(
-            l10n.blockTrafficWithoutVpn,
+            l10n.killSwitch,
             help: widget.desktopCore
-                ? l10n.blockTrafficDesktopHelp
-                : l10n.blockTrafficMacHelp,
+                ? l10n.killSwitchDesktopHelp
+                : l10n.killSwitchMacHelp,
           ),
           value: widget.desktopCore
               ? _settings.blockWithoutVPN

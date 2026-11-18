@@ -625,11 +625,12 @@ class AndroidUIE2E {
             ui.onNodeWithText(notice).assertDoesNotExist()
         } finally { BatteryExemption.set(true) }
     }
-    @Test fun blockTrafficWithoutVpnOpensAndroidVpnSettings() {
+    @Test fun killSwitchOpensAndroidVpnSettings() {
         ui.onNode(hasText("Settings") and hasClickAction()).performClick()
         click("Connection")
         // Android owns the block; the row says so and opens its settings.
         ui.onNode(hasText("Android manages this: turn on Always-on VPN and Block connections without VPN.")).performScrollTo()
+        assertTrue("The row is not named Kill switch", ui.onAllNodes(hasText("Kill switch")).fetchSemanticsNodes().isNotEmpty())
         click("Open")
         val automation = InstrumentationRegistry.getInstrumentation().uiAutomation
         ui.waitUntil(10_000) { automation.rootInActiveWindow?.packageName == "com.android.settings" }

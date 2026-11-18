@@ -367,7 +367,7 @@ extension _ProxyCatalog on DesktopProxy {
           });
       }
       if (restart) {
-        // Another tunnel follows: the core keeps Block traffic without VPN in
+        // Another tunnel follows: the core keeps the kill switch in
         // place between the two.
         final hold =
             candidate.selected != null && candidate.settings.xrayTunEnabled;

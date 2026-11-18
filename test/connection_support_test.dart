@@ -18,7 +18,7 @@ void main() {
     'connection_stopped':
         'Connection stopped unexpectedly. Reconnect to retry.',
     'connection_stopped_blocked':
-        'Connection stopped unexpectedly. Block traffic without VPN keeps traffic blocked until you reconnect, or use Repair VPN setup to lift the block.',
+        'Connection stopped unexpectedly. The kill switch keeps traffic blocked until you reconnect, or use Repair VPN setup to lift the block.',
     'connection_stopped_repair':
         'Connection stopped unexpectedly. Reconnect to retry; if sites stay unreachable, use Repair VPN setup.',
     'vpn_dns_release_failed':

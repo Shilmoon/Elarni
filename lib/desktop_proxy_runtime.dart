@@ -12,7 +12,7 @@ extension _ProxyRuntime on DesktopProxy {
       if (Platform.isWindows || Platform.isLinux) {
         final settings = _catalog!.settings;
         // A crashed Windows helper's kill switch lets the next helper through,
-        // so with Block traffic without VPN it stays until the new tunnel
+        // so with the Kill switch setting it stays until the new tunnel
         // replaces it. A dead Linux supervisor's rejects the next one's traffic.
         if (Platform.isWindows &&
             settings.xrayTunEnabled &&
@@ -652,7 +652,7 @@ extension _ProxyRuntime on DesktopProxy {
     }
   }
 
-  // hold: another start follows. With Block traffic without VPN the core then
+  // hold: another start follows. With the Kill switch setting the core then
   // keeps its kill switch between the two tunnels, so nothing leaves outside
   // while a server switch, a settings change or failover restarts the tunnel.
   // The plain stop of a disconnect lifts it.

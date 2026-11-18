@@ -445,7 +445,7 @@ final class ElarniUITests: XCTestCase {
     for (category, content) in [
       ("General", "Connection recovery"), ("Appearance", "themePicker"),
       ("Connection", "SOCKS port"), ("DNS", "DNS settings"),
-      ("Apps & routes", "Block traffic without VPN"), ("Advanced", "Enable fragmentation"),
+      ("Apps & routes", "Kill switch"), ("Advanced", "Enable fragmentation"),
       ("Server tests", "Test type"), ("Backup and repair", "Create encrypted backup"),
       ("System info", "Operating system"), ("Route table", "Configured included routes")
     ] {

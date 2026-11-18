@@ -105,7 +105,7 @@ void main() {
 
   for (final windows in [true, false])
     testWidgets(
-      'Block traffic without VPN shows a red Home banner only while it blocks (${windows ? 'Windows' : 'macOS'})',
+      'The kill switch shows a red Home banner only while it blocks (${windows ? 'Windows' : 'macOS'})',
       (tester) async {
         messenger.setMockMethodCallHandler(
           channel,
@@ -127,8 +127,8 @@ void main() {
         await tester.tap(find.byKey(const Key('nav-settings')));
         await tester.pumpAndSettle();
         await selectCategory(tester, SettingsCategory.connection);
-        await reveal(tester, find.text('Block traffic without VPN'));
-        await tester.tap(find.text('Block traffic without VPN'));
+        await reveal(tester, find.text('Kill switch'));
+        await tester.tap(find.text('Kill switch'));
         await tester.pumpAndSettle();
         // macOS has no guard of its own: the switch is Include all networks.
         expect(control.settings.blockWithoutVPN, windows);

@@ -785,16 +785,6 @@
         }
       }
     },
-    "Block traffic without VPN" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Блокировать трафик без VPN"
-          }
-        }
-      }
-    },
     "Blue" : {
       "localizations" : {
         "ru" : {
@@ -2095,12 +2085,12 @@
         }
       }
     },
-    "Enforce routes is for specific networks and cannot be combined with Block traffic without VPN or a default /0 route." : {
+    "Enforce routes is for specific networks and cannot be combined with the kill switch or a default /0 route." : {
       "localizations" : {
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "«Принудительные маршруты» предназначены для отдельных сетей и не совмещаются с «Блокировать трафик без VPN» или маршрутом по умолчанию /0."
+            "value" : "«Принудительные маршруты» предназначены для отдельных сетей и не совмещаются с «Kill switch» или маршрутом по умолчанию /0."
           }
         }
       }
@@ -3057,6 +3047,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Ключи, адреса, имена хостов и пользователей скрываются до сохранения строки."
+          }
+        }
+      }
+    },
+    "Kill switch" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Kill switch"
           }
         }
       }
@@ -4394,12 +4394,12 @@
         }
       }
     },
-    "Recovery requires Block traffic without VPN and no bypass or provider routing rules." : {
+    "Recovery requires the kill switch and no bypass or provider routing rules." : {
       "localizations" : {
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Для восстановления нужны «Блокировать трафик без VPN» и отсутствие правил обхода и маршрутизации провайдера."
+            "value" : "Для восстановления нужны «Kill switch» и отсутствие правил обхода и маршрутизации провайдера."
           }
         }
       }
