@@ -4,6 +4,16 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
 
 ## Unreleased
 
+### Fixed
+
+- **"Resolve if no rule matches" no longer lets an IP rule take a name that a later domain rule
+  matches.** The compiled rules end in a catch-all, which would have ended the first pass for
+  every connection, so this setting was compiled as "resolve when needed": a name was resolved
+  at the first IP rule, and a direct rule for an address range won over a proxy rule for the
+  name itself further down. The setting now does what it says, in a routing profile and in a
+  provider's own profile: the rules are read by name first, then with the name's addresses,
+  and only then does the catch-all apply. All platforms.
+
 ## 0.6.2 - 2026-11-17
 
 ### Added

@@ -1478,10 +1478,11 @@ fn single_server_compiles_skip_fragmentation_the_server_cannot_carry() {
     }
 }
 
-// Xray retries rules with resolved IPs only when none matched, and the explicit
-// fallback always matches, so hostnames would never reach IP rules.
+// Xray retries rules with resolved IPs only when none matched, and the explicit fallback always
+// matches. The strategy stays as chosen and the rule is marked as the fallback, which the core
+// applies after that retry.
 #[test]
-fn ip_rules_resolve_hostnames_ahead_of_the_explicit_fallback() {
+fn chosen_strategy_is_kept_and_the_explicit_fallback_is_marked() {
     use crate::model::{RouteDomainStrategy, RouteRule};
     let mut request = compile_request();
     request.routes.fallback_action = Some(RouteAction::Proxy);
@@ -1489,7 +1490,7 @@ fn ip_rules_resolve_hostnames_ahead_of_the_explicit_fallback() {
         (
             Some(RouteDomainStrategy::IpIfNonMatch),
             vec!["192.0.2.0/24"],
-            "IPOnDemand",
+            "IPIfNonMatch",
         ),
         (
             Some(RouteDomainStrategy::IpIfNonMatch),
@@ -1514,10 +1515,22 @@ fn ip_rules_resolve_hostnames_ahead_of_the_explicit_fallback() {
             domains: vec!["full:direct.example".into()],
             ips: ips.iter().map(|ip| ip.to_string()).collect(),
         }];
+        let config = compiled(&request);
         assert_eq!(
-            compiled(&request)["routing"]["domainStrategy"],
-            expected,
+            config["routing"]["domainStrategy"], expected,
             "{strategy:?} {ips:?}"
+        );
+        let fallbacks: Vec<&Value> = config["routing"]["rules"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|rule| rule.get("fallback").is_some())
+            .collect();
+        assert_eq!(
+            fallbacks,
+            [
+                &json!({"type": "field", "network": "tcp,udp", "outboundTag": "elarni-proxy", "fallback": true})
+            ]
         );
     }
 }
