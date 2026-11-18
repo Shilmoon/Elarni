@@ -1658,6 +1658,48 @@ final class ElarniTests: XCTestCase {
     try await model.delete(user)
   }
 
+  // Deleting the selected server's subscription stops the tunnel, but only once the deletion is
+  // written: one that fails leaves the subscription, so the connection, its saved plan and the
+  // wish to stay connected must be left too.
+  func testADeletionThatFailsKeepsTheTunnel() async throws {
+    let model = IOSAppModel()
+    await model.start()
+    let source = try await importLocal(model, "socks://127.0.0.1:1080#Deletion%20fixture")
+    let node = try XCTUnwrap(source.nodes.first)
+    try await model.select(node)
+    let plan = try await model.makePlan(nodeID: node.id)
+    let tunnel = FixtureTunnel(plan: plan)
+    tunnel.session.fixtureStatus = .disconnected
+    model.vpn.manager = tunnel
+    try await model.vpn.refreshProvider()
+    // The simulator cannot start a tunnel, but Connect still records the intent.
+    await model.connect()
+    tunnel.setPlan(plan)
+    tunnel.session.fixtureStatus = .connected
+    model.vpn.manager = tunnel
+    try await model.vpn.refreshProvider()
+    XCTAssertEqual(TunnelCommandCoordinator().intent, .connected)
+    // The deletion's journal cannot be written while a folder that is not empty has its name.
+    let journal = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: false)
+      .appendingPathComponent("Elarni/refresh-transaction-v1.json")
+    try FileManager.default.createDirectory(at: journal, withIntermediateDirectories: false)
+    try Data().write(to: journal.appendingPathComponent("held"))
+    do {
+      try await model.delete(source)
+      XCTFail("a deletion without its journal was accepted")
+    } catch {}
+    try FileManager.default.removeItem(at: journal)
+    model.reload()
+    XCTAssertEqual(model.selectedID, node.id, "the failed deletion lost the selection")
+    XCTAssertTrue(model.vpn.connected, "a deletion that failed stopped the tunnel")
+    XCTAssertEqual(model.vpn.savedPlan, plan, "a deletion that failed cleared the saved plan")
+    XCTAssertEqual(TunnelCommandCoordinator().intent, .connected, "a deletion that failed forgot the wish to stay connected")
+    try await model.delete(source)
+    XCTAssertFalse(model.vpn.connected, "deleting the selected server's subscription left its tunnel up")
+    XCTAssertEqual(TunnelCommandCoordinator().intent, .disconnected)
+    model.vpn.manager = nil
+  }
+
   // A hand edit of a server's Xray JSON replaces its stored config under the same id and name,
   // and the connected tunnel takes it, as after a group choice.
   func testServerConfigEditIsStoredAndReachesTheTunnel() async throws {

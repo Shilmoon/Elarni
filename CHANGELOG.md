@@ -24,6 +24,11 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
 - **A reset device ID stays reset on macOS and iOS.** The refresh right after a reset sent the
   new ID and then dropped it, so every later refresh sent the old ID again; choosing a server in
   a profile's group dropped it too. The new ID now stays with the subscription.
+- **A subscription that could not be deleted keeps its connection on macOS and iOS.** Deleting
+  the subscription of the connected server stopped the tunnel, removed its saved plan and
+  turned reconnecting off before the deletion was written; when the write failed, the
+  subscription stayed and the connection was gone. The tunnel is now stopped once the deletion
+  is on disk, and comes back if the deletion fails after that.
 
 ## 0.6.2 - 2026-11-17
 

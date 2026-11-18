@@ -475,15 +475,21 @@ final class TunnelMethodChannel {
               let store = try self.subscriptionStore()
               let previousRouting = try store.routing.checkpoint()
               let previousRevision = try store.routing.runtimeRevision(subscriptionID: store.selectedSubscriptionID())
-              if store.removesSelection(subscriptionID: id) {
-                try self.commands.persist(.disconnected)
-                try await self.stopForCatalogChange()
-                try await self.removeSavedPlan()
-              }
-              var synchronized = false
+              let removesSelection = store.removesSelection(subscriptionID: id)
+              let previousIntent = self.commands.intent
+              var synchronized = false, stopped = false
               let deleted: (snapshot: [String: Any], removedSelection: Bool)
               do {
                 deleted = try await store.delete(id: id) {
+                  // The store has journaled and saved the deletion by now. One that fails earlier leaves
+                  // the subscription, so the tunnel, its saved plan and the intent stay as they were.
+                  if removesSelection {
+                    stopped = true
+                    try self.commands.persist(.disconnected)
+                    try await self.stopForCatalogChange()
+                    try await self.removeSavedPlan()
+                    return
+                  }
                   let revision = try store.routing.runtimeRevision(subscriptionID: store.selectedSubscriptionID())
                   if store.selectedNodeID() != nil && revision != previousRevision {
                     _ = try await self.performRoutingMutation(store, checkpoint: previousRouting) {
@@ -495,6 +501,14 @@ final class TunnelMethodChannel {
               } catch {
                 if synchronized && !Task.isCancelled {
                   _ = try await self.performRoutingMutation(store) { store.routing.snapshot() }
+                }
+                if stopped && !Task.isCancelled && previousIntent == .connected {
+                  // The store put the subscription back; the connection it carried comes back with it.
+                  do {
+                    try self.commands.persist(.connected)
+                    try await self.prepareSelectedConnection()
+                    try await self.connect()
+                  } catch { try? self.commands.persist(.disconnected) }
                 }
                 throw error
               }
