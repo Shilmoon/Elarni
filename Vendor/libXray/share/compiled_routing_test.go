@@ -125,7 +125,7 @@ func TestCompiledProviderReentryMatchesIPRulesForHostnames(t *testing.T) {
 }
 
 // Xray refuses two routing rules with one tag, so per-app routing with several targets, each
-// with a rule of its own, must still start.
+// with a rule of its own, must still start; so must a provider's rule that came with one of their names.
 func TestCompiledPerAppRoutingWithSeveralTargetsStarts(t *testing.T) {
 	config := compiledRoutingFixture(t, "per-app")
 	listed := 0

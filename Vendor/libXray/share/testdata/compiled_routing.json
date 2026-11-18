@@ -576,6 +576,15 @@
           "type": "field"
         },
         {
+          "domain": [
+            "full:tagged.test"
+          ],
+          "inboundTag": null,
+          "outboundTag": "direct",
+          "ruleTag": "provider-elarni-per-app-listed-0",
+          "type": "field"
+        },
+        {
           "inboundTag": null,
           "network": "tcp,udp",
           "outboundTag": "proxy",

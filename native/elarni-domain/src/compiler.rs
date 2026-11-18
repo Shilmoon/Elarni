@@ -390,6 +390,7 @@ const CHECKED_KEYS: &[&str] = &[
     "redirect",
     "reverse",
     "routing",
+    "ruleTag",
     "rules",
     "security",
     "selector",
@@ -1193,6 +1194,10 @@ pub(crate) fn close_with_app(config: &mut Value) {
     }
 }
 
+/// Tags of the per-app rules start with this. The connections view (Dart, Kotlin) and the live
+/// rule reload (libXray's opened.go) tell a per-app decision by it.
+pub(crate) const PER_APP_RULE_PREFIX: &str = "elarni-per-app-";
+
 /// `prefix` names this config's own direct and block outbounds.
 pub(crate) fn apply_per_app_routing(
     config: &mut Value,
@@ -1337,7 +1342,7 @@ pub(crate) fn apply_per_app_routing(
     // refuses two rules with one tag, so each target's rule is numbered.
     let mut gate = vec![
         json!({"type":"field", "inboundTag":[tun_tag], "network":"tcp,udp",
-        "port":53, "outboundTag":reentry, "ruleTag":"elarni-per-app-dns"}),
+        "port":53, "outboundTag":reentry, "ruleTag":format!("{PER_APP_RULE_PREFIX}dns")}),
     ];
     // A listed program takes its own target before a rule that matches the program that started
     // it ("children:"): Claude Code listed on its own, started by a listed Claude.
@@ -1363,12 +1368,12 @@ pub(crate) fn apply_per_app_routing(
             .map(|(index, (tag, processes))| {
                 json!({"type":"field", "inboundTag":[tun_tag],
         "network":"tcp,udp", "process":processes, "outboundTag":tag,
-        "ruleTag":format!("elarni-per-app-listed-{index}")})
+        "ruleTag":format!("{PER_APP_RULE_PREFIX}listed-{index}")})
             }),
     );
     gate.push(
         json!({"type":"field", "inboundTag":[tun_tag], "network":"tcp,udp",
-        "outboundTag":remaining, "ruleTag":"elarni-per-app-other"}),
+        "outboundTag":remaining, "ruleTag":format!("{PER_APP_RULE_PREFIX}other")}),
     );
     config["routing"]["rules"]
         .as_array_mut()

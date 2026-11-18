@@ -4,6 +4,14 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
 
 ## Unreleased
 
+### Fixed
+
+- **A provider's routing rule named like a per-app rule no longer stops the connection.** A
+  provider profile may name its rules (`ruleTag`). One named `elarni-per-app-listed-0`, or any
+  other name per-app routing gives its own rules, made the core refuse the whole configuration
+  once per-app routing was on, and was shown as a per-app decision in recent connections. Such
+  a rule is renamed when the profile is compiled. All platforms.
+
 ## 0.6.2 - 2026-11-17
 
 ### Added
