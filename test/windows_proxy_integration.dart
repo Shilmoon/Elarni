@@ -1676,10 +1676,10 @@ for line in sys.stdin:
     },
   );
 
-  // Regression: with Block traffic without VPN, each restart the app made
+  // Regression: with the Kill switch setting, each restart the app made
   // (another server, a settings change, failover) lifted the kill switch with
   // the old tunnel, and traffic left outside until the next tunnel was up.
-  test('a restart keeps Block traffic without VPN between its tunnels', () async {
+  test('a restart keeps the kill switch between its tunnels', () async {
     await prepare();
     final settings = (await backend.control.tunnelSettings()).copyWith(
       xrayTunEnabled: true,
@@ -3069,7 +3069,7 @@ rules:
     expect(await backend.control.state(), 'failed');
   });
 
-  // Only Block traffic without VPN keeps the guard after a broker exit.
+  // Only the Kill switch setting keeps the guard after a broker exit.
   test('a VPN crash claims a block only when the kill switch is on', () async {
     await prepare();
     final messages = <String>[];

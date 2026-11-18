@@ -306,7 +306,7 @@ private fun canonical(json: String) = JSONObject(json).let { value -> value.keys
                     } } }) { navigate("credentials", "") }
                 // Android owns the block; only a running VPN can read whether it is on.
                 val lockdown = activity.repository.engine.service?.isLockdownEnabled
-                SettingsTile(tr(R.string.block_traffic_without_vpn), listOfNotNull(lockdown?.let { if (it) tr(R.string.on) else tr(R.string.off) },
+                SettingsTile(tr(R.string.kill_switch), listOfNotNull(lockdown?.let { if (it) tr(R.string.on) else tr(R.string.off) },
                     tr(R.string.android_manages_this_turn_on_always)).joinToString(" · "),
                     trailing = { TextButton({ activity.vpnSettings() }) { Text(tr(R.string.open)) } })
             }

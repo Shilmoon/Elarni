@@ -21,6 +21,9 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
   - "Select servers" moved into the subscription's "…" menu, which also has "Details" and
     "Routing profile": both are under the table, and the menu scrolls to them.
   - The page opens on the subscription of the selected server. Home's server list is unchanged.
+- **"Block traffic without VPN" is now "Kill switch"** on Windows, Linux, macOS, Android and
+  iPhone, in English and Russian. It does what it did; the text under it and the messages that
+  name it say "kill switch" too. Android's System info lists it under the same name.
 
 ### Added
 

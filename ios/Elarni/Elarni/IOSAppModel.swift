@@ -1388,7 +1388,7 @@ final class IOSAppModel {
       catch {
         let failure = error as? AutomationFailure ?? .indeterminate
         if failure == .unsupportedPolicy {
-          self.recoveryStatus = String(localized: "Recovery requires Block traffic without VPN and no bypass or provider routing rules.")
+          self.recoveryStatus = String(localized: "Recovery requires the kill switch and no bypass or provider routing rules.")
           self.recovery.scheduleHealth(now: now, jitter: 0); return
         }
         let confirmedFailure = self.recovery.failedHealth(failure)

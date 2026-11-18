@@ -100,11 +100,11 @@ class AppLocalizationsRu extends AppLocalizations {
 
   @override
   String get issueInvalidRouteEnforcementRemedy =>
-      'Замените 0.0.0.0/0 и ::/0 конкретными маршрутами или выключите принудительность. Для полного туннеля выключите принудительность и включите «Блокировать трафик без VPN».';
+      'Замените 0.0.0.0/0 и ::/0 конкретными маршрутами или выключите принудительность. Для полного туннеля выключите принудительность и включите «Kill switch».';
 
   @override
   String get issueInvalidRouteEnforcement =>
-      '«Принудительным маршрутам туннеля» нужны конкретные включённые маршруты, и их нельзя совмещать с «Блокировать трафик без VPN».';
+      '«Принудительным маршрутам туннеля» нужны конкретные включённые маршруты, и их нельзя совмещать с «Kill switch».';
 
   @override
   String get issueRouteModelTooLargeRemedy =>
@@ -385,7 +385,7 @@ class AppLocalizationsRu extends AppLocalizations {
 
   @override
   String get routeEnforcementWithBlock =>
-      '«Принудительные маршруты туннеля» нельзя совмещать с «Блокировать трафик без VPN». Выключите одно из них.';
+      '«Принудительные маршруты туннеля» нельзя совмещать с «Kill switch». Выключите одно из них.';
 
   @override
   String get routeEnforcementDefaultRoutes =>
@@ -674,7 +674,7 @@ class AppLocalizationsRu extends AppLocalizations {
 
   @override
   String get appRoutingNotFirewall =>
-      'DNS и локальные SOCKS/HTTP-слушатели сохраняют свои правила. Маршрутизация приложений — не межсетевой экран и не аварийный выключатель.';
+      'DNS и локальные SOCKS/HTTP-слушатели сохраняют свои правила. Маршрутизация приложений — не межсетевой экран и не kill switch.';
 
   @override
   String get macMatchingHelp =>
@@ -1133,7 +1133,7 @@ class AppLocalizationsRu extends AppLocalizations {
 
   @override
   String get connectionStoppedBlocked =>
-      'Подключение неожиданно прервалось. «Блокировать трафик без VPN» не пропускает трафик, пока вы не переподключитесь; чтобы снять блокировку, используйте «Исправить настройку VPN».';
+      'Подключение неожиданно прервалось. «Kill switch» не пропускает трафик, пока вы не переподключитесь; чтобы снять блокировку, используйте «Исправить настройку VPN».';
 
   @override
   String get windowsDnsNotRestored =>
@@ -1653,15 +1653,15 @@ class AppLocalizationsRu extends AppLocalizations {
   String get serverAddressing => 'Адресация серверов';
 
   @override
-  String get blockTrafficMacHelp =>
+  String get killSwitchMacHelp =>
       'macOS держит весь трафик внутри туннеля, в том числе во время переподключения. Исключения маршрутов не действуют.';
 
   @override
-  String get blockTrafficDesktopHelp =>
+  String get killSwitchDesktopHelp =>
       'Если VPN неожиданно остановится, ничего не уйдёт с этого устройства мимо него, пока вы не переподключитесь или не используете «Исправить настройку VPN». Отключение снимает блокировку. Нужен системный VPN; нельзя совмещать с «Принудительными маршрутами туннеля».';
 
   @override
-  String get blockTrafficWithoutVpn => 'Блокировать трафик без VPN';
+  String get killSwitch => 'Kill switch';
 
   @override
   String get connectWithoutAdminApprovalHelp =>
@@ -1870,7 +1870,7 @@ class AppLocalizationsRu extends AppLocalizations {
 
   @override
   String get enforceRoutesMacHelp =>
-      'Принудительности нужны конкретные включённые маршруты; маршруты по умолчанию, такие как 0.0.0.0/0 и ::/0, не поддерживаются. Для полного туннеля выключите принудительность и включите «Блокировать трафик без VPN» в настройках подключения.';
+      'Принудительности нужны конкретные включённые маршруты; маршруты по умолчанию, такие как 0.0.0.0/0 и ::/0, не поддерживаются. Для полного туннеля выключите принудительность и включите «Kill switch» в настройках подключения.';
 
   @override
   String get enforceRoutesDesktopHelp =>

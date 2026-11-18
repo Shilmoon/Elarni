@@ -68,7 +68,7 @@ class RejectableEditors extends FakeTunnelControl {
 
 void main() {
   for (final windows in [false, true]) {
-    // On macOS, Include all networks is Block traffic without VPN, outside this editor.
+    // On macOS, Include all networks is the kill switch, outside this editor.
     final routeToggle = windows
         ? 'Include all networks'
         : 'Enforce tunnel routes';

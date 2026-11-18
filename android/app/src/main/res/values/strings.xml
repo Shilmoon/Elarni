@@ -78,7 +78,6 @@
     <string name="network">Network</string>
     <string name="available">Available</string>
     <string name="unavailable">Unavailable</string>
-    <string name="block_without_vpn">Block without VPN</string>
     <string name="on">On</string>
     <string name="always_on_vpn">Always-on VPN</string>
     <string name="vpn_permission">VPN permission</string>
@@ -512,7 +511,7 @@
     <string name="open_server_list">Open server list</string>
     <string name="open">Open</string>
     <string name="android_manages_this_turn_on_always">Android manages this: turn on Always-on VPN and Block connections without VPN.</string>
-    <string name="block_traffic_without_vpn">Block traffic without VPN</string>
+    <string name="kill_switch">Kill switch</string>
     <string name="show">Show</string>
     <string name="allow">Allow</string>
     <string name="allow_location_all_the_time">Allow location all the time</string>

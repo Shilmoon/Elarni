@@ -1313,7 +1313,7 @@ fun pingScope(result: JSONObject) = when (result.string("protocol")) { "tcp" -> 
                 SettingsGroup {
                     SettingsTile(tr(R.string.vpn_permission), if (value.optBoolean("vpnConsent")) tr(R.string.granted) else tr(R.string.not_granted))
                     SettingsTile(tr(R.string.always_on_vpn), if (value.optBoolean("alwaysOn")) tr(R.string.on) else tr(R.string.off))
-                    SettingsTile(tr(R.string.block_without_vpn), if (value.optBoolean("lockdown")) tr(R.string.on) else tr(R.string.off))
+                    SettingsTile(tr(R.string.kill_switch), if (value.optBoolean("lockdown")) tr(R.string.on) else tr(R.string.off))
                     SettingsTile(tr(R.string.network), if (value.optBoolean("networkAvailable")) tr(R.string.available) else tr(R.string.unavailable))
                     SettingsTile(tr(R.string.architectures), value.strings("abis").joinToString())
                 }

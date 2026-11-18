@@ -101,11 +101,11 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get issueInvalidRouteEnforcementRemedy =>
-      'Replace 0.0.0.0/0 and ::/0 with specific routes, or turn enforcement off. For a full tunnel, turn enforcement off and use Block traffic without VPN.';
+      'Replace 0.0.0.0/0 and ::/0 with specific routes, or turn enforcement off. For a full tunnel, turn enforcement off and use the kill switch.';
 
   @override
   String get issueInvalidRouteEnforcement =>
-      'Enforce tunnel routes needs specific included routes and cannot be combined with Block traffic without VPN.';
+      'Enforce tunnel routes needs specific included routes and cannot be combined with the kill switch.';
 
   @override
   String get issueRouteModelTooLargeRemedy =>
@@ -384,7 +384,7 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get routeEnforcementWithBlock =>
-      'Enforce tunnel routes cannot be combined with Block traffic without VPN. Turn one of them off.';
+      'Enforce tunnel routes cannot be combined with the kill switch. Turn one of them off.';
 
   @override
   String get routeEnforcementDefaultRoutes =>
@@ -1121,7 +1121,7 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get connectionStoppedBlocked =>
-      'Connection stopped unexpectedly. Block traffic without VPN keeps traffic blocked until you reconnect, or use Repair VPN setup to lift the block.';
+      'Connection stopped unexpectedly. The kill switch keeps traffic blocked until you reconnect, or use Repair VPN setup to lift the block.';
 
   @override
   String get windowsDnsNotRestored =>
@@ -1634,15 +1634,15 @@ class AppLocalizationsEn extends AppLocalizations {
   String get serverAddressing => 'Server addressing';
 
   @override
-  String get blockTrafficMacHelp =>
+  String get killSwitchMacHelp =>
       'macOS keeps all traffic inside the tunnel, including while it reconnects. Route exclusions do not apply.';
 
   @override
-  String get blockTrafficDesktopHelp =>
+  String get killSwitchDesktopHelp =>
       'If the VPN stops unexpectedly, nothing leaves this device outside it until you reconnect or use Repair VPN setup. Disconnecting lifts the block. Needs System-wide VPN; cannot be combined with Enforce tunnel routes.';
 
   @override
-  String get blockTrafficWithoutVpn => 'Block traffic without VPN';
+  String get killSwitch => 'Kill switch';
 
   @override
   String get connectWithoutAdminApprovalHelp =>
@@ -1848,7 +1848,7 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get enforceRoutesMacHelp =>
-      'Enforcement requires specific included routes; default routes such as 0.0.0.0/0 and ::/0 are unsupported. For a full tunnel, turn enforcement off and use Block traffic without VPN in Connection settings.';
+      'Enforcement requires specific included routes; default routes such as 0.0.0.0/0 and ::/0 are unsupported. For a full tunnel, turn enforcement off and use the kill switch in Connection settings.';
 
   @override
   String get enforceRoutesDesktopHelp =>
