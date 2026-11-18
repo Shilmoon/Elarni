@@ -746,8 +746,6 @@ pub(crate) fn compile_owned_config(
     }
     crate::routing::validate_effective_targets(routes).map_err(|_| CompileError::InvalidRoute)?;
     let mut routing_rules = compile_routes(&routes.rules, routes.fallback_action)?;
-    // The DNS client's own rules below match by inbound first and never resolve a name.
-    let ip_rules = has_ip_rules(&routing_rules);
     let mut dns_servers = routes
         .dns_servers
         .iter()
@@ -912,9 +910,6 @@ pub(crate) fn compile_owned_config(
     }
     let domain_strategy = match routes.domain_strategy.unwrap_or(RouteDomainStrategy::AsIs) {
         RouteDomainStrategy::AsIs => "AsIs",
-        // The explicit fallback always matches, so Xray would never retry with
-        // resolved IPs; resolving on demand lets hostnames reach IP rules.
-        RouteDomainStrategy::IpIfNonMatch if ip_rules => "IPOnDemand",
         RouteDomainStrategy::IpIfNonMatch => "IPIfNonMatch",
         RouteDomainStrategy::IpOnDemand => "IPOnDemand",
     };
@@ -1406,16 +1401,6 @@ pub(crate) fn validate_routing_model(
     .map(|_| ())
 }
 
-/// Xray reads a rule's `ip` as a list or as one comma-separated string.
-pub(crate) fn has_ip_rules(rules: &[Value]) -> bool {
-    rules.iter().any(|rule| {
-        rule.get("ip").is_some_and(|ips| {
-            ips.as_array().is_some_and(|ips| !ips.is_empty())
-                || ips.as_str().is_some_and(|ips| !ips.is_empty())
-        })
-    })
-}
-
 /// Apps resolve through Xray's DNS; IPv6 answers would take them past an IPv4 preference.
 fn query_strategy(preferred_ip: PreferredIp) -> &'static str {
     match preferred_ip {
@@ -1749,6 +1734,13 @@ pub(crate) fn valid_ip_target(target: &str) -> bool {
     })
 }
 
+/// The rule for what no other rule matched. It always matches, which would end Xray's first pass
+/// for every connection and leave IPIfNonMatch without its second, so the core reads `fallback`:
+/// the rules ahead of it are tried with a name's addresses before it applies.
+pub(crate) fn fallback_rule(outbound: impl Into<Value>) -> Value {
+    json!({"type": "field", "network": "tcp,udp", "outboundTag": outbound.into(), "fallback": true})
+}
+
 pub(crate) fn compile_routes(
     rules: &[RouteRule],
     fallback_action: Option<RouteAction>,
@@ -1810,10 +1802,6 @@ pub(crate) fn compile_routes(
         RouteAction::Direct => "elarni-direct",
         RouteAction::Block => "elarni-block",
     };
-    result.push(json!({
-        "type": "field",
-        "network": "tcp,udp",
-        "outboundTag": fallback
-    }));
+    result.push(fallback_rule(fallback));
     Ok(result)
 }

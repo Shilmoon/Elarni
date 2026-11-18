@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::compiler::{
-    CompileError, apply_outbound_runtime, compile_owned_config, compile_routes, has_ip_rules,
+    CompileError, apply_outbound_runtime, compile_owned_config, compile_routes, fallback_rule,
     is_client_protocol, normalize_legacy_reality_names,
 };
 use crate::model::{PacketBackend, PreferredIp, ProfileDnsMode, RouteModel, RuntimeOptions};
@@ -314,12 +314,12 @@ pub fn compile_profile(
             }
             rule.insert("ruleTag".into(), json!(renamed));
         }
-        // A webhook makes the core POST to any URL or local socket. Xray matches keys
-        // case-insensitively and also folds U+212A (Kelvin sign) to k.
+        // A webhook makes the core POST to any URL or local socket, and only Elarni's own
+        // catch-all is a fallback. Xray matches keys case-insensitively and also folds
+        // U+212A (Kelvin sign) to k.
         rule.retain(|key, _| {
-            !key.chars()
-                .flat_map(char::to_lowercase)
-                .eq("webhook".chars())
+            let key: String = key.chars().flat_map(char::to_lowercase).collect();
+            key != "webhook" && key != "fallback"
         });
         let outbound = rule
             .get("outboundTag")
@@ -418,17 +418,7 @@ pub fn compile_profile(
     rules.extend(provider_rules);
     // An explicit rule preserves Xray's original first-outbound fallback even
     // after generated helpers are appended, including after loopback re-entry.
-    rules.push(json!({"type": "field", "network": "tcp,udp", "outboundTag": first_tag}));
-    // That rule always matches, so Xray's IPIfNonMatch retry with resolved IPs
-    // never runs; resolving on demand lets hostnames reach IP rules.
-    if has_ip_rules(&rules)
-        && routing_object
-            .get("domainStrategy")
-            .and_then(Value::as_str)
-            .is_some_and(|strategy| strategy.eq_ignore_ascii_case("IPIfNonMatch"))
-    {
-        routing_object.insert("domainStrategy".into(), json!("IPOnDemand"));
-    }
+    rules.push(fallback_rule(first_tag));
     routing_object.insert("rules".into(), json!(rules));
 
     for helper in owned["outbounds"].as_array().unwrap().iter().skip(1) {

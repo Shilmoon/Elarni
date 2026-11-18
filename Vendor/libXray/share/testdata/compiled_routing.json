@@ -142,6 +142,7 @@
           "type": "field"
         },
         {
+          "fallback": true,
           "network": "tcp,udp",
           "outboundTag": "elarni-proxy",
           "type": "field"
@@ -156,6 +157,9 @@
       "hosts": {
         "direct-range.test": [
           "198.51.100.7"
+        ],
+        "named-in-range.test": [
+          "198.51.100.8"
         ],
         "outside.test": [
           "203.0.113.9"
@@ -281,7 +285,7 @@
       }
     },
     "routing": {
-      "domainStrategy": "IPOnDemand",
+      "domainStrategy": "IPIfNonMatch",
       "rules": [
         {
           "inboundTag": [
@@ -321,6 +325,14 @@
           "type": "field"
         },
         {
+          "domain": [
+            "full:named-in-range.test"
+          ],
+          "outboundTag": "elarni-proxy",
+          "type": "field"
+        },
+        {
+          "fallback": true,
           "network": "tcp,udp",
           "outboundTag": "elarni-proxy",
           "type": "field"
@@ -585,6 +597,7 @@
           "type": "field"
         },
         {
+          "fallback": true,
           "inboundTag": null,
           "network": "tcp,udp",
           "outboundTag": "proxy",
@@ -597,7 +610,8 @@
   "profile": {
     "dns": {
       "hosts": {
-        "loopback-range.test": "127.0.0.1"
+        "loopback-range.test": "127.0.0.1",
+        "named-loopback.test": "127.0.0.1"
       },
       "servers": [
         "192.0.2.53"
@@ -719,7 +733,7 @@
       }
     },
     "routing": {
-      "domainStrategy": "IPOnDemand",
+      "domainStrategy": "IPIfNonMatch",
       "rules": [
         {
           "inboundTag": [
@@ -743,6 +757,7 @@
           "type": "field"
         },
         {
+          "fallback": true,
           "inboundTag": [
             "elarni-socks"
           ],
@@ -758,6 +773,14 @@
           "type": "field"
         },
         {
+          "domain": [
+            "full:named-loopback.test"
+          ],
+          "outboundTag": "proxy",
+          "type": "field"
+        },
+        {
+          "fallback": true,
           "network": "tcp,udp",
           "outboundTag": "proxy",
           "type": "field"
@@ -772,6 +795,9 @@
       "hosts": {
         "direct-range.test": [
           "198.51.100.7"
+        ],
+        "named-in-range.test": [
+          "198.51.100.8"
         ],
         "outside.test": [
           "203.0.113.9"
@@ -915,7 +941,7 @@
       }
     },
     "routing": {
-      "domainStrategy": "IPOnDemand",
+      "domainStrategy": "IPIfNonMatch",
       "rules": [
         {
           "inboundTag": [
@@ -969,6 +995,14 @@
           "type": "field"
         },
         {
+          "domain": [
+            "full:named-in-range.test"
+          ],
+          "outboundTag": "elarni-proxy",
+          "type": "field"
+        },
+        {
+          "fallback": true,
           "network": "tcp,udp",
           "outboundTag": "elarni-proxy",
           "type": "field"
@@ -983,6 +1017,9 @@
       "hosts": {
         "direct-range.test": [
           "198.51.100.7"
+        ],
+        "named-in-range.test": [
+          "198.51.100.8"
         ],
         "outside.test": [
           "203.0.113.9"
@@ -1133,7 +1170,7 @@
       }
     },
     "routing": {
-      "domainStrategy": "IPOnDemand",
+      "domainStrategy": "IPIfNonMatch",
       "rules": [
         {
           "inboundTag": [
@@ -1221,6 +1258,15 @@
           "type": "field"
         },
         {
+          "domain": [
+            "full:named-in-range.test"
+          ],
+          "inboundTag": null,
+          "outboundTag": "elarni-proxy",
+          "type": "field"
+        },
+        {
+          "fallback": true,
           "inboundTag": null,
           "network": "tcp,udp",
           "outboundTag": "elarni-proxy",
@@ -1401,6 +1447,7 @@
           "type": "field"
         },
         {
+          "fallback": true,
           "network": "tcp,udp",
           "outboundTag": "proxy",
           "type": "field"

@@ -157,6 +157,8 @@ func parseFieldRule(msg json.RawMessage) (*router.RoutingRule, error) {
 		Process    *StringList        `json:"process"`
 		LocalOS    *StringList        `json:"localOS"`
 		Webhook    *WebhookRuleConfig `json:"webhook"`
+		// Elarni: see RoutingRule.fallback.
+		Fallback bool `json:"fallback"`
 	}
 	rawFieldRule := new(RawFieldRule)
 	err := json.Unmarshal(msg, rawFieldRule)
@@ -166,6 +168,7 @@ func parseFieldRule(msg json.RawMessage) (*router.RoutingRule, error) {
 
 	rule := new(router.RoutingRule)
 	rule.RuleTag = rawFieldRule.RuleTag
+	rule.Fallback = rawFieldRule.Fallback
 	switch {
 	case len(rawFieldRule.OutboundTag) > 0:
 		rule.TargetTag = &router.RoutingRule_Tag{
