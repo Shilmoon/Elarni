@@ -616,6 +616,33 @@ final class ElarniUITests: XCTestCase {
   }
 
   @MainActor
+  // An iPhone on its side: the tabs sit in a rail at the leading edge and Home shows the connection beside the servers.
+  func testLandscapeShowsARailAndSplitsHome() {
+    let app = XCUIApplication()
+    app.launchArguments = ["--ui-testing", UUID().uuidString]
+    app.launch()
+    importClipboard(app, text: "socks://127.0.0.1:1080#Rail%20Server")
+    XCTAssertTrue(app.buttons["selectedServer"].waitForExistence(timeout: 15))
+    defer { XCUIDevice.shared.orientation = .portrait }
+    XCUIDevice.shared.orientation = .landscapeLeft
+    let home = app.buttons["rail.0"], connect = app.buttons["connect"], server = app.buttons["server.Rail Server"]
+    XCTAssertTrue(home.waitForExistence(timeout: 5), "landscape shows no rail")
+    XCTAssertTrue(home.isSelected)
+    XCTAssertFalse(app.tabBars.buttons["Subscriptions"].isHittable, "the tab bar stayed beside the rail")
+    XCTAssertTrue(server.waitForExistence(timeout: 5))
+    XCTAssertLessThan(home.frame.maxX, connect.frame.minX, "the rail is not at the leading edge")
+    XCTAssertLessThan(connect.frame.maxX, server.frame.minX, "the connection is not beside the server list")
+    XCTAssertLessThan(server.frame.minY, connect.frame.maxY + 200, "the server list starts below the connection")
+    XCTAssertTrue(app.buttons["Test visible servers"].isHittable)
+    app.buttons["rail.2"].tap()
+    XCTAssertTrue(app.navigationBars["Subscriptions"].waitForExistence(timeout: 5))
+    XCTAssertTrue(app.buttons["rail.2"].isSelected)
+    XCUIDevice.shared.orientation = .portrait
+    XCTAssertTrue(app.tabBars.buttons["Subscriptions"].waitForExistence(timeout: 5), "portrait lost the tab bar")
+    XCTAssertTrue(app.tabBars.buttons["Subscriptions"].isSelected)
+    XCTAssertFalse(app.buttons["rail.0"].exists)
+  }
+
   private func serverFilter(_ app: XCUIApplication, _ filter: String) {
     let segment = app.segmentedControls.buttons[filter]
     if segment.exists { segment.tap() }

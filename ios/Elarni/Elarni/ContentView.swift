@@ -8,16 +8,27 @@ struct ContentView: View {
   @State private var scannedText: String?
   @State private var file = false
   @State private var readingClipboard = false
+  @Environment(\.verticalSizeClass) private var verticalSizeClass
   var body: some View {
     presentedContent.appErrors()
   }
+  // An iPhone on its side is short: the tabs move to a rail at the leading edge, as on Android,
+  // and leave the height to the content.
+  private var rail: Bool { verticalSizeClass == .compact }
   @ViewBuilder private var tabs: some View {
     @Bindable var model = model
-    TabView(selection: $model.selectedTab) {
-      NavigationStack { HomeView(importActions: ImportActions(paste: importClipboard, scan: { camera = true }, file: { file = true })).toolbar { importToolbar; brandToolbar } }.tabItem { Label("Home", systemImage: "house") }.tag(0)
-      NavigationStack { SubscriptionsView().toolbar { importToolbar } }.tabItem { Label("Subscriptions", systemImage: "tray.full") }.tag(2)
-      NavigationStack { RoutingView().toolbar { importToolbar } }.tabItem { Label("Routing", systemImage: "arrow.triangle.branch") }.tag(3)
-      NavigationStack { SettingsView() }.tabItem { Label("Settings", systemImage: "gearshape") }.tag(4)
+    HStack(spacing: 0) {
+      if rail { TabRail(selection: $model.selectedTab) }
+      tabView
+    }
+  }
+  private var tabView: some View {
+    @Bindable var model = model
+    return TabView(selection: $model.selectedTab) {
+      NavigationStack { HomeView(importActions: ImportActions(paste: importClipboard, scan: { camera = true }, file: { file = true })).toolbar { importToolbar; brandToolbar } }.toolbarVisibility(rail ? .hidden : .automatic, for: .tabBar).tabItem { Label("Home", systemImage: "house") }.tag(0)
+      NavigationStack { SubscriptionsView().toolbar { importToolbar } }.toolbarVisibility(rail ? .hidden : .automatic, for: .tabBar).tabItem { Label("Subscriptions", systemImage: "tray.full") }.tag(2)
+      NavigationStack { RoutingView().toolbar { importToolbar } }.toolbarVisibility(rail ? .hidden : .automatic, for: .tabBar).tabItem { Label("Routing", systemImage: "arrow.triangle.branch") }.tag(3)
+      NavigationStack { SettingsView() }.toolbarVisibility(rail ? .hidden : .automatic, for: .tabBar).tabItem { Label("Settings", systemImage: "gearshape") }.tag(4)
     }
   }
   private var presentedContent: some View {
@@ -80,6 +91,34 @@ struct ContentView: View {
   }
 }
 
+/// The tabs of an iPhone on its side, at the leading edge.
+private struct TabRail: View {
+  @Environment(IOSAppModel.self) private var model
+  @Binding var selection: Int
+  private let tabs: [(tag: Int, title: String, image: String)] = [
+    (0, String(localized: "Home"), "house"), (2, String(localized: "Subscriptions"), "tray.full"),
+    (3, String(localized: "Routing"), "arrow.triangle.branch"), (4, String(localized: "Settings"), "gearshape")]
+  var body: some View {
+    ScrollView {
+      VStack(spacing: 4) {
+        ForEach(tabs, id: \.tag) { tab in
+          Button { selection = tab.tag } label: {
+            VStack(spacing: 3) {
+              Image(systemName: tab.image).font(.system(size: 19)).symbolVariant(selection == tab.tag ? .fill : .none)
+              Text(tab.title).font(.caption2).lineLimit(1).minimumScaleFactor(0.7)
+            }.frame(width: 76).frame(minHeight: 48).contentShape(Rectangle())
+          }.buttonStyle(.plain)
+            .foregroundStyle(selection == tab.tag ? appTint(model.preferences.accent) : AppPalette.secondary)
+            .accessibilityAddTraits(selection == tab.tag ? .isSelected : [])
+            .accessibilityIdentifier("rail.\(tab.tag)")
+        }
+      }.padding(.vertical, 8)
+    }.scrollBounceBehavior(.basedOnSize)
+      .background(AppPalette.inset.ignoresSafeArea())
+      .accessibilityElement(children: .contain).accessibilityLabel("Tabs")
+  }
+}
+
 /// Import's three sources, which an empty Home offers as its second step.
 struct ImportActions {
   var paste: () -> Void = {}
@@ -97,10 +136,29 @@ struct HomeView: View {
   @State private var details: ServerNode?
   @State private var share: SharedText?
   @State private var list = ServerListCache()
+  @Environment(\.verticalSizeClass) private var verticalSizeClass
   // Compact, so servers show on the first screen; Troubleshooting and recovery live in Settings.
   var body: some View {
     ScrollViewReader { scroll in
-      AppList(sectionSpacing: 8) {
+      Group {
+        // An iPhone on its side shows the connection beside the servers, as Android does.
+        if verticalSizeClass == .compact {
+          GeometryReader { geometry in
+            HStack(spacing: 0) {
+              AppList(sectionSpacing: 8) { connectionSections(scroll: scroll) }.frame(width: min(360, geometry.size.width * 0.38))
+              AppList(sectionSpacing: 8) { listSections }
+            }
+          }
+        } else {
+          AppList(sectionSpacing: 8) { connectionSections(scroll: scroll); listSections }
+        }
+      }.navigationTitle("").navigationBarTitleDisplayMode(.inline)
+        .refreshable { await model.refreshAll() }
+        .sheet(item: $details) { node in NavigationStack { ServerDetailView(nodeID: node.id) } }
+        .sheet(item: $share) { ShareView(item: $0) }
+    }
+  }
+  @ViewBuilder private func connectionSections(scroll: ScrollViewProxy) -> some View {
         connectionSection(scroll: scroll)
         if let notice = model.notice { Section { Text(notice); Button("Dismiss") { model.notice = nil } } }
         if model.settings.monitoringEnabled && model.vpn.connected { TrafficSection() }
@@ -109,6 +167,8 @@ struct HomeView: View {
           Section { Button("Mark a problem now", systemImage: "flag") { model.launch { try await model.markRecording() } } }
         }
 #endif
+  }
+  @ViewBuilder private var listSections: some View {
         serverSections
         if let source = model.selectedSubscription {
           Section("Subscription") {
@@ -119,11 +179,6 @@ struct HomeView: View {
           }
           if let message = source.metadata["announcement"] as? String { Section("Provider notice") { Text(message) } }
         }
-      }.navigationTitle("").navigationBarTitleDisplayMode(.inline)
-        .refreshable { await model.refreshAll() }
-        .sheet(item: $details) { node in NavigationStack { ServerDetailView(nodeID: node.id) } }
-        .sheet(item: $share) { ShareView(item: $0) }
-    }
   }
   private func connectionSection(scroll: ScrollViewProxy) -> some View {
     Section {

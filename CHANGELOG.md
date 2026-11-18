@@ -9,6 +9,8 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
 - **Android and iPhone: a subscription's actions on touch and hold.** Touching and holding a
   subscription on Subscriptions, or its header on Home, opens Refresh, Pin or Unpin, Rename,
   Share and Delete subscription; a local group has no Refresh. A tap acts as before.
+- **iPhone: a landscape layout.** With the iPhone on its side, the tabs move to a rail at the
+  leading edge and Home shows the connection beside the server list, as Android does.
 
 ### Changed
 
