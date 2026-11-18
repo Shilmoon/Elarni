@@ -1002,6 +1002,24 @@ void main() {
     await reveal(tester, find.byKey(const ValueKey('country:daily:NL::all')));
     await reveal(tester, find.byKey(const ValueKey('node:nl-trojan')));
     expect(tester.takeException(), isNull);
+    // A phone switches to the countries of every subscription as a desktop does.
+    final byCountry = find.widgetWithText(ChoiceChip, 'By country');
+    // The chips are above the rows the list has scrolled to.
+    await tester.scrollUntilVisible(
+      byCountry,
+      -400,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(byCountry);
+    await tester.pumpAndSettle();
+    await reveal(tester, find.byKey(const ValueKey('country::NL::country')));
+    await reveal(tester, find.byKey(const ValueKey('node:nl-vmess')));
+    expect(
+      find.byKey(const ValueKey('server-subscription:daily')),
+      findsNothing,
+    );
+    expect(tester.takeException(), isNull);
     await tester.sendKeyEvent(LogicalKeyboardKey.tab);
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox());

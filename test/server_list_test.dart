@@ -405,7 +405,7 @@ void main() {
   );
 
   testWidgets(
-    'By country replaces Recent on a desktop and joins the subscriptions',
+    'By country lists the servers of every subscription under their country',
     (tester) async {
       await tester.binding.setSurfaceSize(const Size(1280, 1400));
       addTearDown(() => tester.binding.setSurfaceSize(null));

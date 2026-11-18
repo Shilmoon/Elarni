@@ -151,13 +151,7 @@ extension _HomePages on _ElarniHomeState {
 
   List<SubscriptionNode> _filteredNodes(SubscriptionGroup group) {
     final nodes = group.nodes
-        .where(
-          (node) => _nodeFilter == 'favorites'
-              ? node.favorite
-              : _nodeFilter == 'recent'
-              ? node.lastSuccessAt != null
-              : true,
-        )
+        .where((node) => _nodeFilter != 'favorites' || node.favorite)
         .where(
           (node) =>
               _locationFilter == null || _locationKey(node) == _locationFilter,
@@ -171,10 +165,6 @@ extension _HomePages on _ElarniHomeState {
                   .contains(_search),
         )
         .toList();
-    if (_nodeFilter == 'recent') {
-      nodes.sort((a, b) => b.lastSuccessAt!.compareTo(a.lastSuccessAt!));
-      return nodes;
-    }
     if (widget.desktop.sort != 'provider') {
       final positions = {
         for (var i = 0; i < group.nodes.length; i++) group.nodes[i].id: i,
@@ -1762,7 +1752,7 @@ extension _HomePages on _ElarniHomeState {
     final positions = {
       for (var i = 0; i < nodes.length; i++) nodes[i].node.id: i,
     };
-    if (widget.desktop.sort != 'provider' && _nodeFilter != 'recent') {
+    if (widget.desktop.sort != 'provider') {
       nodes.sort((a, b) {
         final pinned = (widget.desktop.pinned.contains(a.group.id) ? 0 : 1)
             .compareTo(widget.desktop.pinned.contains(b.group.id) ? 0 : 1);
@@ -1833,8 +1823,6 @@ extension _HomePages on _ElarniHomeState {
                 Text(
                   _nodeFilter == 'favorites'
                       ? l10n.noFavoriteServers
-                      : _nodeFilter == 'recent'
-                      ? l10n.noSuccessfulConnections
                       : l10n.noMatchingServers,
                 ),
                 TextButton(
@@ -2639,12 +2627,7 @@ extension _HomePages on _ElarniHomeState {
             for (final entry in {
               'all': l10n.filterAll,
               'favorites': l10n.filterFavorites,
-              // A desktop window has room for every server, so it groups
-              // them a second way; a phone keeps the short list.
-              if (widget.desktop.available)
-                'country': l10n.filterByCountry
-              else
-                'recent': l10n.filterRecent,
+              'country': l10n.filterByCountry,
             }.entries)
               ChoiceChip(
                 label: Text(entry.value),

@@ -3422,12 +3422,6 @@ abstract class AppLocalizations {
   /// **'Search servers'**
   String get searchServers;
 
-  /// No description provided for @filterRecent.
-  ///
-  /// In en, this message translates to:
-  /// **'Recent'**
-  String get filterRecent;
-
   /// No description provided for @filterByCountry.
   ///
   /// In en, this message translates to:
@@ -3637,12 +3631,6 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Show all servers'**
   String get showAllServers;
-
-  /// No description provided for @noSuccessfulConnections.
-  ///
-  /// In en, this message translates to:
-  /// **'No successful connections yet'**
-  String get noSuccessfulConnections;
 
   /// No description provided for @noFavoriteServers.
   ///

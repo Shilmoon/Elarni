@@ -1959,9 +1959,6 @@ class AppLocalizationsEn extends AppLocalizations {
   String get searchServers => 'Search servers';
 
   @override
-  String get filterRecent => 'Recent';
-
-  @override
   String get filterByCountry => 'By country';
 
   @override
@@ -2078,9 +2075,6 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get showAllServers => 'Show all servers';
-
-  @override
-  String get noSuccessfulConnections => 'No successful connections yet';
 
   @override
   String get noFavoriteServers => 'No favorite servers';
