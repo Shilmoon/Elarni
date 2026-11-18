@@ -4,6 +4,16 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
 
 ## Unreleased
 
+### Fixed
+
+- **A Clash profile in global mode follows the server chosen in it.** Such a profile (Remnawave's
+  default Mihomo template is one) was imported without its rules and with nothing in their
+  place, so the first server of the file carried everything, whatever was chosen in its
+  groups. It now has the **GLOBAL** group Clash gives global mode: the file's own, or one that
+  offers every group, every server and DIRECT and starts on the file's first group. A
+  subscription gets it at its next refresh; a file or pasted profile has to be imported again.
+  All platforms.
+
 ## 0.6.2 - 2026-11-17
 
 ### Added

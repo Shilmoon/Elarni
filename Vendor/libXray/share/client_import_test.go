@@ -291,8 +291,41 @@ rules:
 	if err := json.Unmarshal(result.Profiles[0].Config, &root); err != nil {
 		t.Fatal(err)
 	}
-	if len(result.Skipped) != 0 || root["routing"] != nil || len(root["outbounds"].([]any)) != 6 {
+	if len(result.Skipped) != 0 || len(root["outbounds"].([]any)) != 7 {
 		t.Fatalf("global mode: skipped %+v, config %s", result.Skipped, result.Profiles[0].Config)
+	}
+	// The file's rules are left out. Everything goes to the GLOBAL group, which starts on the file's
+	// first group and offers every group, every proxy and DIRECT.
+	rules, _ := json.Marshal(root["routing"].(map[string]any)["rules"])
+	groups, _ := json.Marshal(root["elarniGroups"])
+	if string(rules) != `[{"network":"tcp,udp","outboundTag":"GLOBAL","type":"field"}]` ||
+		string(groups) != `[{"name":"GLOBAL","options":["→ Remnawave","a","b","DIRECT"],"selected":"→ Remnawave","type":"select"},`+
+			`{"name":"→ Remnawave","options":["a","b"],"selected":"a","type":"select"}]` {
+		t.Fatalf("global mode: rules %s, groups %s", rules, groups)
+	}
+	// The file's own GLOBAL group is the one used, and a proxy by that name keeps it.
+	for _, test := range []struct {
+		replace      *strings.Replacer
+		rule, groups string
+	}{
+		{strings.NewReplacer("name: '→ Remnawave'", "name: GLOBAL"), "GLOBAL",
+			`[{"name":"GLOBAL","options":["a","b"],"selected":"a","type":"select"}]`},
+		{strings.NewReplacer("{name: a,", "{name: GLOBAL,", "proxies: [a, b]", "proxies: [GLOBAL, b]"), "GLOBAL_",
+			`[{"name":"GLOBAL_","options":["→ Remnawave","GLOBAL","b","DIRECT"],"selected":"→ Remnawave","type":"select"},` +
+				`{"name":"→ Remnawave","options":["GLOBAL","b"],"selected":"GLOBAL","type":"select"}]`},
+	} {
+		result, err := ImportClientProfiles(test.replace.Replace(input))
+		if err != nil {
+			t.Fatalf("%s: %v", test.rule, err)
+		}
+		var root map[string]any
+		if err := json.Unmarshal(result.Profiles[0].Config, &root); err != nil {
+			t.Fatal(err)
+		}
+		rule := root["routing"].(map[string]any)["rules"].([]any)[0].(map[string]any)["outboundTag"]
+		if groups, _ := json.Marshal(root["elarniGroups"]); string(groups) != test.groups || rule != test.rule {
+			t.Errorf("rule to %v, want %s; groups %s", rule, test.rule, groups)
+		}
 	}
 	if _, err := ImportClientProfiles(strings.Replace(input, "mode: global", "mode: direct", 1)); err == nil {
 		t.Fatal("direct mode imported")
