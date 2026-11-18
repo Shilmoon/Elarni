@@ -525,6 +525,16 @@ void main() {
       expect(mixed.pingURL, DesktopIntegration.defaultPingURL);
       expect(mixed.pingExpectedBody, 'ok');
       mixed.dispose();
+
+      // The removed "Current rules / active tunnel" choice was a proxy test.
+      stored = jsonEncode({
+        ...jsonDecode(stored) as Map,
+        'pingProtocol': 'activeProxy',
+      });
+      final former = DesktopIntegration();
+      await former.load();
+      expect(former.pingProtocol, 'proxy');
+      former.dispose();
     },
   );
 

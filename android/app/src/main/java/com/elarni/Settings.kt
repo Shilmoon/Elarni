@@ -64,7 +64,7 @@ object Settings {
         // Chosen on the Logs screen, not in a settings section.
         SettingField("logLevel", tr(R.string.log_level), "warning", "Logs", logLevels),
         SettingField("includeAllNetworks", tr(R.string.capture_all_ip_routes), false, "Apps & routes", detail = tr(R.string.overrides_the_included_route_list_excluded)),
-        SettingField("probeMode", tr(R.string.test_type), "proxy", "Server tests", listOf("proxy", "activeProxy", "tcp", "icmp")),
+        SettingField("probeMode", tr(R.string.test_type), "proxy", "Server tests", listOf("proxy", "tcp", "icmp")),
         SettingField("probeTimeout", tr(R.string.timeout_in_seconds_1_15), 5, "Server tests"),
         SettingField("probeMethod", tr(R.string.http_method), "GET", "Server tests", listOf("GET", "HEAD")),
         SettingField("probeVariant", tr(R.string.test_mode), "default", "Server tests", listOf("default", "double", "keepalive")),
@@ -100,6 +100,8 @@ object Settings {
     fun normalize(raw: JSONObject, credentials: JSONObject?): JSONObject {
         val value = defaults().merge(raw)
         if (value.opt("schemaVersion") != 1) throw AppFailure("invalid_settings")
+        // "Current rules / active tunnel" is no longer a choice; it was a proxy test of the selected server.
+        if (value.opt("probeMode") == "activeProxy") value.put("probeMode", "proxy")
         fields.forEach { field ->
             val item = value.get(field.key)
             if (field.initial is Boolean && item !is Boolean || field.initial is Int && item !is Int ||

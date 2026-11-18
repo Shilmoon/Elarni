@@ -4,6 +4,14 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
 
 ## Unreleased
 
+### Changed
+
+- **The "Current rules / active tunnel" test type is gone** from Settings › Server tests.
+  It tested only the selected server, so with it chosen **Test all** showed a result for one
+  server and nothing for the rest, and for that server it measured what **Proxy** measures
+  (on Android it only worked while connected). A saved choice of it becomes **Proxy**. The
+  connection health check and connection recovery still test the running tunnel. All platforms.
+
 ## 0.6.2 - 2026-11-18
 
 ### Added

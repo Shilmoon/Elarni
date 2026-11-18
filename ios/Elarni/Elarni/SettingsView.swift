@@ -116,13 +116,13 @@ struct PreferencesEditor: View {
       } else {
         Section {
           Picker("Test type", selection: $value.probeMode) {
-            Text("Proxy").tag("proxy"); Text("Current rules / active tunnel").tag("activeProxy"); Text("Direct TCP").tag("tcp"); Text("Direct ICMP").tag("icmp")
+            Text("Proxy").tag("proxy"); Text("Direct TCP").tag("tcp"); Text("Direct ICMP").tag("icmp")
           }
           Picker("Timeout", selection: $value.probeTimeout) {
             ForEach(Array(Set([5, 7, 9, 12, 15, value.probeTimeout])).sorted(), id: \.self) { Text("\($0) s timeout").tag($0) }
           }.accessibilityIdentifier("probeTimeout")
         } footer: { Text("While connected, proxy tests check the selected VPN path. Disconnect to test other servers, direct TCP, or ICMP. Results expire after five minutes or a configuration change.") }
-        if ["proxy", "activeProxy"].contains(value.probeMode) {
+        if value.probeMode == "proxy" {
           Section("HTTP request") {
             Picker("HTTP method", selection: $value.probeMethod) { Text("Proxy GET").tag("GET"); Text("Proxy HEAD").tag("HEAD") }
             Picker("Test mode", selection: $value.probeVariant) { Text("Default").tag("default"); Text("Double").tag("double"); Text("Keep-alive").tag("keepalive") }
