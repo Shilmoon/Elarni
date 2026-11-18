@@ -1598,6 +1598,8 @@ extension _HomeController on _ElarniHomeState {
   }
 
   void _selectSettingsCategory(SettingsCategory category) {
+    // Choosing a category ends a search.
+    _settingsSearch.clear();
     _set(() => _settingsCategory = category);
     if (category == SettingsCategory.system ||
         category == SettingsCategory.general) {

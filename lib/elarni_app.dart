@@ -246,6 +246,7 @@ class ElarniHome extends StatefulWidget {
 class _ElarniHomeState extends State<ElarniHome> {
   final _editorSaving = ValueNotifier<bool>(false);
   final TextEditingController _nodeSearch = TextEditingController();
+  final TextEditingController _settingsSearch = TextEditingController();
   final TextEditingController _pingURL = TextEditingController(
     text: DesktopIntegration.defaultPingURL,
   );
@@ -454,6 +455,7 @@ class _ElarniHomeState extends State<ElarniHome> {
     _pingSaveTimer?.cancel();
     _editorSaving.dispose();
     _nodeSearch.dispose();
+    _settingsSearch.dispose();
     widget.tunnelControl.setImportListener(null);
     _pingURL.dispose();
     _pingExpectedStatus.dispose();
@@ -615,16 +617,7 @@ class _ElarniHomeState extends State<ElarniHome> {
               },
       ),
     );
-    Widget section(String title) => Padding(
-      padding: const EdgeInsets.fromLTRB(16, 24, 16, 8),
-      child: Semantics(
-        header: true,
-        child: Text(
-          title,
-          style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
-        ),
-      ),
-    );
+    Widget section(String title) => ElarniSettingsSection(title);
     Widget action({
       required Widget title,
       Widget? subtitle,
@@ -1738,6 +1731,26 @@ class _ElarniHomeState extends State<ElarniHome> {
                           ? l10n.routeTableHelp
                           : null,
                       onSelect: _selectSettingsCategory,
+                      search: _settingsSearch,
+                      onSearch: (_) => setState(() {}),
+                      // A search builds every category; a category's own name
+                      // finds all of its rows.
+                      results: switch (_settingsSearch.text
+                          .trim()
+                          .toLowerCase()) {
+                        '' => null,
+                        final query => [
+                          for (final category in SettingsCategory.values)
+                            if (category.label.toLowerCase().contains(query)
+                                    ? settingsSections[category]!()
+                                    : settingSearchResults(
+                                        settingsSections[category]!(),
+                                        query,
+                                      )
+                                case final rows when rows.isNotEmpty)
+                              (category, rows),
+                        ],
+                      },
                       children: settingsSections[_settingsCategory]!(),
                     ),
                     DesktopPage.routing => pageList(

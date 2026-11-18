@@ -2001,6 +2001,12 @@ class AppLocalizationsRu extends AppLocalizations {
   String get noMatchingServers => 'Нет подходящих серверов';
 
   @override
+  String get searchSettings => 'Поиск настроек';
+
+  @override
+  String get noMatchingSettings => 'Нет подходящих настроек';
+
+  @override
   String get noServersInSubscription => 'В этой подписке нет серверов';
 
   @override

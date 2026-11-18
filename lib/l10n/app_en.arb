@@ -977,6 +977,8 @@
     }
   },
   "noMatchingServers": "No matching servers",
+  "searchSettings": "Search settings",
+  "noMatchingSettings": "No settings match",
   "noServersInSubscription": "No servers in this subscription",
   "delete": "Delete",
   "selectUnreachable": "Select unreachable",

@@ -11,6 +11,14 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
   apps have their tabs, instead of a row under the title bar. The back arrow in the title bar
   is gone: every page is one click away. A wider window keeps the sidebar.
 
+### Added
+
+- **Desktop: search in Settings.** A "Search settings" field sits above the category menu in
+  a narrow window and at the top of the category list in a wide one. Typing shows the matching
+  settings from every category, grouped by category, as the working controls themselves: a
+  setting is found by its label, its help text, the text under it, the heading it stands under
+  or its category's name. Clearing the field or choosing a category ends the search.
+
 ### Fixed
 
 - **Desktop: Routing › Per-app routing in a narrow window.** A selected app's name was squeezed

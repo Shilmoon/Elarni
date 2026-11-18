@@ -1979,6 +1979,12 @@ class AppLocalizationsEn extends AppLocalizations {
   String get noMatchingServers => 'No matching servers';
 
   @override
+  String get searchSettings => 'Search settings';
+
+  @override
+  String get noMatchingSettings => 'No settings match';
+
+  @override
   String get noServersInSubscription => 'No servers in this subscription';
 
   @override

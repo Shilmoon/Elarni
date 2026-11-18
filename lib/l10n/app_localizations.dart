@@ -3458,6 +3458,18 @@ abstract class AppLocalizations {
   /// **'No matching servers'**
   String get noMatchingServers;
 
+  /// No description provided for @searchSettings.
+  ///
+  /// In en, this message translates to:
+  /// **'Search settings'**
+  String get searchSettings;
+
+  /// No description provided for @noMatchingSettings.
+  ///
+  /// In en, this message translates to:
+  /// **'No settings match'**
+  String get noMatchingSettings;
+
   /// No description provided for @noServersInSubscription.
   ///
   /// In en, this message translates to:
