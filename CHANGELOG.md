@@ -4,6 +4,14 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
 
 ## Unreleased
 
+### Fixed
+
+- **A subscription that could not be deleted keeps its connection on macOS and iOS.** Deleting
+  the subscription of the connected server stopped the tunnel, removed its saved plan and
+  turned reconnecting off before the deletion was written; when the write failed, the
+  subscription stayed and the connection was gone. The tunnel is now stopped once the deletion
+  is on disk, and comes back if the deletion fails after that.
+
 ## 0.6.2 - 2026-11-17
 
 ### Added

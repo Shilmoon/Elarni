@@ -440,10 +440,7 @@ final class IOSAppModel {
   func rename(_ group: ServerSubscription, name: String) throws { _ = try catalog().rename(id: group.id, name: name) }
   func delete(_ group: ServerSubscription) async throws {
     let store = try catalog()
-    if store.removesSelection(subscriptionID: group.id) {
-      try await vpn.disconnect(); try await vpn.clearSavedPlan()
-      try commands.persist(.disconnected); recovery.stop(); try saveEpisode()
-    }
+    let removesSelection = store.removesSelection(subscriptionID: group.id)
     // A provider's routing profile goes with it, also where the selected server's
     // subscription uses it; the tunnel must not keep those rules (as on macOS).
     let revision = try store.routing.runtimeRevision(subscriptionID: store.selectedSubscriptionID())
@@ -451,9 +448,18 @@ final class IOSAppModel {
       let previous = vpn.savedPlan
       let wasConnected = vpn.connected
       let waiting = onDemandWaiting
-      var synchronized = false
+      let intent = commands.intent
+      var synchronized = false, stopped = false
       do {
         _ = try await store.delete(id: group.id) {
+          // The store has journaled and saved the deletion by now. One that fails earlier leaves the
+          // subscription, so the tunnel, its saved plan and the intent stay as they were (as on macOS).
+          if removesSelection {
+            stopped = true
+            try await self.vpn.disconnect(); try await self.vpn.clearSavedPlan()
+            try self.commands.persist(.disconnected); self.recovery.stop(); try self.saveEpisode()
+            return
+          }
           guard store.selectedNodeID() != nil,
                 try store.routing.runtimeRevision(subscriptionID: store.selectedSubscriptionID()) != revision else { return }
           synchronized = true
@@ -468,6 +474,18 @@ final class IOSAppModel {
             try await vpn.persist(previous, settings: settings, allowOnDemand: commands.intent == .connected)
           }
         } else if synchronized, waiting, let previous { try await vpn.persist(previous, settings: settings, allowOnDemand: commands.intent == .connected) }
+        if stopped, let intent, let previous {
+          // The store put the subscription back; the connection it carried comes back with it.
+          do {
+            try commands.persist(intent)
+            if wasConnected {
+              recovery.rearm(now: ProcessInfo.processInfo.systemUptime); try saveEpisode()
+              try await vpn.connect(previous, settings: settings)
+            } else if waiting { try await vpn.persist(previous, settings: settings, allowOnDemand: intent == .connected) }
+          } catch {
+            try? commands.persist(.disconnected); recovery.stop(); try? saveEpisode()
+          }
+        }
         throw error
       }
     }
