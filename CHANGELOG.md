@@ -4,6 +4,11 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
 
 ## Unreleased
 
+### Changed
+
+- **`elarni-cli status` no longer builds the server list to read the selected server.** A
+  monitor that asks for the status every few seconds repeated that work for every server.
+
 ## 0.6.2 - 2026-11-17
 
 ### Added

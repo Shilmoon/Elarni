@@ -168,7 +168,9 @@ final class HeadlessControl {
           input['arguments'] == null ? {} : headlessObject(input['arguments']),
         );
       case 'status':
-        final snapshot = await profiles();
+        // A monitor asks this over and over: only the selection is read, and
+        // the server list is not built to be thrown away.
+        final snapshot = await invoke('subscriptions', {});
         return {
           ...await invoke('state', {}),
           'selectedNodeId': snapshot['selectedNodeId'],
