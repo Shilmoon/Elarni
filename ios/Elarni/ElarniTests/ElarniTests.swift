@@ -1581,6 +1581,10 @@ final class ElarniTests: XCTestCase {
     try await model.refresh(added[1])
     XCTAssertEqual(feed.hwid("/hwid-a"), after)
     XCTAssertEqual(feed.hwid("/hwid-b"), before)
+    // The refresh that sent the new ID must not have put the old one back.
+    try await model.refresh(added[0])
+    XCTAssertEqual(feed.hwid("/hwid-a"), after, "the reset lasted one refresh")
+    XCTAssertEqual(try model.deviceID(subscriptionID: added[0]), after)
     for source in model.subscriptions where !existing.contains(source.id) { try await model.delete(source) }
   }
 

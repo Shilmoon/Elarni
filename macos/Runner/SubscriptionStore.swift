@@ -1378,7 +1378,8 @@ final class SubscriptionStore {
           fallbackHosts: old.fallbackHosts,
           fetchOptions: old.fetchOptions,
           importedName: old.importedName,
-          hiddenNodes: hidden.isEmpty ? nil : hidden
+          hiddenNodes: hidden.isEmpty ? nil : hidden,
+          deviceSalt: old.deviceSalt
         ),
         refs
       )

@@ -1298,7 +1298,20 @@ struct SubscriptionChecks {
     _ = try await store.refresh(id: id)
     try expect(dnsNotice() == nil, "the DNS notice outlived the provider DNS")
     print("PASS a provider DNS that asks the system resolver is noted until the provider changes it")
-    return 4
+    // A reset stays: the refresh after the one that sent the new ID sends it again.
+    let firstID = try store.deviceID(subscriptionID: id)
+    _ = try store.resetDeviceID(subscriptionID: id)
+    let resetID = try store.deviceID(subscriptionID: id)
+    try expect(resetID != firstID, "a reset left the device ID as it was")
+    _ = try await store.refresh(id: id)
+    try expect(store.deviceID(subscriptionID: id) == resetID, "a refresh undid the device ID reset")
+    try await mode("updated")
+    _ = try await store.refresh(id: id)
+    try await mode("baseline")
+    store = try openStore()
+    try expect(store.deviceID(subscriptionID: id) == resetID, "a changed refresh and a relaunch undid the device ID reset")
+    print("PASS a device ID reset survives refreshes and a relaunch")
+    return 5
   }
 
   static func rejects(_ body: () throws -> Void) throws {

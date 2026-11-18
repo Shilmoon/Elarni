@@ -4,6 +4,12 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
 
 ## Unreleased
 
+### Fixed
+
+- **A reset device ID stays reset on macOS and iOS.** The refresh right after a reset sent the
+  new ID and then dropped it, so every later refresh sent the old ID again; choosing a server in
+  a profile's group dropped it too. The new ID now stays with the subscription.
+
 ## 0.6.2 - 2026-11-17
 
 ### Added
