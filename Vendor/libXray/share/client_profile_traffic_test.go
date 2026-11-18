@@ -308,3 +308,86 @@ func TestCompiledProviderChainsTraverseBothHops(t *testing.T) {
 		})
 	}
 }
+
+// Clash's global mode sends everything through what the GLOBAL group selects. The rules are left
+// out, so that selection has to decide the default route: choosing another server in it, or in
+// the group it points at, changes the outbound that carries the traffic.
+func TestCompiledProviderClashGlobalModeFollowsItsSelection(t *testing.T) {
+	type object = map[string]any
+	imported, err := ImportClientProfiles(`mode: global
+proxies:
+  - {name: a, type: socks5, server: 127.0.0.1, port: 1081}
+  - {name: b, type: socks5, server: 127.0.0.1, port: 1082}
+proxy-groups:
+  - {name: PROXY, type: select, proxies: [a, b]}
+rules:
+  - MATCH,DIRECT
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var profile object
+	if err := json.Unmarshal(imported.Profiles[0].Config, &profile); err != nil {
+		t.Fatal(err)
+	}
+	choose := func(group, choice string) {
+		t.Helper()
+		for _, item := range profile["elarniGroups"].([]any) {
+			if item := item.(object); item["name"] == group {
+				item["selected"] = choice
+				return
+			}
+		}
+		t.Fatalf("no group %s in %v", group, profile["elarniGroups"])
+	}
+	// The outbound a connection no rule names leaves by, as its protocol and port.
+	carriedBy := func() string {
+		t.Helper()
+		compiled, err := compileElarniFFI("compileProfile", object{"profile": profile, "socksPort": trafficPort(t)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var config object
+		if err := json.Unmarshal(compiled, &config); err != nil {
+			t.Fatal(err)
+		}
+		config["inbounds"] = []any{}
+		instance, stop := startTrafficCore(t, config)
+		defer stop()
+		tag := pickCompiledRoute(t, instance.GetFeature(routing.RouterType()).(routing.Router), "elarni-socks", net.DomainAddress("anywhere.test"))
+		for _, outbound := range config["outbounds"].([]any) {
+			if outbound := outbound.(object); outbound["tag"] == tag {
+				settings, _ := json.Marshal(outbound["settings"])
+				var server struct {
+					Port    int `json:"port"`
+					Servers []struct {
+						Port int `json:"port"`
+					} `json:"servers"`
+				}
+				if err := json.Unmarshal(settings, &server); err != nil {
+					t.Fatal(err)
+				}
+				if len(server.Servers) > 0 {
+					server.Port = server.Servers[0].Port
+				}
+				return fmt.Sprintf("%v:%d", outbound["protocol"], server.Port)
+			}
+		}
+		t.Fatalf("no outbound %s", tag)
+		return ""
+	}
+	for _, step := range []struct{ group, choice, want string }{
+		{"", "", "socks:1081"},
+		{"PROXY", "b", "socks:1082"},
+		{"GLOBAL", "a", "socks:1081"},
+		{"GLOBAL", "DIRECT", "freedom:0"},
+		{"GLOBAL", "PROXY", "socks:1082"},
+	} {
+		if step.group != "" {
+			choose(step.group, step.choice)
+		}
+		if got := carriedBy(); got != step.want {
+			t.Errorf("%s = %s: the default route leaves by %s, want %s", step.group, step.choice, got, step.want)
+		}
+	}
+}
