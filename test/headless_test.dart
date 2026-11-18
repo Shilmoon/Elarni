@@ -328,6 +328,26 @@ echo "/org/freedesktop/login1: org.freedesktop.login1.Manager.PrepareForSleep (f
     });
   });
 
+  test('status reports the selection without listing the servers', () async {
+    final control = HeadlessControl(
+      (method, args) async => switch (method) {
+        // Anything that walked the list would fail on this one.
+        'subscriptions' => {'selectedNodeId': 'one', 'subscriptions': 'unread'},
+        'state' => {'state': 'connected', 'liveness': 'alive'},
+        'automationStatus' => {'status': 'idle'},
+        'runtimeMetrics' => {'uplink': 1},
+        _ => throw StateError(method),
+      },
+    );
+    expect(await control.request({'command': 'status'}), {
+      'state': 'connected',
+      'liveness': 'alive',
+      'selectedNodeId': 'one',
+      'automation': {'status': 'idle'},
+      'runtime': {'uplink': 1},
+    });
+  });
+
   test('partial settings preserve the controller contract', () async {
     final calls = <CatalogMap>[];
     final control = HeadlessControl((method, args) async {

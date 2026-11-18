@@ -52,6 +52,10 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
   left out, or with an authentic package of another build, passed. It now requires every file
   the build attested, all from one run at the draft's commit, the tag of the version that was
   built, and a signed APK whose contents are the build's unsigned one.
+### Changed
+
+- **`elarni-cli status` no longer builds the server list to read the selected server.** A
+  monitor that asks for the status every few seconds repeated that work for every server.
 
 ## 0.6.2 - 2026-11-17
 
