@@ -106,16 +106,9 @@ Future<void> main(List<String> arguments) async {
         }
         return;
       }
-      final core = option(
-        '--core',
-        '$bundle/elarni-core${Platform.isWindows ? '.exe' : ''}',
-      );
-      final domain = option(
-        '--domain',
-        Platform.isWindows
-            ? '$bundle/elarni_domain.dll'
-            : '$bundle/lib/libelarni_domain.so',
-      );
+      // Linux: this process is the daemon. macOS and Windows returned above.
+      final core = option('--core', '$bundle/elarni-core');
+      final domain = option('--domain', '$bundle/lib/libelarni_domain.so');
       final password = option('--keyring-password-file', '');
       if (args.isNotEmpty) throw const FormatException('unexpected_argument');
       daemon = true;
