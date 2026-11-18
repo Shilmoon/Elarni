@@ -4,6 +4,14 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
 
 ## Unreleased
 
+### Fixed
+
+- **Desktop: a subscription's page shows and copies the device ID its next download sends.**
+  The ID depends on the address the subscription is downloaded from, but the page kept the
+  one it looked up first: after the provider moved the subscription, or after a switch to a
+  download format served from another address, **Copy** gave the old ID. A lookup that failed
+  stayed "Unavailable" until the app was restarted; it is now tried again.
+
 ## 0.6.2 - 2026-11-17
 
 ### Added
