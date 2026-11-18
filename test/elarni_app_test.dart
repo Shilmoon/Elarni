@@ -74,11 +74,7 @@ Future<void> openSettings(WidgetTester tester) async {
 }
 
 Future<void> closeSettings(WidgetTester tester) async {
-  // Narrow windows go back; wide ones use the sidebar.
-  final back = find.byKey(const Key('settings-back'));
-  final button = back.evaluate().isNotEmpty
-      ? back
-      : find.byKey(const Key('nav-home'));
+  final button = find.byKey(const Key('nav-home'));
   if (button.evaluate().isNotEmpty) {
     await tester.tap(button);
     await tester.pumpAndSettle();
@@ -2620,6 +2616,47 @@ void main() {
     await openSubscriptions(tester);
     await openRouting(tester);
     expect(find.byKey(const Key('per-app-routing-mode')), findsOneWidget);
+  });
+
+  testWidgets('a narrow window has its navigation at the bottom', (
+    tester,
+  ) async {
+    await pumpApp(tester, FakeTunnelControl(), windows: true);
+    const pages = ['home', 'subscriptions', 'routing', 'settings'];
+    Offset center(String page) =>
+        tester.getCenter(find.byKey(Key('nav-$page')));
+
+    await tester.binding.setSurfaceSize(const Size(420, 760));
+    await tester.pumpAndSettle();
+    for (final (index, page) in pages.indexed) {
+      // One row along the bottom edge, a quarter of the width each.
+      expect(center(page).dy, greaterThan(760 - 56), reason: page);
+      expect(center(page).dy, center('home').dy, reason: page);
+      expect(center(page).dx, closeTo(420 / 4 * (index + .5), 1), reason: page);
+    }
+    await openSubscriptions(tester);
+    // The page ends where the bar starts, and nothing sends the reader back.
+    expect(
+      tester.getRect(find.byKey(const ValueKey('subscriptions-list'))).bottom,
+      lessThanOrEqualTo(tester.getRect(find.byKey(const Key('nav-home'))).top),
+    );
+    expect(find.byKey(const Key('settings-back')), findsNothing);
+    await tester.tap(find.byKey(const Key('nav-settings')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('settings-category')), findsOneWidget);
+    expect(find.byKey(const Key('settings-back')), findsNothing);
+    await tester.tap(find.byKey(const Key('nav-home')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('home-list')), findsOneWidget);
+
+    // A wide window keeps the sidebar.
+    await tester.binding.setSurfaceSize(const Size(1200, 900));
+    await tester.pumpAndSettle();
+    for (final page in pages) {
+      expect(center(page).dx, lessThan(176), reason: page);
+    }
+    expect(center('home').dy, lessThan(200));
+    expect(center('settings').dy, greaterThan(800));
   });
 
   testWidgets('a narrow window gives the per-app editor the page width', (

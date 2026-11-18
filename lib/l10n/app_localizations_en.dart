@@ -466,9 +466,6 @@ class AppLocalizationsEn extends AppLocalizations {
   String get home => 'Home';
 
   @override
-  String get backToHome => 'Back to Home';
-
-  @override
   String get settingsGroupSupport => 'Support';
 
   @override

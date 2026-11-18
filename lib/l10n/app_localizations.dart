@@ -854,12 +854,6 @@ abstract class AppLocalizations {
   /// **'Home'**
   String get home;
 
-  /// No description provided for @backToHome.
-  ///
-  /// In en, this message translates to:
-  /// **'Back to Home'**
-  String get backToHome;
-
   /// No description provided for @settingsGroupSupport.
   ///
   /// In en, this message translates to:
