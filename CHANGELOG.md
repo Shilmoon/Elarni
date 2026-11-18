@@ -45,6 +45,13 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
   one.** Every server test through its own proxy made a full copy of the catalog first, so a
   **Test all** of a large subscription did work that grew with the square of its size and
   held up the window. A test now reads the one server it needs.
+### Changed
+
+- **A release is published only when its draft is one build's whole set of files.** The publish
+  stage checked the files that were in the draft, each on its own, so a draft with a package
+  left out, or with an authentic package of another build, passed. It now requires every file
+  the build attested, all from one run at the draft's commit, the tag of the version that was
+  built, and a signed APK whose contents are the build's unsigned one.
 
 ## 0.6.2 - 2026-11-17
 
