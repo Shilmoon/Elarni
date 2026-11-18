@@ -42,6 +42,15 @@ final class DesktopIntegration extends ChangeNotifier {
   String language = 'system';
   String accent = 'evergreen', sort = 'provider';
   Set<String> pinned = {};
+
+  /// The Home groups the user closed; every other group is open. A
+  /// subscription's id, `<id>:<country>` for a country in it and `:<country>`
+  /// for a country in the By country list.
+  Set<String> closedGroups = {};
+  static const maxClosedGroups = 256;
+  static final _closedGroup = RegExp(
+    r'^(?=.)[A-Za-z0-9_-]{0,128}(:[A-Za-z]{2,5})?$',
+  );
   bool expiryReminders = false, _notifying = false;
   bool favoritesFirst = true;
   int lastExpiryReminderDay = 0;
@@ -184,6 +193,12 @@ final class DesktopIntegration extends ChangeNotifier {
       language = nextLanguage;
       sort = nextSort;
       pinned = nextPins;
+      // Unreadable entries are dropped: their groups open again.
+      closedGroups = {
+        if (value['closedGroups'] case final List stored)
+          for (final key in stored.take(maxClosedGroups))
+            if (key is String && _closedGroup.hasMatch(key)) key,
+      };
       expiryReminders = value['expiryReminders'] == true;
       favoritesFirst = value['favoritesFirst'] != false;
       lastExpiryReminderDay = value['lastExpiryReminderDay'] as int? ?? 0;
@@ -229,6 +244,18 @@ final class DesktopIntegration extends ChangeNotifier {
     unawaited(checkForUpdate());
   }
 
+  /// Remembers the closed Home groups; waits for a save in progress and never
+  /// throws, as a group opens and closes whether or not that is stored.
+  Future<void> rememberClosedGroups(Set<String> groups) async {
+    while (saving && !_closed) await _saved?.future;
+    if (_closed || !available) return;
+    try {
+      await update(closedGroups: groups.take(maxClosedGroups).toSet());
+    } on Object {
+      /* update() publishes its error. */
+    }
+  }
+
   // Saves for the update logic: they wait for a save in progress and never
   // throw; a failure keeps the error update() published.
   Future<bool> _store({
@@ -254,6 +281,7 @@ final class DesktopIntegration extends ChangeNotifier {
     String? language,
     String? sort,
     Set<String>? pinned,
+    Set<String>? closedGroups,
     bool? expiryReminders,
     bool? favoritesFirst,
     int? lastExpiryReminderDay,
@@ -295,6 +323,7 @@ final class DesktopIntegration extends ChangeNotifier {
         'language': language ?? this.language,
         'sort': sort ?? this.sort,
         'pinned': (pinned ?? this.pinned).toList()..sort(),
+        'closedGroups': (closedGroups ?? this.closedGroups).toList()..sort(),
         'expiryReminders': expiryReminders ?? this.expiryReminders,
         'favoritesFirst': favoritesFirst ?? this.favoritesFirst,
         'lastExpiryReminderDay':
@@ -324,6 +353,7 @@ final class DesktopIntegration extends ChangeNotifier {
       this.language = language ?? this.language;
       this.sort = sort ?? this.sort;
       this.pinned = pinned ?? this.pinned;
+      this.closedGroups = closedGroups ?? this.closedGroups;
       this.expiryReminders = expiryReminders ?? this.expiryReminders;
       this.favoritesFirst = favoritesFirst ?? this.favoritesFirst;
       this.lastExpiryReminderDay =

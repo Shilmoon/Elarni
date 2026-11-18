@@ -9,6 +9,15 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
 - **Favorites as one list.** The Favorites filter on Home shows the favorite servers of every
   subscription in one list, without subscription and country groups to open; each server has
   its country's flag after its name, and showing the list tests the servers not tested lately.
+- **Home shows every server.** Every subscription and country on Home starts open. On
+  Windows, macOS and Linux a group you close stays closed the next time the app starts, until
+  you open it; on Android and iPhone it stays closed until the app closes. A start therefore
+  tests the servers of every group left open, not only the selected country's.
+- **By country on desktop.** On Windows, macOS and Linux the third list on Home is By country
+  in place of Recent: the servers of all subscriptions under one header for each country, each
+  with its subscription's name. Android and iPhone keep Recent.
+- **Server rows under a subscription** show the transport and security after the protocol, not
+  the subscription's name again.
 
 ## 0.6.2 - 2026-11-18
 

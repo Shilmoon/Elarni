@@ -133,6 +133,8 @@ void main() {
         await tester.pumpAndSettle();
         expect(find.byKey(const ValueKey('node:a')), findsOneWidget);
         expect(find.byKey(const ValueKey('node:b')), findsNothing);
+        // Where no desktop host answers, the third list is the recent servers.
+        expect(find.widgetWithText(ChoiceChip, 'By country'), findsNothing);
         await tester.tap(find.widgetWithText(ChoiceChip, 'Recent'));
         await tester.pumpAndSettle();
         // The row keeps only the server; its last connection is in the tooltip.

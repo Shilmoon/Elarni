@@ -1193,6 +1193,8 @@ extension _HomePages on _ElarniHomeState {
     bool subscriptionView = false,
     bool selecting = false,
     bool flag = false,
+    // Named where no subscription header stands above the row.
+    bool subscription = false,
   }) {
     final scheme = Theme.of(context).colorScheme;
     final result = _pingResults[node.id];
@@ -1371,9 +1373,9 @@ extension _HomePages on _ElarniHomeState {
                               children: [
                                 ProtocolTag(node.protocol),
                                 Text(
-                                  subscriptionView
-                                      ? '${node.transport} · ${node.security}'
-                                      : group.name,
+                                  subscription
+                                      ? group.name
+                                      : '${node.transport} · ${node.security}',
                                   style: TextStyle(
                                     fontSize: 12,
                                     color: scheme.onSurfaceVariant,
@@ -1656,10 +1658,14 @@ extension _HomePages on _ElarniHomeState {
       contentPadding: const EdgeInsets.fromLTRB(20, 16, 20, 4),
       onTap: _search.isNotEmpty
           ? null
-          : () => _set(() {
-              if (!_collapsedSubscriptions.remove(group.id))
-                _collapsedSubscriptions.add(group.id);
-            }),
+          : () {
+              if (_toggleGroup(group.id))
+                _pingOpened([
+                  for (final country in _countryGroups(group))
+                    if (country.open)
+                      for (final entry in country.nodes) entry.node,
+                ]);
+            },
       title: Text(
         group.name,
         style: const TextStyle(fontWeight: FontWeight.w600),
@@ -1705,7 +1711,7 @@ extension _HomePages on _ElarniHomeState {
     return [
       for (final code in codes)
         _countryGroup(
-          '${subscription?.id}:$code',
+          '${subscription?.id ?? ''}:$code',
           countries[code],
           byCountry[code]!,
         ),
@@ -1724,10 +1730,29 @@ extension _HomePages on _ElarniHomeState {
       location: location,
       nodes: nodes,
       selected: selected,
-      open:
-          _search.isNotEmpty ||
-          (_expandedCountries[key] ?? (selected || location == null)),
+      open: _search.isNotEmpty || !_closedGroups.contains(key),
     );
+  }
+
+  /// The Home groups the user closed: a subscription's id, `<id>:<country>`
+  /// for a country in it and `:<country>` for one in the By country list.
+  Set<String> get _closedGroups =>
+      _closedGroupsNow ?? widget.desktop.closedGroups;
+
+  /// Opens or closes a Home group and remembers that; true when it opened.
+  bool _toggleGroup(String key) {
+    final ids = {for (final group in _subscriptions.subscriptions) group.id};
+    final closed = {
+      for (final other in _closedGroups)
+        // A removed subscription's groups are forgotten.
+        if (other.startsWith(':') || ids.contains(other.split(':').first))
+          other,
+    };
+    final open = closed.remove(key);
+    if (!open) closed.add(key);
+    _set(() => _closedGroupsNow = closed);
+    unawaited(widget.desktop.rememberClosedGroups(closed));
+    return open;
   }
 
   /// Orders servers of several subscriptions as the sort menu says.
@@ -1767,13 +1792,23 @@ extension _HomePages on _ElarniHomeState {
     return servers;
   }
 
-  /// The servers in Home's open groups, which a launch tests.
+  /// The servers Home lists: those of its open groups.
+  List<SubscriptionNode> _shownServers() => [
+    if (_nodeFilter == 'favorites')
+      for (final entry in _favoriteServers()) entry.node
+    else
+      for (final group in _nodeFilter == 'country' ? [null] : _displayGroups())
+        if (group == null ||
+            _search.isNotEmpty ||
+            !_closedGroups.contains(group.id))
+          for (final country in _countryGroups(group))
+            if (country.open)
+              for (final entry in country.nodes) entry.node,
+  ];
+
+  /// The servers a launch tests.
   List<String> _openServerIds() => [
-    for (final group in _displayGroups())
-      if (_search.isNotEmpty || !_collapsedSubscriptions.contains(group.id))
-        for (final country in _countryGroups(group))
-          if (country.open)
-            for (final entry in country.nodes) entry.node.id,
+    for (final node in _shownServers()) node.id,
   ];
 
   // Builders, so that a long list makes only the rows on screen.
@@ -1818,18 +1853,24 @@ extension _HomePages on _ElarniHomeState {
       if (_nodeFilter == 'favorites')
         return [
           for (final entry in _favoriteServers())
-            () => _serverRow(entry.node, entry.group, flag: true),
+            () => _serverRow(
+              entry.node,
+              entry.group,
+              flag: true,
+              subscription: true,
+            ),
         ];
-      return [
-        for (final group in groups)
-          // A search shows every match, so it opens closed subscriptions.
-          if (_search.isNotEmpty ||
-              !_collapsedSubscriptions.contains(group.id)) ...[
-            () => _serverSubscriptionHeader(group, open: true),
-            ..._serverItems(subscription: group),
-          ] else
-            () => _serverSubscriptionHeader(group, open: false),
-      ];
+      // By country puts every subscription's servers under one country.
+      if (_nodeFilter != 'country')
+        return [
+          for (final group in groups)
+            // A search shows every match, so it opens closed subscriptions.
+            if (_search.isNotEmpty || !_closedGroups.contains(group.id)) ...[
+              () => _serverSubscriptionHeader(group, open: true),
+              ..._serverItems(subscription: group),
+            ] else
+              () => _serverSubscriptionHeader(group, open: false),
+        ];
     }
     final countries = _countryGroups(subscription);
     return [
@@ -1863,9 +1904,17 @@ extension _HomePages on _ElarniHomeState {
             () => country.selected
                 ? ColoredBox(
                     color: scheme.primary.withValues(alpha: .08),
-                    child: _serverRow(entry.node, entry.group),
+                    child: _serverRow(
+                      entry.node,
+                      entry.group,
+                      subscription: subscription == null,
+                    ),
                   )
-                : _serverRow(entry.node, entry.group),
+                : _serverRow(
+                    entry.node,
+                    entry.group,
+                    subscription: subscription == null,
+                  ),
           () => Container(
             height: 8,
             decoration: BoxDecoration(
@@ -1914,9 +1963,7 @@ extension _HomePages on _ElarniHomeState {
           onTap: _search.isNotEmpty
               ? null
               : () {
-                  final open = !country.open;
-                  _set(() => _expandedCountries[country.key] = open);
-                  if (open)
+                  if (_toggleGroup(country.key))
                     _pingOpened(country.nodes.map((entry) => entry.node));
                 },
           leading: Column(
@@ -2592,18 +2639,22 @@ extension _HomePages on _ElarniHomeState {
             for (final entry in {
               'all': l10n.filterAll,
               'favorites': l10n.filterFavorites,
-              'recent': l10n.filterRecent,
+              // A desktop window has room for every server, so it groups
+              // them a second way; a phone keeps the short list.
+              if (widget.desktop.available)
+                'country': l10n.filterByCountry
+              else
+                'recent': l10n.filterRecent,
             }.entries)
               ChoiceChip(
                 label: Text(entry.value),
                 selected: _nodeFilter == entry.key,
                 onSelected: (_) {
                   _set(() => _nodeFilter = entry.key);
-                  // The list has no group to open, which is what tests a server.
-                  if (entry.key == 'favorites')
-                    _pingOpened(
-                      _favoriteServers().map((server) => server.node),
-                    );
+                  // These lists show servers that the groups of All may hide,
+                  // and opening a group is what tests a server.
+                  if (entry.key == 'favorites' || entry.key == 'country')
+                    _pingOpened(_shownServers());
                 },
               ),
             if (_locationFilter case final location?)

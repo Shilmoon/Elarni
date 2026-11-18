@@ -965,6 +965,7 @@
   "loginRegistered": "Registered for your account.",
   "searchServers": "Search servers",
   "filterRecent": "Recent",
+  "filterByCountry": "By country",
   "filterFavorites": "Favorites",
   "filterAll": "All",
   "servers": "Servers",

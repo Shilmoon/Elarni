@@ -555,6 +555,7 @@
   "loginRegistered": "Зарегистрировано для вашей учётной записи.",
   "searchServers": "Поиск серверов",
   "filterRecent": "Недавние",
+  "filterByCountry": "По странам",
   "filterFavorites": "Избранные",
   "filterAll": "Все",
   "servers": "Серверы",

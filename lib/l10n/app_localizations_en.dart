@@ -1962,6 +1962,9 @@ class AppLocalizationsEn extends AppLocalizations {
   String get filterRecent => 'Recent';
 
   @override
+  String get filterByCountry => 'By country';
+
+  @override
   String get filterFavorites => 'Favorites';
 
   @override

@@ -3428,6 +3428,12 @@ abstract class AppLocalizations {
   /// **'Recent'**
   String get filterRecent;
 
+  /// No description provided for @filterByCountry.
+  ///
+  /// In en, this message translates to:
+  /// **'By country'**
+  String get filterByCountry;
+
   /// No description provided for @filterFavorites.
   ///
   /// In en, this message translates to:

@@ -1984,6 +1984,9 @@ class AppLocalizationsRu extends AppLocalizations {
   String get filterRecent => 'Недавние';
 
   @override
+  String get filterByCountry => 'По странам';
+
+  @override
   String get filterFavorites => 'Избранные';
 
   @override
