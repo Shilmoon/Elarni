@@ -1985,6 +1985,29 @@ class AppLocalizationsEn extends AppLocalizations {
   String get noMatchingSettings => 'No settings match';
 
   @override
+  String get selectServers => 'Select servers';
+
+  @override
+  String get testAll => 'Test all';
+
+  @override
+  String get serverColumn => 'Server';
+
+  @override
+  String get latencyColumn => 'Latency';
+
+  @override
+  String subscriptionCount(int count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: '$count subscriptions',
+      one: '1 subscription',
+    );
+    return '$_temp0';
+  }
+
+  @override
   String get noServersInSubscription => 'No servers in this subscription';
 
   @override

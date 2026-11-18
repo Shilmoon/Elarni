@@ -2007,6 +2007,31 @@ class AppLocalizationsRu extends AppLocalizations {
   String get noMatchingSettings => 'Нет подходящих настроек';
 
   @override
+  String get selectServers => 'Выбрать серверы';
+
+  @override
+  String get testAll => 'Проверить все';
+
+  @override
+  String get serverColumn => 'Сервер';
+
+  @override
+  String get latencyColumn => 'Задержка';
+
+  @override
+  String subscriptionCount(int count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: '$count подписки',
+      many: '$count подписок',
+      few: '$count подписки',
+      one: '$count подписка',
+    );
+    return '$_temp0';
+  }
+
+  @override
   String get noServersInSubscription => 'В этой подписке нет серверов';
 
   @override

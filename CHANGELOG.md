@@ -10,6 +10,17 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
   Subscriptions, Routing and Settings icons are a bar along the bottom edge, where the phone
   apps have their tabs, instead of a row under the title bar. The back arrow in the title bar
   is gone: every page is one click away. A wider window keeps the sidebar.
+- **Desktop: the Subscriptions page is a server table.** The page shows one subscription at
+  a time, chosen in a menu that lists each with its server count and state, with Refresh and
+  the "…" menu beside it. Under it are the server search, a Favorites filter, the order (the
+  one Home uses) and "Test all", then the servers as a table: flag, name, protocol, latency,
+  a star and a "…" menu per row. The cards that had to be opened one by one are gone.
+  - A row now selects its server, as on Home; the selected one has a mark beside its name.
+  - "Check exit" and "Server config" moved from buttons on the row into its "…" menu, which
+    also has Rename, Share, Server IP type and Hide or Delete.
+  - "Select servers" moved into the subscription's "…" menu, which also has "Details" and
+    "Routing profile": both are under the table, and the menu scrolls to them.
+  - The page opens on the subscription of the selected server. Home's server list is unchanged.
 
 ### Added
 
