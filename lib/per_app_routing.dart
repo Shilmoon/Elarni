@@ -1183,7 +1183,7 @@ class _PerAppRoutingEditorState extends State<PerAppRoutingEditor> {
     _ => target,
   };
 
-  Widget _targetSelect(String process) {
+  Widget _targetSelect(String process, {double? width = 240}) {
     final current = targets[process] ?? _modeTarget;
     final values = [
       'direct',
@@ -1197,7 +1197,7 @@ class _PerAppRoutingEditorState extends State<PerAppRoutingEditor> {
         current,
     ];
     return SizedBox(
-      width: 240,
+      width: width,
       child: ElarniSelect<String>(
         key: Key('per-app-target:$process'),
         value: current,
@@ -1430,175 +1430,244 @@ class _PerAppRoutingEditorState extends State<PerAppRoutingEditor> {
         [for (final process in selections) (process, _app(process))]..sort(
           (a, b) => a.$2.name.toLowerCase().compareTo(b.$2.name.toLowerCase()),
         );
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        ElarniHelpLabel(
-          l10n.perAppRouting,
-          help: switch (mode) {
-            'bypass' => l10n.perAppBypassHelp,
-            'proxyOnly' => l10n.perAppOnlyHelp,
-            _ => l10n.perAppOffHelp,
-          },
-        ),
-        // The help label above names the control for screen readers too.
-        Semantics(
-          label: l10n.perAppRouting,
-          child: ElarniSelect<String>(
-            key: const Key('per-app-routing-mode'),
-            value: mode,
-            isExpanded: true,
-            items: [
-              DropdownMenuItem(value: 'off', child: Text(l10n.off)),
-              DropdownMenuItem(
-                value: 'bypass',
-                child: Text(l10n.perAppBypassSelected),
-              ),
-              DropdownMenuItem(
-                value: 'proxyOnly',
-                child: Text(l10n.perAppOnlySelected),
-              ),
-            ],
-            onChanged: enabled
-                ? (value) => setState(() => mode = value!)
-                : null,
-          ),
-        ),
-        const SizedBox(height: 24),
-        Row(
-          children: [
-            Expanded(
-              child: Text(
-                l10n.selectedApps,
-                style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                  fontSize: 18,
-                  fontWeight: FontWeight.w600,
+    final heading = Text(
+      l10n.selectedApps,
+      style: Theme.of(context).textTheme.titleMedium?.copyWith(
+        fontSize: 18,
+        fontWeight: FontWeight.w600,
+      ),
+    );
+    final connections = widget.readConnections == null
+        ? null
+        : TextButton(
+            key: const Key('per-app-connections'),
+            onPressed: enabled ? () => _show(_AppView.connections) : null,
+            child: Text(l10n.perAppConnections),
+          );
+    final addApps = OutlinedButton(
+      onPressed: enabled
+          ? () {
+              search.clear();
+              _show(_AppView.picker);
+            }
+          : null,
+      child: Text(l10n.addApps),
+    );
+    Widget appRow(String process, _RoutingApp app, {required bool narrow}) {
+      final details = TextButton(
+        onPressed: enabled ? () => _details(app) : null,
+        child: Text(l10n.details),
+      );
+      final remove = IconButton(
+        tooltip: l10n.removeApp(app.name),
+        icon: const Icon(CupertinoIcons.xmark, size: 16),
+        onPressed: enabled
+            ? () => setState(
+                () => selections.removeWhere(
+                  (value) => identity(value) == identity(app.process),
                 ),
+              )
+            : null,
+      );
+      if (!narrow) {
+        return ListTile(
+          contentPadding: const EdgeInsets.symmetric(
+            horizontal: 4,
+            vertical: 4,
+          ),
+          leading: _icon(app),
+          title: Text(app.name),
+          subtitle: _ruleStatus(app),
+          trailing: Wrap(
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [_targetSelect(process), details, remove],
+          ),
+        );
+      }
+      // The trailing controls of a list tile would leave the name no width.
+      final theme = Theme.of(context);
+      return Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 12),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _icon(app),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Tooltip(
+                              message: app.name,
+                              child: Text(
+                                app.name,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: theme.textTheme.bodyLarge,
+                              ),
+                            ),
+                            DefaultTextStyle.merge(
+                              style: theme.listTileTheme.subtitleTextStyle,
+                              child: _ruleStatus(app),
+                            ),
+                          ],
+                        ),
+                      ),
+                      details,
+                      remove,
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  _targetSelect(process, width: null),
+                ],
               ),
-            ),
-            if (widget.readConnections != null) ...[
-              TextButton(
-                key: const Key('per-app-connections'),
-                onPressed: enabled ? () => _show(_AppView.connections) : null,
-                child: Text(l10n.perAppConnections),
-              ),
-              const SizedBox(width: 8),
-            ],
-            OutlinedButton(
-              onPressed: enabled
-                  ? () {
-                      search.clear();
-                      _show(_AppView.picker);
-                    }
-                  : null,
-              child: Text(l10n.addApps),
             ),
           ],
         ),
-        _appListNotice(),
-        const SizedBox(height: 12),
-        if (selectedApps.isEmpty)
-          Padding(
-            padding: const EdgeInsets.symmetric(vertical: 24),
-            child: Text(
-              l10n.noAppsSelected,
-              style: TextStyle(
-                color: Theme.of(context).colorScheme.onSurfaceVariant,
+      );
+    }
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final narrow =
+            constraints.maxWidth < 620 ||
+            MediaQuery.textScalerOf(context).scale(1) >= 1.5;
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            ElarniHelpLabel(
+              l10n.perAppRouting,
+              help: switch (mode) {
+                'bypass' => l10n.perAppBypassHelp,
+                'proxyOnly' => l10n.perAppOnlyHelp,
+                _ => l10n.perAppOffHelp,
+              },
+            ),
+            // The help label above names the control for screen readers too.
+            Semantics(
+              label: l10n.perAppRouting,
+              child: ElarniSelect<String>(
+                key: const Key('per-app-routing-mode'),
+                value: mode,
+                isExpanded: true,
+                items: [
+                  DropdownMenuItem(value: 'off', child: Text(l10n.off)),
+                  DropdownMenuItem(
+                    value: 'bypass',
+                    child: Text(l10n.perAppBypassSelected),
+                  ),
+                  DropdownMenuItem(
+                    value: 'proxyOnly',
+                    child: Text(l10n.perAppOnlySelected),
+                  ),
+                ],
+                onChanged: enabled
+                    ? (value) => setState(() => mode = value!)
+                    : null,
               ),
             ),
-          ),
-        for (final (process, app) in selectedApps)
-          Column(
-            children: [
+            const SizedBox(height: 24),
+            if (narrow) ...[
+              heading,
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [addApps, ?connections],
+              ),
+            ] else
+              Row(
+                children: [
+                  Expanded(child: heading),
+                  if (connections != null) ...[
+                    connections,
+                    const SizedBox(width: 8),
+                  ],
+                  addApps,
+                ],
+              ),
+            _appListNotice(),
+            const SizedBox(height: 12),
+            if (selectedApps.isEmpty)
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 24),
+                child: Text(
+                  l10n.noAppsSelected,
+                  style: TextStyle(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ),
+            for (final (process, app) in selectedApps)
+              Column(
+                children: [
+                  appRow(process, app, narrow: narrow),
+                  const Divider(height: 1),
+                ],
+              ),
+            if (selectedApps.isNotEmpty)
               ListTile(
+                key: const Key('per-app-other-apps'),
                 contentPadding: const EdgeInsets.symmetric(
                   horizontal: 4,
                   vertical: 4,
                 ),
-                leading: _icon(app),
-                title: Text(app.name),
-                subtitle: _ruleStatus(app),
-                trailing: Wrap(
-                  crossAxisAlignment: WrapCrossAlignment.center,
-                  children: [
-                    _targetSelect(process),
-                    TextButton(
-                      onPressed: enabled ? () => _details(app) : null,
-                      child: Text(l10n.details),
-                    ),
-                    IconButton(
-                      tooltip: l10n.removeApp(app.name),
-                      icon: const Icon(CupertinoIcons.xmark, size: 16),
-                      onPressed: enabled
-                          ? () => setState(
-                              () => selections.removeWhere(
-                                (value) =>
-                                    identity(value) == identity(app.process),
-                              ),
-                            )
-                          : null,
-                    ),
-                  ],
+                title: Text(l10n.otherApps),
+                trailing: Text(
+                  mode == 'proxyOnly'
+                      ? l10n.targetDirect
+                      : l10n.targetFollowRouting,
                 ),
               ),
-              const Divider(height: 1),
-            ],
-          ),
-        if (selectedApps.isNotEmpty)
-          ListTile(
-            key: const Key('per-app-other-apps'),
-            contentPadding: const EdgeInsets.symmetric(
-              horizontal: 4,
-              vertical: 4,
-            ),
-            title: Text(l10n.otherApps),
-            trailing: Text(
-              mode == 'proxyOnly'
-                  ? l10n.targetDirect
-                  : l10n.targetFollowRouting,
-            ),
-          ),
-        const SizedBox(height: 16),
-        Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Icon(
-              CupertinoIcons.info,
-              size: 16,
-              color: Theme.of(context).colorScheme.onSurfaceVariant,
-            ),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Text(
-                l10n.perAppTargetsHelp,
-                style: TextStyle(
+            const SizedBox(height: 16),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Icon(
+                  CupertinoIcons.info,
+                  size: 16,
                   color: Theme.of(context).colorScheme.onSurfaceVariant,
                 ),
-              ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    l10n.perAppTargetsHelp,
+                    style: TextStyle(
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ),
+              ],
             ),
+            if (widget.advancedRoutes != null) ...[
+              const SizedBox(height: 20),
+              widget.advancedRoutes!,
+            ],
+            _footer([
+              TextButton(
+                onPressed: enabled
+                    ? () => setState(() {
+                        draft.reset(widget.settings);
+                        notice = null;
+                        widget.onCancel?.call();
+                      })
+                    : null,
+                child: Text(l10n.cancel),
+              ),
+              FilledButton(
+                onPressed: enabled ? _save : null,
+                child: Text(l10n.saveChanges),
+              ),
+            ]),
           ],
-        ),
-        if (widget.advancedRoutes != null) ...[
-          const SizedBox(height: 20),
-          widget.advancedRoutes!,
-        ],
-        _footer([
-          TextButton(
-            onPressed: enabled
-                ? () => setState(() {
-                    draft.reset(widget.settings);
-                    notice = null;
-                    widget.onCancel?.call();
-                  })
-                : null,
-            child: Text(l10n.cancel),
-          ),
-          FilledButton(
-            onPressed: enabled ? _save : null,
-            child: Text(l10n.saveChanges),
-          ),
-        ]),
-      ],
+        );
+      },
     );
   }
 

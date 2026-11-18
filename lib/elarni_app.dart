@@ -1674,10 +1674,12 @@ class _ElarniHomeState extends State<ElarniHome> {
         ),
       ],
     };
+    // As the shell and the settings, a narrow window keeps its width for content.
     Widget pageList(
       String key,
       String title,
       List<Widget> children, {
+      required bool narrowPage,
       Widget? action,
     }) => Material(
       color: Theme.of(context).colorScheme.surfaceContainerLow,
@@ -1687,7 +1689,7 @@ class _ElarniHomeState extends State<ElarniHome> {
           constraints: const BoxConstraints(maxWidth: 920),
           child: ListView(
             key: ValueKey(key),
-            padding: const EdgeInsets.all(24),
+            padding: EdgeInsets.all(narrowPage ? 16 : 24),
             children: [
               Row(
                 children: [
@@ -1726,98 +1728,110 @@ class _ElarniHomeState extends State<ElarniHome> {
         child: Stack(
           children: [
             Positioned.fill(
-              child: switch (_page) {
-                DesktopPage.settings => ElarniSettings(
-                  category: _settingsCategory,
-                  help: _settingsCategory == SettingsCategory.routes
-                      ? l10n.routeTableHelp
-                      : null,
-                  onSelect: _selectSettingsCategory,
-                  children: settingsSections[_settingsCategory]!(),
-                ),
-                DesktopPage.routing => pageList(
-                  'routing-list',
-                  l10n.routing,
-                  [
-                    DefaultTabController(
-                      // An import that opens the profiles moves the tab too.
-                      key: ValueKey((_routingTab, _routingTabRefusals)),
-                      length: 2,
-                      initialIndex: _routingTab,
-                      child: TabBar(
-                        isScrollable: true,
-                        tabAlignment: TabAlignment.start,
-                        onTap: (index) => unawaited(_openRoutingTab(index)),
-                        tabs: [
-                          Tab(text: l10n.routingProfiles),
-                          Tab(text: l10n.perAppRouting),
-                        ],
-                      ),
+              child: LayoutBuilder(
+                builder: (context, constraints) {
+                  final narrowPage = constraints.maxWidth < 700;
+                  return switch (_page) {
+                    DesktopPage.settings => ElarniSettings(
+                      category: _settingsCategory,
+                      help: _settingsCategory == SettingsCategory.routes
+                          ? l10n.routeTableHelp
+                          : null,
+                      onSelect: _selectSettingsCategory,
+                      children: settingsSections[_settingsCategory]!(),
                     ),
-                    const SizedBox(height: 12),
-                    if (_routingTab == 0)
-                      ..._routingItems()
-                    else
-                      Padding(
-                        padding: const EdgeInsets.fromLTRB(20, 8, 20, 0),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              l10n.perAppRoutingIntro,
-                              style: TextStyle(
-                                color: Theme.of(
-                                  context,
-                                ).colorScheme.onSurfaceVariant,
-                              ),
-                            ),
-                            const SizedBox(height: 16),
-                            perAppRouting(),
-                          ],
+                    DesktopPage.routing => pageList(
+                      'routing-list',
+                      l10n.routing,
+                      [
+                        DefaultTabController(
+                          // An import that opens the profiles moves the tab too.
+                          key: ValueKey((_routingTab, _routingTabRefusals)),
+                          length: 2,
+                          initialIndex: _routingTab,
+                          child: TabBar(
+                            isScrollable: true,
+                            tabAlignment: TabAlignment.start,
+                            onTap: (index) => unawaited(_openRoutingTab(index)),
+                            tabs: [
+                              Tab(text: l10n.routingProfiles),
+                              Tab(text: l10n.perAppRouting),
+                            ],
+                          ),
                         ),
-                      ),
-                  ],
-                  action: _routingTab == 0
-                      ? IconButton(
-                          tooltip: l10n.refreshProfiles,
-                          onPressed: _busy ? null : _refreshRouting,
-                          icon: const Icon(CupertinoIcons.arrow_clockwise),
-                        )
-                      : null,
-                ),
-                DesktopPage.subscriptions => pageList(
-                  'subscriptions-list',
-                  l10n.subscriptions,
-                  [
-                    if (_subscriptions.subscriptions.isEmpty) ...[
-                      const SizedBox(height: 12),
-                      Text(l10n.noSubscriptionsYet),
-                      const SizedBox(height: 8),
-                      Text(l10n.addSubscriptionToStart),
-                    ],
-                    // Built only here: each card parses every server name.
-                    for (final group in _subscriptions.subscriptions)
-                      _subscriptionCard(group),
-                  ],
-                  action:
-                      _subscriptions.subscriptions.any(
-                        (group) => !group.isLocal,
-                      )
-                      ? IconButton(
-                          key: const Key('refresh-all-subscriptions'),
-                          tooltip: l10n.refreshAllSubscriptions,
-                          onPressed: _busy || _refreshingAll
-                              ? null
-                              : _refreshAllSubscriptions,
-                          icon: const Icon(CupertinoIcons.arrow_clockwise),
-                        )
-                      : null,
-                ),
-                DesktopPage.home => _homeContent(
-                  memorySummary,
-                  activitySummary,
-                ),
-              },
+                        const SizedBox(height: 12),
+                        if (_routingTab == 0)
+                          ..._routingItems()
+                        else
+                          Padding(
+                            padding: EdgeInsets.fromLTRB(
+                              narrowPage ? 0 : 20,
+                              8,
+                              narrowPage ? 0 : 20,
+                              0,
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  l10n.perAppRoutingIntro,
+                                  style: TextStyle(
+                                    color: Theme.of(
+                                      context,
+                                    ).colorScheme.onSurfaceVariant,
+                                  ),
+                                ),
+                                const SizedBox(height: 16),
+                                perAppRouting(),
+                              ],
+                            ),
+                          ),
+                      ],
+                      narrowPage: narrowPage,
+                      action: _routingTab == 0
+                          ? IconButton(
+                              tooltip: l10n.refreshProfiles,
+                              onPressed: _busy ? null : _refreshRouting,
+                              icon: const Icon(CupertinoIcons.arrow_clockwise),
+                            )
+                          : null,
+                    ),
+                    DesktopPage.subscriptions => pageList(
+                      'subscriptions-list',
+                      l10n.subscriptions,
+                      [
+                        if (_subscriptions.subscriptions.isEmpty) ...[
+                          const SizedBox(height: 12),
+                          Text(l10n.noSubscriptionsYet),
+                          const SizedBox(height: 8),
+                          Text(l10n.addSubscriptionToStart),
+                        ],
+                        // Built only here: each card parses every server name.
+                        for (final group in _subscriptions.subscriptions)
+                          _subscriptionCard(group),
+                      ],
+                      narrowPage: narrowPage,
+                      action:
+                          _subscriptions.subscriptions.any(
+                            (group) => !group.isLocal,
+                          )
+                          ? IconButton(
+                              key: const Key('refresh-all-subscriptions'),
+                              tooltip: l10n.refreshAllSubscriptions,
+                              onPressed: _busy || _refreshingAll
+                                  ? null
+                                  : _refreshAllSubscriptions,
+                              icon: const Icon(CupertinoIcons.arrow_clockwise),
+                            )
+                          : null,
+                    ),
+                    DesktopPage.home => _homeContent(
+                      memorySummary,
+                      activitySummary,
+                    ),
+                  };
+                },
+              ),
             ),
             if (_message != null)
               Positioned(
