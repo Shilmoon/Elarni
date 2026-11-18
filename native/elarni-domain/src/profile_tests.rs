@@ -305,6 +305,99 @@ fn per_app_targets_that_are_the_same_share_one_outbound() {
     assert_eq!(app_tags, ["elarni-app-0", "elarni-app-1", "elarni-app-2"]);
 }
 
+// Xray refuses a config with two rules of one tag, and the connections view and the live rule
+// reload tell Elarni's per-app rules by their tags, so a provider's rule cannot carry one.
+#[test]
+fn provider_rule_tags_stay_out_of_the_per_app_names() {
+    let tagged = |tag: &str| json!({"type": "field", "domain": [format!("full:{tag}.example")], "outboundTag": "direct", "ruleTag": tag});
+    let profile = json!({"outbounds": [node("proxy", "edge.example.com"),
+            {"tag": "direct", "protocol": "freedom", "settings": {}}],
+        "routing": {"rules": [tagged("elarni-per-app-listed-0"), tagged("elarni-per-app-other"),
+            tagged("elarni-per-app-dns"), tagged("provider-elarni-per-app-dns"), tagged("ads")]}});
+    let per_app: RuntimeOptions = serde_json::from_value(json!({
+        "perAppMode": "bypass", "perAppProcesses": ["curl", "steam"],
+        "perAppTargets": [{"process": "steam", "target": "block"}]}))
+    .unwrap();
+    for (runtime, own) in [
+        (RuntimeOptions::default(), vec![]),
+        (
+            per_app,
+            vec![
+                "elarni-per-app-dns",
+                "elarni-per-app-listed-0",
+                "elarni-per-app-listed-1",
+                "elarni-per-app-other",
+            ],
+        ),
+    ] {
+        let result = compile_profile(
+            profile.clone(),
+            None,
+            1080,
+            PacketBackend::XrayTun,
+            1500,
+            &runtime,
+            None,
+        )
+        .unwrap();
+        let config: Value = serde_json::from_slice(&result.config).unwrap();
+        let rules = config["routing"]["rules"].as_array().unwrap();
+        let tag_of = |domain: &str| {
+            rules
+                .iter()
+                .find(|rule| rule["domain"] == json!([format!("full:{domain}.example")]))
+                .unwrap()["ruleTag"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        };
+        // A provider's own rules keep a name, away from Elarni's and from each other's.
+        assert_eq!(tag_of("ads"), "ads");
+        assert_eq!(
+            tag_of("provider-elarni-per-app-dns"),
+            "provider-elarni-per-app-dns"
+        );
+        let mut tags: Vec<&str> = rules
+            .iter()
+            .filter_map(|rule| rule["ruleTag"].as_str())
+            .collect();
+        let generated: Vec<&str> = rules
+            .iter()
+            .filter(|rule| rule.get("domain").is_none())
+            .filter_map(|rule| rule["ruleTag"].as_str())
+            .collect();
+        assert_eq!(generated, own);
+        assert_eq!(
+            tags.iter()
+                .filter(|tag| tag.starts_with("elarni-per-app-"))
+                .count(),
+            own.len(),
+            "{tags:?}"
+        );
+        let count = tags.len();
+        tags.sort_unstable();
+        tags.dedup();
+        assert_eq!(tags.len(), count, "{tags:?}");
+        assert_eq!(count, own.len() + 5);
+    }
+    // Xray reads the key in any case, so another spelling would pass by the check.
+    let mut miscased = profile.clone();
+    miscased["routing"]["rules"][0] = json!({"type": "field", "domain": ["full:a.example"],
+        "outboundTag": "direct", "RuleTag": "elarni-per-app-other"});
+    assert!(
+        compile_profile(
+            miscased,
+            None,
+            1080,
+            PacketBackend::XrayTun,
+            1500,
+            &RuntimeOptions::default(),
+            None
+        )
+        .is_err()
+    );
+}
+
 // Each listed app can have its own target; the others keep the mode's.
 #[test]
 fn per_app_targets_send_each_listed_app_to_its_own_outbound() {

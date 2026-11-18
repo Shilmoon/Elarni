@@ -107,8 +107,11 @@ fn compiled_fixtures() -> Value {
     // Per-app routing with several targets: each target's apps share a rule of their own, and
     // a "children:" rule adds one more.
     let per_app = compile_profile(
+        // The provider's rule carries a name the per-app rules use.
         json!({"outbounds": [client("proxy"),
-            {"tag": "direct", "protocol": "freedom", "settings": {}}]}),
+            {"tag": "direct", "protocol": "freedom", "settings": {}}],
+            "routing": {"rules": [{"type": "field", "domain": ["full:tagged.test"],
+                "outboundTag": "direct", "ruleTag": "elarni-per-app-listed-0"}]}}),
         None,
         10890,
         PacketBackend::XrayTun,

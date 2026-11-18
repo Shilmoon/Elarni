@@ -294,8 +294,26 @@ pub fn compile_profile(
         Some(Value::Array(rules)) => rules,
         _ => return Err(CompileError::InvalidRoute),
     };
+    let mut rule_tags: BTreeSet<String> = provider_rules
+        .iter()
+        .filter_map(|rule| rule.get("ruleTag").and_then(Value::as_str))
+        .map(str::to_owned)
+        .collect();
     for rule in &mut provider_rules {
         let rule = rule.as_object_mut().ok_or(CompileError::InvalidRoute)?;
+        // Elarni's per-app rules own their names: Xray refuses a config with two rules of one
+        // tag, and a provider's rule under such a name would be shown as a per-app decision.
+        if let Some(tag) = rule
+            .get("ruleTag")
+            .and_then(Value::as_str)
+            .filter(|tag| tag.starts_with(crate::compiler::PER_APP_RULE_PREFIX))
+        {
+            let mut renamed = format!("provider-{tag}");
+            while !rule_tags.insert(renamed.clone()) {
+                renamed.push('-');
+            }
+            rule.insert("ruleTag".into(), json!(renamed));
+        }
         // A webhook makes the core POST to any URL or local socket. Xray matches keys
         // case-insensitively and also folds U+212A (Kelvin sign) to k.
         rule.retain(|key, _| {

@@ -9,6 +9,11 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
 - **Apps sent to the same server or local proxy share one connection handler.** Per-app routing
   made a separate outbound and rule for every app, even when several apps had the same target,
   because it compared a new target with ones it had already tagged. Desktop and Android.
+- **A provider's routing rule named like a per-app rule no longer stops the connection.** A
+  provider profile may name its rules (`ruleTag`). One named `elarni-per-app-listed-0`, or any
+  other name per-app routing gives its own rules, made the core refuse the whole configuration
+  once per-app routing was on, and was shown as a per-app decision in recent connections. Such
+  a rule is renamed when the profile is compiled. All platforms.
 
 ## 0.6.2 - 2026-11-17
 
