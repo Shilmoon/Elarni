@@ -330,17 +330,18 @@ final class IOSAppModel {
     backgroundTime = .invalid
   }
 
-  /// Reports a VPN that went down without the user's Stop, while the app was open or suspended.
   /// On Demand connected an untrusted Wi-Fi network; that connection is the app's from now on.
   func adoptUntrustedWiFiConnection() {
     if vpn.connected, commands.intent != .connected, untrustedWiFiArmed, !busy { try? commands.persist(.connected) }
   }
 
-  private func noteUnexpectedDisconnect() {
+  /// Reports a VPN that went down without the user's Stop, while the app was open or suspended.
+  /// A stop with iOS's own VPN switch (Settings, Control Center) is the user's too.
+  func noteUnexpectedDisconnect() {
     if vpn.connected { sawConnected = true; return }
     guard sawConnected, !vpn.active, !busy else { return }
     sawConnected = false
-    guard commands.intent == .connected else { return }
+    guard commands.intent == .connected, !IOSConnectionAlerts.stoppedByUser() else { return }
     notice = String(localized: "Elarni disconnected without a Stop from you. Tap Connect to reconnect.") +
       (settings.onDemandEnabled || settings.includeAllNetworks ? "" : String(localized: " Turn on On Demand in Settings › General so iOS reconnects it automatically."))
   }
