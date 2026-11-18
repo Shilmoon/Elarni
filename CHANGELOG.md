@@ -4,6 +4,13 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
 
 ## Unreleased
 
+### Fixed
+
+- **iPhone: no lost-connection notice after you switch the VPN off in iOS.** Switching Elarni
+  off in Settings or Control Center is your own stop, as Stop in the app is, so Home no longer
+  reports "Elarni disconnected without a Stop from you" after it. A connection that iOS or a
+  failure ends is still reported.
+
 ## 0.6.2 - 2026-11-18
 
 ### Added

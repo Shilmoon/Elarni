@@ -103,7 +103,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider, @unchecked Sendable {
     DiagnosticLog.record("provider_stop", ["reason": Int64(reason.rawValue)])
     CoreLog.persist()
 #if os(iOS)
-    if reason == .userInitiated { IOSOnDemandRestart.userStopped() }
+    if reason == .userInitiated { IOSOnDemandRestart.userStopped(); IOSConnectionAlerts.userStopped() }
     // Alert after cleanup has joined the monitor, so a late refresh cannot re-arm it.
     let cause = Self.unexpectedStopCause(reason)
     let completion = {
