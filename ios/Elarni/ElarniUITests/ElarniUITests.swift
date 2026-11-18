@@ -16,28 +16,41 @@ final class ElarniUITests: XCTestCase {
     XCTAssertEqual(app.buttons["selectedServer"].label, "Fixture")
     importClipboard(app, text: "socks://127.0.0.1:1084#Germany%20Second%20provider\nsocks://127.0.0.1:1085#Germany%20Netherlands%20chain")
     XCTAssertFalse(app.tabBars.buttons["Servers"].exists)
-    XCTAssertLessThan(app.buttons["connect"].frame.maxY, app.textFields["serverSearch"].frame.minY)
+    XCTAssertLessThan(app.buttons["connect"].frame.maxY, app.buttons["Test visible servers"].frame.minY)
+    // Home has no search field or server options menu; a subscription's server list keeps its search.
+    XCTAssertFalse(app.textFields["serverSearch"].exists)
+    XCTAssertFalse(app.buttons["Server options"].exists)
     app.buttons["selectedServer"].tap()
-    let search = app.textFields["serverSearch"]
-    XCTAssertTrue(search.waitForExistence(timeout: 5))
-    search.tap(); search.typeText("Germany\n")
+    // Every subscription and country starts open: a server shows without opening its group.
     let germany = app.buttons["server.Germany Demo"]
     XCTAssertTrue(germany.waitForExistence(timeout: 5))
-    XCTAssertFalse(app.buttons["server.Fixture"].exists)
-    XCTAssertFalse(app.buttons["server.Netherlands Demo"].exists)
+    XCTAssertTrue(app.staticTexts["source.Local profiles"].exists)
     XCTAssertTrue(app.staticTexts["countryFlag.DE"].firstMatch.exists)
+    // By country gathers the servers of every subscription, one group per country.
+    serverFilter(app, "By country")
+    XCTAssertTrue(germany.waitForExistence(timeout: 5))
+    XCTAssertFalse(app.staticTexts["source.Local profiles"].exists)
     XCTAssertEqual(app.staticTexts.matching(identifier: "country.DE").count, 1)
     XCTAssertTrue(app.buttons.containing(.staticText, identifier: "country.DE").firstMatch.label.contains("3 servers"))
     XCTAssertTrue(app.buttons["server.Germany Second provider"].exists)
+    let netherlands = app.buttons["server.Netherlands Demo"]
+    reveal(netherlands, in: app)
+    // A closed country hides its servers, and stays closed after a restart (below).
+    app.buttons.containing(.staticText, identifier: "country.NL").firstMatch.tap()
+    XCTAssertTrue(netherlands.waitForNonExistence(timeout: 5))
+    reveal(app.buttons["server.Germany Netherlands chain"], in: app)
     XCTAssertTrue(app.staticTexts["country.other"].exists)
-    XCTAssertTrue(app.buttons["server.Germany Netherlands chain"].exists)
+    serverFilter(app, "All")
+    reveal(germany, in: app)
     germany.tap()
-    app.buttons["Clear search"].tap()
     germany.press(forDuration: 1)
     app.buttons["Favorite"].tap()
     serverFilter(app, "Favorites")
     XCTAssertTrue(germany.waitForExistence(timeout: 5))
     XCTAssertFalse(app.buttons["server.Fixture"].exists)
+    // Favorites are one list: no subscription or country above them.
+    XCTAssertFalse(app.staticTexts["source.Local profiles"].exists)
+    XCTAssertFalse(app.staticTexts["country.DE"].exists)
     germany.press(forDuration: 1)
     XCTAssertTrue(app.buttons["Share"].exists)
     XCTAssertTrue(app.buttons["Test server"].exists)
@@ -56,6 +69,12 @@ final class ElarniUITests: XCTestCase {
     app.launch()
     XCTAssertTrue(app.buttons["selectedServer"].waitForExistence(timeout: 10))
     XCTAssertEqual(app.buttons["selectedServer"].label, "Germany Demo")
+    app.buttons["selectedServer"].tap()
+    serverFilter(app, "By country")
+    XCTAssertTrue(app.staticTexts["country.NL"].waitForExistence(timeout: 5))
+    XCTAssertFalse(netherlands.exists)
+    XCTAssertTrue(germany.exists)
+    serverFilter(app, "All")
     for tab in ["Home", "Subscriptions"] {
       app.tabBars.buttons[tab].tap()
       if tab == "Home" { app.buttons["selectedServer"].tap() }
@@ -520,7 +539,7 @@ final class ElarniUITests: XCTestCase {
     XCTAssertTrue(app.buttons["selectedServer"].waitForExistence(timeout: 15))
     try audit("Home")
     app.buttons["selectedServer"].tap()
-    XCTAssertTrue(app.textFields["serverSearch"].waitForExistence(timeout: 5))
+    XCTAssertTrue(app.buttons["Test visible servers"].waitForExistence(timeout: 5))
     try audit("servers")
     for tab in ["Subscriptions", "Routing"] {
       app.tabBars.buttons[tab].tap()

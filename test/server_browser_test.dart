@@ -60,6 +60,23 @@ SubscriptionSnapshot countryFixture() => SubscriptionSnapshot(
   ],
 );
 
+/// A start that remembers [groups] as closed: every other group of Home is
+/// open. Returns what the app stored last.
+String Function() closedGroups(WidgetTester tester, List<String> groups) {
+  var stored = jsonEncode({'closedGroups': groups});
+  final messenger = tester.binding.defaultBinaryMessenger;
+  messenger.setMockMethodCallHandler(DesktopIntegration.channel, (call) async {
+    if (call.method == 'getPreferences') return stored;
+    if (call.method == 'setPreferences')
+      stored = (call.arguments as Map)['json'] as String;
+    return null;
+  });
+  addTearDown(
+    () => messenger.setMockMethodCallHandler(DesktopIntegration.channel, null),
+  );
+  return () => stored;
+}
+
 class NoticeControl extends FakeTunnelControl {
   final links = <String>[];
   final refreshes = <String>[];
@@ -366,12 +383,6 @@ void main() {
           ElarniApp(tunnelControl: control, windows: windows),
         );
         await tester.pumpAndSettle();
-        // Launch tests only open groups; opening these tests their servers.
-        for (final id in ['daily:NL', 'travel:NL']) {
-          await reveal(tester, find.byKey(ValueKey('country:$id::all')));
-          await tester.tap(find.byKey(ValueKey('country:$id::all')));
-          await tester.pumpAndSettle();
-        }
         expect(
           tester
               .widget<LinearProgressIndicator>(
@@ -655,11 +666,12 @@ void main() {
         final pending = <String, Completer<PingResult>>{};
         final control = NoticeControl()..snapshot = countryFixture();
         control.onPing = (id) => (pending[id] = Completer<PingResult>()).future;
+        closedGroups(tester, ['daily:NL', 'travel:NL']);
         await tester.pumpWidget(
           ElarniApp(tunnelControl: control, windows: windows),
         );
         await tester.pumpAndSettle();
-        // Launch tests the open groups: the selected country and the unnamed server.
+        // Launch tests the open groups, not the two closed before.
         expect(pending.keys, ['de', 'unknown']);
         expect(
           find.byKey(const ValueKey('country-ping:daily:NL')),
@@ -757,6 +769,7 @@ void main() {
             timestamp: DateTime.now().millisecondsSinceEpoch / 1000,
           );
         };
+        closedGroups(tester, ['daily:NL', 'travel:NL']);
         await tester.pumpWidget(
           ElarniApp(tunnelControl: control, windows: windows),
         );
@@ -811,8 +824,13 @@ void main() {
         pinged.clear();
         expect(find.widgetWithText(ProtocolTag, 'VMess'), findsOneWidget);
         final foreignNode = find.byKey(const ValueKey('node:nl-vmess'));
+        // Its subscription is the header above it; the row says how it connects.
         expect(
           find.descendant(of: foreignNode, matching: find.text('Travel')),
+          findsNothing,
+        );
+        expect(
+          find.descendant(of: foreignNode, matching: find.text('tcp · tls')),
           findsOneWidget,
         );
         await tester.ensureVisible(find.byKey(const ValueKey('ping:nl-vmess')));
@@ -981,10 +999,26 @@ void main() {
     await tester.tap(find.text('Message from boVPN'));
     await tester.pumpAndSettle();
     expect(find.text(providerMessage), findsOneWidget);
-    await reveal(tester, find.text('Netherlands'));
-    await tester.tap(find.text('Netherlands'));
-    await tester.pumpAndSettle();
+    await reveal(tester, find.byKey(const ValueKey('country:daily:NL::all')));
     await reveal(tester, find.byKey(const ValueKey('node:nl-trojan')));
+    expect(tester.takeException(), isNull);
+    // A phone switches to the countries of every subscription as a desktop does.
+    final byCountry = find.widgetWithText(ChoiceChip, 'By country');
+    // The chips are above the rows the list has scrolled to.
+    await tester.scrollUntilVisible(
+      byCountry,
+      -400,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(byCountry);
+    await tester.pumpAndSettle();
+    await reveal(tester, find.byKey(const ValueKey('country::NL::country')));
+    await reveal(tester, find.byKey(const ValueKey('node:nl-vmess')));
+    expect(
+      find.byKey(const ValueKey('server-subscription:daily')),
+      findsNothing,
+    );
     expect(tester.takeException(), isNull);
     await tester.sendKeyEvent(LogicalKeyboardKey.tab);
     expect(tester.takeException(), isNull);
@@ -1058,12 +1092,13 @@ void main() {
         await tester.tap(find.byKey(const Key('nav-subscriptions')));
         await tester.pumpAndSettle();
         for (final id in ['daily', 'travel']) {
-          await tester.tap(
-            find.descendant(
-              of: find.byKey(ValueKey('subscription:$id')),
-              matching: find.text(id == 'daily' ? 'boVPN' : 'Travel'),
-            ),
+          final title = find.descendant(
+            of: find.byKey(ValueKey('subscription:$id')),
+            matching: find.text(id == 'daily' ? 'boVPN' : 'Travel'),
           );
+          await tester.ensureVisible(title);
+          await tester.pumpAndSettle();
+          await tester.tap(title);
           await tester.pumpAndSettle();
         }
         // A provider that hides its configs gets no button.
@@ -1180,7 +1215,8 @@ void main() {
   testWidgets(
     'a chosen location narrows Home until it is removed or its servers are gone',
     (tester) async {
-      await tester.binding.setSurfaceSize(const Size(1280, 1200));
+      // Tall enough to build every open group at once.
+      await tester.binding.setSurfaceSize(const Size(1280, 2000));
       addTearDown(() => tester.binding.setSurfaceSize(null));
       final control = NoticeControl()..snapshot = countryFixture();
       await tester.pumpWidget(ElarniApp(tunnelControl: control));

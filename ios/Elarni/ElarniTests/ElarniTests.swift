@@ -476,30 +476,58 @@ final class ElarniTests: XCTestCase {
     XCTAssertEqual(ExitResult(ip: "203.0.113.7", country: "T1", revision: "r").countryName, "Tor")
   }
 
-  // Home groups its servers once per change, with favorites first unless turned off.
-  func testServerListGroupsOncePerChangeWithFavoritesFirst() {
+  // Home builds its lists once per change: by subscription and country, by country alone, and
+  // the favorites without groups.
+  func testServerListBuildsItsThreeListsOncePerChange() {
     func node(_ id: String, _ name: String, favorite: Bool = false) -> [String: Any] { ["id": id, "name": name, "protocol": "vless", "favorite": favorite] }
-    let source = ServerSubscription(raw: ["id": "s", "name": "Provider",
-      "nodes": [node("a", "🇳🇱 Amsterdam"), node("b", "🇳🇱 Rotterdam", favorite: true), node("c", "🇩🇪 Berlin")]])
+    let sources = [
+      ServerSubscription(raw: ["id": "s", "name": "Provider",
+        "nodes": [node("a", "🇳🇱 Amsterdam"), node("b", "🇳🇱 Rotterdam", favorite: true), node("c", "🇩🇪 Berlin")]]),
+      ServerSubscription(raw: ["id": "t", "name": "Travel", "nodes": [node("d", "🇳🇱 Utrecht", favorite: true), node("e", "Private server")]]),
+    ]
     let cache = ServerListCache()
-    var key = ServerListCache.Key(catalog: 1, search: "", country: "", filter: "all", order: "provider", favoritesFirst: true, pinned: [], latencies: [:])
-    cache.update(key, subscriptions: [source], probes: [:])
-    cache.update(key, subscriptions: [source], probes: [:])
+    var key = ServerListCache.Key(catalog: 1, filter: "all", order: "provider", favoritesFirst: true, pinned: [], latencies: [:])
+    cache.update(key, subscriptions: sources, probes: [:])
+    cache.update(key, subscriptions: sources, probes: [:])
     XCTAssertEqual(cache.builds, 1)
-    XCTAssertEqual(cache.visible.map(\.id), ["b", "a", "c"])
-    XCTAssertEqual(cache.groups.map(\.code), ["DE", "NL"])
-    XCTAssertEqual(cache.groups.last?.nodes.map(\.id), ["b", "a"])
-    XCTAssertEqual(cache.locations.map(\.code), ["DE", "NL"])
-    XCTAssertFalse(cache.hasOther)
+    XCTAssertEqual(cache.sources.map(\.name), ["Provider", "Travel"])
+    XCTAssertEqual(cache.sources.map { $0.countries.map(\.id) }, [["s:DE", "s:NL"], ["t:NL", "t:other"]])
+    XCTAssertEqual(cache.sources[0].countries[1].nodes.map(\.id), ["b", "a"])
+    XCTAssertEqual(cache.visible.map(\.id), ["c", "b", "a", "d", "e"])
+    XCTAssertTrue(cache.countries.isEmpty)
     key.favoritesFirst = false
-    cache.update(key, subscriptions: [source], probes: [:])
+    cache.update(key, subscriptions: sources, probes: [:])
     XCTAssertEqual(cache.builds, 2)
-    XCTAssertEqual(cache.groups.last?.nodes.map(\.id), ["a", "b"])
-    key.catalog = 2
-    key.search = "Berlin"
-    cache.update(key, subscriptions: [source], probes: [:])
-    XCTAssertEqual(cache.builds, 3)
-    XCTAssertEqual(cache.visible.map(\.id), ["c"])
+    XCTAssertEqual(cache.sources[0].countries[1].nodes.map(\.id), ["a", "b"])
+    // By country: one group per country, with the servers of every subscription.
+    key.filter = "country"
+    cache.update(key, subscriptions: sources, probes: [:])
+    XCTAssertTrue(cache.sources.isEmpty)
+    XCTAssertEqual(cache.countries.map(\.id), [":DE", ":NL", ":other"])
+    XCTAssertEqual(cache.countries[1].nodes.map(\.id), ["a", "b", "d"])
+    key.pinned = ["t"]
+    cache.update(key, subscriptions: sources, probes: [:])
+    XCTAssertEqual(cache.countries[1].nodes.map(\.id), ["d", "a", "b"])
+    key.filter = "all"
+    cache.update(key, subscriptions: sources, probes: [:])
+    XCTAssertEqual(cache.sources.map(\.name), ["Travel", "Provider"])
+    // Favorites: one list, no groups.
+    key.filter = "favorites"; key.pinned = []
+    cache.update(key, subscriptions: sources, probes: [:])
+    XCTAssertEqual(cache.visible.map(\.id), ["b", "d"])
+    XCTAssertTrue(cache.sources.isEmpty && cache.countries.isEmpty)
+    XCTAssertEqual(cache.builds, 6)
+  }
+
+  // A closed subscription or country is remembered; what a removed subscription left is not.
+  func testClosedGroupsToggleAndForgetRemovedSubscriptions() throws {
+    XCTAssertEqual(ServerListCache.toggled("s:NL", closed: [], subscriptions: ["s"]), ["s:NL"])
+    XCTAssertEqual(ServerListCache.toggled("s", closed: ["s:NL"], subscriptions: ["s"]), ["s", "s:NL"])
+    XCTAssertEqual(ServerListCache.toggled("s:NL", closed: ["s:NL", ":DE", "gone", "gone:NL"], subscriptions: ["s"]), [":DE"])
+    // Preferences saved before the list remembered anything still load.
+    let saved = try JSONEncoder().encode(IOSPreferences())
+    XCTAssertFalse(String(decoding: saved, as: UTF8.self).contains("closedGroups"))
+    XCTAssertNil(try JSONDecoder().decode(IOSPreferences.self, from: saved).closedGroups)
   }
 
   // Xray-core #6663: Go's HTTP/2 client gave each XHTTP upload a buffer as large as the

@@ -370,8 +370,9 @@ class _ElarniHomeState extends State<ElarniHome> {
   String? _healthRevision;
   DesktopPage _page = DesktopPage.home;
   String? _expandedSubscription;
-  final Set<String> _collapsedSubscriptions = {};
-  final Map<String, bool> _expandedCountries = {};
+  // The Home groups closed, once one was opened or closed in this run;
+  // until then those the preferences remember.
+  Set<String>? _closedGroupsNow;
   SettingsCategory _settingsCategory = SettingsCategory.general;
   // The Routing page's tab: 0 routing profiles, 1 per-app routing.
   int _routingTab = 0;

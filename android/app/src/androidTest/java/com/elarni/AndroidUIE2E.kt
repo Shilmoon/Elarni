@@ -113,6 +113,8 @@ class AndroidUIE2E {
         snapshot().sources.forEach { call("deleteSource", obj("id" to it.getString("id"))) }
         snapshot().routes.forEach { call("deleteRouting", obj("id" to it.getString("id"))) }
         call("settings", obj("settings" to Settings.defaults()))
+        // Home remembers its closed groups; each test starts with all of them open.
+        ui.activity.getSharedPreferences("ui", android.content.Context.MODE_PRIVATE).edit().remove("closedGroups").commit()
         // The QR screen's live scanner needs the camera. A grant leaves the app running; a revoke would end it.
         InstrumentationRegistry.getInstrumentation().uiAutomation.grantRuntimePermission(ui.activity.packageName, android.Manifest.permission.CAMERA)
         if (ui.onAllNodesWithText("Country").fetchSemanticsNodes().isNotEmpty() && ui.onAllNodesWithText("Sort").fetchSemanticsNodes().isNotEmpty())
@@ -527,14 +529,15 @@ class AndroidUIE2E {
         call("favorite", obj("id" to german.getString("id"), "value" to true))
         call("select", obj("id" to snapshot().nodes.first { it.string("name") == "🇳🇱 Amsterdam" }.string("id")))
         val list = ui.onNode(hasScrollToIndexAction())
+        // Every subscription and country starts open: a server shows without opening its group.
+        val source = snapshot().sources.single().getString("id")
+        list.performScrollToNode(hasTestTag("source-$source"))
         list.performScrollToNode(hasText("Germany"))
-        click("Germany")
         list.performScrollToNode(hasText("[DE] Frankfurt"))
         ui.onNodeWithText("[DE] Frankfurt").assertExists()
         list.performScrollToNode(hasText("Германия Berlin"))
         ui.onNodeWithText("Германия Berlin").assertExists()
         list.performScrollToNode(hasText("European Union"))
-        click("European Union")
         list.performScrollToNode(hasText("Europe"))
         ui.onNodeWithText("Europe").assertExists()
         list.performScrollToNode(hasText("Other locations"))
@@ -542,22 +545,52 @@ class AndroidUIE2E {
         ui.onNodeWithText("France via Germany").assertExists()
         list.performScrollToNode(hasText("Stay in touch"))
         ui.onNodeWithText("Stay in touch").assertExists()
-        list.performScrollToNode(hasText("Search servers"))
+        // Home has no search field or server options; a subscription's server list keeps them.
+        ui.onNodeWithText("Search servers").assertDoesNotExist()
+        ui.onNodeWithContentDescription("Server options").assertDoesNotExist()
+        // A closed country hides its servers and stays closed when the screen is built again.
+        list.performScrollToNode(hasText("Netherlands"))
+        click("Netherlands")
+        ui.onNodeWithText("Amsterdam").assertDoesNotExist()
+        ui.activityRule.scenario.recreate()
+        ui.onNode(hasScrollToIndexAction()).performScrollToNode(hasText("Netherlands"))
+        ui.onNodeWithText("Amsterdam").assertDoesNotExist()
+        assertEquals(setOf("$source:NL"), ui.activity.getSharedPreferences("ui", android.content.Context.MODE_PRIVATE).getStringSet("closedGroups", null))
+        // By country lists the servers of every subscription under their country, with its own closed groups.
+        click("By country")
+        ui.onNodeWithTag("source-$source").assertDoesNotExist()
+        ui.onNode(hasScrollToIndexAction()).performScrollToNode(hasText("Amsterdam"))
+        ui.onNodeWithText("Amsterdam").assertExists()
+        click("All")
+        // A closed subscription hides its countries.
+        ui.onNode(hasScrollToIndexAction()).performScrollToNode(hasTestTag("source-$source"))
+        ui.onNodeWithTag("source-$source").performClick()
+        ui.onNodeWithText("Germany").assertDoesNotExist()
+        ui.onNodeWithTag("source-$source").performClick()
+        ui.onNode(hasScrollToIndexAction()).performScrollToNode(hasText("Germany"))
+        // Favorites are one list: no subscription or country above a server, which shows its flag itself.
+        click("Favorites")
+        ui.onNode(hasScrollToIndexAction()).performScrollToNode(hasText("[DE] Frankfurt"))
+        ui.onNodeWithText("[DE] Frankfurt").assertExists()
+        ui.onNodeWithText("Other locations").assertDoesNotExist()
+        ui.onNodeWithText("Germany").assertDoesNotExist()
+        ui.onNodeWithTag("source-$source").assertDoesNotExist()
+        ui.onNodeWithTag("server-flag-DE", useUnmergedTree = true).assertExists()
+        ui.onNodeWithText("Recent").assertDoesNotExist()
+        // A subscription's server list keeps the search, which finds a country by its name.
+        call("renameSource", obj("id" to source, "name" to "Filter group"))
+        ui.onNode(hasText("Subscriptions") and hasClickAction()).performClick()
+        click("Filter group"); click("Browse subscription servers")
+        ui.onNodeWithText("By country").assertDoesNotExist()
         ui.onNodeWithText("Search servers").performTextInput("Netherlands")
+        // The country closed on Home is the same group here; a search shows what it found in it.
         // The keyboard opens after the input and its inset animation, which the test cannot wait for, shrinks the list
         // under a row scrolled to the bottom edge: scroll again until the row stays shown.
         ui.waitUntil(5000) {
-            list.performScrollToNode(hasText("Amsterdam"))
+            ui.onNode(hasScrollToIndexAction()).performScrollToNode(hasText("Amsterdam"))
             ui.onAllNodesWithText("Amsterdam").fetchSemanticsNodes().isNotEmpty()
         }
-        list.performScrollToNode(hasText("Search servers"))
-        ui.onNodeWithText("Search servers").performTextClearance()
-        click("Favorites")
-        list.performScrollToNode(hasText("[DE] Frankfurt"))
-        ui.onNodeWithText("[DE] Frankfurt").assertExists()
-        ui.onNodeWithText("Other locations").assertDoesNotExist()
-        click("Recent")
-        ui.onNodeWithText("No servers match this filter.").assertExists()
+        ui.onNodeWithText("[DE] Frankfurt").assertDoesNotExist()
     }
 
     @Test fun localProxyLoginShowsCopiesAndNeedsAWarningToDrop() {
@@ -684,8 +717,10 @@ class AndroidUIE2E {
             ui.onNodeWithContentDescription("Dismiss").performClick()
             editSetting("Timeout in seconds · 1–15", "7")
             click("Open server list")
-            ui.onNodeWithContentDescription("Server options").performClick()
-            ui.onNode(hasText("Germany") and hasAnyAncestor(isPopup())).performClick()
+            // The servers on screen are those of the open groups: a closed country is not tested.
+            ui.onNode(hasScrollToIndexAction()).performScrollToNode(hasText("Netherlands"))
+            click("Netherlands")
+            ui.onNodeWithText("Netherlands Hidden").assertDoesNotExist()
             ui.onNodeWithContentDescription("Test visible servers").performClick()
             val visible = snapshot().nodes.single { it.string("name") == "Germany Visible" }.string("id")
             val hidden = snapshot().nodes.single { it.string("name") == "Netherlands Hidden" }.string("id")
@@ -705,7 +740,7 @@ class AndroidUIE2E {
             ui.onNodeWithContentDescription("Server actions").performClick()
             ui.onNodeWithText("Details").performClick()
             click(if (snapshot().selected == visible) "Selected server" else "Use server")
-            ui.onNodeWithText("Search servers").assertExists()
+            ui.onNodeWithContentDescription("Test visible servers").assertExists()
             assertEquals(visible, snapshot().selected)
             val recovery = snapshot().data.mapObject("automation")
             // The picked server becomes the primary; the allowed backups stay.
@@ -713,9 +748,7 @@ class AndroidUIE2E {
             assertEquals("orderedFallback", recovery.string("policy"))
             assertEquals(group, recovery.string("subscriptionID"))
             assertEquals(listOf(visible, hidden), recovery.strings("nodeIDs"))
-            click("All locations")
-            ui.onNodeWithContentDescription("Server options").performClick()
-            click("Alphabetical")
+            call("settings", obj("settings" to obj("sort" to "alphabet")))
             ui.waitUntil(5000) { snapshot().settings.string("sort") == "alphabet" }
             assertEquals("success", repo.state.value.pings.getValue(visible).string("status"))
             assertFalse(repo.state.value.pings.containsKey(hidden))
@@ -1309,8 +1342,7 @@ class AndroidUIE2E {
                 fun top(name: String) = ui.onNodeWithText(name).fetchSemanticsNode().positionInRoot.y
                 ui.onNode(hasScrollToIndexAction()).performScrollToNode(hasText("Netherlands C"))
                 assertTrue("A favorite leads its country", top("Netherlands B") < top("Netherlands A"))
-                ui.onNodeWithContentDescription("Server options").performClick()
-                ui.onNode(hasText("Favorites first") and hasAnyAncestor(isPopup())).performClick()
+                call("settings", obj("settings" to obj("favoritesFirst" to false)))
                 ui.waitUntil(5000) { !snapshot().settings.optBoolean("favoritesFirst", true) }
                 ui.waitForIdle()
                 assertTrue("Provider order without favorites first", top("Netherlands A") < top("Netherlands B"))
@@ -1470,12 +1502,14 @@ class AndroidUIE2E {
             ui.onNodeWithText("Timeout in seconds · 1–15").assertExists()
         }
     }
-    // A General draft left open must not revert a sort chosen on Home since.
-    @Test fun openGeneralDraftKeepsASortChosenOnHome() {
+    // A General draft left open must not revert a sort chosen on a server list since.
+    @Test fun openGeneralDraftKeepsASortChosenOnAServerList() {
         call("import", obj("text" to "socks://127.0.0.1:18100#Sort%20fixture"))
+        call("renameSource", obj("id" to snapshot().sources.single().getString("id"), "name" to "Sort group"))
         ui.onNode(hasText("Settings") and hasClickAction()).performClick()
         click("General")
-        ui.onNode(hasText("Home") and hasClickAction()).performClick()
+        ui.onNode(hasText("Subscriptions") and hasClickAction()).performClick()
+        click("Sort group"); click("Browse subscription servers")
         ui.onNodeWithContentDescription("Server options").performClick()
         ui.onNode(hasText("Lowest latency") and hasAnyAncestor(isPopup())).performClick()
         ui.waitUntil(5000) { snapshot().settings.string("sort") == "latency" }
@@ -1640,7 +1674,7 @@ class AndroidUIE2E {
         click("Server tests")
         editSetting("Timeout in seconds · 1–15", "7")
         ui.onNode(hasText("Home") and hasClickAction()).performClick()
-        ui.waitUntil(5000) { ui.onAllNodesWithContentDescription("Server options").fetchSemanticsNodes().isNotEmpty() }
+        ui.waitUntil(5000) { ui.onAllNodesWithContentDescription("Test visible servers").fetchSemanticsNodes().isNotEmpty() }
         assertEquals(7, snapshot().settings.getInt("probeTimeout"))
         // A value the app rejects keeps its page open with the error; Cancel is the way out without it.
         ui.onNode(hasText("Settings") and hasClickAction()).performClick()

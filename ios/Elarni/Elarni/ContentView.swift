@@ -93,14 +93,10 @@ struct HomeView: View {
   @Environment(\.openURL) private var openURL
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @Environment(\.dynamicTypeSize) private var dynamicTypeSize
-  @State private var search = ""
   @State private var filter = "all"
-  @State private var country = ""
-  @State private var expandedCountries: [String: Bool] = [:]
   @State private var details: ServerNode?
   @State private var share: SharedText?
   @State private var list = ServerListCache()
-  @FocusState private var searchFocused: Bool
   // Compact, so servers show on the first screen; Troubleshooting and recovery live in Settings.
   var body: some View {
     ScrollViewReader { scroll in
@@ -124,7 +120,6 @@ struct HomeView: View {
           if let message = source.metadata["announcement"] as? String { Section("Provider notice") { Text(message) } }
         }
       }.navigationTitle("").navigationBarTitleDisplayMode(.inline)
-        .scrollDismissesKeyboard(.interactively)
         .refreshable { await model.refreshAll() }
         .sheet(item: $details) { node in NavigationStack { ServerDetailView(nodeID: node.id) } }
         .sheet(item: $share) { ShareView(item: $0) }
@@ -183,7 +178,7 @@ struct HomeView: View {
   // Body passes are many; the grouping runs only when what it shows changes.
   private var serverList: ServerListCache {
     let order = model.preferences.serverOrder
-    list.update(.init(catalog: model.catalogRevision, search: search, country: country, filter: filter, order: order,
+    list.update(.init(catalog: model.catalogRevision, filter: filter, order: order,
                       favoritesFirst: model.preferences.favoritesFirst ?? true, pinned: model.preferences.pinned,
                       latencies: order == "latency" ? model.probes.compactMapValues(\.milliseconds) : [:]),
                 subscriptions: model.subscriptions, probes: model.probes)
@@ -196,137 +191,143 @@ struct HomeView: View {
           HStack(spacing: 8) {
             if dynamicTypeSize.isAccessibilitySize { serverFilter.pickerStyle(.menu); Spacer() }
             else { serverFilter.pickerStyle(.segmented) }
-            serverOptions
-          }.accessibilityElement(children: .contain).accessibilityLabel("Servers")
-          HStack(spacing: 8) {
-            HStack(spacing: 8) {
-              Image(systemName: "magnifyingglass").foregroundStyle(AppPalette.secondary).accessibilityHidden(true)
-              TextField("Search servers", text: $search, prompt: Text("Search servers").foregroundColor(AppPalette.secondary)).focused($searchFocused)
-                .textInputAutocapitalization(.never).autocorrectionDisabled().submitLabel(.search)
-                .accessibilityIdentifier("serverSearch").onSubmit { searchFocused = false }
-              if !search.isEmpty {
-                Button { search = "" } label: { Image(systemName: "xmark.circle.fill").frame(width: 44, height: 44) }
-                  .buttonStyle(.plain).foregroundStyle(AppPalette.secondary).accessibilityLabel("Clear search")
-              }
-            }.padding(.leading, 12).padding(.trailing, search.isEmpty ? 12 : 0).frame(minHeight: 44)
-              .background(AppPalette.inset, in: RoundedRectangle(cornerRadius: 8))
-            Button { model.testServers(serverList.visible) } label: {
+            Button { model.testServers(shown) } label: {
               Image(systemName: "waveform.path.ecg").frame(width: 44, height: 44)
-            }.buttonStyle(.plain).accessibilityLabel("Test visible servers").disabled(model.busy || visibleCount == 0)
-          }
-          if let location = locations.first(where: { $0.code == country }) {
-            HStack {
-              Text(location.name).foregroundStyle(AppPalette.secondary)
-              Spacer()
-              Button("All locations") { country = "" }.buttonStyle(.plain).frame(minHeight: 44)
-            }.font(.subheadline)
-          }
+            }.buttonStyle(.plain).accessibilityLabel("Test visible servers").disabled(model.busy || shown.isEmpty)
+          }.accessibilityElement(children: .contain).accessibilityLabel("Servers")
           if !model.testingIDs.isEmpty { Button("Cancel tests", role: .cancel) { model.cancelTests() }.buttonStyle(.plain).frame(minHeight: 44) }
           if let last = lastSuccessful, last.id != model.selectedID {
             Button("Use last successful server") { model.launch { try await model.select(last) } }
               .buttonStyle(.plain).foregroundStyle(appTint(model.preferences.accent)).frame(minHeight: 44)
               .accessibilityHint(last.name).disabled(model.busy)
           }
-          // Right under the search field, so the floating tab bar can't cover the hint.
+          // Right under the filters, so the floating tab bar can't cover the hint.
           if model.nodes.isEmpty {
             GettingStarted(actions: importActions).disabled(!model.loaded || model.busy)
           } else if visibleCount == 0 {
-            AppEmptyState(title: "No matching servers", systemImage: "magnifyingglass", message: "Try another search or change the server filters.")
+            AppEmptyState(title: "No favorites", systemImage: "star", message: "Touch and hold a server to add it to Favorites.")
           }
         }.id("servers").listRowSeparator(.hidden)
       }
-      ForEach(countryGroups, id: \.code) { group in
-        Section {
-          DisclosureGroup(isExpanded: Binding(get: {
-            !search.isEmpty || (expandedCountries[group.code] ?? (group.nodes.contains { $0.id == model.selectedID } || group.code == "other"))
-          }, set: { expandedCountries[group.code] = $0 })) {
-          ForEach(group.nodes) { node in
-            HStack(spacing: 4) {
-              Button {
-                if node.format == "telegram" { do { openURL(try model.telegramURL(node)) } catch { model.show(error) } }
-                else { model.launch { try await model.select(node) } }
-              } label: { ServerRow(node: node, selected: model.selectedID == node.id, provider: model.subscriptions.first { $0.id == node.subscriptionID }?.name) }
-              .buttonStyle(.plain)
-              .accessibilityIdentifier("server.\(node.name)").disabled(model.busy)
-              .contextMenu {
-                Button("Details", systemImage: "info.circle") { details = node }
-                Button(node.favorite ? String(localized: "Remove favorite") : String(localized: "Favorite"), systemImage: "star") { model.launch { try model.setFavorite(node) } }
-                Button("Test server", systemImage: "waveform.path.ecg") { model.testServers([node]) }
-                if node.format != "telegram" { Button("Check exit", systemImage: "globe") { model.checkExit(node) } }
-                Button("Share", systemImage: "square.and.arrow.up") { shareNode(node) }
-              }
-              // The same details as a long press or a swipe, for those who never try one.
-              Button { details = node } label: { Label("Details", systemImage: "info.circle").labelStyle(.iconOnly) }
-                .buttonStyle(.borderless).frame(minWidth: 44, minHeight: 44)
-                .accessibilityLabel("\(node.name) details").accessibilityIdentifier("details.\(node.name)")
-            }
-            .listRowBackground(model.selectedID == node.id ? appTint(model.preferences.accent).opacity(0.12) : AppPalette.surface)
-            .swipeActions(edge: .trailing, allowsFullSwipe: false) { Button("Details", systemImage: "info.circle") { details = node }.tint(.accentColor) }
-            .swipeActions(edge: .leading) { Button(node.favorite ? String(localized: "Unfavorite") : String(localized: "Favorite"), systemImage: "star") { model.launch { try model.setFavorite(node) } }.tint(.orange) }
-          }
-          } label: {
-            HStack(spacing: 12) {
-              LocationFlag(location: group.location)
+      switch filter {
+      case "favorites":
+        // One list without groups: a favorite is found by its name, not by where it came from.
+        if visibleCount > 0 { Section { ForEach(serverList.visible) { serverRow($0, provider: true) } } }
+      case "country":
+        ForEach(serverList.countries) { country in Section { countryGroup(country, provider: true) } }
+      default:
+        ForEach(serverList.sources) { source in
+          Section {
+            DisclosureGroup(isExpanded: open(source.id)) {
+              ForEach(source.countries) { countryGroup($0, provider: false) }
+            } label: {
               ViewThatFits(in: .horizontal) {
-                HStack(spacing: 8) { countryTitle(group); countryCount(group); countryPing(group) }
-                VStack(alignment: .leading, spacing: 4) { countryTitle(group); HStack(spacing: 8) { countryCount(group); countryPing(group) } }
-              }
-            }.frame(minHeight: 44)
+                HStack(spacing: 8) { sourceTitle(source); sourceCount(source) }
+                VStack(alignment: .leading, spacing: 4) { sourceTitle(source); sourceCount(source) }
+              }.frame(minHeight: 44)
+            }
           }
-            .listRowBackground(group.nodes.contains { $0.id == model.selectedID } ? appTint(model.preferences.accent).opacity(0.08) : AppPalette.surface)
         }
       }
       Section {
         HStack {
-          Text(!search.isEmpty ? String(localized: "Search results") : filter == "favorites" ? String(localized: "Favorites") : filter == "recent" ? String(localized: "Recent servers") : String(localized: "All servers"))
+          Text(filter == "favorites" ? String(localized: "Favorites") : filter == "country" ? String(localized: "By country") : String(localized: "All servers"))
           Spacer()
           Text("\(visibleCount) servers")
         }.font(.footnote).foregroundStyle(AppPalette.secondary).listRowSeparator(.hidden)
       }
   }
   private var serverFilter: some View {
-    Picker("Show", selection: $filter) { Text("All").tag("all"); Text("Favorites").tag("favorites"); Text("Recent").tag("recent") }
+    Picker("Show", selection: $filter) { Text("All").tag("all"); Text("Favorites").tag("favorites"); Text("By country").tag("country") }
       .accessibilityIdentifier("serverFilter")
   }
-  private func countryTitle(_ group: (code: String, location: ServerLocation?, nodes: [ServerNode])) -> some View {
+  // Every group starts open; the closed ones are remembered, so a start shows the list as it was left.
+  private var closed: [String] { model.preferences.closedGroups ?? [] }
+  private func open(_ group: String) -> Binding<Bool> {
+    Binding(get: { !closed.contains(group) }, set: { value in
+      guard value == closed.contains(group) else { return }
+      var next = model.preferences
+      next.closedGroups = ServerListCache.toggled(group, closed: closed, subscriptions: model.subscriptions.map(\.id))
+      do { try model.savePreferences(next) } catch { model.show(error) }
+    })
+  }
+  /// The servers on screen: those of the open groups.
+  private var shown: [ServerNode] {
+    switch filter {
+    case "favorites": serverList.visible
+    case "country": serverList.countries.filter { !closed.contains($0.id) }.flatMap(\.nodes)
+    default: serverList.sources.filter { !closed.contains($0.id) }.flatMap { $0.countries.filter { !closed.contains($0.id) }.flatMap(\.nodes) }
+    }
+  }
+  private func sourceTitle(_ source: ServerListCache.Source) -> some View {
+    Text(source.name).font(.headline).foregroundStyle(AppPalette.text).accessibilityIdentifier("source.\(source.name)")
+  }
+  private func sourceCount(_ source: ServerListCache.Source) -> some View {
+    Text("· \(source.countries.reduce(0) { $0 + $1.nodes.count }) servers").font(.subheadline).foregroundStyle(AppPalette.secondary)
+  }
+  // Under a subscription a row leaves its name out; across subscriptions it tells them apart.
+  private func countryGroup(_ group: ServerListCache.Country, provider: Bool) -> some View {
+    DisclosureGroup(isExpanded: open(group.id)) {
+      ForEach(group.nodes) { serverRow($0, provider: provider) }
+    } label: {
+      HStack(spacing: 12) {
+        LocationFlag(location: group.location)
+        ViewThatFits(in: .horizontal) {
+          HStack(spacing: 8) { countryTitle(group); countryCount(group); countryPing(group) }
+          VStack(alignment: .leading, spacing: 4) { countryTitle(group); HStack(spacing: 8) { countryCount(group); countryPing(group) } }
+        }
+      }.frame(minHeight: 44)
+    }
+      .listRowBackground(group.nodes.contains { $0.id == model.selectedID } ? appTint(model.preferences.accent).opacity(0.08) : AppPalette.surface)
+  }
+  private func serverRow(_ node: ServerNode, provider: Bool) -> some View {
+    HStack(spacing: 4) {
+      Button {
+        if node.format == "telegram" { do { openURL(try model.telegramURL(node)) } catch { model.show(error) } }
+        else { model.launch { try await model.select(node) } }
+      } label: {
+        ServerRow(node: node, selected: model.selectedID == node.id,
+                  provider: provider ? model.subscriptions.first { $0.id == node.subscriptionID }?.name : nil, compact: true)
+      }
+      .buttonStyle(.plain)
+      .accessibilityIdentifier("server.\(node.name)").disabled(model.busy)
+      .contextMenu {
+        Button("Details", systemImage: "info.circle") { details = node }
+        Button(node.favorite ? String(localized: "Remove favorite") : String(localized: "Favorite"), systemImage: "star") { model.launch { try model.setFavorite(node) } }
+        Button("Test server", systemImage: "waveform.path.ecg") { model.testServers([node]) }
+        if node.format != "telegram" { Button("Check exit", systemImage: "globe") { model.checkExit(node) } }
+        Button("Share", systemImage: "square.and.arrow.up") { shareNode(node) }
+      }
+      // The same details as a long press or a swipe, for those who never try one.
+      Button { details = node } label: { Label("Details", systemImage: "info.circle").labelStyle(.iconOnly) }
+        .buttonStyle(.borderless).frame(minWidth: 44, minHeight: 44)
+        .accessibilityLabel("\(node.name) details").accessibilityIdentifier("details.\(node.name)")
+    }
+    .listRowBackground(model.selectedID == node.id ? appTint(model.preferences.accent).opacity(0.12) : AppPalette.surface)
+    .swipeActions(edge: .trailing, allowsFullSwipe: false) { Button("Details", systemImage: "info.circle") { details = node }.tint(.accentColor) }
+    .swipeActions(edge: .leading) { Button(node.favorite ? String(localized: "Unfavorite") : String(localized: "Favorite"), systemImage: "star") { model.launch { try model.setFavorite(node) } }.tint(.orange) }
+  }
+  private func countryTitle(_ group: ServerListCache.Country) -> some View {
     Text(group.location?.name ?? String(localized: "Other locations")).font(.headline).foregroundStyle(AppPalette.text)
       .accessibilityIdentifier("country.\(group.code)")
   }
-  private func countryCount(_ group: (code: String, location: ServerLocation?, nodes: [ServerNode])) -> some View {
+  private func countryCount(_ group: ServerListCache.Country) -> some View {
     Text("· \(group.nodes.count) servers").font(.subheadline).foregroundStyle(AppPalette.secondary)
   }
-  @ViewBuilder private func countryPing(_ group: (code: String, location: ServerLocation?, nodes: [ServerNode])) -> some View {
+  @ViewBuilder private func countryPing(_ group: ServerListCache.Country) -> some View {
     if let best = group.nodes.compactMap({ model.probes[$0.id]?.currentMilliseconds(for: $0) }).min() {
       LatencyBadge(milliseconds: best, label: String(localized: "Lowest latency: \(best) milliseconds"))
         .accessibilityIdentifier("country-ping.\(group.code)")
     }
-  }
-  private var serverOptions: some View {
-    Menu {
-        Picker("Country", selection: $country) {
-          Text("All locations").tag("")
-          ForEach(locations, id: \.code) { Text($0.name).tag($0.code) }
-          if serverList.hasOther { Text("Other locations").tag("other") }
-        }
-        Picker("Sort", selection: Binding(get: { model.preferences.serverOrder }, set: { value in
-          var next = model.preferences; next.serverOrder = value; do { try model.savePreferences(next) } catch { model.show(error) }
-        })) { Text("Provider order").tag("provider"); Text("Name").tag("name"); Text("Latency").tag("latency") }
-        Toggle("Favorites first", isOn: Binding(get: { model.preferences.favoritesFirst ?? true }, set: { value in
-          var next = model.preferences; next.favoritesFirst = value; do { try model.savePreferences(next) } catch { model.show(error) }
-        }))
-    } label: { Image(systemName: "line.3.horizontal.decrease").frame(width: 44, height: 44) }
-      .accessibilityLabel("Server options")
   }
   private var lastSuccessful: ServerNode? {
     model.nodes.filter { $0.successCurrent && $0.format != "telegram" }.max { ($0.lastSuccess ?? .distantPast) < ($1.lastSuccess ?? .distantPast) }
       .flatMap { $0.lastSuccess == nil ? nil : $0 }
   }
   private var visibleCount: Int { serverList.visible.count }
-  private var countryGroups: [ServerListCache.Group] { serverList.groups }
   private func shareNode(_ node: ServerNode) {
     do { share = SharedText(title: node.name, text: try model.share(id: node.id, subscription: false)) } catch { model.show(error) }
   }
-  private var locations: [ServerLocation] { serverList.locations }
 }
 
 struct ServerRow: View {
@@ -335,6 +336,8 @@ struct ServerRow: View {
   let node: ServerNode
   var selected = false
   var provider: String?
+  // Home packs more servers on screen; a subscription's server list keeps the roomier rows.
+  var compact = false
   var body: some View {
     Group {
       if dynamicTypeSize.isAccessibilitySize {
@@ -347,12 +350,12 @@ struct ServerRow: View {
       } else {
         HStack(spacing: 12) {
           LocationFlag(location: ServerLocation.fromName(node.name))
-          VStack(alignment: .leading, spacing: 4) { serverName; serverMetadata; exitLine }
+          VStack(alignment: .leading, spacing: compact ? 2 : 4) { serverName; serverMetadata; exitLine }
           Spacer(minLength: 8)
           serverStatus
         }
       }
-    }.padding(.vertical, 5).frame(minHeight: 44).contentShape(.rect)
+    }.padding(.vertical, compact ? 0 : 5).frame(minHeight: 44).contentShape(.rect)
   }
   private var serverName: some View {
     Text(ServerLocation.displayName(node.name)).foregroundStyle(AppPalette.text).multilineTextAlignment(.leading).fixedSize(horizontal: false, vertical: true)

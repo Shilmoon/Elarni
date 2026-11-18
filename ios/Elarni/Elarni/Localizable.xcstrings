@@ -523,16 +523,6 @@
         }
       }
     },
-    "All locations" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Все местоположения"
-          }
-        }
-      }
-    },
     "All servers" : {
       "localizations" : {
         "ru" : {
@@ -805,6 +795,16 @@
         }
       }
     },
+    "By country" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "По странам"
+          }
+        }
+      }
+    },
     "CPU count" : {
       "localizations" : {
         "ru" : {
@@ -941,16 +941,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Выберите основной и разрешённые серверы из одной подписки. Для автовыбора нужны как минимум два сервера и цели проверки с разными именами хостов."
-          }
-        }
-      }
-    },
-    "Clear search" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Очистить поиск"
           }
         }
       }
@@ -1302,16 +1292,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Не удалось прочитать изображение с QR-кодом"
-          }
-        }
-      }
-    },
-    "Country" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Страна"
           }
         }
       }
@@ -3101,16 +3081,6 @@
         }
       }
     },
-    "Latency" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Задержка"
-          }
-        }
-      }
-    },
     "Leave empty to follow the app setting (%lld h). 1–168." : {
       "localizations" : {
         "ru" : {
@@ -3563,22 +3533,22 @@
         }
       }
     },
+    "No favorites" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Нет избранных серверов"
+          }
+        }
+      }
+    },
     "No log lines yet. The core records them while it runs." : {
       "localizations" : {
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Записей пока нет. Ядро пишет их во время работы."
-          }
-        }
-      }
-    },
-    "No matching servers" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Нет подходящих серверов"
           }
         }
       }
@@ -4314,32 +4284,12 @@
         }
       }
     },
-    "Recent" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Недавние"
-          }
-        }
-      }
-    },
     "Recent issues" : {
       "localizations" : {
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Недавние проблемы"
-          }
-        }
-      }
-    },
-    "Recent servers" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Недавние серверы"
           }
         }
       }
@@ -5064,16 +5014,6 @@
         }
       }
     },
-    "Search results" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Результаты поиска"
-          }
-        }
-      }
-    },
     "Search servers" : {
       "localizations" : {
         "ru" : {
@@ -5180,16 +5120,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Адресация серверов"
-          }
-        }
-      }
-    },
-    "Server options" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Параметры серверов"
           }
         }
       }
@@ -5435,16 +5365,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Уменьшение размера"
-          }
-        }
-      }
-    },
-    "Sort" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Сортировка"
           }
         }
       }
@@ -6329,6 +6249,16 @@
         }
       }
     },
+    "Touch and hold a server to add it to Favorites." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Нажмите и удерживайте сервер, чтобы добавить его в избранное."
+          }
+        }
+      }
+    },
     "Traffic" : {
       "localizations" : {
         "ru" : {
@@ -6395,16 +6325,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Доверенные сети Wi-Fi"
-          }
-        }
-      }
-    },
-    "Try another search or change the server filters." : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Попробуйте другой запрос или измените фильтры серверов."
           }
         }
       }
