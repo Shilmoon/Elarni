@@ -19,6 +19,8 @@ COMMANDS = {
     'rust': ['sh', 'scripts/check-tests', 'rust'],
     'flutter': ['sh', 'scripts/check-tests', 'flutter'],
     'swift': ['sh', 'scripts/check-tests', 'swift'],
+    # Compiles the iPhone app, its extensions and its tests; scripts/check-ios <simulator> runs them.
+    'ios': ['sh', 'scripts/check-ios', '--build'],
     'windows': [python, 'scripts/check-windows'],
     'scripts': [python, 'scripts/check_report.py', '--', python, '-m', 'unittest', 'discover', '-s', 'scripts', '-p', '*_test.py'],
     'lint': ['sh', 'scripts/check-tests', 'lint'],
@@ -57,8 +59,11 @@ def select(paths):
             # The desktop flow also picks the windows_*.png codes from its file dialog.
             desktop = path.startswith('test/windows_proxy') or path.startswith('test/windows_') and path.endswith('.png')
             hits |= {'flutter', 'windows'} if desktop else {'flutter'}
-        if path.startswith(('macos/', 'ios/')):
-            hits.add('swift')
+        # The iPhone app links the macOS sources (ios/Elarni/*/Shared); the macOS suites compile nothing of ios/.
+        if path.startswith('macos/'):
+            hits |= {'swift', 'ios'}
+        if path.startswith('ios/'):
+            hits.add('ios')
         if path == 'scripts/check-tests':
             hits |= {'go', 'rust', 'flutter', 'swift'}
         elif path == 'scripts/check-windows':
@@ -66,7 +71,7 @@ def select(paths):
         elif path.startswith('scripts/'):
             hits.add('scripts')
         # CI runs the desktop flow off macOS and the Swift checks only on macOS.
-        hits.discard('windows' if sys.platform == 'darwin' else 'swift')
+        hits -= {'windows'} if sys.platform == 'darwin' else {'swift', 'ios'}
         if hits:
             selected |= hits
         elif not (path.endswith(QUIET) or path.startswith('docs/') or path.startswith('.') and not path.startswith('.github/')):
@@ -79,7 +84,7 @@ def select(paths):
 
 def everything():
     # Every check CI runs on this OS; the static and race checks run only on Linux.
-    names = set(COMMANDS) - {'windows' if sys.platform == 'darwin' else 'swift'}
+    names = set(COMMANDS) - ({'windows'} if sys.platform == 'darwin' else {'swift', 'ios'})
     return sorted(names if sys.platform.startswith('linux') else names - {'lint', 'race'})
 
 
