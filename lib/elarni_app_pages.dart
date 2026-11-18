@@ -855,7 +855,13 @@ extension _HomePages on _ElarniHomeState {
             child: Text(l10n.reconnect),
           ),
           TextButton(
-            onPressed: _busy ? null : _repairTunnel,
+            // No helper holds System proxy mode's block: a disconnect gives
+            // the proxy setting back.
+            onPressed: _busy
+                ? null
+                : widget.desktopCore && _settings.systemProxy
+                ? _disconnect
+                : _repairTunnel,
             child: Text(l10n.liftBlock),
           ),
         ],

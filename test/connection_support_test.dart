@@ -19,6 +19,8 @@ void main() {
         'Connection stopped unexpectedly. Reconnect to retry.',
     'connection_stopped_blocked':
         'Connection stopped unexpectedly. The kill switch keeps traffic blocked until you reconnect, or use Repair VPN setup to lift the block.',
+    'connection_stopped_proxy_blocked':
+        'Connection stopped unexpectedly. The kill switch keeps the system proxy on Elarni, so apps that follow it have no connection until you reconnect. Disconnect to lift the block.',
     'connection_stopped_repair':
         'Connection stopped unexpectedly. Reconnect to retry; if sites stay unreachable, use Repair VPN setup.',
     'vpn_dns_release_failed':

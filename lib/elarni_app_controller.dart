@@ -230,12 +230,14 @@ extension _HomeController on _ElarniHomeState {
       !_settings.inboundAuthEnabled;
 
   // Only while it blocks: the connection failed and the guard, or on macOS
-  // Include all networks, keeps traffic from leaving outside the tunnel.
+  // Include all networks, keeps traffic from leaving outside the tunnel. In
+  // System proxy mode the OS proxy stays on the closed listener.
   bool get _blockingWithoutVPN =>
       _stateAvailable &&
       _state == TunnelState.failed &&
       (widget.desktopCore
-          ? _settings.xrayTunEnabled && _settings.blockWithoutVPN
+          ? (_settings.xrayTunEnabled || _settings.systemProxy) &&
+                _settings.blockWithoutVPN
           : _settings.includeAllNetworks);
 
   Future<void> _allowAppsWithoutLogin() async {

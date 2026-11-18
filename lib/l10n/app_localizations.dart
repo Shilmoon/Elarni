@@ -1964,6 +1964,12 @@ abstract class AppLocalizations {
   /// **'Connection stopped unexpectedly. Reconnect to retry; if sites stay unreachable, use Repair VPN setup.'**
   String get connectionStoppedRepair;
 
+  /// No description provided for @connectionStoppedProxyBlocked.
+  ///
+  /// In en, this message translates to:
+  /// **'Connection stopped unexpectedly. The kill switch keeps the system proxy on Elarni, so apps that follow it have no connection until you reconnect. Disconnect to lift the block.'**
+  String get connectionStoppedProxyBlocked;
+
   /// No description provided for @connectionStoppedBlocked.
   ///
   /// In en, this message translates to:
@@ -2873,7 +2879,7 @@ abstract class AppLocalizations {
   /// No description provided for @killSwitchDesktopHelp.
   ///
   /// In en, this message translates to:
-  /// **'If the VPN stops unexpectedly, nothing leaves this device outside it until you reconnect or use Repair VPN setup. Disconnecting lifts the block. Needs System-wide VPN; cannot be combined with Enforce tunnel routes.'**
+  /// **'If the VPN stops unexpectedly, nothing leaves this device outside it until you reconnect or use Repair VPN setup. Disconnecting lifts the block. In System proxy mode the system proxy stays on Elarni instead: apps that follow it get no connection until you reconnect or disconnect, and apps that ignore it are not covered. Not available with Local proxy only; cannot be combined with Enforce tunnel routes.'**
   String get killSwitchDesktopHelp;
 
   /// No description provided for @killSwitch.
