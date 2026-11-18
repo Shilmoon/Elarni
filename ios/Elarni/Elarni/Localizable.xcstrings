@@ -3944,6 +3944,16 @@
         }
       }
     },
+    "Pin" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Закрепить"
+          }
+        }
+      }
+    },
     "Pin subscription" : {
       "localizations" : {
         "ru" : {
@@ -6418,6 +6428,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Безлимит"
+          }
+        }
+      }
+    },
+    "Unpin" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Открепить"
           }
         }
       }

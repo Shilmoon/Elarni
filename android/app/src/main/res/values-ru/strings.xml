@@ -212,6 +212,8 @@
     <string name="delete_subscription">Удалить подписку</string>
     <string name="rename">Переименовать</string>
     <string name="pin_subscription">Закрепить подписку</string>
+    <string name="pin">Закрепить</string>
+    <string name="unpin">Открепить</string>
     <string name="download_options">Параметры загрузки</string>
     <string name="download_format">Формат загрузки</string>
     <string name="original">Оригинал</string>

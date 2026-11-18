@@ -212,6 +212,8 @@
     <string name="delete_subscription">Delete subscription</string>
     <string name="rename">Rename</string>
     <string name="pin_subscription">Pin subscription</string>
+    <string name="pin">Pin</string>
+    <string name="unpin">Unpin</string>
     <string name="download_options">Download options</string>
     <string name="download_format">Download format</string>
     <string name="original">Original</string>

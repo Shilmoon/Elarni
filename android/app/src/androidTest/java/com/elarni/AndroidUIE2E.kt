@@ -521,6 +521,35 @@ class AndroidUIE2E {
         ui.waitUntil(10_000) { ui.activity.interaction.notice == "File saved." }
     }
 
+    // Touch and hold on a subscription, on Home and on Subscriptions, offers the actions of its page; a tap acts as before.
+    @Test fun subscriptionMenuOnLongPress() {
+        call("import", obj("text" to "socks://127.0.0.1:18120#Menu%20server"))
+        val source = snapshot().sources.single().getString("id")
+        val inMenu = hasAnyAncestor(hasTestTag("source-menu"))
+        ui.onNode(hasScrollToIndexAction()).performScrollToNode(hasTestTag("source-$source"))
+        ui.onNodeWithTag("source-$source").performTouchInput { longClick() }
+        // A local group has no feed to refresh.
+        ui.onNode(hasText("Refresh") and inMenu).assertDoesNotExist()
+        listOf("Pin", "Rename", "Share", "Delete subscription").forEach { ui.onNode(hasText(it) and inMenu).assertExists() }
+        ui.onNode(hasText("Pin") and inMenu).performClick()
+        ui.waitUntil(5000) { snapshot().source(source).optBoolean("pinned") }
+        // The long press did not fold the group: the connection panel names the server, and so does its row.
+        ui.onAllNodesWithText("Menu server").assertCountEquals(2)
+        ui.onNode(hasText("Subscriptions") and hasClickAction()).performClick()
+        val row = hasText(snapshot().source(source).string("name")) and hasClickAction()
+        ui.onNode(row).performTouchInput { longClick() }
+        ui.onNode(hasText("Unpin") and inMenu).assertExists()
+        ui.onNode(hasText("Rename") and inMenu).performClick()
+        ui.onNodeWithText("Name").performTextReplacement("Held group")
+        click("Save")
+        ui.waitUntil(5000) { snapshot().source(source).string("name") == "Held group" }
+        ui.onNode(hasText("Held group") and hasClickAction()).performTouchInput { longClick() }
+        ui.onNode(hasText("Delete subscription") and inMenu).performClick()
+        ui.onNodeWithText("Delete this subscription and its servers?").assertExists()
+        ui.onNode(hasText("Delete") and hasAnyAncestor(isDialog())).performClick()
+        ui.waitUntil(5000) { snapshot().sources.isEmpty() }
+    }
+
     @Test fun countryGroupsAndServerFilters() {
         val names = listOf("[DE] Frankfurt", "Германия Berlin", "🇳🇱 Amsterdam", "France via Germany", "Stay in touch", "🇪🇺 Europe")
         val links = names.mapIndexed { index, name -> "socks://127.0.0.1:${18100 + index}#${java.net.URLEncoder.encode(name, "UTF-8").replace("+", "%20")}" }
