@@ -1192,6 +1192,7 @@ extension _HomePages on _ElarniHomeState {
     SubscriptionGroup group, {
     bool subscriptionView = false,
     bool selecting = false,
+    bool flag = false,
   }) {
     final scheme = Theme.of(context).colorScheme;
     final result = _pingResults[node.id];
@@ -1329,10 +1330,35 @@ extension _HomePages on _ElarniHomeState {
                                 size: 19,
                               ),
                             ),
-                      title: Text(
-                        ServerLocation.displayName(node.name),
-                        style: const TextStyle(fontSize: 16),
-                      ),
+                      title: flag && named != null
+                          ? Row(
+                              children: [
+                                Flexible(
+                                  child: Text(
+                                    ServerLocation.displayName(node.name),
+                                    style: const TextStyle(fontSize: 16),
+                                    // A wrapped name keeps the flag beside it.
+                                    textWidthBasis: TextWidthBasis.longestLine,
+                                  ),
+                                ),
+                                const SizedBox(width: 9),
+                                Tooltip(
+                                  message: named.name,
+                                  // Smaller than a group's flag, to sit in a line of text.
+                                  child: SizedBox(
+                                    width: 24,
+                                    height: 17.6,
+                                    child: FittedBox(
+                                      child: LocationFlag(location: named),
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            )
+                          : Text(
+                              ServerLocation.displayName(node.name),
+                              style: const TextStyle(fontSize: 16),
+                            ),
                       subtitle: Padding(
                         padding: const EdgeInsets.only(top: 6),
                         child: Column(
@@ -1691,6 +1717,23 @@ extension _HomePages on _ElarniHomeState {
     ServerLocation? location,
     List<({SubscriptionNode node, SubscriptionGroup group})> nodes,
   ) {
+    _sortServers(nodes);
+    final selected = nodes.any((entry) => entry.node.selected);
+    return (
+      key: key,
+      location: location,
+      nodes: nodes,
+      selected: selected,
+      open:
+          _search.isNotEmpty ||
+          (_expandedCountries[key] ?? (selected || location == null)),
+    );
+  }
+
+  /// Orders servers of several subscriptions as the sort menu says.
+  void _sortServers(
+    List<({SubscriptionNode node, SubscriptionGroup group})> nodes,
+  ) {
     final positions = {
       for (var i = 0; i < nodes.length; i++) nodes[i].node.id: i,
     };
@@ -1711,16 +1754,17 @@ extension _HomePages on _ElarniHomeState {
             : positions[a.node.id]!.compareTo(positions[b.node.id]!);
       });
     }
-    final selected = nodes.any((entry) => entry.node.selected);
-    return (
-      key: key,
-      location: location,
-      nodes: nodes,
-      selected: selected,
-      open:
-          _search.isNotEmpty ||
-          (_expandedCountries[key] ?? (selected || location == null)),
-    );
+  }
+
+  /// The favorites of every subscription in one list: they are few and picked
+  /// by name, so no subscription or country group stands between them.
+  List<({SubscriptionNode node, SubscriptionGroup group})> _favoriteServers() {
+    final servers = [
+      for (final group in _displayGroups())
+        for (final node in _displayNodes(group)) (node: node, group: group),
+    ];
+    _sortServers(servers);
+    return servers;
   }
 
   /// The servers in Home's open groups, which a launch tests.
@@ -1770,6 +1814,11 @@ extension _HomePages on _ElarniHomeState {
               ],
             ),
           ),
+        ];
+      if (_nodeFilter == 'favorites')
+        return [
+          for (final entry in _favoriteServers())
+            () => _serverRow(entry.node, entry.group, flag: true),
         ];
       return [
         for (final group in groups)
@@ -2548,7 +2597,14 @@ extension _HomePages on _ElarniHomeState {
               ChoiceChip(
                 label: Text(entry.value),
                 selected: _nodeFilter == entry.key,
-                onSelected: (_) => _set(() => _nodeFilter = entry.key),
+                onSelected: (_) {
+                  _set(() => _nodeFilter = entry.key);
+                  // The list has no group to open, which is what tests a server.
+                  if (entry.key == 'favorites')
+                    _pingOpened(
+                      _favoriteServers().map((server) => server.node),
+                    );
+                },
               ),
             if (_locationFilter case final location?)
               InputChip(

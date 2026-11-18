@@ -4,6 +4,12 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
 
 ## Unreleased
 
+### Changed
+
+- **Favorites as one list.** The Favorites filter on Home shows the favorite servers of every
+  subscription in one list, without subscription and country groups to open; each server has
+  its country's flag after its name, and showing the list tests the servers not tested lately.
+
 ## 0.6.2 - 2026-11-18
 
 ### Added

@@ -7,6 +7,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:elarni/desktop_integration.dart';
 import 'package:elarni/elarni_app.dart';
 import 'package:elarni/elarni_widgets.dart';
+import 'package:elarni/server_locations.dart';
 import 'package:elarni/tunnel_channel.dart';
 import 'elarni_app_test.dart' show reveal, selectCategory;
 import 'server_browser_test.dart' show NoticeControl, countryFixture, server;
@@ -222,6 +223,118 @@ void main() {
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox());
   });
+
+  testWidgets(
+    'the favorites filter lists servers without groups, each with its flag',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1280, 900));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final fixture = countryFixture();
+      const favorites = {'nl-trojan', 'unknown', 'nl-vmess'};
+      final control = NoticeControl()
+        ..snapshot = SubscriptionSnapshot(
+          selectedNodeId: fixture.selectedNodeId,
+          subscriptions: [
+            for (final group in fixture.subscriptions)
+              SubscriptionGroup(
+                id: group.id,
+                name: group.name,
+                status: group.status,
+                nodes: [
+                  for (final node in group.nodes)
+                    SubscriptionNode(
+                      id: node.id,
+                      name: node.name,
+                      protocol: node.protocol,
+                      transport: node.transport,
+                      security: node.security,
+                      selected: node.selected,
+                      favorite: favorites.contains(node.id),
+                    ),
+                ],
+              ),
+          ],
+        );
+      control.onPing = (id) async => reply(id);
+      await tester.pumpWidget(ElarniApp(tunnelControl: control, windows: true));
+      await tester.pumpAndSettle();
+      // The Netherlands groups start closed, so their servers are untested.
+      expect(find.byKey(const ValueKey('node:nl-trojan')), findsNothing);
+      control.pingCalls.clear();
+      await tester.tap(find.widgetWithText(ChoiceChip, 'Favorites'));
+      await tester.pumpAndSettle();
+      Finder row(String id) => find.byKey(ValueKey('node:$id'));
+      for (final id in favorites) expect(row(id), findsOneWidget);
+      expect(row('de'), findsNothing);
+      expect(row('nl-vless'), findsNothing);
+      expect(
+        find.byWidgetPredicate((widget) {
+          final key = widget.key;
+          return key is ValueKey<String> &&
+              (key.value.startsWith('country:') ||
+                  key.value.startsWith('server-subscription:'));
+        }),
+        findsNothing,
+      );
+      expect(find.text('Netherlands'), findsNothing);
+      // The flag follows the name; a server without a country has none.
+      for (final (id, name) in [
+        ('nl-trojan', 'Netherlands • Amsterdam 02'),
+        ('nl-vmess', 'NL Rotterdam'),
+      ]) {
+        final flag = find.descendant(
+          of: row(id),
+          matching: find.byType(LocationFlag),
+        );
+        expect(flag, findsOneWidget);
+        expect(
+          tester.getTopLeft(flag).dx,
+          greaterThan(
+            tester
+                .getTopRight(
+                  find.descendant(of: row(id), matching: find.text(name)),
+                )
+                .dx,
+          ),
+        );
+      }
+      expect(
+        find.descendant(
+          of: row('unknown'),
+          matching: find.byType(LocationFlag),
+        ),
+        findsNothing,
+      );
+      // The subscription stays on the row, the only place left that names it.
+      expect(
+        find.descendant(of: row('nl-vmess'), matching: find.text('Travel')),
+        findsOneWidget,
+      );
+      // No group is left to open, so showing the list tests its stale servers.
+      expect(control.pingCalls.map((call) => call.nodeId).toList()..sort(), [
+        'nl-trojan',
+        'nl-vmess',
+      ]);
+      // The other filters keep their groups.
+      await tester.tap(find.widgetWithText(ChoiceChip, 'All'));
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const ValueKey('server-subscription:daily')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey('country:daily:NL::all')),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(of: row('de'), matching: find.byType(LocationFlag)),
+        findsNothing,
+      );
+      expect(control.connectCalls, 0);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
 
   testWidgets('select unreachable hides the failed servers together', (
     tester,
