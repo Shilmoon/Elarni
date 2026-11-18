@@ -263,6 +263,48 @@ fn compile_per_app(runtime: &RuntimeOptions) -> Result<Value, crate::compiler::C
     Ok(config)
 }
 
+// Apps sent to the same server or local proxy share one outbound and one rule; a second
+// handler for the same target would open its own connections to it.
+#[test]
+fn per_app_targets_that_are_the_same_share_one_outbound() {
+    let server = json!({"outbounds":[node("proxy", "nl.example.com")]});
+    let config = compile_per_app(&per_app_runtime(json!([
+        {"process":"curl", "target":"proxy", "proxy":"socks://127.0.0.1:1088"},
+        {"process":"telegram", "target":"server", "server": server},
+        {"process":"browser", "target":"proxy", "proxy":"socks5://localhost:1088"},
+        {"process":"steam", "target":"server", "server": server},
+        {"process":"game.exe", "target":"proxy", "proxy":"http://127.0.0.1:1088"},
+    ])))
+    .unwrap();
+    let rules = after_own_subnet_block(&config);
+    let listed: Vec<(&Value, &str)> = rules
+        .iter()
+        .filter(|rule| {
+            rule["ruleTag"]
+                .as_str()
+                .is_some_and(|tag| tag.starts_with("elarni-per-app-listed"))
+        })
+        .map(|rule| (&rule["process"], rule["outboundTag"].as_str().unwrap()))
+        .collect();
+    assert_eq!(
+        listed,
+        [
+            (&json!(["curl", "browser"]), "elarni-app-0"),
+            (&json!(["telegram", "steam"]), "elarni-app-1"),
+            // The same address over another protocol is another target.
+            (&json!(["game.exe"]), "elarni-app-2"),
+        ]
+    );
+    let app_tags: Vec<&str> = config["outbounds"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|outbound| outbound["tag"].as_str())
+        .filter(|tag| tag.starts_with("elarni-app-"))
+        .collect();
+    assert_eq!(app_tags, ["elarni-app-0", "elarni-app-1", "elarni-app-2"]);
+}
+
 // Each listed app can have its own target; the others keep the mode's.
 #[test]
 fn per_app_targets_send_each_listed_app_to_its_own_outbound() {

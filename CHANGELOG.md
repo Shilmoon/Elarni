@@ -4,6 +4,12 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
 
 ## Unreleased
 
+### Fixed
+
+- **Apps sent to the same server or local proxy share one connection handler.** Per-app routing
+  made a separate outbound and rule for every app, even when several apps had the same target,
+  because it compared a new target with ones it had already tagged. Desktop and Android.
+
 ## 0.6.2 - 2026-11-17
 
 ### Added
