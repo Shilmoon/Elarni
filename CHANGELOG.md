@@ -4,6 +4,13 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
 
 ## Unreleased
 
+### Changed
+
+- **Windows and Linux: testing many servers no longer copies the whole server list for each
+  one.** Every server test through its own proxy made a full copy of the catalog first, so a
+  **Test all** of a large subscription did work that grew with the square of its size and
+  held up the window. A test now reads the one server it needs.
+
 ## 0.6.2 - 2026-11-17
 
 ### Added

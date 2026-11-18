@@ -33,6 +33,87 @@ void main() {
     expect(kept.data['inboundCredentials'], isNull);
   });
 
+  // A server test compiles one server. Its catalog used to be a JSON copy of the
+  // whole catalog, made for every server of a bulk test.
+  test('a server test gets a catalog of that server alone, without a copy', () {
+    Map<String, Object?> node(String id) => {
+      'id': id,
+      'name': id,
+      'format': 'xrayProfile',
+      'config': {'tag': id},
+    };
+    final data = {
+      ...DesktopCatalog.empty(),
+      'selectedNodeId': 'a-1',
+      'subscriptions': [
+        {
+          'id': 'a',
+          'nodes': [node('a-1'), node('a-2')],
+          'hiddenNodes': [node('a-3')],
+        },
+        {
+          'id': 'b',
+          'nodes': [node('b-1')],
+        },
+      ],
+      'profiles': [
+        {'id': 'route-a', 'enabled': true, 'assetRevision': 'ra'},
+        {'id': 'route-b', 'enabled': true, 'assetRevision': 'rb'},
+      ],
+      'assignments': {'a': 'route-a', 'b': 'route-b'},
+    };
+    final before = jsonEncode(data);
+    final catalog = DesktopCatalog(
+      data,
+      (method, payload) async => throw StateError(method),
+      (operation, payload) => throw StateError(operation),
+    );
+    final settings = catalog.settings.copyWith(socksPort: 23456).toMap();
+    final first = catalog.only('a-2', {
+      'selectedNodeId': 'a-2',
+      'settings': settings,
+      'inboundCredentials': {'username': 'one', 'password': 'one'},
+    });
+    final second = catalog.only('b-1', {'selectedNodeId': 'b-1'});
+    expect(first.selected, 'a-2');
+    expect(first.settings.socksPort, 23456);
+    expect(catalogMap(first.data['inboundCredentials'])['username'], 'one');
+    expect(first.sources.map((source) => source['id']), ['a']);
+    expect(
+      [
+        for (final source in first.sources)
+          for (final item in catalogList(source['nodes'])) item['id'],
+      ],
+      ['a-2'],
+    );
+    expect(first.sources.single['hiddenNodes'], isEmpty);
+    expect(first.routes.map((route) => route['id']), ['route-a']);
+    expect(first.assignments['a'], 'route-a');
+    // The server and its routing profile are the catalog's own, not copies.
+    expect(
+      identical(first.node('a-2')['config'], catalog.node('a-2')['config']),
+      isTrue,
+    );
+    expect(second.selected, 'b-1');
+    expect(second.routes.map((route) => route['id']), ['route-b']);
+    expect(
+      second.settings.socksPort,
+      catalog.settings.socksPort,
+      reason: 'one test changed the settings of another',
+    );
+    expect(jsonEncode(data), before, reason: 'a test changed the catalog');
+    expect(
+      () => catalog.only('missing', const {}),
+      throwsA(
+        isA<PlatformException>().having(
+          (error) => error.code,
+          'code',
+          'invalid_profile',
+        ),
+      ),
+    );
+  });
+
   test(
     'per-app server targets resolve to their server and survive a restore',
     () {
