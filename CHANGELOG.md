@@ -4,6 +4,14 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
 
 ## Unreleased
 
+### Fixed
+
+- **Desktop: testing with "Current rules / active tunnel" no longer marks other servers
+  unavailable.** That test measures the selected server's tunnel, but **Test all** asked for
+  every server, got the selected one's result each time, and showed the rest as failed. It now
+  tests the selected server once and leaves the other rows alone; a row's own test button
+  tests the selected server too.
+
 ## 0.6.2 - 2026-11-17
 
 ### Added
