@@ -3470,6 +3470,36 @@ abstract class AppLocalizations {
   /// **'No settings match'**
   String get noMatchingSettings;
 
+  /// No description provided for @selectServers.
+  ///
+  /// In en, this message translates to:
+  /// **'Select servers'**
+  String get selectServers;
+
+  /// No description provided for @testAll.
+  ///
+  /// In en, this message translates to:
+  /// **'Test all'**
+  String get testAll;
+
+  /// No description provided for @serverColumn.
+  ///
+  /// In en, this message translates to:
+  /// **'Server'**
+  String get serverColumn;
+
+  /// No description provided for @latencyColumn.
+  ///
+  /// In en, this message translates to:
+  /// **'Latency'**
+  String get latencyColumn;
+
+  /// No description provided for @subscriptionCount.
+  ///
+  /// In en, this message translates to:
+  /// **'{count, plural, =1{1 subscription} other{{count} subscriptions}}'**
+  String subscriptionCount(int count);
+
   /// No description provided for @noServersInSubscription.
   ///
   /// In en, this message translates to:

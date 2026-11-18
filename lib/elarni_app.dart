@@ -370,7 +370,13 @@ class _ElarniHomeState extends State<ElarniHome> {
   String? _locationFilter;
   String? _healthRevision;
   DesktopPage _page = DesktopPage.home;
-  String? _expandedSubscription;
+
+  /// The subscription the Subscriptions page shows, once one was chosen.
+  String? _shownSubscription;
+  bool _subscriptionFavorites = false;
+  final _subscriptionDetailsTile = ExpansibleController();
+  final _subscriptionsScroll = ScrollController();
+  final _subscriptionFooter = GlobalKey();
   final Set<String> _collapsedSubscriptions = {};
   final Map<String, bool> _expandedCountries = {};
   SettingsCategory _settingsCategory = SettingsCategory.general;
@@ -456,6 +462,8 @@ class _ElarniHomeState extends State<ElarniHome> {
     _editorSaving.dispose();
     _nodeSearch.dispose();
     _settingsSearch.dispose();
+    _subscriptionDetailsTile.dispose();
+    _subscriptionsScroll.dispose();
     widget.tunnelControl.setImportListener(null);
     _pingURL.dispose();
     _pingExpectedStatus.dispose();
@@ -1674,6 +1682,8 @@ class _ElarniHomeState extends State<ElarniHome> {
       List<Widget> children, {
       required bool narrowPage,
       Widget? action,
+      String? caption,
+      ScrollController? controller,
     }) => Material(
       color: Theme.of(context).colorScheme.surfaceContainerLow,
       child: Align(
@@ -1682,21 +1692,40 @@ class _ElarniHomeState extends State<ElarniHome> {
           constraints: const BoxConstraints(maxWidth: 920),
           child: ListView(
             key: ValueKey(key),
+            controller: controller,
             padding: EdgeInsets.all(narrowPage ? 16 : 24),
             children: [
               Row(
                 children: [
                   Expanded(
-                    child: Text(
-                      title,
-                      style: Theme.of(context).textTheme.headlineMedium
-                          ?.copyWith(fontWeight: FontWeight.w600),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          title,
+                          style: Theme.of(context).textTheme.headlineMedium
+                              ?.copyWith(fontWeight: FontWeight.w600),
+                        ),
+                        if (caption != null)
+                          Padding(
+                            padding: const EdgeInsets.only(top: 2),
+                            child: Text(
+                              caption,
+                              style: TextStyle(
+                                fontSize: 13,
+                                color: Theme.of(
+                                  context,
+                                ).colorScheme.onSurfaceVariant,
+                              ),
+                            ),
+                          ),
+                      ],
                     ),
                   ),
                   ?action,
                 ],
               ),
-              const SizedBox(height: 20),
+              SizedBox(height: caption == null ? 20 : 16),
               for (final child in children)
                 if (child is Card)
                   Padding(
@@ -1819,11 +1848,16 @@ class _ElarniHomeState extends State<ElarniHome> {
                           const SizedBox(height: 8),
                           Text(l10n.addSubscriptionToStart),
                         ],
-                        // Built only here: each card parses every server name.
-                        for (final group in _subscriptions.subscriptions)
-                          _subscriptionCard(group),
+                        // Built only here: the table parses every server name.
+                        if (_shownGroup case final group?)
+                          ..._subscriptionPage(group, narrow: narrowPage),
                       ],
                       narrowPage: narrowPage,
+                      controller: _subscriptionsScroll,
+                      caption: _subscriptions.subscriptions.isEmpty
+                          ? null
+                          : '${l10n.subscriptionCount(_subscriptions.subscriptions.length)}'
+                                ' · ${l10n.serverCount(_subscriptions.subscriptions.fold(0, (count, group) => count + group.nodes.length))}',
                       action:
                           _subscriptions.subscriptions.any(
                             (group) => !group.isLocal,

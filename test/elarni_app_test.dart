@@ -1302,11 +1302,6 @@ void main() {
         await reveal(tester, find.text('Free provider banner'));
         expect(find.text('Visit provider'), findsOneWidget);
         await openSubscriptions(tester);
-        for (var i = 0; i < 3; i++) {
-          await reveal(tester, find.text('Fixture'));
-          await tester.tap(find.text('Fixture'));
-          await tester.pumpAndSettle();
-        }
         await reveal(tester, find.text('Message from Fixture'));
         await tester.tap(find.text('Message from Fixture'));
         await tester.pumpAndSettle();
@@ -1326,7 +1321,8 @@ void main() {
           ),
         );
         await tester.pumpAndSettle();
-        expect(control.selectedIDs, isEmpty);
+        // A table row selects its server, as on Home.
+        expect(control.selectedIDs, ['b']);
         expect(tester.takeException(), isNull);
       },
       variant: TargetPlatformVariant.only(platform),

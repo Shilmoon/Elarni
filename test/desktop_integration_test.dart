@@ -12,6 +12,7 @@ import 'package:elarni/strings.dart' show appLocale;
 import 'elarni_app_test.dart' show openPerAppRouting, selectCategory, reveal;
 import 'package:elarni/tunnel_channel.dart';
 import 'support/fake_tunnel_control.dart';
+import 'support/subscriptions_page.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -775,12 +776,8 @@ void main() {
         await tester.pumpAndSettle();
         await tester.tap(find.byKey(const Key('nav-subscriptions')));
         await tester.pumpAndSettle();
-        await tester.tap(
-          find.byKey(const ValueKey('subscription-actions:second')),
-        );
-        await tester.pumpAndSettle();
-        await tester.tap(find.text('Pin subscription'));
-        await tester.pumpAndSettle();
+        await showSubscription(tester, 'Second subscription');
+        await subscriptionMenu(tester, 'second', 'Pin subscription');
         await tester.tap(find.byKey(const Key('nav-home')));
         await tester.pumpAndSettle();
         expect(
