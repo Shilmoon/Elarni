@@ -9,6 +9,7 @@ import unittest
 
 SCRIPT = Path(__file__).with_name('check-changed').resolve()
 DESKTOP = sys.platform != 'darwin'
+MAC = sys.platform == 'darwin'
 # CI's static checks run on Linux, so a Go or Rust change selects them there.
 LINT = ['lint'] if sys.platform.startswith('linux') else []
 
@@ -86,6 +87,19 @@ class CheckChangedSelection(unittest.TestCase):
             self.assertEqual(self.selection()[0], sorted(['go', 'rust', 'windows'] + LINT) if DESKTOP else ['go', 'rust', 'swift'], path)
             (self.root / path).unlink()
 
+    def test_an_iphone_source_builds_the_iphone_app_and_not_the_mac_suites(self):
+        # The macOS suites compile nothing under ios/, so they cannot stand for a check of it.
+        self.write('ios/Elarni/Elarni/IOSAppModel.swift')
+        selected, notes = self.selection()
+        self.assertEqual(selected, ['ios'] if MAC else [])
+        self.assertEqual('ios/Elarni/Elarni/IOSAppModel.swift' in notes, not MAC)
+
+    def test_a_mac_source_runs_the_mac_suites_and_builds_the_iphone_app_that_links_it(self):
+        self.write('macos/Runner/SubscriptionStore.swift')
+        selected, notes = self.selection()
+        self.assertEqual(selected, ['ios', 'swift'] if MAC else [])
+        self.assertEqual('macos/Runner/SubscriptionStore.swift' in notes, not MAC)
+
     def test_failure_output_prints_on_a_legacy_console_code_page(self):
         # Flutter frames failures with box-drawing characters, which cp1251 cannot encode.
         (self.root / 'scripts/check-tests').write_bytes(b"#!/bin/sh\nprintf '\\342\\225\\220 failure\\n'\nexit 1\n")
@@ -101,7 +115,7 @@ class CheckChangedSelection(unittest.TestCase):
         self.assertEqual(result.returncode, 1)
 
     def test_all_selects_every_ci_check_for_this_os_without_changes(self):
-        expected = {'darwin': ['flutter', 'go', 'rust', 'scripts', 'swift'],
+        expected = {'darwin': ['flutter', 'go', 'ios', 'rust', 'scripts', 'swift'],
                     'linux': ['flutter', 'go', 'lint', 'race', 'rust', 'scripts', 'windows']}
         self.assertEqual(self.selection('--all')[0], expected.get(sys.platform, ['flutter', 'go', 'rust', 'scripts', 'windows']))
 

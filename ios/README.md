@@ -30,6 +30,10 @@ It runs the native and UI suites with synthetic profiles and loopback traffic; i
 never starts a system VPN. Simulator runs need ad-hoc signing for Keychain access.
 Shared Swift changes also need `scripts/check-tests swift`.
 
+`scripts/check-ios --build` only compiles the app, its extensions and both test
+targets, without a simulator. `scripts/check-changed` runs it for a change under
+`ios/` or `macos/`; run the suites on a simulator before a pull request.
+
 Simulator tests don't cover tunnel traffic. On a device, check TCP/UDP and DNS over
 IPv4/IPv6, routes, reconnects across Wi-Fi/cellular, background and lock, and the
 Control Center and Shortcuts actions. With On Demand on, also stop the VPN with the
