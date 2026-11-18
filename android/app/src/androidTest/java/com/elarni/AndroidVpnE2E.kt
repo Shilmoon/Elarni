@@ -282,6 +282,9 @@ class AndroidVpnE2E {
             }
             val internal = call("ping", obj("id" to id, "protocol" to "activeProxy", "url" to "http://10.0.2.2:$httpPort/fixture", "method" to "GET", "timeout" to 5, "expectedStatus" to 200, "expectedBody" to "proxy:elarni-synthetic"))
             assertEquals("success", internal.objects("results").single().getString("status"))
+            // The removed "Current rules / active tunnel" test type, as an older version saved it, is a proxy test.
+            call("settings", obj("settings" to obj("probeMode" to "activeProxy")))
+            assertEquals("proxy", snapshot().settings.getString("probeMode"))
             call("settings", obj("settings" to obj("theme" to "dark", "sort" to "alphabet", "probeTimeout" to 7, "probeMode" to "tcp")))
             assertEquals("connected", repo.state.value.connection)
             assertTrue("Preference saves must preserve the running core's traffic counters", Native.call("getRuntimeMetrics").getLong("uplinkBytes") >= connectedMetrics.getLong("uplinkBytes"))

@@ -256,7 +256,7 @@ private fun canonical(json: String) = JSONObject(json).let { value -> value.keys
                     "preferredIP" -> listOf(tr(R.string.automatic), "IPv4", "IPv6")
                     "profilePreferredIP" -> listOf(tr(R.string.use_profile), tr(R.string.automatic), "IPv4", "IPv6")
                     "sort" -> listOf(tr(R.string.provider_order), tr(R.string.alphabetical), tr(R.string.lowest_latency))
-                    "probeMode" -> listOf(tr(R.string.proxy), tr(R.string.current_rules_active_tunnel), tr(R.string.direct_tcp_2), tr(R.string.direct_icmp_2))
+                    "probeMode" -> listOf(tr(R.string.proxy), tr(R.string.direct_tcp_2), tr(R.string.direct_icmp_2))
                     "probeVariant" -> listOf(tr(R.string.single_request), tr(R.string.double_request), "Keep-alive")
                     "profileDNSMode" -> listOf(tr(R.string.provider_profile), "1.1.1.1", tr(R.string.routing_profile))
                     "tlsFingerprint" -> listOf(tr(R.string.from_the_server), "Chrome", "Firefox", "Safari", tr(R.string.random_browser), tr(R.string.randomized))
@@ -280,7 +280,7 @@ private fun canonical(json: String) = JSONObject(json).let { value -> value.keys
     val listed = fields.filter { item -> item.key !in immediate && item.key !in addressing && item.key != "updateFeedURL" && section != "Apps & routes" &&
         !(item.key == "httpPort" && values["httpInboundEnabled"] != "true" ||
             item.key in listOf("fragmentPackets", "fragmentLength", "fragmentInterval") && values["fragmentationEnabled"] != "true" ||
-            section == "Server tests" && item.key in listOf("probeMethod", "probeVariant", "probeURL", "probeExpectedStatus", "probeExpectedBody") && values["probeMode"] !in listOf("proxy", "activeProxy")) }
+            section == "Server tests" && item.key in listOf("probeMethod", "probeVariant", "probeURL", "probeExpectedStatus", "probeExpectedBody") && values["probeMode"] != "proxy") }
     SettingsColumn {
         if (section == "General") SettingsGroup(tr(R.string.connection_2)) {
             SettingsTile(tr(R.string.connection_recovery), if (catalog.data.mapObject("automation").optBoolean("enabled")) tr(R.string.on) else tr(R.string.off)) { navigate("automation", "") }
@@ -987,9 +987,9 @@ fun withSites(text: String, sites: List<String>): String {
     val clock by rememberClock()
     var expected by rememberSaveable { mutableStateOf(saved.optInt("probeExpectedStatus", 204).toString()) }; var body by rememberDraft(activity, "ping-body-$id") { saved.string("probeExpectedBody") }
     FormColumn {
-        ChoiceField(tr(R.string.test_method), protocol, listOf("proxy", "activeProxy", "tcp", "icmp"), listOf(tr(R.string.proxy), tr(R.string.active_proxy_2), tr(R.string.direct_tcp_2), tr(R.string.direct_icmp_2))) { protocol = it }
+        ChoiceField(tr(R.string.test_method), protocol, listOf("proxy", "tcp", "icmp"), listOf(tr(R.string.proxy), tr(R.string.direct_tcp_2), tr(R.string.direct_icmp_2))) { protocol = it }
         TextField(tr(R.string.timeout_in_seconds_1_15), timeout) { timeout = it }
-        if (protocol in listOf("proxy", "activeProxy")) {
+        if (protocol == "proxy") {
             TextField(tr(R.string.test_url), url) { url = it }
             ChoiceField(tr(R.string.http_method), method, listOf("HEAD", "GET")) { method = it }
             ChoiceField(tr(R.string.probe_mode), mode, listOf("default", "double", "keepalive"), listOf(tr(R.string.single_request), tr(R.string.double_request), "Keep-alive")) { mode = it }

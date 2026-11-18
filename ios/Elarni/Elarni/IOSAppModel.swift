@@ -104,6 +104,8 @@ final class IOSAppModel {
       try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
       directory = root
       preferences = try read(IOSPreferences.self, name: "ios-preferences.json") ?? IOSPreferences()
+      // "Current rules / active tunnel" is no longer a choice; it was a proxy test of the selected server.
+      if preferences.probeMode == "activeProxy" { preferences.probeMode = "proxy" }
       recovery = AutomationPolicy(savedEpisode: try read(AutomationPolicy.Episode.self, name: "ios-recovery.json"))
       let savedSettings = try read(IOSTunnelSettings.self, name: "ios-settings.json")
       settings = savedSettings ?? IOSTunnelSettings()
