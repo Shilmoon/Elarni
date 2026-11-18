@@ -539,6 +539,19 @@ func TestFullTCPTableKeepsHalfClosedConnectionThatStillReceives(t *testing.T) {
 		return client.(*stdnet.TCPConn)
 	}
 	first := open()
+	// The table is full once the first connection holds its slot: a probe that got there before it
+	// would be the one admitted, and the download the one refused.
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(time.Millisecond) {
+		handler.tcpAdmission.mu.Lock()
+		held := len(handler.tcpAdmission.sessions)
+		handler.tcpAdmission.mu.Unlock()
+		if held == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the first connection was not admitted")
+		}
+	}
 	first.CloseWrite() // the request is sent; the response streams for 2 s
 	received := make(chan int)
 	go func() {
