@@ -46,6 +46,8 @@ and `output.log`. [docs/TESTING.md](docs/TESTING.md) lists each suite.
 
 - Keep a change to one purpose; follow a changed interface through every platform that uses it.
 - Conventional Commits; add a line under "Unreleased" in `CHANGELOG.md`.
+- GitHub release notes are short and written for users, not a copy of `CHANGELOG.md`: follow
+  "Release notes" in [docs/RELEASING.md](docs/RELEASING.md).
 - Never commit keys, signing material, real server addresses or subscription URLs; tests use
   loopback fixtures.
 - Pull requests state the AI tool used and what it did (see CONTRIBUTING.md).
