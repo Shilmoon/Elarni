@@ -1278,7 +1278,7 @@ pub(crate) fn apply_per_app_routing(
             "routing" => reentry.clone(),
             "block" => block_tag.clone(),
             kind => {
-                let mut outbound = match kind {
+                let outbound = match kind {
                     "server" => per_app_server_outbound(item.server.as_ref().unwrap(), runtime)?,
                     _ => per_app_proxy_outbound(item.proxy.as_ref().unwrap(), config)?,
                 };
@@ -1295,7 +1295,7 @@ pub(crate) fn apply_per_app_routing(
                                     && extra.iter().all(|(used, _)| used != tag)
                             })
                             .unwrap();
-                        outbound["tag"] = json!(tag);
+                        // Kept without its tag: the next app's target is compared with it.
                         extra.push((tag.clone(), outbound));
                         tag
                     }
@@ -1377,7 +1377,10 @@ pub(crate) fn apply_per_app_routing(
     let outbounds = config["outbounds"]
         .as_array_mut()
         .ok_or(CompileError::InvalidOutbound)?;
-    outbounds.extend(extra.into_iter().map(|(_, outbound)| outbound));
+    outbounds.extend(extra.into_iter().map(|(tag, mut outbound)| {
+        outbound["tag"] = json!(tag);
+        outbound
+    }));
     outbounds
         .push(json!({"tag":reentry, "protocol":"loopback", "settings":{"inboundTag":reentry}}));
     Ok(())
