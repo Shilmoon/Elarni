@@ -4,6 +4,22 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
 
 ## Unreleased
 
+### Changed
+
+- **Windows and Linux: testing many servers no longer copies the whole server list for each
+  one.** Every server test through its own proxy made a full copy of the catalog first, so a
+  **Test all** of a large subscription did work that grew with the square of its size and
+  held up the window. A test now reads the one server it needs.
+
+- **A release is published only when its draft is one build's whole set of files.** The publish
+  stage checked the files that were in the draft, each on its own, so a draft with a package
+  left out, or with an authentic package of another build, passed. It now requires every file
+  the build attested, all from one run at the draft's commit, the tag of the version that was
+  built, and a signed APK whose contents are the build's unsigned one.
+
+- **`elarni-cli status` no longer builds the server list to read the selected server.** A
+  monitor that asks for the status every few seconds repeated that work for every server.
+
 ### Fixed
 
 - **Apps sent to the same server or local proxy share one connection handler.** Per-app routing
@@ -39,26 +55,11 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
   one it looked up first: after the provider moved the subscription, or after a switch to a
   download format served from another address, **Copy** gave the old ID. A lookup that failed
   stayed "Unavailable" until the app was restarted; it is now tried again.
-### Changed
 
-- **Windows and Linux: testing many servers no longer copies the whole server list for each
-  one.** Every server test through its own proxy made a full copy of the catalog first, so a
-  **Test all** of a large subscription did work that grew with the square of its size and
-  held up the window. A test now reads the one server it needs.
-### Changed
-
-- **A release is published only when its draft is one build's whole set of files.** The publish
-  stage checked the files that were in the draft, each on its own, so a draft with a package
-  left out, or with an authentic package of another build, passed. It now requires every file
-  the build attested, all from one run at the draft's commit, the tag of the version that was
-  built, and a signed APK whose contents are the build's unsigned one.
-### Changed
-
-- **`elarni-cli status` no longer builds the server list to read the selected server.** A
-  monitor that asks for the status every few seconds repeated that work for every server.
 - **iPhone: a pasted or file import says which servers it left out.** The notice about servers
   Elarni does not support, and the ones about routing rules or DNS it could not apply, were
   shown only for subscriptions with a link. A local import now shows them on its page too.
+
 - **"Resolve if no rule matches" no longer lets an IP rule take a name that a later domain rule
   matches.** The compiled rules end in a catch-all, which would have ended the first pass for
   every connection, so this setting was compiled as "resolve when needed": a name was resolved
