@@ -4,6 +4,12 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
 
 ## Unreleased
 
+### Fixed
+
+- **iPhone: a pasted or file import says which servers it left out.** The notice about servers
+  Elarni does not support, and the ones about routing rules or DNS it could not apply, were
+  shown only for subscriptions with a link. A local import now shows them on its page too.
+
 ## 0.6.2 - 2026-11-17
 
 ### Added
