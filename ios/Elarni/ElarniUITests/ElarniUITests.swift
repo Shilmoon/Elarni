@@ -129,6 +129,22 @@ final class ElarniUITests: XCTestCase {
     XCTAssertEqual(app.buttons["selectedServer"].label, "Recovered")
   }
 
+  // A pasted or file import that left servers out says so on its own page, as a subscription does.
+  @MainActor
+  func testALocalImportNamesTheServersItLeftOut() throws {
+    let app = XCUIApplication()
+    app.launchArguments = ["--ui-testing", UUID().uuidString]
+    app.launch()
+    importClipboard(app, text: "socks://127.0.0.1:1080#Kept\nunknown://broken")
+    XCTAssertTrue(app.buttons["selectedServer"].waitForExistence(timeout: 15))
+    app.tabBars.buttons["Subscriptions"].tap()
+    app.staticTexts["Local profiles"].firstMatch.tap()
+    let notice = app.staticTexts["Servers not added"]
+    XCTAssertTrue(notice.waitForExistence(timeout: 5), "a local import hides the servers it left out")
+    XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "1 (unknown)")).firstMatch.exists)
+    XCTAssertFalse(app.staticTexts["Device ID"].exists, "a local import shows a provider device ID")
+  }
+
   // Elarni ships no servers, so an empty Home says where one comes from and adds it from there.
   @MainActor
   func testEmptyHomeWalksThroughTheFirstServer() throws {

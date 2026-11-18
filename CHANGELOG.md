@@ -56,6 +56,9 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
 
 - **`elarni-cli status` no longer builds the server list to read the selected server.** A
   monitor that asks for the status every few seconds repeated that work for every server.
+- **iPhone: a pasted or file import says which servers it left out.** The notice about servers
+  Elarni does not support, and the ones about routing rules or DNS it could not apply, were
+  shown only for subscriptions with a link. A local import now shows them on its page too.
 
 ## 0.6.2 - 2026-11-17
 
