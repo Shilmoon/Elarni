@@ -26,6 +26,16 @@ final class ElarniUITests: XCTestCase {
     XCTAssertTrue(germany.waitForExistence(timeout: 5))
     XCTAssertTrue(app.staticTexts["source.Local profiles"].exists)
     XCTAssertTrue(app.staticTexts["countryFlag.DE"].firstMatch.exists)
+    // Touch and hold on a subscription offers the actions of its page; a local group has no feed to refresh.
+    app.staticTexts["source.Local profiles"].press(forDuration: 1)
+    XCTAssertTrue(app.buttons["Pin"].waitForExistence(timeout: 5), "Home's subscription has no touch-and-hold menu")
+    for action in ["Rename", "Share", "Delete subscription"] { XCTAssertTrue(app.buttons[action].exists, action) }
+    XCTAssertFalse(app.buttons["Refresh"].exists)
+    app.buttons["Pin"].tap()
+    XCTAssertTrue(germany.waitForExistence(timeout: 5), "the touch and hold folded the subscription")
+    app.staticTexts["source.Local profiles"].press(forDuration: 1)
+    XCTAssertTrue(app.buttons["Unpin"].waitForExistence(timeout: 5))
+    app.buttons["Unpin"].tap()
     // By country gathers the servers of every subscription, one group per country.
     serverFilter(app, "By country")
     XCTAssertTrue(germany.waitForExistence(timeout: 5))
@@ -157,6 +167,12 @@ final class ElarniUITests: XCTestCase {
     importClipboard(app, text: "socks://127.0.0.1:1080#Kept\nunknown://broken")
     XCTAssertTrue(app.buttons["selectedServer"].waitForExistence(timeout: 15))
     app.tabBars.buttons["Subscriptions"].tap()
+    // The same menu on Subscriptions; Rename asks for the name.
+    app.staticTexts["Local profiles"].firstMatch.press(forDuration: 1)
+    XCTAssertTrue(app.buttons["Rename"].waitForExistence(timeout: 5), "Subscriptions has no touch-and-hold menu")
+    app.buttons["Rename"].tap()
+    XCTAssertTrue(app.alerts["Rename subscription"].waitForExistence(timeout: 5))
+    app.alerts.buttons["Cancel"].tap()
     app.staticTexts["Local profiles"].firstMatch.tap()
     let notice = app.staticTexts["Servers not added"]
     XCTAssertTrue(notice.waitForExistence(timeout: 5), "a local import hides the servers it left out")

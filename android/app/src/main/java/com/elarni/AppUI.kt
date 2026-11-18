@@ -16,6 +16,7 @@ import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -798,13 +799,17 @@ fun updatedAgo(seconds: Double): String = when {
                     val id = source.string("id")
                     val isOpen = open(id)
                     item(key = "source-$id") {
-                        Row(Modifier.padding(start = 16.dp, end = 16.dp, top = 12.dp).clip(MaterialTheme.shapes.medium).clickable { toggle(id) }.heightIn(min = 48.dp)
+                        var menu by remember { mutableStateOf(false) }
+                        Box(Modifier.padding(start = 16.dp, end = 16.dp, top = 12.dp)) {
+                        SourceMenu(catalog, source, activity, state.busy, menu) { menu = false }
+                        Row(Modifier.clip(MaterialTheme.shapes.medium).combinedClickable(onLongClick = { menu = true }) { toggle(id) }.heightIn(min = 48.dp)
                             .padding(start = 16.dp, end = 24.dp).testTag("source-$id"), verticalAlignment = Alignment.CenterVertically) {
                             Column(Modifier.weight(1f)) {
                                 Text(source.string("name"), Modifier.semantics { heading() }, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
                                 Text(trPlural(R.plurals.server_count, groups.sumOf { it.entries.size }), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                             }
                             RouteIcon(if (isOpen) "collapse" else "expand")
+                        }
                         }
                     }
                     if (isOpen) groups.forEach { countryItems(it, provider = false) }
@@ -893,6 +898,9 @@ private fun protocolParts(node: JSONObject): List<String> {
             Text(tr(R.string.import_a_provider_link_or_local), color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
         } }
         itemsIndexed(sources, key = { _, source -> source.string("id") }) { index, source ->
+            var menu by remember { mutableStateOf(false) }
+            Box {
+            SourceMenu(catalog, source, activity, busy, menu) { menu = false }
             ListItem(headlineContent = { Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) { Text(source.string("name"), Modifier.weight(1f), style = MaterialTheme.typography.titleMedium); if (source.optBoolean("pinned")) RouteIcon("pin", tr(R.string.pinned_subscription), MaterialTheme.colorScheme.onSurfaceVariant) } },
                 supportingContent = { Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     val count = source.objects("nodes").size
@@ -906,7 +914,8 @@ private fun protocolParts(node: JSONObject): List<String> {
                 } },
                 leadingContent = { RouteIcon(if (source.has("url")) "shield" else "folder", color = MaterialTheme.colorScheme.onSurfaceVariant) }, trailingContent = { RouteIcon("forward", color = MaterialTheme.colorScheme.onSurfaceVariant) },
                 colors = ListItemDefaults.colors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh),
-                modifier = Modifier.clip(segmentShape(index, sources.size)).clickable { navigate("source", source.string("id")) })
+                modifier = Modifier.clip(segmentShape(index, sources.size)).combinedClickable(onLongClick = { menu = true }) { navigate("source", source.string("id")) })
+            }
         }
     }
     }
@@ -967,7 +976,6 @@ private fun quota(metadata: JSONObject): Triple<String, String, Float?> {
     if (source == null) { EmptyDetail(); return }
     var selecting by rememberSaveable(id) { mutableStateOf(false) }
     var chosen by rememberSaveable(id) { mutableStateOf(listOf<String>()) }
-    var name by rememberSaveable(id, source.string("name")) { mutableStateOf(source.string("name")) }
     var renaming by rememberSaveable { mutableStateOf(false) }
     var sharing by rememberSaveable { mutableStateOf(false) }
     var showingHidden by rememberSaveable { mutableStateOf(false) }
@@ -1037,7 +1045,7 @@ private fun quota(metadata: JSONObject): Triple<String, String, Float?> {
                 SettingsTile(tr(R.string.download_options), enabled = !busy) { navigate("sourceOptions", id) }
             }
             SettingsSwitch(tr(R.string.pin_subscription), source.optBoolean("pinned"), enabled = !busy) { activity.run("pinSource", obj("id" to id, "value" to it)) }
-            SettingsTile(tr(R.string.rename), enabled = !busy) { name = source.string("name"); renaming = true }
+            SettingsTile(tr(R.string.rename), enabled = !busy) { renaming = true }
             SettingsTile(tr(R.string.share), enabled = !busy) { if (remote) activity.run("share", obj("id" to id, "subscription" to true)) { activity.interaction.share = it } else sharing = true }
         }
         SettingsGroup {
@@ -1091,13 +1099,40 @@ private fun quota(metadata: JSONObject): Triple<String, String, Float?> {
             }
         }
     }, confirmButton = { TextButton({ showingHidden = false }) { Text(tr(R.string.close)) } })
-    if (renaming) AlertDialog(onDismissRequest = { if (!busy) renaming = false }, title = { Text(tr(R.string.rename_subscription)) }, text = {
+    if (renaming) RenameSourceDialog(source, activity, busy) { renaming = false }
+    if (sharing) ShareServersSheet(catalog, source, activity, busy) { sharing = false }
+}
+
+@Composable private fun RenameSourceDialog(source: JSONObject, activity: MainActivity, busy: Boolean, dismiss: () -> Unit) {
+    val id = source.string("id")
+    var name by rememberSaveable { mutableStateOf(source.string("name")) }
+    AlertDialog(onDismissRequest = { if (!busy) dismiss() }, title = { Text(tr(R.string.rename_subscription)) }, text = {
         Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
             OutlinedTextField(name, { name = it }, label = { Text(tr(R.string.name)) }, modifier = Modifier.fillMaxWidth())
-            if (source.has("url") && source.has("manualName")) TextButton({ renaming = false; activity.run("renameSource", obj("id" to id, "name" to "")) }, enabled = !busy) { Text(tr(R.string.use_provider_name)) }
+            if (source.has("url") && source.has("manualName")) TextButton({ dismiss(); activity.run("renameSource", obj("id" to id, "name" to "")) }, enabled = !busy) { Text(tr(R.string.use_provider_name)) }
         }
-    }, confirmButton = { TextButton({ renaming = false; activity.run("renameSource", obj("id" to id, "name" to name)) }, enabled = !busy && name.trim().isNotEmpty()) { Text(tr(R.string.save)) } }, dismissButton = { TextButton({ renaming = false }, enabled = !busy) { Text(tr(R.string.cancel)) } })
+    }, confirmButton = { TextButton({ dismiss(); activity.run("renameSource", obj("id" to id, "name" to name)) }, enabled = !busy && name.trim().isNotEmpty()) { Text(tr(R.string.save)) } }, dismissButton = { TextButton(dismiss, enabled = !busy) { Text(tr(R.string.cancel)) } })
+}
+
+// Touch and hold on a subscription, on Subscriptions and on Home: the actions of its page.
+@Composable private fun SourceMenu(catalog: Catalog, source: JSONObject, activity: MainActivity, busy: Boolean, open: Boolean, dismiss: () -> Unit) {
+    val id = source.string("id")
+    val remote = source.has("url")
+    val pinned = source.optBoolean("pinned")
+    var renaming by rememberSaveable { mutableStateOf(false) }
+    var sharing by rememberSaveable { mutableStateOf(false) }
+    var deleting by rememberSaveable { mutableStateOf(false) }
+    DropdownMenu(open, dismiss, Modifier.testTag("source-menu")) {
+        if (remote) DropdownMenuItem({ Text(tr(R.string.refresh_2)) }, { dismiss(); activity.run("refresh", obj("id" to id)) }, enabled = !busy)
+        DropdownMenuItem({ Text(tr(if (pinned) R.string.unpin else R.string.pin)) }, { dismiss(); activity.run("pinSource", obj("id" to id, "value" to !pinned)) }, enabled = !busy)
+        DropdownMenuItem({ Text(tr(R.string.rename)) }, { dismiss(); renaming = true }, enabled = !busy)
+        DropdownMenuItem({ Text(tr(R.string.share)) }, { dismiss(); if (remote) activity.run("share", obj("id" to id, "subscription" to true)) { activity.interaction.share = it } else sharing = true }, enabled = !busy)
+        DropdownMenuItem({ Text(tr(R.string.delete_subscription), color = if (busy) Color.Unspecified else MaterialTheme.colorScheme.error) }, { dismiss(); deleting = true }, enabled = !busy)
+    }
+    if (renaming) RenameSourceDialog(source, activity, busy) { renaming = false }
     if (sharing) ShareServersSheet(catalog, source, activity, busy) { sharing = false }
+    if (deleting) AlertDialog(onDismissRequest = { deleting = false }, title = { Text(tr(R.string.delete_this_subscription_and_its_servers)) }, text = { Text(tr(R.string.if_it_contains_the_selected_server)) },
+        confirmButton = { TextButton({ deleting = false; activity.run("deleteSource", obj("id" to id)) }) { Text(tr(R.string.delete)) } }, dismissButton = { TextButton({ deleting = false }) { Text(tr(R.string.cancel)) } })
 }
 
 // A local group has no subscription link, so it shares the links of the servers chosen here.

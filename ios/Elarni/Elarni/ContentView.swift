@@ -221,10 +221,11 @@ struct HomeView: View {
             DisclosureGroup(isExpanded: open(source.id)) {
               ForEach(source.countries) { countryGroup($0, provider: false) }
             } label: {
-              ViewThatFits(in: .horizontal) {
+              let label = ViewThatFits(in: .horizontal) {
                 HStack(spacing: 8) { sourceTitle(source); sourceCount(source) }
                 VStack(alignment: .leading, spacing: 4) { sourceTitle(source); sourceCount(source) }
-              }.frame(minHeight: 44)
+              }.frame(maxWidth: .infinity, minHeight: 44, alignment: .leading).contentShape(Rectangle())
+              if let subscription = model.subscriptions.first(where: { $0.id == source.id }) { label.subscriptionMenu(subscription) } else { label }
             }
           }
         }
