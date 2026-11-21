@@ -1522,6 +1522,105 @@ void main() {
     },
   );
 
+  // Per-app routing works only in VPN mode. Leaving VPN mode turned it off,
+  // and coming back left it off, so the apps went through the default server.
+  testWidgets(
+    'leaving VPN mode pauses per-app routing and coming back resumes it',
+    (tester) async {
+      var stored = '{}';
+      final messenger = tester.binding.defaultBinaryMessenger;
+      messenger.setMockMethodCallHandler(DesktopIntegration.channel, (
+        call,
+      ) async {
+        if (call.method == 'getPreferences') return stored;
+        if (call.method == 'setPreferences')
+          stored = (call.arguments as Map)['json'] as String;
+        return null;
+      });
+      addTearDown(
+        () => messenger.setMockMethodCallHandler(
+          DesktopIntegration.channel,
+          null,
+        ),
+      );
+      final control = FakeTunnelControl()
+        ..settings = const TunnelSettings(
+          xrayTunEnabled: true,
+          perAppMode: 'proxyOnly',
+          perAppProcesses: ['fixture.exe'],
+          perAppTargets: {'fixture.exe': 'direct'},
+        );
+      Future<void> choose(String current, String mode) async {
+        await openSettings(tester);
+        await selectCategory(tester, SettingsCategory.connection);
+        await tester.tap(find.text(current));
+        await tester.pumpAndSettle();
+        await tester.tap(find.widgetWithText(MenuItemButton, mode));
+        await tester.pumpAndSettle();
+      }
+
+      await pumpApp(tester, control, windows: true);
+      await choose('System-wide VPN', 'Local proxy only');
+      expect(
+        (control.settings.xrayTunEnabled, control.settings.perAppMode),
+        (false, 'off'),
+      );
+      expect(control.settings.perAppProcesses, ['fixture.exe']);
+      expect(control.settings.perAppTargets, {'fixture.exe': 'direct'});
+      expect(jsonDecode(stored)['pausedPerAppMode'], 'proxyOnly');
+      // A switch between the proxy modes keeps the paused mode.
+      await choose('Local proxy only', 'System proxy');
+      expect(control.settings.systemProxyEnabled, isTrue);
+      expect(jsonDecode(stored)['pausedPerAppMode'], 'proxyOnly');
+      // It survives a restart.
+      await tester.pumpWidget(const SizedBox());
+      await pumpApp(tester, control, windows: true);
+      await choose('System proxy', 'System-wide VPN');
+      expect(
+        (control.settings.xrayTunEnabled, control.settings.perAppMode),
+        (true, 'proxyOnly'),
+      );
+      expect(control.settings.perAppTargets, {'fixture.exe': 'direct'});
+      expect(jsonDecode(stored)['pausedPerAppMode'], '');
+      // Per-app routing that was off stays off.
+      control.settings = control.settings.copyWith(perAppMode: 'off');
+      await tester.pumpWidget(const SizedBox());
+      await pumpApp(tester, control, windows: true);
+      await choose('System-wide VPN', 'Local proxy only');
+      expect(jsonDecode(stored)['pausedPerAppMode'], '');
+      await choose('Local proxy only', 'System-wide VPN');
+      expect(
+        (control.settings.xrayTunEnabled, control.settings.perAppMode),
+        (true, 'off'),
+      );
+
+      // macOS turns VPN mode on and off with the Xray TUN switch.
+      control.settings = control.settings.copyWith(perAppMode: 'bypass');
+      await tester.pumpWidget(const SizedBox());
+      await pumpApp(tester, control);
+      await openSettings(tester);
+      await selectCategory(tester, SettingsCategory.connection);
+      final tun = find.widgetWithText(ElarniCheckboxTile, 'Xray TUN');
+      await reveal(tester, tun);
+      await tester.tap(tun);
+      await tester.pumpAndSettle();
+      expect(
+        (control.settings.xrayTunEnabled, control.settings.perAppMode),
+        (false, 'off'),
+      );
+      expect(jsonDecode(stored)['pausedPerAppMode'], 'bypass');
+      await tester.tap(tun);
+      await tester.pumpAndSettle();
+      expect(
+        (control.settings.xrayTunEnabled, control.settings.perAppMode),
+        (true, 'bypass'),
+      );
+      expect(jsonDecode(stored)['pausedPerAppMode'], '');
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
+
   testWidgets(
     'local proxy can cancel startup without a late cancellation becoming failure',
     (tester) async {

@@ -2000,6 +2000,12 @@ abstract class AppLocalizations {
   /// **'A scheduled subscription or routing refresh failed.'**
   String get scheduledRefreshFailed;
 
+  /// No description provided for @perAppTargetGoneKept.
+  ///
+  /// In en, this message translates to:
+  /// **'A server that an app is routed through is gone from its subscription. The connection keeps the old settings; choose another server for that app in Per-app routing.'**
+  String get perAppTargetGoneKept;
+
   /// No description provided for @groupSelectionFailed.
   ///
   /// In en, this message translates to:

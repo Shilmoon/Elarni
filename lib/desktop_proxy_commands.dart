@@ -954,7 +954,7 @@ extension _ProxyCommands on DesktopProxy {
         'updateInboundCredentials' => candidate.settingsSnapshot(),
         _ => candidate.routingSnapshot(),
       };
-    });
+    }, subscriptionRefresh: method == 'refreshSubscription');
     if (refreshError != null) throw refreshError!;
     // A refresh that succeeded, scheduled or not, restarts the scheduled one's backoff.
     if (method == 'refreshSubscription')

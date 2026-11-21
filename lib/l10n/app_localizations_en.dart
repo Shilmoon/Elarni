@@ -1144,6 +1144,10 @@ class AppLocalizationsEn extends AppLocalizations {
       'A scheduled subscription or routing refresh failed.';
 
   @override
+  String get perAppTargetGoneKept =>
+      'A server that an app is routed through is gone from its subscription. The connection keeps the old settings; choose another server for that app in Per-app routing.';
+
+  @override
   String get groupSelectionFailed =>
       'Group selection failed. The saved selection was restored.';
 
