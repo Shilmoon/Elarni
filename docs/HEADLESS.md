@@ -20,6 +20,13 @@ Without the app, `elarni-cli daemon` runs it without a window; stop it with
 app bundle. A Linux daemon needs no desktop session; see
 [linux/HEADLESS.md](../linux/HEADLESS.md) for its keyring and boot service.
 Linux and Windows daemons reconnect on the next start unless you ran `disconnect`.
+They write what the window would show to stderr, one line each: `notice: <code>`
+(for example `connection_stopped` or `scheduled_refresh_failed`), and
+`state: <state>` when a notice, a connect or a catalog change leaves the connection
+in a new state. `call readLogs` reads the core's log.
+
+A daemon never checks for or installs updates; only the app's window does. Update
+a server with its package: on Linux, `sudo apt install ./elarni_*_amd64.deb`.
 
 ```sh
 elarni-cli import profile.txt          # - reads stdin
@@ -62,6 +69,7 @@ your user. Nothing listens on the network.
 |---|---|
 | `state`, `subscriptions`, `routingProfiles`, `tunnelSettings`, `automationStatus`, `runtimeMetrics` | None |
 | `inboundCredentials` | None; returns the saved SOCKS/HTTP `username` and `password`, or `{}` |
+| `readLogs` | Optional `after`, the last `seq` you read; returns the log `level` and the `entries` after it, each with its `seq`. Linux and Windows keep the last 1000 lines and return the newest `seq` as `last`. |
 | `connect`, `disconnect`, `repairTunnel` | None |
 | `systemInfo`, `routeTable` | None |
 | `setLaunchAtLogin` | `enabled` (boolean); controls desktop login registration. Not exposed by the Linux standalone service: manage it with systemd. |

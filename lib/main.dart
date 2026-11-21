@@ -81,7 +81,14 @@ Future<void> main(List<String> arguments) async {
     try {
       if (server == null) throw StateError('control_unavailable');
       if (desktop != null) {
-        await desktop.request('state');
+        final started = await desktop.request('state');
+        // No window shows the notices; the daemon's output gets them.
+        logHeadlessNotices(
+          desktop.control,
+          desktop.request,
+          stderr.writeln,
+          state: started['state'],
+        );
       } else {
         await const MethodChannel(
           'com.elarni/tunnel',

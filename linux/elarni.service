@@ -20,7 +20,9 @@ Environment=XDG_CONFIG_HOME=/var/lib/elarni/config
 Environment=XDG_CACHE_HOME=/var/lib/elarni/cache
 Environment=XDG_RUNTIME_DIR=/run/elarni
 ExecStart=/usr/bin/dbus-run-session -- /opt/elarni/elarni-cli --socket /run/elarni/control.sock daemon --keyring-password-file /etc/elarni/keyring-password
-Restart=always
+# elarni-cli shutdown exits 0 and stays down; a crash, a kill or the keyring
+# helper exiting ends non-zero and is restarted.
+Restart=on-failure
 RestartSec=5s
 TimeoutStopSec=30s
 KillMode=control-group

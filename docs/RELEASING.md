@@ -84,6 +84,8 @@ cannot be read) and show a notice when it names a newer version; pre-release tag
 Settings › General › Update feed changes it to another HTTPS address, serving a GitHub
 `releases/latest` reply or `{"version": "0.4.1", "url": "https://…"}`, or clears it to turn the
 check off; debug builds start with it off. The default feed needs the repository to be public.
+A headless daemon (`elarni-cli daemon`, the Linux boot service) never checks; a server is
+updated with its package ([HEADLESS.md](HEADLESS.md)).
 
 An install from the MSI, the `.deb`, the AppImage or the APK also replaces itself with the
 release the feed names (Settings › General › Install updates automatically, on by default). It

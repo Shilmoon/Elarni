@@ -135,13 +135,15 @@ def check(bundle):
             passed.append('refresh-applies-catalog-changes')
             methods = command('commands')['methods']
             assert {'updateRoutingProfile', 'updateInboundCredentials', 'exportCatalogBackup',
-                    'restoreCatalogBackup', 'exportEvidence', 'systemInfo', 'routeTable'} <= set(methods)
+                    'restoreCatalogBackup', 'exportEvidence', 'systemInfo', 'routeTable', 'readLogs'} <= set(methods)
             assert 'setLaunchAtLogin' not in methods  # systemd owns service startup
             node = sources[0]['nodes'][0]['id']
             command('call', 'setNodeFavorite', '-', data=json.dumps({'nodeId': node, 'favorite': True}))
             assert command('profiles')['subscriptions'][0]['nodes'][0]['favorite']
             assert command('call', 'systemInfo')['processorCount'] > 0
             assert 'table' in command('call', 'routeTable')
+            logs = command('call', 'readLogs', '-', data=json.dumps({'after': 0}))
+            assert isinstance(logs['entries'], list) and isinstance(logs['last'], int), logs
             passed.append('complete-call-controls-and-diagnostics')
             sealed = command('call', 'exportCatalogBackup', '-',
                              data=json.dumps({'password': 'synthetic headless backup password'}))
@@ -334,13 +336,15 @@ def check(bundle):
             owner = owned_pid(bundle / 'elarni-cli', 'daemon')
             assert owner is not None
             os.kill(owner, signal.SIGKILL)
-            daemon.wait(timeout=30)
+            # Non-zero (dbus-run-session reports 128+9), so systemd's Restart=on-failure starts it again.
+            assert daemon.wait(timeout=30) != 0
             vpn['wait_clean']()
             daemon = start()
             wait_connected(); vpn_traffic()
             passed.append('daemon-crash-cleanup-and-durable-intent-recovery')
             command('shutdown')
-            daemon.wait(timeout=30)
+            # A requested stop exits 0, so systemd's Restart=on-failure leaves it stopped.
+            assert daemon.wait(timeout=30) == 0, (root / 'daemon.log').read_text()[-6000:]
             vpn['wait_clean']()
             assert not control.exists()
             with socket.socket() as connection:

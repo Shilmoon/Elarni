@@ -7,7 +7,7 @@ import 'desktop_proxy.dart';
 import 'desktop_version.dart';
 import 'headless_transport.dart';
 import 'platform_services.dart';
-import 'tunnel_channel.dart' show recordingBuild;
+import 'tunnel_channel.dart' show TunnelControl, recordingBuild;
 
 export 'headless_transport.dart';
 
@@ -27,6 +27,7 @@ const headlessMethods = {
   'setLaunchAtLogin',
   'configureAutomation',
   'automationStatus',
+  'readLogs',
   'importClientProfiles',
   'addSubscription',
   'refreshSubscription',
@@ -326,6 +327,92 @@ String headlessFailureCode(Object error, {required bool daemon}) {
       : 'operation_failed';
 }
 
+/// What the window would show goes to the service log instead, one line each:
+/// `notice: <code>` for each of [control]'s notices, as codes because the
+/// daemon has no translations, and `state: <state>` when the connection state
+/// read after one differs from the last, starting at [state].
+void logHeadlessNotices(
+  TunnelControl control,
+  DesktopRequest invoke,
+  void Function(String line) log, {
+  Object? state,
+}) {
+  var shown = state;
+  control.setImportListener((code) {
+    if (code != null) log('notice: $code');
+    // A catalog change (no code) can also be a connect or a failover.
+    invoke('state', {}).then((value) {
+      final current = value['state'];
+      if (current is String && current != shown)
+        log('state: ${shown = current}');
+    }, onError: (Object _) {});
+  });
+}
+
+/// Serves [proxy] on [socketPath] until a shutdown request or SIGINT/SIGTERM,
+/// which return normally, or until [failure] completes with the error that
+/// ends the daemon instead. Its lines go to [log], stderr by default.
+Future<void> serveHeadless(
+  String socketPath,
+  DesktopProxy proxy, {
+  Future<Object>? failure,
+  void Function(String line)? log,
+}) async {
+  final void Function(String line) write = log ?? stderr.writeln;
+  Process? sleep;
+  HeadlessServer? server;
+  final done = Completer<void>();
+  void stop() {
+    if (!done.isCompleted) done.complete();
+  }
+
+  final signals = <StreamSubscription<ProcessSignal>>[];
+  try {
+    server = await HeadlessServer.bind(
+      socketPath,
+      HeadlessControl(
+        proxy.request,
+        unattended: true,
+        desktopIntegration: false,
+      ).request,
+      onShutdown: stop,
+    );
+    // Acquire the same catalog lease as the GUI.
+    final started = await proxy.request('state');
+    logHeadlessNotices(
+      proxy.control,
+      proxy.request,
+      write,
+      state: started['state'],
+    );
+    // The Windows daemon is the hidden app, whose window hears sleep itself.
+    if (Platform.isLinux)
+      sleep = await watchLinuxSleep((sleeping) {
+        unawaited(proxy.handleSleep(sleeping));
+      });
+    for (final signal in [
+      ProcessSignal.sigint,
+      if (!Platform.isWindows) ProcessSignal.sigterm,
+    ]) {
+      signals.add(signal.watch().listen((_) => stop()));
+    }
+    if (failure != null)
+      unawaited(
+        failure.then((error) {
+          if (!done.isCompleted) done.completeError(error);
+        }),
+      );
+    write('Elarni headless control ready.');
+    await done.future;
+  } finally {
+    for (final signal in signals) {
+      await signal.cancel();
+    }
+    sleep?.kill();
+    await server?.close();
+  }
+}
+
 Future<void> runHeadless({
   required String socketPath,
   required String corePath,
@@ -336,15 +423,8 @@ Future<void> runHeadless({
     throw UnsupportedError('Use the macOS app host for headless control.');
   if (keyringPasswordFile != null && !Platform.isLinux)
     throw ArgumentError('keyring_password_requires_linux');
-  Process? keyring, sleep;
+  Process? keyring;
   DesktopProxy? proxy;
-  HeadlessServer? server;
-  final done = Completer<void>();
-  void stop() {
-    if (!done.isCompleted) done.complete();
-  }
-
-  final signals = <StreamSubscription<ProcessSignal>>[];
   try {
     if (keyringPasswordFile != null) {
       final password = File(keyringPasswordFile);
@@ -423,50 +503,17 @@ Future<void> runHeadless({
         throw desktopError('desktop_operation_unavailable');
       },
     );
-    server = await HeadlessServer.bind(
+    await serveHeadless(
       socketPath,
-      HeadlessControl(
-        proxy.request,
-        unattended: true,
-        desktopIntegration: false,
-      ).request,
-      onShutdown: stop,
+      proxy,
+      failure: keyring?.exitCode.then((_) => StateError('keyring_exited')),
     );
-    await proxy.request('state'); // Acquire the same catalog lease as the GUI.
-    // The Windows daemon is the hidden app, whose window hears sleep itself.
-    if (Platform.isLinux)
-      sleep = await watchLinuxSleep((sleeping) {
-        unawaited(proxy?.handleSleep(sleeping));
-      });
-    for (final signal in [
-      ProcessSignal.sigint,
-      if (!Platform.isWindows) ProcessSignal.sigterm,
-    ]) {
-      signals.add(signal.watch().listen((_) => stop()));
-    }
-    if (keyring != null)
-      unawaited(
-        keyring.exitCode.then((_) {
-          if (!done.isCompleted)
-            done.completeError(StateError('keyring_exited'));
-        }),
-      );
-    stderr.writeln('Elarni headless control ready.');
-    await done.future;
   } finally {
-    for (final signal in signals) {
-      await signal.cancel();
-    }
-    sleep?.kill();
     try {
-      await server?.close();
+      await proxy?.dispose();
     } finally {
-      try {
-        await proxy?.dispose();
-      } finally {
-        keyring?.kill();
-        if (keyring != null) await keyring.exitCode;
-      }
+      keyring?.kill();
+      if (keyring != null) await keyring.exitCode;
     }
   }
 }
