@@ -517,6 +517,8 @@
     <string name="allow">Разрешить</string>
     <string name="allow_location_all_the_time">Разрешить геолокацию всегда</string>
     <string name="android_shows_wi_fi_names_only">Android показывает имена Wi-Fi только приложениям, которым всегда разрешена геолокация, и только при включённой геолокации.</string>
+    <string name="allow_notifications">Разрешить уведомления</string>
+    <string name="reminders_need_elarni_s_notifications">Для напоминаний нужны уведомления Elarni. Они выключены в настройках Android.</string>
     <string name="none_every_wi_fi_network_connects">Нет. Подключение в любой сети Wi-Fi.</string>
     <string name="one_network_name_per_line">Одно имя сети на строку.</string>
     <string name="trusted_wi_fi_networks">Доверенные сети Wi-Fi</string>

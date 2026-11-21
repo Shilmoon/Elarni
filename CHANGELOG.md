@@ -4,6 +4,13 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
 
 ## Unreleased
 
+### Fixed
+
+- Subscription expiry reminders could be on and never show. Turning them on now asks for the
+  notification permission, Settings › General says when Elarni's notifications are off and opens
+  the permission request or Android's notification settings, and a reminder that could not be
+  shown is no longer counted as shown, so it comes once notifications are allowed. Android.
+
 ## 0.6.2 - 2026-11-18
 
 ### Added
