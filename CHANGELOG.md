@@ -4,6 +4,15 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
 
 ## Unreleased
 
+### Fixed
+
+- **Select unreachable** in a subscription's server list ticks only servers whose latest test is
+  still current and failed to reach the server. It also ticked servers whose test never reached
+  them (another test was running, it was cancelled, the active-connection test ran without a
+  connection, the server does not support the test type), was cut short by the 7-second limit
+  of a whole-list test under a longer timeout, or was hours old. Windows, Linux, macOS, Android
+  and iPhone.
+
 ## 0.6.2 - 2026-11-18
 
 ### Added

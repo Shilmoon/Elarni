@@ -1042,7 +1042,8 @@ final class IOSAppModel {
               catch {
                 try Task.checkCancellation()
                 if self.probeQuarantined { self.show(error); throw error }
-                result = ProbeResult(milliseconds: nil, status: "Failed", revision: node.revision, date: Date(), mode: mode, failure: Self.probeFailure(error))
+                result = ProbeResult(milliseconds: nil, status: "Failed", revision: node.revision, date: Date(), mode: mode,
+                  failure: Self.probeFailure(error), serverFailure: Self.probeFailedToReachServer(error))
               }
               return (node.id, result)
             }
@@ -1104,6 +1105,17 @@ final class IOSAppModel {
     case IOSAppError.invalidSettings: String(localized: "This test type does not support this server.")
     case AutomationFailure.staleContext: String(localized: "The server or connection changed during the test.")
     default: String(localized: "The test could not run.")
+    }
+  }
+
+  /// Whether a failed test failed to reach the server, which Select unreachable ticks. A test that could not run
+  /// against it does not: one the core was busy for or cancelled, a test type the server lacks, a refused test
+  /// address, configuration or setting, a changed connection, or a catalog that could not be read.
+  static func probeFailedToReachServer(_ error: Error) -> Bool {
+    switch error {
+    case let failure as IOSProbeFailure: !["probe_busy", "canceled", "invalid_target", "invalid_configuration"].contains(failure.code)
+    case IOSAppError.operationTimedOut, IOSAppError.providerUnavailable: true
+    default: false
     }
   }
 

@@ -111,6 +111,8 @@ struct ProbeResult {
   let date: Date
   var mode = "proxy"
   var failure: String?
+  /// Whether a failed test failed to reach the server, rather than not running against it.
+  var serverFailure = false
   /// The status is state ("Passed", "Failed"); this is its text.
   var statusLabel: String { String(localized: String.LocalizationValue(status)) }
   var scope: String {
@@ -121,7 +123,9 @@ struct ProbeResult {
     default: String(localized: "Proxy HTTP")
     }
   }
-  func current(for node: ServerNode) -> Bool { revision == node.revision && Date().timeIntervalSince(date) < 300 }
+  func current(for node: ServerNode, now: Date = Date()) -> Bool { revision == node.revision && now.timeIntervalSince(date) < 300 }
+  /// What Select unreachable ticks: a current test that failed to reach the server.
+  func unreachable(for node: ServerNode, now: Date = Date()) -> Bool { status == "Failed" && serverFailure && current(for: node, now: now) }
   func currentMilliseconds(for node: ServerNode) -> Int? {
     guard current(for: node), status == "Passed", let milliseconds, milliseconds >= 0 else { return nil }
     return milliseconds

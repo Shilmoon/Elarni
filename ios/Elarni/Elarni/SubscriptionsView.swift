@@ -151,9 +151,10 @@ struct SubscriptionDetailView: View {
               Spacer()
               Button("Cancel") { selecting = false; chosen = [] }.buttonStyle(.borderless).frame(minHeight: 44)
             }
-            // The selected server stays, as the store requires.
+            // A current test that failed to reach the server. The selected server stays, as the store requires.
             Button("Select unreachable") {
-              chosen.formUnion(visible.filter { $0.id != model.selectedID && model.probes[$0.id]?.status == "Failed" }.map(\.id))
+              let now = Date()
+              chosen.formUnion(visible.filter { $0.id != model.selectedID && model.probes[$0.id]?.unreachable(for: $0, now: now) == true }.map(\.id))
             }
             Button(source.local ? String(localized: "Delete \(servers(chosenCount))") : String(localized: "Hide \(servers(chosenCount))"), role: .destructive) { removingChosen = true }
               .disabled(model.busy || chosenCount == 0 || chosenCount >= source.nodes.count)

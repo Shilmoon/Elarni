@@ -1437,6 +1437,29 @@ final class ElarniTests: XCTestCase {
     try await model.delete(group)
   }
 
+  // Select unreachable ticks a server whose latest test is current and failed to reach it,
+  // not one whose test could not run against it, an old one or one of an earlier configuration.
+  func testSelectUnreachableTicksOnlyACurrentFailureToReachTheServer() {
+    let now = Date(timeIntervalSince1970: 1_800_000_000)
+    let node = ServerNode(raw: ["id": "a", "configurationRevision": "r1"], subscriptionID: "s")
+    func failed(_ error: Error, age: TimeInterval = 10, revision: String = "r1") -> ProbeResult {
+      ProbeResult(milliseconds: nil, status: "Failed", revision: revision, date: now - age, mode: "proxy",
+        failure: "", serverFailure: IOSAppModel.probeFailedToReachServer(error))
+    }
+    func native(_ code: String) -> IOSProbeFailure { IOSProbeFailure(code: code, stage: nil, cleanupPending: false, receivedHTTP: false) }
+    let reached: [Error] = [native("timeout"), native("failed"), native("eof"), IOSAppError.operationTimedOut, IOSAppError.providerUnavailable]
+    for error in reached { XCTAssertTrue(failed(error).unreachable(for: node, now: now), "\(error)") }
+    let notRun: [Error] = [native("probe_busy"), native("canceled"), native("invalid_target"), native("invalid_configuration"),
+      IOSAppError.busy, IOSAppError.invalidSettings, IOSAppError.nativeFailure, IOSAppError.unsupportedProcessRouting,
+      AutomationFailure.staleContext, AutomationFailure.providerFailure, IOSPlatformError.signingRequired]
+    for error in notRun { XCTAssertFalse(failed(error).unreachable(for: node, now: now), "\(error)") }
+    XCTAssertTrue(failed(native("timeout"), age: 299).unreachable(for: node, now: now))
+    XCTAssertFalse(failed(native("timeout"), age: 300).unreachable(for: node, now: now), "As old as the list marks stale")
+    XCTAssertFalse(failed(native("timeout"), age: 3 * 3600).unreachable(for: node, now: now))
+    XCTAssertFalse(failed(native("timeout"), revision: "r0").unreachable(for: node, now: now), "A test of an earlier configuration")
+    XCTAssertFalse(ProbeResult(milliseconds: 40, status: "Passed", revision: "r1", date: now, mode: "proxy").unreachable(for: node, now: now))
+  }
+
   // Pull to refresh refreshes each subscription in turn. One that needs approval
   // keeps its prompt when a later one succeeds.
   func testLaterRefreshKeepsAPendingApproval() async throws {
