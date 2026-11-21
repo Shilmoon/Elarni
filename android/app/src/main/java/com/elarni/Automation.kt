@@ -151,3 +151,29 @@ class Automation(saved: JSONObject) {
         }
     }
 }
+
+/** Restarts of a core that stopped by itself while recovery is off: two in ten minutes at most, so one that keeps
+ *  stopping cannot loop. Times are [Automation.clock] seconds. */
+class CrashRestarts {
+    private val times = ArrayDeque<Double>()
+    /** Whether a restart may run at [time]; one that may is counted. */
+    fun allow(time: Double): Boolean {
+        while (times.isNotEmpty() && time - times.first() >= 600) times.removeFirst()
+        return (times.size < 2).also { if (it) times.addLast(time) }
+    }
+}
+
+/** As on desktop, a server that passed a liveness check since its core started and then failed two in a row gets a new
+ *  core. One that never passed (its exit may refuse the check targets) is only reported, so it cannot restart forever;
+ *  the restart [reset]s the pass, so only a new one allows the next. */
+class DeadCore {
+    private var failures = 0
+    private var passed: String? = null
+    /** A start, a stop or a change of state. */
+    fun reset() { failures = 0; passed = null }
+    /** Records a check of [server], its id and configuration revision; true when its core should restart now. */
+    fun checked(server: String, ok: Boolean): Boolean {
+        if (ok) { failures = 0; passed = server; return false }
+        return ++failures >= 2 && passed == server
+    }
+}

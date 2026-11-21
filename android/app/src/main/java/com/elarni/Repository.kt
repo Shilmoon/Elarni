@@ -173,7 +173,7 @@ class Repository(private val app: ElarniApplication) {
         store.save(saved)
     }
     private fun state(value: String) {
-        if (value != mutable.value.connection) livenessAt = null
+        if (value != mutable.value.connection) { livenessAt = null; deadCore.reset() }
         // A new start counts from zero again.
         if (value != "connected" || mutable.value.connection != "connected") trafficSample = null
         mutable.update { val kept = value == "connected" && it.connection == "connected"
@@ -185,12 +185,16 @@ class Repository(private val app: ElarniApplication) {
     private var trafficSample: LongArray? = null
     private var livenessAt: Double? = null
     private var livenessUplink = 0L
+    /** The liveness checks of the running core that restart it. */
+    private val deadCore = DeadCore()
+    private val crashRestarts = CrashRestarts()
     // The downlink proves nothing: listener replies and direct routes move it while the server is gone.
     private fun uplink() = Native.call("getRuntimeMetrics").optLong("uplinkBytes")
     // The counter restarts with the core, so each reading is the next baseline.
     private fun uplinkGrew(): Boolean { val now = uplink(); return (now > livenessUplink).also { livenessUplink = now } }
     // "connected" means only that the core runs. Checks the server once after Connect, then each
-    // interval while traffic leaves or the last check failed. It only reports, and says whether it probed.
+    // interval while traffic leaves or the last check failed, and says whether it probed. A server that
+    // passed traffic and then failed two checks in a row gets a new core, as on desktop; failover has its own path.
     private fun liveness(catalog: Catalog, generation: Long): Boolean {
         val last = livenessAt
         if (last != null) {
@@ -201,15 +205,17 @@ class Repository(private val app: ElarniApplication) {
         val targets = configured.ifEmpty { Automation.livenessTargets.let { all -> (0 until all.length()).map(all::getJSONObject) } }
         val ok = targets.any { target -> runCatching { engine.probe(catalog, catalog.selected, target.copy().put("protocol", "activeProxy").put("method", "GET").put("timeout", 5)) }.isSuccess }
         check(generation)
-        checked(ok)
+        if (checked(ok) && automation.online && connectionWanted() && !catalog.data.mapObject("automation").optBoolean("enabled")) restartInTunnel(generation)
         return true
     }
-    /** Shows a check of the connected server; the traffic baseline starts after the check's own requests. */
-    private fun checked(ok: Boolean) {
-        if (!engine.running || mutable.value.connection != "connected") return
+    /** Shows a check of the connected server and says whether its core should restart; the traffic baseline starts after the check's own requests. */
+    private fun checked(ok: Boolean): Boolean {
+        if (!engine.running || mutable.value.connection != "connected") return false
         livenessAt = Automation.clock(); livenessUplink = uplink()
+        val dead = deadCore.checked(catalog.selected + ":" + catalog.nodeOrNull(catalog.selected)?.string("configurationRevision", catalog.selected), ok)
         mutable.update { it.copy(liveness = if (ok) "ok" else "noTraffic", noTrafficSince = if (ok) null else it.noTrafficSince ?: System.currentTimeMillis()) }
         publish()
+        return dead
     }
     fun cancel(): Long { val generation = epoch.incrementAndGet(); Native.cancelOperations(); return generation }
     fun beginConnectionRequest(): Long { stopRequested.set(false); return cancel() }
@@ -303,7 +309,7 @@ class Repository(private val app: ElarniApplication) {
             state("disconnected")
         }
     }
-    private fun start(value: Catalog, generation: Long) {
+    private fun start(value: Catalog, generation: Long, keepTunnel: Boolean = wantsRecovery()) {
         check(generation)
         val route = value.routeFor(value.selected)
         if (route != null) {
@@ -311,7 +317,7 @@ class Repository(private val app: ElarniApplication) {
             if (route.string("assetRevision").isEmpty()) { assets.prepare(value, route.getString("id")); edits++ }
         }
         check(generation)
-        engine.start(value, keepTunnel = wantsRecovery()) { check(generation) }
+        engine.start(value, keepTunnel) { check(generation) }
     }
     private fun apply(candidate: Catalog, generation: Long, refresh: Boolean = false): JSONObject {
         check(generation); candidate.reconcileSelection(); candidate.validate()
@@ -755,6 +761,22 @@ class Repository(private val app: ElarniApplication) {
         try { state("connecting"); start(catalog, generation); automation.healthy(Automation.clock()); state("connected") }
         catch (error: Exception) { if (code(error) != "cancelled") { state("failed"); automation.schedule(Automation.clock()); report(error) } }
     }
+    /** The user still wants the connection, and neither the screen pause nor a Disconnect holds it. */
+    private fun connectionWanted() = automation.intent && !automation.sleeping && !stopRequested.get()
+    /** Restarts the core inside the interface it has, so nothing leaves outside the VPN meanwhile. Without recovery to
+     *  retry it, a start that fails releases the interface: Android has no kill switch of the app's own to keep it for.
+     *  A Disconnect or Cancel meanwhile is no failure, as for [restart]. */
+    private fun restartInTunnel(generation: Long) {
+        try { state("connecting"); start(catalog, generation, keepTunnel = true); automation.healthy(Automation.clock()); state("connected") }
+        catch (error: Exception) {
+            if (code(error) == "cancelled") return
+            val recovery = wantsRecovery()
+            if (!recovery) runCatching { engine.stop() }
+            state("failed")
+            if (recovery) automation.schedule(Automation.clock())
+            report(error)
+        }
+    }
     suspend fun screenChanged(sleeping: Boolean) {
         ready.await(); mutex.withLock {
             if (!catalog.settings.optBoolean("disconnectOnSleep")) return
@@ -779,7 +801,14 @@ class Repository(private val app: ElarniApplication) {
             val config = catalog.data.optJSONObject("automation") ?: Automation.defaults()
             var probed = false
             if (engine.running) {
-                if (!Native.call("getXrayState").optBoolean("running")) { try { engine.stop(releaseTunnel = !wantsRecovery()) } finally { state("failed") } }
+                if (!Native.call("getXrayState").optBoolean("running")) {
+                    // Without recovery, a core that stopped by itself starts again at once inside its interface, so nothing
+                    // leaves outside the VPN meanwhile; twice in ten minutes at most, so one that keeps stopping cannot loop.
+                    if (!wantsRecovery() && connectionWanted() && crashRestarts.allow(time)) {
+                        runCatching { engine.stop(releaseTunnel = false) }
+                        restartInTunnel(generation)
+                    } else try { engine.stop(releaseTunnel = !wantsRecovery()) } finally { state("failed") }
+                }
                 else {
                     val monitoring = catalog.settings.optBoolean("monitoringEnabled")
                     // A widget alone reads the counters for its speed line; the app reads them only on screen: for Home's speed
