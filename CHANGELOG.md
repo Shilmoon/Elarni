@@ -4,6 +4,17 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
 
 ## Unreleased
 
+### Fixed
+
+- When the core stopped by itself while connected, Android closed the VPN, and nothing brought
+  the connection back unless **Reconnect automatically** or failover was on. Without Android's
+  own **Block connections without VPN**, every app's traffic then went on outside the VPN
+  without a word. Now the VPN stays up and the core is started again inside it at once, twice
+  in ten minutes at most; when that fails as well, the VPN closes and the connection shows as
+  failed, as before. And a connection whose server passed traffic and then fails two checks in
+  a row (**Connected · no traffic**) gets a new core, as on Windows and Linux; a server that
+  never passed the check is still only reported. Android.
+
 ## 0.6.2 - 2026-11-18
 
 ### Added
