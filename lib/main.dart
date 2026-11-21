@@ -140,11 +140,11 @@ Future<void> main(List<String> arguments) async {
     );
   // Once: a quit for an update closes first, then the window's dispose follows.
   Future<void>? closing;
-  Future<void> close() => closing ??= () async {
+  Future<void> close({bool keepBlock = false}) => closing ??= () async {
     try {
       await (await control)?.close();
     } finally {
-      await desktop?.dispose();
+      await desktop?.dispose(keepBlock: keepBlock);
     }
   }();
   runApp(
@@ -158,7 +158,9 @@ Future<void> main(List<String> arguments) async {
           ? null
           : ({required bool restart}) async {
               try {
-                await close();
+                // Block traffic without VPN covers the gap until the new
+                // build connects.
+                await close(keepBlock: true);
               } on Object {
                 // The update needs this process gone, closed cleanly or not.
               }

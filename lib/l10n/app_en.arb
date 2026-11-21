@@ -514,7 +514,7 @@
   "routingProfilesNotLoaded": "Routing profiles could not be loaded.",
   "connectionStoppedUnexpectedly": "Connection stopped unexpectedly. Reconnect to retry.",
   "connectionStoppedRepair": "Connection stopped unexpectedly. Reconnect to retry; if sites stay unreachable, use Repair VPN setup.",
-  "connectionStoppedBlocked": "Connection stopped unexpectedly. Block traffic without VPN keeps traffic blocked until you reconnect, or use Repair VPN setup to lift the block.",
+  "connectionStoppedBlocked": "Connection stopped unexpectedly. Block traffic without VPN keeps traffic blocked until you reconnect. Disconnecting, quitting Elarni or Repair VPN setup lifts the block.",
   "windowsDnsNotRestored": "Disconnected, but Windows DNS could not be restored yet. If sites stay unreachable, use Repair VPN setup.",
   "systemProxyNotRestored": "The system proxy setting could not be restored. Check it in your system network settings.",
   "systemProxyNotSet": "The system proxy could not be set. Apps can still use the HTTP proxy at 127.0.0.1:{port}.",

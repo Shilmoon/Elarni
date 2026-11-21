@@ -4,6 +4,16 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
 
 ## Unreleased
 
+### Fixed
+
+- With **Block traffic without VPN** on, **Disconnect** and quitting Elarni now lift the block
+  that a VPN which stopped by itself left, as Settings says. Before, Elarni showed Disconnected
+  while nothing could leave the device until the next Connect, **Repair VPN setup** or a
+  restart, and quitting while connected kept the block with no Elarni running. When the VPN
+  helper itself crashed, Disconnect clears its block too, asking for consent where the system
+  needs it; declined, it points at Repair VPN setup. Quitting for an update still keeps the
+  block until the new version is back. Windows, Linux.
+
 ## 0.6.2 - 2026-11-18
 
 ### Added
