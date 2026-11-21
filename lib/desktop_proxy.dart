@@ -95,7 +95,8 @@ final class DesktopProxy {
   final SystemProxySession? _systemProxy;
   bool _proxyReleased = false;
   Timer? _wifiTimer;
-  // The network last acted on; null before the first reading.
+  // The network last acted on: its name, or for a name that cannot be read,
+  // a NUL and the addresses it was read on; null before the first reading.
   ({String? name})? _wifi;
   String? _wifiStatus, _wifiPath;
   int _wifiSkips = 0;

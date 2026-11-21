@@ -88,7 +88,8 @@ extension _ProxyAutomation on DesktopProxy {
   }
 
   // Connect on untrusted Wi-Fi: joining a network that is not on the trusted
-  // list connects, once per join. Other networks and a Stop stay as they are.
+  // list, or whose name cannot be read, connects, once per join. Other
+  // networks and a Stop stay as they are.
   Future<void> _wifiTick() async {
     if (_catalog?.settings.connectOnUntrustedWiFi != true) {
       _wifi = _wifiStatus = _wifiPath = null;
@@ -106,17 +107,25 @@ extension _ProxyAutomation on DesktopProxy {
       _wifiSkips = 0;
       final settings = _catalog?.settings;
       if (settings == null || !settings.connectOnUntrustedWiFi) return;
-      _wifiStatus = reading.denied ? 'locationDenied' : 'ok';
+      _wifiStatus = !reading.denied
+          ? 'ok'
+          : Platform.isLinux
+          ? 'nameUnreadable'
+          : 'locationDenied';
+      // A network whose name cannot be read is untrusted, and its addresses
+      // tell it from the next one: the IPv4 ones when it has any, since IPv6
+      // privacy addresses rotate on the same network and would undo a Stop.
+      // Another address change counts as a new join, which errs toward
+      // connecting.
+      final key = reading.denied ? '\u0000${_stablePath(path)}' : reading.name;
       // A busy controller leaves the join for the next reading.
-      if (reading.denied ||
-          _wifi?.name == reading.name && _wifi != null ||
+      if (_wifi?.name == key && _wifi != null ||
           _operation != null ||
           _disconnecting != null)
         return;
-      _wifi = (name: reading.name);
-      final name = reading.name;
-      if (name == null ||
-          settings.trustedWiFiNetworks.contains(name) ||
+      _wifi = (name: key);
+      if (key == null ||
+          !reading.denied && settings.trustedWiFiNetworks.contains(key) ||
           _catalog!.selected == null ||
           {'connected', 'connecting'}.contains(_state))
         return;
@@ -126,6 +135,16 @@ extension _ProxyAutomation on DesktopProxy {
     } finally {
       _wifiBusy = false;
     }
+  }
+
+  // The IPv4 entries of a path ("index:address" joined by "|"), or the whole
+  // path when it has none.
+  static String _stablePath(String path) {
+    final v4 = path
+        .split('|')
+        .where((entry) => entry.indexOf(':') == entry.lastIndexOf(':'))
+        .join('|');
+    return v4.isEmpty ? path : v4;
   }
 
   // The addresses of usable physical links, sorted; empty when offline.
