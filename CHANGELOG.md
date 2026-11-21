@@ -4,6 +4,17 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
 
 ## Unreleased
 
+### Fixed
+
+- **Connect on untrusted Wi-Fi was late on Android without mobile data.** Android told the app
+  that Wi-Fi had changed only by mobile data taking over, so with mobile data off (roaming, a
+  tablet) or on a move from one Wi-Fi network straight to another, a new network was noticed
+  only by a check every 15 to 26 minutes, later with the screen off. The app now hears of every
+  Wi-Fi change at once: while the rule is on and the VPN is off, a small watcher process of
+  its own keeps running, with a **Watching for untrusted Wi-Fi** notification that has its own
+  channel and can be hidden. It starts the app only when Wi-Fi changes. The earlier reports
+  remain for when Android stops the watcher all the same.
+
 ## 0.6.2 - 2026-11-18
 
 ### Added

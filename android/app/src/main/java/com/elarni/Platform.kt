@@ -50,6 +50,9 @@ class ElarniApplication : Application() {
     /** Whether the process before this one died while its VPN service existed. */
     var serviceHeld = false
         private set
+    /** While the VPN service runs, this process hears of Wi-Fi changes itself; WiFiWatchService does otherwise. */
+    @Volatile var vpnServiceRuns = false
+        private set
     private val serviceMarker get() = java.io.File(noBackupFilesDir, "service-running")
     val socketController = DialerController { fd ->
         !requiresProtection || fd in 0..Int.MAX_VALUE.toLong() && vpnOwner?.protect(fd.toInt()) == true
@@ -57,6 +60,8 @@ class ElarniApplication : Application() {
     override fun onCreate() {
         super.onCreate()
         instance = this
+        // WiFiWatchService's process holds that service alone: no core, no catalog, and none of what follows.
+        if (getProcessName() != packageName) return
         // Before any component starts: a marker the service did not remove outlived its process, and so did its alarm.
         serviceHeld = serviceMarker.exists()
         watchService(false)
@@ -117,6 +122,7 @@ class ElarniApplication : Application() {
         val alarms = getSystemService(AlarmManager::class.java)
         if (on) { runCatching { serviceMarker.createNewFile() }; alarms.setInexactRepeating(AlarmManager.ELAPSED_REALTIME, SystemClock.elapsedRealtime() + 60_000, 60_000, watchAlarm); watchIdle() }
         else { alarms.cancel(watchAlarm); alarms.cancel(idleAlarm); serviceMarker.delete() }
+        vpnServiceRuns = on; WiFiRule.hold(this)
     }
     /** Doze holds the repeating alarm for hours. While the VPN service runs and is not paused for sleep, an inexact
      *  allow-while-idle alarm (no exact-alarm permission) wakes about every 15 minutes; each alarm sets the next. */
