@@ -1,6 +1,7 @@
 import CryptoKit
 import Foundation
 import Network
+import NetworkExtension
 import Observation
 import Security
 import UIKit
@@ -104,6 +105,8 @@ final class IOSAppModel {
       try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
       directory = root
       preferences = try read(IOSPreferences.self, name: "ios-preferences.json") ?? IOSPreferences()
+      // "Current rules / active tunnel" is no longer a choice; it was a proxy test of the selected server.
+      if preferences.probeMode == "activeProxy" { preferences.probeMode = "proxy" }
       recovery = AutomationPolicy(savedEpisode: try read(AutomationPolicy.Episode.self, name: "ios-recovery.json"))
       let savedSettings = try read(IOSTunnelSettings.self, name: "ios-settings.json")
       settings = savedSettings ?? IOSTunnelSettings()
@@ -330,17 +333,18 @@ final class IOSAppModel {
     backgroundTime = .invalid
   }
 
-  /// Reports a VPN that went down without the user's Stop, while the app was open or suspended.
   /// On Demand connected an untrusted Wi-Fi network; that connection is the app's from now on.
   func adoptUntrustedWiFiConnection() {
     if vpn.connected, commands.intent != .connected, untrustedWiFiArmed, !busy { try? commands.persist(.connected) }
   }
 
-  private func noteUnexpectedDisconnect() {
+  /// Reports a VPN that went down without the user's Stop, while the app was open or suspended.
+  /// A stop with iOS's own VPN switch (Settings, Control Center) is the user's too.
+  func noteUnexpectedDisconnect() {
     if vpn.connected { sawConnected = true; return }
     guard sawConnected, !vpn.active, !busy else { return }
     sawConnected = false
-    guard commands.intent == .connected else { return }
+    guard commands.intent == .connected, !IOSConnectionAlerts.stoppedByUser() else { return }
     notice = String(localized: "Elarni disconnected without a Stop from you. Tap Connect to reconnect.") +
       (settings.onDemandEnabled || settings.includeAllNetworks ? "" : String(localized: " Turn on On Demand in Settings › General so iOS reconnects it automatically."))
   }
@@ -596,6 +600,10 @@ final class IOSAppModel {
           id = try await chooseBeforeConnecting(current: id)
           try Task.checkCancellation()
         }
+        // The plan holds no rules of a routing list that was never downloaded. The store bounds this download,
+        // whose failure fails no connection; Stop cancels it.
+        await store.routing.downloadMissingManaged(subscriptionID: try? store.subscriptionID(nodeID: id))
+        try Task.checkCancellation()
         let plan = try await makePlan(nodeID: id)
         if id != original { try store.beginSelectionPublication() }
         do {
@@ -796,6 +804,19 @@ final class IOSAppModel {
     return compiled
   }
 
+  /// The joined Wi-Fi network's name, or nil without one. iOS tells it to an app that holds the Access Wi-Fi Information
+  /// entitlement and has a VPN configuration installed, which is Elarni once it has connected.
+  func joinedWiFi() async -> String? {
+#if DEBUG
+    if isolation != nil {
+      let args = ProcessInfo.processInfo.arguments
+      return args.firstIndex(of: "--joined-wifi").flatMap { args.indices.contains($0 + 1) ? args[$0 + 1] : nil }
+    }
+#endif
+    guard let name = await NEHotspotNetwork.fetchCurrent()?.ssid, !name.isEmpty else { return nil }
+    return name
+  }
+
   func saveSettings(_ next: IOSTunnelSettings) async throws {
     try next.validate()
     guard next != settings else { return }
@@ -898,10 +919,30 @@ final class IOSAppModel {
     } catch { notice = String(localized: "Expiry reminders could not be updated. Check notification access in iPhone Settings.") }
   }
 
-  func exportBackup(password: String) async throws -> String {
-    let result = try await NativeAPI.perform("sealCatalogBackup", ["catalog": try catalog().backupCatalog(), "password": password])
+  /// The sealed backup, and what to say once it is saved: the subscriptions it left out, or nil.
+  func exportBackup(password: String) async throws -> (text: String, leftOut: String?) {
+    let backup = try catalog().backupCatalog()
+    let result = try await NativeAPI.perform("sealCatalogBackup", ["catalog": backup.document, "password": password])
     guard let text = result["text"] as? String else { throw IOSAppError.nativeFailure }
-    return text
+    return (text, Self.backupLeftOut(backup.excluded))
+  }
+
+  /// What a saved backup left out and why, in one message, as on the desktop; nil when it left out nothing.
+  static func backupLeftOut(_ excluded: [[String: String]]) -> String? {
+    let forbidden = excluded.filter { $0["reason"] == "sharing_disabled" }.compactMap { $0["name"] }
+    let unrefreshed = excluded.filter { $0["reason"] != "sharing_disabled" }.compactMap { $0["name"] }
+    var parts: [String] = []
+    if !forbidden.isEmpty {
+      let names = forbidden.joined(separator: ", ")
+      parts.append(String(localized: "Backup saved without \(forbidden.count) subscriptions: \(names). Their providers do not allow backups."))
+    }
+    if !unrefreshed.isEmpty {
+      let names = unrefreshed.joined(separator: ", ")
+      parts.append(forbidden.isEmpty
+        ? String(localized: "Backup saved without \(unrefreshed.count) subscriptions: \(names). Update them once first.")
+        : String(localized: "Also left out \(unrefreshed.count) subscriptions that were never updated: \(names). Update them once first."))
+    }
+    return parts.isEmpty ? nil : parts.joined(separator: " ")
   }
 
   func restoreBackup(text: String, password: String) async throws {
@@ -1042,7 +1083,8 @@ final class IOSAppModel {
               catch {
                 try Task.checkCancellation()
                 if self.probeQuarantined { self.show(error); throw error }
-                result = ProbeResult(milliseconds: nil, status: "Failed", revision: node.revision, date: Date(), mode: mode, failure: Self.probeFailure(error))
+                result = ProbeResult(milliseconds: nil, status: "Failed", revision: node.revision, date: Date(), mode: mode,
+                  failure: Self.probeFailure(error), serverFailure: Self.probeFailedToReachServer(error))
               }
               return (node.id, result)
             }
@@ -1104,6 +1146,17 @@ final class IOSAppModel {
     case IOSAppError.invalidSettings: String(localized: "This test type does not support this server.")
     case AutomationFailure.staleContext: String(localized: "The server or connection changed during the test.")
     default: String(localized: "The test could not run.")
+    }
+  }
+
+  /// Whether a failed test failed to reach the server, which Select unreachable ticks. A test that could not run
+  /// against it does not: one the core was busy for or cancelled, a test type the server lacks, a refused test
+  /// address, configuration or setting, a changed connection, or a catalog that could not be read.
+  static func probeFailedToReachServer(_ error: Error) -> Bool {
+    switch error {
+    case let failure as IOSProbeFailure: !["probe_busy", "canceled", "invalid_target", "invalid_configuration"].contains(failure.code)
+    case IOSAppError.operationTimedOut, IOSAppError.providerUnavailable: true
+    default: false
     }
   }
 
@@ -1338,6 +1391,8 @@ final class IOSAppModel {
           let node = selected, config.nodeIDs.contains(node.id) else { return }
     let now = ProcessInfo.processInfo.systemUptime
     guard recovery.online else { recoveryStatus = String(localized: "Waiting for network"); return }
+    // A spent episode starts over by itself after a wait, as on the other platforms.
+    if recovery.episode.exhausted && recovery.rearmUnattended(now: now, intent: true) { try? saveEpisode() }
     guard !recovery.episode.exhausted else { recoveryStatus = String(localized: "Retry limit reached. Tap Connect to retry."); return }
     // A failed provider reports reasserting until it is restarted; treat it as down.
     let failed = vpn.failed
@@ -1388,7 +1443,7 @@ final class IOSAppModel {
       catch {
         let failure = error as? AutomationFailure ?? .indeterminate
         if failure == .unsupportedPolicy {
-          self.recoveryStatus = String(localized: "Recovery requires Block traffic without VPN and no bypass or provider routing rules.")
+          self.recoveryStatus = String(localized: "Recovery requires the kill switch and no bypass or provider routing rules.")
           self.recovery.scheduleHealth(now: now, jitter: 0); return
         }
         let confirmedFailure = self.recovery.failedHealth(failure)

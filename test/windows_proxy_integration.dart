@@ -155,18 +155,32 @@ Future<void> checkHTTPRejected(int proxyPort, int targetPort) async {
 // The OS proxy setting, kept in memory: the user's own, or Elarni's port.
 final class FakeSystemProxy implements SystemProxy {
   ProxySettings current = {'user': 'pac'};
+  // Each setting written back, and the next read while a test waits for one.
+  final writes = <ProxySettings>[];
+  Completer<void>? reading;
 
   @override
-  Future<ProxySettings> read() async => {...current};
+  Future<ProxySettings> read() async {
+    reading?.complete();
+    reading = null;
+    return {...current};
+  }
 
   @override
   Future<void> point(int port) async => current = {'port': port};
 
   @override
-  Future<void> write(ProxySettings settings) async => current = {...settings};
+  Future<void> write(ProxySettings settings) async {
+    writes.add(settings);
+    current = {...settings};
+  }
 
   @override
   bool pointsAt(ProxySettings settings, int port) => settings['port'] == port;
+
+  @override
+  bool matchesPoint(ProxySettings settings, int port) =>
+      settings['port'] == port;
 }
 
 // A core that hands each request line to [record], so a test can count what
@@ -394,6 +408,7 @@ void main() {
   DesktopProxy createBackend({
     Duration? replyTimeout,
     Duration? helperExitGrace,
+    Duration? managedListTimeout,
     int? automationProbeSeconds,
     int? automationRetrySeconds,
     List<CatalogMap>? livenessTargets,
@@ -408,6 +423,7 @@ void main() {
       catalogIO: storage,
       replyTimeout: replyTimeout,
       helperExitGrace: helperExitGrace,
+      managedListTimeout: managedListTimeout,
       automationProbeSeconds: automationProbeSeconds,
       automationRetrySeconds: automationRetrySeconds,
       livenessTargets: livenessTargets,
@@ -1154,41 +1170,51 @@ rules:
   );
 
   // A revision follows the compiled configuration, so it shows the setting reached the compiler.
-  test('the TLS fingerprint setting changes a TLS server\'s configuration', () async {
-    final imported = await backend.control.importClientProfiles(
-      content: profile.replaceFirst(
-        'security=none&type=tcp',
-        'security=tls&type=tcp&sni=fixture.test',
-      ),
-    );
-    final id = imported.snapshot.subscriptions.single.nodes.single.id;
-    await backend.control.selectNode(id);
-    Future<String?> revision() async => (await backend.control.subscriptions())
-        .subscriptions
-        .single
-        .nodes
-        .single
-        .configurationRevision;
-    final settings = await backend.control.tunnelSettings();
-    expect(settings.tlsFingerprint, 'server');
-    final first = await revision();
-    final chosen = await backend.control.updateTunnelSettings(
-      settings.copyWith(tlsFingerprint: 'firefox'),
-    );
-    expect(chosen.tlsFingerprint, 'firefox');
-    final second = await revision();
-    expect(second, isNot(first));
-    expect((await backend.control.tunnelSettings()).tlsFingerprint, 'firefox');
-    // A hello the app does not offer is refused and the choice stays.
-    await expectLater(
-      backend.control.updateTunnelSettings(
-        settings.copyWith(tlsFingerprint: 'edge'),
-      ),
-      throwsA(isA<PlatformException>()),
-    );
-    expect((await backend.control.tunnelSettings()).tlsFingerprint, 'firefox');
-    expect(await revision(), second);
-  });
+  test(
+    'the TLS fingerprint setting changes a TLS server\'s configuration',
+    () async {
+      final imported = await backend.control.importClientProfiles(
+        content: profile.replaceFirst(
+          'security=none&type=tcp',
+          'security=tls&type=tcp&sni=fixture.test',
+        ),
+      );
+      final id = imported.snapshot.subscriptions.single.nodes.single.id;
+      await backend.control.selectNode(id);
+      Future<String?> revision() async =>
+          (await backend.control.subscriptions())
+              .subscriptions
+              .single
+              .nodes
+              .single
+              .configurationRevision;
+      final settings = await backend.control.tunnelSettings();
+      expect(settings.tlsFingerprint, 'server');
+      final first = await revision();
+      final chosen = await backend.control.updateTunnelSettings(
+        settings.copyWith(tlsFingerprint: 'firefox'),
+      );
+      expect(chosen.tlsFingerprint, 'firefox');
+      final second = await revision();
+      expect(second, isNot(first));
+      expect(
+        (await backend.control.tunnelSettings()).tlsFingerprint,
+        'firefox',
+      );
+      // A hello the app does not offer is refused and the choice stays.
+      await expectLater(
+        backend.control.updateTunnelSettings(
+          settings.copyWith(tlsFingerprint: 'edge'),
+        ),
+        throwsA(isA<PlatformException>()),
+      );
+      expect(
+        (await backend.control.tunnelSettings()).tlsFingerprint,
+        'firefox',
+      );
+      expect(await revision(), second);
+    },
+  );
 
   test('configuration revisions follow each compiled-settings edit', () async {
     await prepare();
@@ -1676,10 +1702,10 @@ for line in sys.stdin:
     },
   );
 
-  // Regression: with Block traffic without VPN, each restart the app made
+  // Regression: with the Kill switch setting, each restart the app made
   // (another server, a settings change, failover) lifted the kill switch with
   // the old tunnel, and traffic left outside until the next tunnel was up.
-  test('a restart keeps Block traffic without VPN between its tunnels', () async {
+  test('a restart keeps the kill switch between its tunnels', () async {
     await prepare();
     final settings = (await backend.control.tunnelSettings()).copyWith(
       xrayTunEnabled: true,
@@ -1991,6 +2017,163 @@ for line in sys.stdin:
       expect(routed.last, 'runVPN');
       await backend.control.disconnect();
       expect((await events.readAsLines()).last, 'stopVPN');
+    },
+  );
+
+  // A refresh that took the server an app is routed through stopped the
+  // tunnel, failed to start the new one and started the old one again: the
+  // connection dropped at every scheduled retry, and the refresh never applied.
+  test(
+    'a scheduled refresh that drops a per-app server keeps the running tunnel',
+    () async {
+      var now = DateTime.now();
+      await backend.dispose();
+      backend = createBackend(
+        clock: () => now,
+        refreshInterval: const Duration(milliseconds: 50),
+        // The stub listeners pass no traffic; the stub helper never exits.
+        livenessTargets: const [],
+        helperExitGrace: const Duration(milliseconds: 500),
+      );
+      final pinnedProfile = profile
+          .replaceFirst(userID, '00000000-0000-4000-8000-000000000002')
+          .replaceFirst('#Fixture', '#Pinned');
+      var listed = true;
+      final feed = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      addTearDown(() => feed.close(force: true));
+      feed.listen((request) async {
+        request.response.write(listed ? '$profile\n$pinnedProfile' : profile);
+        await request.response.close();
+      });
+      final added = await backend.control.addSubscription(
+        'http://127.0.0.1:${feed.port}/feed',
+      );
+      final nodes = (await backend.control.refreshSubscription(
+        added.snapshot.subscriptions.single.id,
+        challenge: added.warning!.challenge,
+      )).snapshot.subscriptions.single.nodes;
+      final pinned = nodes.singleWhere((node) => node.name == 'Pinned').id;
+      await backend.control.selectNode(
+        nodes.singleWhere((node) => node.name == 'Fixture').id,
+      );
+      final settings = (await backend.control.tunnelSettings()).copyWith(
+        xrayTunEnabled: true,
+        perAppMode: 'bypass',
+        perAppProcesses: ['fixture.exe'],
+        perAppTargets: {'fixture.exe': 'node:$pinned'},
+      );
+      await backend.control.updateTunnelSettings(settings);
+      final events = File.fromUri(temporary.uri.resolve('vpn-pinned-events'));
+      await useStub('''
+import json, socket, subprocess, sys
+listeners = []
+for line in sys.stdin:
+    request = json.loads(line)
+    method = request['method']
+    if method in ('runVPN', 'reloadVPN', 'stopVPN'):
+        with open(${jsonEncode(events.path)}, 'a') as events: print(method, file=events)
+    if method == 'runVPN':
+        config = json.loads(request['payload']['configJSON'])
+        for inbound in config['inbounds']:
+            if inbound['protocol'] in ('socks', 'http'):
+                listener = socket.socket()
+                listener.bind(('127.0.0.1', inbound['port']))
+                listener.listen(32)
+                listeners.append(listener)
+        print(json.dumps({'success': True, 'data': {}}), flush=True)
+    elif method in ('reloadVPN', 'stopVPN'):
+        if method == 'stopVPN':
+            for listener in listeners: listener.close()
+            listeners.clear()
+        print(json.dumps({'success': True, 'data': {}}), flush=True)
+    else:
+        child = subprocess.Popen([${jsonEncode(corePath)}], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+        child.stdin.write(line)
+        child.stdin.flush()
+        print(child.stdout.readline(), end='', flush=True)
+        child.stdin.close()
+        child.wait(timeout=10)
+        break
+''');
+      final notices = <String>[];
+      final noticed = Completer<String>();
+      backend.control.setImportListener((notice) {
+        if (notice == null) return;
+        notices.add(notice);
+        if (!noticed.isCompleted &&
+            {
+              'per_app_target_missing',
+              'scheduled_refresh_failed',
+            }.contains(notice))
+          noticed.complete(notice);
+      });
+      try {
+        await backend.control.connect();
+        expect(await events.readAsLines(), ['runVPN']);
+        // The provider drops the server; the scheduled refresh runs.
+        listed = false;
+        now = now.add(const Duration(hours: 5));
+        expect(
+          await noticed.future.timeout(
+            const Duration(seconds: 20),
+            onTimeout: () => fail('No scheduled refresh: $notices'),
+          ),
+          'per_app_target_missing',
+        );
+        // It applied and counts as a success, so it is not retried.
+        final source = catalogList(
+          catalogMap(storedCatalog!['committed'])['subscriptions'],
+        ).single;
+        expect(catalogList(source['nodes']).map((node) => node['name']), [
+          'Fixture',
+        ]);
+        expect(source['failures'], 0);
+        expect(
+          (await backend.control.subscriptions()).subscriptions.single.nodes
+              .map((node) => node.name),
+          ['Fixture'],
+        );
+        // The running tunnel keeps its old configuration.
+        expect(await backend.control.state(), 'connected');
+        expect(await events.readAsLines(), ['runVPN']);
+
+        // A change that restarts the tunnel needs the server, so it fails
+        // before the tunnel stops.
+        await expectLater(
+          backend.control.updateTunnelSettings(
+            settings.copyWith(excludedRoutes: ['203.0.113.0/24']),
+          ),
+          throwsA(
+            isA<PlatformException>().having(
+              (error) => error.code,
+              'code',
+              'per_app_target_missing',
+            ),
+          ),
+        );
+        expect(await backend.control.state(), 'connected');
+        expect(await events.readAsLines(), ['runVPN']);
+        expect(
+          (await backend.control.tunnelSettings()).excludedRoutes,
+          settings.excludedRoutes,
+        );
+        expect(notices, ['per_app_target_missing']);
+
+        // The next Connect names the app's rule.
+        await backend.control.disconnect();
+        await expectLater(
+          backend.control.connect(),
+          throwsA(
+            isA<PlatformException>().having(
+              (error) => error.code,
+              'code',
+              'per_app_target_missing',
+            ),
+          ),
+        );
+      } finally {
+        backend.control.setImportListener(null);
+      }
     },
   );
 
@@ -3004,6 +3187,166 @@ rules:
     },
   );
 
+  // System proxy mode runs no elevated helper, so its kill switch is the OS
+  // proxy setting itself, left on the closed listener.
+  test(
+    'System proxy mode keeps the OS proxy on its closed listener under the kill switch',
+    () async {
+      final os = FakeSystemProxy();
+      final backup = File.fromUri(temporary.uri.resolve('system-proxy.json'));
+      await backend.dispose();
+      backend = createBackend(systemProxy: SystemProxySession(os, backup));
+      await prepare();
+      final messages = <String>[];
+      backend.control.setImportListener((message) {
+        if (message != null) messages.add(message);
+      });
+      final settings = (await backend.control.tunnelSettings()).copyWith(
+        systemProxyEnabled: true,
+        blockWithoutVPN: true,
+      );
+      await backend.control.updateTunnelSettings(settings);
+      expect(await backend.control.connect(), 'connected');
+      expect(os.current, {'port': settings.httpPort});
+      lastProcess!.kill();
+      await lastProcess!.exitCode;
+      await Future<void>.delayed(Duration.zero);
+      expect(messages, contains('connection_stopped_proxy_blocked'));
+      expect(messages, isNot(contains('connection_stopped')));
+      // A catalog edit moves the setting to where the state puts it, as the
+      // next tick does: failed, or already starting again, it stays.
+      final id = (await backend.control.subscriptions()).selectedNodeId!;
+      await backend.control.setNodeFavorite(id, true);
+      expect(os.current, {'port': settings.httpPort});
+      expect(await backup.exists(), isTrue);
+
+      // Disconnecting lifts the block.
+      expect(await backend.control.disconnect(), 'disconnected');
+      expect(os.current, {'user': 'pac'});
+      expect(await backup.exists(), isFalse);
+
+      // A port another program holds is never made the system proxy.
+      final occupied = await ServerSocket.bind(
+        InternetAddress.loopbackIPv4,
+        settings.httpPort,
+      );
+      try {
+        await expectLater(
+          backend.control.connect(),
+          throwsA(
+            isA<PlatformException>().having(
+              (e) => e.code,
+              'code',
+              'listener_unavailable',
+            ),
+          ),
+        );
+        expect(await backend.control.state(), 'failed');
+        expect(os.current, {'user': 'pac'});
+      } finally {
+        await occupied.close();
+      }
+      expect(await backend.control.disconnect(), 'disconnected');
+    },
+  );
+
+  // Without the kill switch, too, the setting stays on Elarni while a running
+  // connection restarts: apps would go direct for those seconds. A first start
+  // still waits for its listener, and a stopped connection gives it back.
+  test(
+    'System proxy mode keeps the OS proxy on its listener through a restart',
+    () async {
+      final os = FakeSystemProxy();
+      final backup = File.fromUri(temporary.uri.resolve('system-proxy.json'));
+      // Moved on, it has the next sync read the setting back, which shows
+      // that a tick ran.
+      var now = Duration.zero;
+      await backend.dispose();
+      backend = createBackend(
+        systemProxy: SystemProxySession(os, backup, clock: () => now),
+      );
+      await prepare();
+      final messages = <String>[];
+      backend.control.setImportListener((message) {
+        if (message != null) messages.add(message);
+      });
+      final settings = (await backend.control.tunnelSettings()).copyWith(
+        systemProxyEnabled: true,
+      );
+      expect(settings.blockWithoutVPN, isFalse);
+      await backend.control.updateTunnelSettings(settings);
+
+      // Runs [start] with its runtime launch held, in connecting, until
+      // [whileHeld] returns. Configuration checks launch cores before it.
+      Future<T> held<T>(
+        Future<T> Function() start,
+        Future<void> Function() whileHeld,
+      ) async {
+        launchGate = Completer<void>();
+        launchEntered = Completer<void>();
+        final started = start();
+        try {
+          for (;;) {
+            await launchEntered!.future.timeout(const Duration(seconds: 10));
+            if (await backend.control.state() == 'connecting') break;
+            final gate = launchGate!;
+            launchEntered = Completer<void>();
+            launchGate = Completer<void>();
+            gate.complete();
+          }
+          await whileHeld();
+        } finally {
+          final gate = launchGate!;
+          launchGate = launchEntered = null;
+          gate.complete();
+        }
+        return started;
+      }
+
+      // A first start points the setting once its listener is up; the 1 Hz
+      // sync leaves it alone meanwhile.
+      expect(
+        await held(backend.control.connect, () async {
+          await Future<void>.delayed(const Duration(milliseconds: 1500));
+          expect(os.current, {'user': 'pac'});
+        }),
+        'connected',
+      );
+      expect(os.current, {'port': settings.httpPort});
+
+      // A settings change restarts the core.
+      await held(
+        () => backend.control.updateTunnelSettings(
+          settings.copyWith(httpInboundEnabled: !settings.httpInboundEnabled),
+        ),
+        () async {
+          // Restoring the user's setting would read it as well.
+          final reading = os.reading = Completer<void>();
+          now += const Duration(seconds: 30);
+          await reading.future.timeout(const Duration(seconds: 5));
+          await Future<void>.delayed(Duration.zero);
+          expect(os.current, {'port': settings.httpPort});
+        },
+      );
+      expect(await backend.control.state(), 'connected');
+      expect(os.current, {'port': settings.httpPort});
+      expect(os.writes, isEmpty, reason: 'the user setting never came back');
+      expect(messages, isEmpty);
+
+      // A connection that stopped by itself gives the user's setting back.
+      lastProcess!.kill();
+      await lastProcess!.exitCode;
+      await Future<void>.delayed(Duration.zero);
+      expect(messages, contains('connection_stopped'));
+      final id = (await backend.control.subscriptions()).selectedNodeId!;
+      await backend.control.setNodeFavorite(id, true);
+      expect(await backend.control.state(), 'failed');
+      expect(os.current, {'user': 'pac'});
+      expect(await backup.exists(), isFalse);
+      expect(await backend.control.disconnect(), 'disconnected');
+    },
+  );
+
   test(
     'occupied listener fails startup without replacing the selected profile',
     () async {
@@ -3069,7 +3412,7 @@ rules:
     expect(await backend.control.state(), 'failed');
   });
 
-  // Only Block traffic without VPN keeps the guard after a broker exit.
+  // Only the Kill switch setting keeps the guard after a broker exit.
   test('a VPN crash claims a block only when the kill switch is on', () async {
     await prepare();
     final messages = <String>[];
@@ -3186,6 +3529,171 @@ for line in sys.stdin:
       'runVPN ${owner.pid}',
       'stopVPN ${owner.pid}',
     ]);
+  });
+
+  // A VPN helper under Block traffic without VPN that logs each tunnel command
+  // with its stop's flag, each guard clear and the end of its input. Its tunnel
+  // ends by itself each time the returned lose file appears, and it declines a
+  // guard clear while the decline file exists.
+  Future<({File events, File lose, File decline, List<String> messages})>
+  useBlockingHelper() async {
+    await prepare();
+    final messages = <String>[];
+    backend.control.setImportListener((message) {
+      if (message != null) messages.add(message);
+    });
+    await backend.control.updateTunnelSettings(
+      (await backend.control.tunnelSettings()).copyWith(
+        xrayTunEnabled: true,
+        blockWithoutVPN: true,
+        enforceRoutes: false,
+      ),
+    );
+    final events = File.fromUri(temporary.uri.resolve('vpn-block-events'));
+    final lose = File.fromUri(temporary.uri.resolve('vpn-block-lose'));
+    final decline = File.fromUri(temporary.uri.resolve('vpn-block-decline'));
+    // The files outlive the test that wrote them.
+    for (final file in [events, lose, decline]) {
+      if (await file.exists()) await file.delete();
+    }
+    await useStub('''
+import json, os, socket, sys, threading, time
+listeners = []
+tunnel = False
+output = threading.Lock()
+def note(entry):
+    with open(${jsonEncode(events.path)}, 'a') as events: print(entry, file=events)
+def send(value):
+    with output: print(json.dumps(value), flush=True)
+def lose():
+    while True:
+        while not os.path.exists(${jsonEncode(lose.path)}): time.sleep(0.01)
+        for listener in listeners: listener.close()
+        listeners.clear()
+        # Windows refuses the removal while the test still has the file open.
+        while True:
+            try:
+                os.unlink(${jsonEncode(lose.path)})
+                break
+            except PermissionError: time.sleep(0.01)
+        send({'event': 'stopped'})
+threading.Thread(target=lose, daemon=True).start()
+for line in sys.stdin:
+    request = json.loads(line)
+    method, payload = request['method'], request['payload']
+    if method == 'clearVPNGuard':
+        note(method)
+        if os.path.exists(${jsonEncode(decline.path)}):
+            send({'success': False, 'error': 'elevation_denied'})
+        else:
+            send({'success': True, 'data': {}})
+        sys.exit(0)
+    # Other commands, such as the retiring of routing files at start, are not the tunnel's.
+    if method in ('runVPN', 'stopVPN'):
+        note(' '.join([method] + [flag for flag in ('hold', 'release') if payload.get(flag)]))
+    if method == 'runVPN':
+        tunnel = True
+        for inbound in json.loads(payload['configJSON'])['inbounds']:
+            if inbound['protocol'] in ('socks', 'http'):
+                listener = socket.socket()
+                listener.bind(('127.0.0.1', inbound['port']))
+                listener.listen(32)
+                listeners.append(listener)
+    elif method == 'stopVPN':
+        for listener in listeners: listener.close()
+        listeners.clear()
+    send({'success': True, 'data': {}})
+if tunnel: note('closed')
+''');
+    return (events: events, lose: lose, decline: decline, messages: messages);
+  }
+
+  Future<void> untilFailed() async {
+    for (var i = 0; i < 200; i++) {
+      if (await backend.control.state() == 'failed') break;
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+    }
+    expect(await backend.control.state(), 'failed');
+  }
+
+  // Regression: with Block traffic without VPN, Disconnect after a tunnel that
+  // ended by itself showed Disconnected while the helper kept the block, so the
+  // device stayed offline until Connect, Repair VPN setup or a restart.
+  test('Disconnect lifts the block a lost tunnel kept', () async {
+    final (:events, :lose, decline: _, :messages) = await useBlockingHelper();
+    expect(await backend.control.connect(), 'connected');
+    await lose.writeAsString('end the tunnel');
+    await untilFailed();
+    expect(messages, ['connection_stopped_blocked']);
+    expect(await backend.control.disconnect(), 'disconnected');
+    // Nothing is left to lift, so another Disconnect sends nothing.
+    expect(await backend.control.disconnect(), 'disconnected');
+    expect(await events.readAsLines(), ['runVPN', 'stopVPN release']);
+    // The user's stop of a running tunnel says so too.
+    expect(await backend.control.connect(), 'connected');
+    expect(await backend.control.disconnect(), 'disconnected');
+    expect((await events.readAsLines()).skip(2), [
+      'runVPN',
+      'stopVPN release',
+    ]);
+    expect(messages, ['connection_stopped_blocked']);
+  });
+
+  // A helper that crashed takes no stop; its block stays until one clears it.
+  test('Disconnect clears the block a crashed helper left', () async {
+    final (:events, lose: _, :decline, :messages) = await useBlockingHelper();
+    Future<void> crash() async {
+      staleGuard = false;
+      expect(await backend.control.connect(), 'connected');
+      lastProcess!.kill();
+      await lastProcess!.exitCode;
+      await untilFailed();
+      staleGuard = true;
+    }
+
+    await crash();
+    expect(await backend.control.disconnect(), 'disconnected');
+    expect(await events.readAsLines(), ['runVPN', 'clearVPNGuard']);
+    expect(messages, ['connection_stopped_blocked']);
+    // Declined, Disconnect still ends and points at Repair VPN setup.
+    await crash();
+    await decline.writeAsString('decline the consent prompt');
+    expect(await backend.control.disconnect(), 'disconnected');
+    expect(await backend.control.state(), 'disconnected');
+    expect((await events.readAsLines()).skip(2), ['runVPN', 'clearVPNGuard']);
+    expect(messages.skip(1), [
+      'connection_stopped_blocked',
+      'vpn_guard_stale',
+    ]);
+  });
+
+  // The helper takes a closed input for a lost tunnel and keeps its block, so
+  // quitting stops it first. An update's quit keeps the block until the new
+  // build is back.
+  test('quitting lifts the block, and an update quit keeps it', () async {
+    final (:events, :lose, decline: _, messages: _) = await useBlockingHelper();
+    for (final (lost, keepBlock) in [
+      (false, false),
+      (false, true),
+      (true, false),
+      (true, true),
+    ]) {
+      await events.writeAsString('');
+      expect(await backend.control.connect(), 'connected');
+      final helper = lastProcess!;
+      if (lost) {
+        await lose.writeAsString('end the tunnel');
+        await untilFailed();
+      }
+      await backend.dispose(keepBlock: keepBlock);
+      expect(await helper.exitCode.timeout(const Duration(seconds: 10)), 0);
+      expect(
+        await events.readAsLines(),
+        ['runVPN', if (!keepBlock) 'stopVPN release', 'closed'],
+        reason: 'lost tunnel $lost, keepBlock $keepBlock',
+      );
+      backend = createBackend();
+    }
   });
 
   test(
@@ -7942,6 +8450,184 @@ else:
     },
   );
 
+  // A core that answers list downloads itself and logs, in order, the URL of
+  // each download and each proxy start, with "listed" when the started
+  // configuration has the site of the list named "listed". A URL with "broken"
+  // fails, one with "hang" never answers, any other serves its host name.
+  Future<File> useManagedListCore(String name) async {
+    final log = File.fromUri(temporary.uri.resolve(name));
+    await useStub('''
+import json, subprocess, sys, threading, time
+line = sys.stdin.readline()
+request = json.loads(line)
+method = request['method']
+with open(${jsonEncode(log.path)}, 'a') as out:
+    if method == 'fetchSubscription':
+        out.write('fetch ' + request['payload']['url'] + '\\n')
+    elif method == 'runXrayFromJson':
+        out.write('run' + (' listed' if 'listed.example' in request['payload']['configJSON'] else '') + '\\n')
+if method == 'fetchSubscription':
+    url = request['payload']['url']
+    if 'hang' in url:
+        time.sleep(60)
+    if 'broken' in url:
+        print(json.dumps({'success': False, 'error': 'fetch_failed'}), flush=True)
+    else:
+        print(json.dumps({'success': True, 'data': {'body': url.split('/')[2] + '\\n'}}), flush=True)
+    sys.exit()
+child = subprocess.Popen([${jsonEncode(corePath)}], stdin=subprocess.PIPE, stderr=subprocess.DEVNULL)
+child.stdin.write(line.encode())
+child.stdin.flush()
+# The core answers on this stdout; a runtime lasts until the controller closes this pipe.
+def forward_eof():
+    sys.stdin.read()
+    child.stdin.close()
+threading.Thread(target=forward_eof, daemon=True).start()
+sys.exit(child.wait())
+''');
+    return log;
+  }
+
+  // The selected server's routing profile, with these lists, none downloaded.
+  Future<String> importManagedRoute(List<String> lists) async {
+    final routeId = (await backend.control.importRouting(
+      jsonEncode({
+        'Name': 'Managed route',
+        'RemoteDNSType': 'DoU',
+        'RemoteDNSIP': '1.1.1.1',
+        'DomesticDNSType': 'DoU',
+        'DomesticDNSIP': '8.8.8.8',
+        'ManagedSources': [
+          for (final id in lists)
+            {
+              'id': id,
+              'url': 'https://$id.example/list',
+              'destination': 'direct',
+              'matchMode': 'exact',
+            },
+        ],
+      }),
+    )).profiles.single.id;
+    final source = (await backend.control.subscriptions()).subscriptions.single;
+    await backend.control.assignRoutingProfile(source.id, routeId);
+    return routeId;
+  }
+
+  CatalogMap storedRoute(String id) => catalogList(
+    catalogMap(storedCatalog!['committed'])['profiles'],
+  ).singleWhere((route) => route['id'] == id);
+
+  double nowSeconds() => DateTime.now().millisecondsSinceEpoch / 1000;
+
+  // Without its download a list's rules are not in the configuration; Connect
+  // downloads it before the core starts, so the first connection follows them.
+  test('connect first downloads a routing list never downloaded', () async {
+    await backend.dispose();
+    // No scheduled refresh may download the list first.
+    backend = createBackend(refreshInterval: const Duration(hours: 1));
+    final log = await useManagedListCore('managed-connect');
+    await prepare();
+    final routeId = await importManagedRoute(['listed']);
+    expect(
+      log.existsSync() ? log.readAsLinesSync() : const <String>[],
+      isEmpty,
+      reason: 'nothing downloaded yet',
+    );
+    final reports = <String?>[];
+    backend.control.setImportListener(reports.add);
+    expect(await backend.control.connect(), 'connected');
+    expect(log.readAsLinesSync(), [
+      'fetch https://listed.example/list',
+      'run listed',
+    ]);
+    expect(reports, isNot(contains('managed_list_missing')));
+    final route = storedRoute(routeId);
+    expect(catalogMap(route['lists']).keys, ['listed']);
+    // The whole profile downloaded, so its next refresh is the daily one.
+    expect(
+      route['nextManagedRefreshAt']! as num,
+      greaterThan(nowSeconds() + 3600),
+    );
+    await checkSocks(
+      (await backend.control.tunnelSettings()).socksPort,
+      target.port,
+    );
+  });
+
+  // Connect waits for the lists at most its bound in total. One it could not
+  // download fails no connection: the window hears once that its rules wait,
+  // and the scheduled refresh takes the route at once, over the connection.
+  test(
+    'connect goes on without a routing list it cannot download in time',
+    () async {
+      await backend.dispose();
+      backend = createBackend(
+        refreshInterval: const Duration(hours: 1),
+        managedListTimeout: const Duration(milliseconds: 500),
+      );
+      final log = await useManagedListCore('managed-connect-failed');
+      await prepare();
+      final routeId = await importManagedRoute(['broken', 'hang', 'later']);
+      final reports = <String?>[];
+      backend.control.setImportListener(reports.add);
+      final watch = Stopwatch()..start();
+      expect(await backend.control.connect(), 'connected');
+      expect(watch.elapsed, lessThan(const Duration(seconds: 30)));
+      // The failed download returned at once and the hanging one took the
+      // rest of the bound, which left none for the last list.
+      expect(log.readAsLinesSync(), [
+        'fetch https://broken.example/list',
+        'fetch https://hang.example/list',
+        'run',
+      ]);
+      expect(reports.where((code) => code == 'managed_list_missing'), [
+        'managed_list_missing',
+      ]);
+      final route = storedRoute(routeId);
+      expect(catalogMap(route['lists'] ?? {}), isEmpty);
+      expect(route['managedError'], 'fetch_failed');
+      expect(
+        route['nextManagedRefreshAt']! as num,
+        lessThanOrEqualTo(nowSeconds()),
+      );
+      await checkSocks(
+        (await backend.control.tunnelSettings()).socksPort,
+        target.port,
+      );
+    },
+  );
+
+  test('Stop during the list download before a connect cancels it', () async {
+    await backend.dispose();
+    backend = createBackend(
+      refreshInterval: const Duration(hours: 1),
+      managedListTimeout: const Duration(seconds: 30),
+    );
+    final log = await useManagedListCore('managed-connect-stop');
+    await prepare();
+    await importManagedRoute(['hang']);
+    final cancelled = expectLater(
+      backend.control.connect(),
+      throwsA(
+        isA<PlatformException>().having(
+          (error) => error.code,
+          'code',
+          'cancelled',
+        ),
+      ),
+    );
+    for (var i = 0; !log.existsSync() || log.readAsLinesSync().isEmpty; i++) {
+      expect(i, lessThan(100), reason: 'the list download did not start');
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+    }
+    final watch = Stopwatch()..start();
+    expect(await backend.control.disconnect(), 'disconnected');
+    await cancelled;
+    expect(watch.elapsed, lessThan(const Duration(seconds: 10)));
+    expect(await backend.control.state(), 'disconnected');
+    expect(log.readAsLinesSync(), ['fetch https://hang.example/list']);
+  });
+
   test(
     'a failed scheduled refresh retries on the subscription schedule',
     () async {
@@ -8001,6 +8687,165 @@ else:
     },
   );
 
+  // A captive portal or a redirect to a private address once must not stop a
+  // subscription's refreshes for good, nor fill the window with notices.
+  test(
+    'a scheduled refresh that meets a risky answer retries in two hours and says so once',
+    () async {
+      var now = DateTime.now();
+      await backend.dispose();
+      backend = createBackend(
+        clock: () => now,
+        refreshInterval: const Duration(milliseconds: 50),
+      );
+      var requests = 0;
+      final feed = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      feed.listen((request) async {
+        requests++;
+        request.response.write(profile);
+        await request.response.close();
+      });
+      final notices = <String?>[];
+      final changes = StreamController<String?>.broadcast();
+      backend.control.setImportListener((message) {
+        notices.add(message);
+        changes.add(message);
+      });
+      CatalogMap source() => catalogList(
+        catalogMap(storedCatalog!['committed'])['subscriptions'],
+      ).single;
+      double at() => now.millisecondsSinceEpoch / 1000;
+      int reviews() =>
+          notices.where((n) => n == 'scheduled_refresh_needs_review').length;
+      try {
+        // A loopback feed over plain HTTP needs the user's approval.
+        final added = await backend.control.addSubscription(
+          'http://127.0.0.1:${feed.port}/feed',
+        );
+        final id = added.snapshot.subscriptions.single.id;
+        expect(added.warning, isNotNull);
+        expect(source()['status'], 'needsApproval');
+        expect(source()['nextRefreshAt'], at() + 7200);
+        for (var retry = 1; retry <= 3; retry++) {
+          final retried = changes.stream
+              .firstWhere((_) => source()['nextRefreshAt'] == at() + 7200)
+              .timeout(
+                const Duration(seconds: 10),
+                onTimeout: () => fail('No scheduled retry $retry'),
+              );
+          now = now.add(const Duration(seconds: 7200));
+          await retried;
+          expect(source()['status'], 'needsApproval');
+          expect(source()['nodes'], isEmpty);
+          // The approval check comes before the download; nothing was fetched.
+          expect(requests, 0);
+          // The notice follows the change; it may have come already.
+          if (retry == 1 && reviews() == 0) {
+            await changes.stream
+                .firstWhere((n) => n == 'scheduled_refresh_needs_review')
+                .timeout(
+                  const Duration(seconds: 10),
+                  onTimeout: () => fail('The first retry said nothing'),
+                );
+          }
+        }
+        expect(
+          reviews(),
+          1,
+          reason: 'One notice until the subscription updates',
+        );
+        // The user's review still approves and applies it.
+        final review = await backend.control.refreshSubscription(id);
+        final approved = await backend.control.refreshSubscription(
+          id,
+          challenge: review.warning!.challenge,
+        );
+        expect(approved.warning, isNull);
+        expect(source()['status'], 'ready');
+        expect(requests, greaterThan(0));
+      } finally {
+        backend.control.setImportListener(null);
+        await changes.close();
+        await feed.close(force: true);
+      }
+    },
+  );
+
+  // Reset device ID is what the user does about a device limit: the next
+  // scheduled refresh sends the new ID instead of waiting for an interval.
+  test(
+    'a device limit waits one interval, and a device ID reset refreshes at the next tick',
+    () async {
+      var now = DateTime.now();
+      await backend.dispose();
+      backend = createBackend(
+        clock: () => now,
+        refreshInterval: const Duration(milliseconds: 50),
+      );
+      String? limited;
+      final sent = <String?>[];
+      final feed = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      feed.listen((request) async {
+        final device = request.headers.value('x-hwid');
+        sent.add(device);
+        if (device == limited) {
+          request.response
+            ..statusCode = HttpStatus.forbidden
+            ..headers.set('X-Hwid-Limit', 'true');
+        } else {
+          request.response.write(profile);
+        }
+        await request.response.close();
+      });
+      final changes = StreamController<void>.broadcast();
+      backend.control.setImportListener((_) => changes.add(null));
+      CatalogMap source() => catalogList(
+        catalogMap(storedCatalog!['committed'])['subscriptions'],
+      ).single;
+      double at() => now.millisecondsSinceEpoch / 1000;
+      try {
+        final added = await backend.control.addSubscription(
+          'http://127.0.0.1:${feed.port}/feed',
+        );
+        final id = added.snapshot.subscriptions.single.id;
+        await backend.control.refreshSubscription(
+          id,
+          challenge: added.warning!.challenge,
+        );
+        limited = await backend.control.subscriptionDeviceID(id);
+        await expectLater(
+          backend.control.refreshSubscription(id),
+          throwsA(
+            isA<PlatformException>().having(
+              (error) => error.code,
+              'code',
+              'hwid_limit',
+            ),
+          ),
+        );
+        expect(source()['refreshError'], 'hwid_limit');
+        expect(source()['nextRefreshAt'], at() + 4 * 3600);
+        final before = sent.length;
+        final refreshed = changes.stream
+            .firstWhere((_) => source()['status'] == 'ready')
+            .timeout(
+              const Duration(seconds: 10),
+              onTimeout: () => fail('No scheduled refresh after the reset'),
+            );
+        await backend.control.resetSubscriptionDeviceID(id);
+        await refreshed;
+        final reset = await backend.control.subscriptionDeviceID(id);
+        expect(reset, isNot(limited));
+        expect(sent.skip(before), allOf(isNotEmpty, everyElement(reset)));
+        expect(source()['refreshError'], isNull);
+      } finally {
+        backend.control.setImportListener(null);
+        await changes.close();
+        await feed.close(force: true);
+      }
+    },
+  );
+
   test('a refresh the user runs ends the scheduled refresh backoff', () async {
     var now = DateTime.now();
     await backend.dispose();
@@ -8054,6 +8899,74 @@ else:
       await feed.close(force: true);
     }
   });
+
+  test(
+    'a refresh that drops the selected server says so once, manual or scheduled',
+    () async {
+      var now = DateTime.now();
+      await backend.dispose();
+      backend = createBackend(
+        clock: () => now,
+        refreshInterval: const Duration(milliseconds: 50),
+      );
+      String server(int n) => profile
+          .replaceFirst(userID, '00000000-0000-4000-8000-00000000000$n')
+          .replaceFirst('#Fixture', '#Server$n');
+      var servers = [server(1), server(2), server(3)];
+      final feed = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      feed.listen((request) async {
+        request.response.write(servers.join('\n'));
+        await request.response.close();
+      });
+      final notices = <String>[];
+      final replaced = StreamController<void>.broadcast();
+      backend.control.setImportListener((message) {
+        if (message == null) return;
+        notices.add(message);
+        if (message == 'selected_server_replaced') replaced.add(null);
+      });
+      try {
+        final added = await backend.control.addSubscription(
+          'http://127.0.0.1:${feed.port}/feed',
+        );
+        final id = added.snapshot.subscriptions.single.id;
+        final first = (await backend.control.refreshSubscription(
+          id,
+          challenge: added.warning!.challenge,
+        )).snapshot.subscriptions.single.nodes;
+        expect(first.map((node) => node.name), [
+          'Server1',
+          'Server2',
+          'Server3',
+        ]);
+        await backend.control.selectNode(first[0].id);
+        // A refresh that keeps the selected server says nothing.
+        await backend.control.refreshSubscription(id);
+        expect(notices, isEmpty);
+        servers = [server(2), server(3)];
+        final refreshed = await backend.control.refreshSubscription(id);
+        expect(refreshed.snapshot.selectedNodeId, first[1].id);
+        expect(notices, ['selected_server_replaced']);
+        // The scheduled refresh goes the same way.
+        servers = [server(3)];
+        final scheduled = replaced.stream.first;
+        now = now.add(const Duration(seconds: 5 * 3600));
+        await scheduled.timeout(
+          const Duration(seconds: 10),
+          onTimeout: () => fail('No scheduled refresh replaced the server'),
+        );
+        expect(
+          (await backend.control.subscriptions()).selectedNodeId,
+          first[2].id,
+        );
+        expect(notices, List.filled(2, 'selected_server_replaced'));
+      } finally {
+        backend.control.setImportListener(null);
+        await replaced.close();
+        await feed.close(force: true);
+      }
+    },
+  );
 
   test('a save waits for a scheduled refresh instead of failing busy', () async {
     var now = DateTime.now();

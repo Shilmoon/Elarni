@@ -4,6 +4,251 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
 
 ## Unreleased
 
+## 0.6.3 - 2026-11-22
+
+### Added
+
+- **Android and iPhone: a subscription's actions on touch and hold.** Touching and holding a
+  subscription on Subscriptions, or its header on Home, opens Refresh, Pin or Unpin, Rename,
+  Share and Delete subscription; a local group has no Refresh. A tap acts as before.
+- **iPhone: a landscape layout.** With the iPhone on its side, the tabs move to a rail at the
+  leading edge and Home shows the connection beside the server list, as Android does.
+- **Desktop: search in Settings.** A "Search settings" field sits above the category menu in
+  a narrow window and at the top of the category list in a wide one. Typing shows the matching
+  settings from every category, grouped by category, as the working controls themselves: a
+  setting is found by its label, its help text, the text under it, the heading it stands under
+  or its category's name. Clearing the field or choosing a category ends the search.
+- **Windows, Linux: the kill switch works in System proxy mode.** It was available only with
+  System-wide VPN. With it on in System proxy mode, the computer's proxy setting stays on
+  Elarni when the connection stops by itself, fails to start or restarts, so the apps that
+  follow the system proxy get no connection instead of a direct one. Reconnecting, disconnecting,
+  "Lift block" on Home, turning the kill switch off or quitting gives your own proxy setting
+  back. Apps that ignore the system proxy are not covered in this mode, as they were not
+  while connected; "Local proxy only" has no kill switch. A port that another program holds is
+  never made the system proxy.
+
+### Changed
+
+- **Android: the subscriptions' update time sits at the top of Home.** The line that says when
+  the subscriptions were updated is now the first thing on Home, above the connection, where a
+  pull shows its spinner. A tap on it still updates them.
+- **Home shows every server.** On every platform Home lists the servers by subscription and,
+  under it, by country (Android and iPhone had the countries alone), and every subscription
+  and country starts open. A group you close stays closed the next time the app starts, until
+  you open it. On Windows, macOS and Linux a start therefore tests the servers of every group
+  left open, not only the selected country's; on Android and iPhone **Test visible servers**
+  tests the servers of the open groups.
+- **By country in place of Recent.** The third list on Home is By country: the servers of all
+  subscriptions under one header for each country, each with its subscription's name. All
+  stays the list a start opens. The Recent list is gone on every platform; **Use last
+  successful server** on Android and iPhone and the tooltip of a server's test button on
+  desktop still lead to the last connection.
+- **Favorites as one list.** The Favorites filter on Home shows the favorite servers of every
+  subscription in one list, without subscription and country groups to open. Each server names
+  its subscription and shows its country's flag: after its name on desktop and Android, before
+  it on iPhone, where every server row has one. On desktop, showing the list tests the servers
+  not tested lately.
+- **Server rows under a subscription** show the transport and security after the protocol, not
+  the subscription's name again. All platforms.
+- **Android and iPhone: a compact Home.** Home drops the server search field and the server
+  options menu, and its server rows are shorter, so more servers fit on a screen. A
+  subscription's server list keeps the search (on Android also the country filter, the sort and
+  favorites first); the sort and favorites first are in Settings › General as before.
+- Desktop: adding a subscription stays on Home, even when it brings a routing profile; until
+  now such an import opened the Routing page.
+- **The "Current rules / active tunnel" test type is gone** from Settings › Server tests.
+  It tested only the selected server, so with it chosen **Test all** showed a result for one
+  server and nothing for the rest, and for that server it measured what **Proxy** measures
+  (on Android it only worked while connected). A saved choice of it becomes **Proxy**. The
+  connection health check and connection recovery still test the running tunnel. All platforms.
+- **Desktop: a narrow window has its pages at the bottom.** Below 700 px the Home,
+  Subscriptions, Routing and Settings icons are a bar along the bottom edge, where the phone
+  apps have their tabs, instead of a row under the title bar. The back arrow in the title bar
+  is gone: every page is one click away. A wider window keeps the sidebar.
+- **Desktop: the Subscriptions page is a server table.** The page shows one subscription at
+  a time, chosen in a menu that lists each with its server count and state, with Refresh and
+  the "…" menu beside it. Under it are the server search, a Favorites filter, the order (the
+  one Home uses) and "Test all", then the servers as a table: flag, name, protocol, latency,
+  a star and a "…" menu per row. The cards that had to be opened one by one are gone.
+  - A row now selects its server, as on Home; the selected one has a mark beside its name.
+  - "Check exit" and "Server config" moved from buttons on the row into its "…" menu, which
+    also has Rename, Share, Server IP type and Hide or Delete.
+  - "Select servers" moved into the subscription's "…" menu, which also has "Details" and
+    "Routing profile": both are under the table, and the menu scrolls to them.
+  - The page opens on the subscription of the selected server. Home's server list is unchanged.
+- **"Block traffic without VPN" is now "Kill switch"** on Windows, Linux, macOS, Android and
+  iPhone, in English and Russian. It does what it did; the text under it and the messages that
+  name it say "kill switch" too. Android's System info lists it under the same name.
+- **Closing the window no longer quits Elarni.** On Windows, and on Linux desktops that show
+  tray icons, the window hides to the tray, and the first time a notification says so; **Show
+  Elarni** in the tray menu (on Windows also a click on the icon) brings it back. On macOS the
+  app keeps running in the Dock and the menu bar, and a click on its Dock icon shows the window.
+  The VPN, **Connect on untrusted Wi-Fi**, reconnecting, subscription refresh and expiry
+  reminders go on with the window closed. **Quit Elarni** in the tray menu (Ctrl+Q on Linux, Cmd+Q on macOS)
+  quits; on a Linux desktop without a tray closing the window still quits. Quitting on Windows
+  and Linux now waits for the disconnect, for up to 8 seconds, before the app ends. Windows,
+  Linux, macOS.
+- **Trusted Wi-Fi networks are picked, not typed, on Android.** The list has a page of its own:
+  it shows the Wi-Fi network the phone is on with a **Trust** button, each trusted network with a
+  button that removes it, and **Add by name** for a network that is out of range. Each change is
+  saved at once. Android shows an app neither the phone's saved networks nor, without location
+  access, the name of the one it is on.
+- **Trusted Wi-Fi networks are picked, not typed, on iPhone and iPad.** The list has a page of
+  its own: it shows the Wi-Fi network the device is on with a **Trust** button, each trusted
+  network with a button that removes it, and **Add by name** for a network that is out of range.
+  Each change is saved at once. iOS tells an app the name of the joined network once the app has
+  a VPN configuration, so the joined network appears after the first connection; the app now
+  carries the Access Wi-Fi Information capability for it.
+
+### Fixed
+
+- **Android: one failing provider no longer keeps Home at "Updated 6 days ago".** The line
+  showed the oldest subscription, so after an update in which one provider could not be reached
+  it still gave that provider's old time. It now gives the time of the subscriptions that did
+  update and counts the rest next to it ("Updated just now · 1 not updated").
+- **iPhone: no lost-connection notice after you switch the VPN off in iOS.** Switching Elarni
+  off in Settings or Control Center is your own stop, as Stop in the app is, so Home no longer
+  reports "Elarni disconnected without a Stop from you" after it. A connection that iOS or a
+  failure ends is still reported.
+- **Desktop: Routing › Per-app routing in a narrow window.** A selected app's name was squeezed
+  to one letter per line by its target menu, "Details" and the remove button. Below 620 px the
+  name keeps one line (cut with an ellipsis, whole in its tooltip) with "Details" and remove
+  beside it and the target menu across the width under it; the "Selected apps" heading has its
+  own line above "Add apps" and "Recent connections". The Subscriptions and Routing pages use
+  16 px side margins below 700 px instead of 24, and the per-app editor loses its extra 20.
+- **System proxy mode** keeps the computer's proxy setting on Elarni while a running
+  connection restarts for a server switch, a settings change or failover, with or without the
+  kill switch. Before, the setting went back to your own for those seconds, so browsers went
+  direct while the window said Reconnecting. A first connect still sets it once Elarni is
+  listening, and a connection that stopped by itself gives your setting back unless the kill
+  switch holds it. A failed attempt to set the proxy is tried again every 30 seconds instead of
+  only at the next connect. Elarni also reads the setting back every 30 seconds: when another
+  program (a second VPN client, a company agent, or you in the system settings) changed it,
+  Elarni sets it again and says so; after the third change in one connection it leaves the
+  setting to that program and says that apps may not use the VPN. Disconnecting gives back the
+  setting you had before connecting, as before, or leaves the one another program was left.
+  Windows, Linux.
+- **Connect on untrusted Wi-Fi** now connects when the Wi-Fi name cannot be read, as it does on a
+  network that is not on the trusted list. Before, an unreadable name turned the rule off without
+  a word: on Android without location allowed all the time, on Windows 11 24H2 and later without
+  Location access, and on Linux when neither NetworkManager's `nmcli` nor `iw` gave the name.
+  Linux now also asks `iw` when NetworkManager does not manage the Wi-Fi, and finds it in
+  `/usr/sbin` when PATH lacks it (as on Debian). Settings says what to allow. Such a network still
+  connects once per join; on Windows and Linux the computer's addresses tell it from the next
+  one, so a new address counts as a new join. With no trusted networks Android no longer reads
+  the name at all. Android, Windows and Linux.
+- **Connect on untrusted Wi-Fi was late on Android without mobile data.** Android told the app
+  that Wi-Fi had changed only by mobile data taking over, so with mobile data off (roaming, a
+  tablet) or on a move from one Wi-Fi network straight to another, a new network was noticed
+  only by a check every 15 to 26 minutes, later with the screen off. The app now hears of every
+  Wi-Fi change at once: while the rule is on and the VPN is off, a small watcher process of
+  its own keeps running, with a **Watching for untrusted Wi-Fi** notification that has its own
+  channel and can be hidden. It starts the app only when Wi-Fi changes. The earlier reports
+  remain for when Android stops the watcher all the same.
+- Subscription expiry reminders could be on and never show. Turning them on now asks for the
+  notification permission, Settings › General says when Elarni's notifications are off and opens
+  the permission request or Android's notification settings, and a reminder that could not be
+  shown is no longer counted as shown, so it comes once notifications are allowed. Android.
+- When the core stopped by itself while connected, Android closed the VPN, and nothing brought
+  the connection back unless **Reconnect automatically** or failover was on. Without Android's
+  own **Block connections without VPN**, every app's traffic then went on outside the VPN
+  without a word. Now the VPN stays up and the core is started again inside it at once, twice
+  in ten minutes at most; when that fails as well, the VPN closes and the connection shows as
+  failed, as before. And a connection whose server passed traffic and then fails two checks in
+  a row (**Connected · no traffic**) gets a new core, as on Windows and Linux; a server that
+  never passed the check is still only reported. Android.
+- **Select unreachable** in a subscription's server list ticks only servers whose latest test is
+  still current and failed to reach the server. It also ticked servers whose test never reached
+  them (another test was running, it was cancelled, the active-connection test ran without a
+  connection, the server does not support the test type), was cut short by the 7-second limit
+  of a whole-list test under a longer timeout, or was hours old. Windows, Linux, macOS, Android
+  and iPhone.
+- A subscription no longer stops updating for good after a network answered unexpectedly once
+  (retried every two hours; Windows, Linux, macOS, iPhone) or after a device-limit reply
+  (retried at its regular interval, and right after Reset device ID; all platforms).
+- **Headless control:** the log can be read with `elarni-cli call readLogs` (pass
+  `{"after": <seq>}` for only newer lines), and a daemon writes the notices the window would
+  show, such as a connection that stopped or a scheduled refresh that failed, and the
+  connection state they leave, to its output, so the Linux boot service has them in its journal
+  (`journalctl -u elarni`). Before, the service logged one line at start. `elarni-cli shutdown`
+  now stops the Linux boot service until `systemctl start elarni` or the next boot: before,
+  systemd started it again five seconds later and it reconnected. A crash or a keyring failure
+  still restarts it. The README said the `.deb` updates itself; that is so only where the app's
+  window runs. A headless install never checks for updates: update a server with its package
+  (`sudo apt install ./elarni_*_amd64.deb`). The log over `elarni-cli` works on Linux, Windows
+  and macOS; the notices on Linux and Windows.
+- A subscription refresh that removes the server an app is routed through no longer drops the
+  connection. Before, the refresh stopped the tunnel, could not start it without that server,
+  started the old one again and failed, so every scheduled retry cut every app's connections
+  for a moment and the subscription never updated. The refresh now applies, the running
+  connection keeps its old settings and a notice says to choose another server for that app.
+  A change that would restart the tunnel without that server fails before the connection
+  stops, and the next Connect names the app's rule. Windows and Linux; Android already did this.
+- Leaving VPN mode (for System proxy or Local proxy only, or turning Xray TUN off on macOS) and
+  coming back turns per-app routing on again with the mode it had. Before, leaving VPN mode
+  turned it off for good, so after the return every app took the default route until per-app
+  routing was turned on by hand. The app list and its targets were kept, and still are.
+  Windows, Linux and macOS.
+- With **Only listed apps** and none of the listed apps installed, Connect now says so instead
+  of connecting. Before, the VPN then took every app, all of them went direct, and Elarni showed
+  Connected. A settings change that would restart a running tunnel that way fails the same way,
+  before the tunnel stops. Android.
+- When a subscription update removes the selected server, macOS now moves to another server of
+  that subscription (recovery's first allowed server when recovery is on) instead of
+  disconnecting, and Windows, Linux, macOS and Android say that the server changed (iPhone
+  already did). On Android only an update you start says so; a scheduled one changes the
+  server without a word, as before.
+- A subscription update that removes the server an app is routed through in Per-app routing
+  now applies while connected: the connection keeps its settings, and a notice says to choose
+  another server for that app. Until now every update of that subscription, manual or
+  scheduled, failed until the per-app rule was changed. macOS; Windows, Linux and Android
+  already applied it.
+- Android: DNS is one choice, as on the other platforms. Settings › DNS no longer has a separate
+  **Use profile DNS** switch, which could be off while **DNS override** named the provider
+  profile or the routing profile; the connection then used 1.1.1.1 whatever the override said.
+  A saved pair is read once: the switch off with **Provider profile** becomes **1.1.1.1**, which
+  is what the connection used; the switch off with **Routing profile** keeps the routing
+  profile's DNS, which the connection now uses.
+- Windows, Linux, macOS, iPhone: a routing profile's managed domain list that was never
+  downloaded is downloaded when connecting, for up to 10 seconds, so the first connection already
+  follows its rules. Before, a list that had not been downloaded yet, for example right after an
+  import, left its rules out until a later refresh. A download that fails does not stop the
+  connection: the list is downloaded again over the connection, and on Windows and Linux Elarni
+  says that its rules do not apply yet.
+- A VPN core that stops by itself now shows as **Connection failed** ("Connection stopped
+  unexpectedly") instead of **Reconnecting…** without end, and the app starts it again, twice
+  in ten minutes at most. The tunnel keeps its routes, so nothing leaks until the core runs
+  again. Connect restarts a failed core too, and Disconnect stops it. With Recovery on, its own
+  retries restart the core; with **Xray TUN** on, only Connect does. macOS.
+- Recovery that gave up no longer waits for Connect: it starts over by itself after 2.5, then 5,
+  then 10 minutes, the waits Android and the headless Windows and Linux client use, and when
+  the network comes back after it was gone. A connection that passes its check starts the waits
+  over. On iPhone this runs while the app is open. macOS and iPhone.
+- **A backup is no longer refused because of one subscription.** A subscription whose provider
+  forbids backups, or one never updated (so whether its provider allows them is unknown), used
+  to stop the whole backup. It is now left out, together with its provider's routing and the
+  assignments and selection that point at it, and the message after saving names it and why.
+  Nothing of such a subscription is saved, as before; the backup still fails when nothing else
+  is left to save. Windows, Linux, macOS, Android and iPhone; `exportCatalogBackup` in headless
+  mode returns the left-out subscriptions in `data.excluded`.
+- **Android:** when Elarni's saved data could no longer be decrypted because its key was gone (as
+  when a backup tool brings back its files without the key), it said to restart the app and
+  offered no way out but clearing its storage in Android Settings. It now offers **Reset
+  Elarni** and says to restore a backup or add the subscriptions again afterwards. A Keystore
+  that only fails to answer still keeps the data and offers no reset.
+- When Elarni's saved data can no longer be read (a damaged file, a Windows profile whose keys
+  changed, a reset Linux keyring), Settings › Backup and repair offers **Reset**, which sets the
+  unreadable file aside and starts empty so a backup can be restored; another running copy and a
+  locked keyring now say what they are instead of advising a restore that could not work.
+  Windows, Linux.
+- With the **Kill switch** on, **Disconnect** and quitting Elarni now lift the block
+  that a VPN which stopped by itself left, as Settings says. Before, Elarni showed Disconnected
+  while nothing could leave the device until the next Connect, **Repair VPN setup** or a
+  restart, and quitting while connected kept the block with no Elarni running. When the VPN
+  helper itself crashed, Disconnect clears its block too, asking for consent where the system
+  needs it; declined, it points at Repair VPN setup. Quitting for an update still keeps the
+  block until the new version is back. Windows, Linux.
+
 ## 0.6.2 - 2026-11-18
 
 ### Added

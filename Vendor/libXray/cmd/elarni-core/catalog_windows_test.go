@@ -58,3 +58,9 @@ func TestCatalogEncryptedPublication(t *testing.T) {
 		t.Fatal("unreadable user data was overwritten")
 	}
 }
+
+// A profile whose DPAPI keys changed cannot decrypt the catalog again; Reset
+// moves it aside, never deleting it, so the app can start empty.
+func TestCatalogSetAsideKeepsUnreadableData(t *testing.T) {
+	testCatalogSetAside(t, filepath.Join(t.TempDir(), "data with spaces"), "catalog.dpapi")
+}

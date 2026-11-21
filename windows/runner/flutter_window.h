@@ -51,4 +51,8 @@ class FlutterWindow : public Win32Window {
 // link handlers and launch-at-login entry this app wrote under HKCU.
 bool UnregisterProfileLinks();
 
+// Brings Elarni's window to the front as the user left it, also when a close
+// hid it to the tray; another instance calls it with the running window.
+void ShowAppWindow(HWND window);
+
 #endif  // RUNNER_FLUTTER_WINDOW_H_

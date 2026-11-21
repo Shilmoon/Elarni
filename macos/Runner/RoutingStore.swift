@@ -869,6 +869,46 @@ final class RoutingStore {
     return (record.managedSources ?? []).map(\.source.id)
   }
 
+  /// The lists that were never downloaded of the profile a connection with this subscription uses, when it is
+  /// on: their rules are not in its route model yet. One whose last download needed approval waits for the
+  /// user or its two-hour retry: a schedule no longer pauses for it, so its error names it.
+  func missingManagedSources(subscriptionID: String?) -> [(profileID: String, sourceID: String)] {
+    guard let subscriptionID, let profileID = catalog.assignments[subscriptionID],
+          let record = catalog.profiles.first(where: { $0.id == profileID }), record.enabled else { return [] }
+    return (record.managedSources ?? []).filter { $0.lastSuccessfulFetch == nil && $0.schedule.errorCategory != "authorization" }
+      .map { (record.id, $0.source.id) }
+  }
+
+  /// Connect downloads the lists `missingManagedSources` names first, for at most `seconds` in total. A list
+  /// still missing fails no connection: a failed download is scheduled again like any other, one cut off by the
+  /// bound stays due, so the scheduled refresh downloads it over the connection. Cancelling the caller ends the
+  /// wait. Returns whether a list is still missing.
+  @discardableResult
+  func downloadMissingManaged(subscriptionID: String?, within seconds: Double = 10) async -> Bool {
+    let sources = missingManagedSources(subscriptionID: subscriptionID)
+    guard !sources.isEmpty else { return false }
+    var made: AsyncStream<Void>.Continuation?
+    let finished = AsyncStream<Void> { made = $0 }
+    guard let finish = made else { return true }
+    let work = Task { @MainActor in
+      for source in sources {
+        if Task.isCancelled { break }
+        do { try await self.refreshManaged(id: source.profileID, sourceID: source.sourceID) }
+        catch { /* Recorded on the list's schedule; a cancelled one is left as it was. */ }
+      }
+      finish.finish()
+    }
+    let bound = Task {
+      try? await Task.sleep(nanoseconds: UInt64(max(0, seconds) * 1_000_000_000))
+      finish.finish()
+    }
+    // Ends when the work does, at the bound, or when the caller is cancelled. A list another refresh is
+    // already downloading is waited for through that refresh, which a cancellation does not stop at once.
+    for await _ in finished {}
+    work.cancel(); bound.cancel()
+    return !missingManagedSources(subscriptionID: subscriptionID).isEmpty
+  }
+
   func nextManagedDate() -> Date? {
     let current = now()
     return catalog.profiles.filter { $0.enabled && managedTasks[$0.id] == nil }
@@ -926,7 +966,7 @@ final class RoutingStore {
         let prior = catalog
         let authorization = error is SubscriptionApprovalRequirement
         catalog.profiles[index].managedSources![sourceIndex].schedule.failed(now: now(), interval: Self.managedInterval,
-          category: authorization ? "authorization" : "refresh", authorization: authorization)
+          category: authorization ? "authorization" : "refresh", failure: authorization ? .approval : .other)
         do { try save() } catch { catalog = prior; throw error }
       }
       throw error

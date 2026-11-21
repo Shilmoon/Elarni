@@ -111,6 +111,8 @@ struct ProbeResult {
   let date: Date
   var mode = "proxy"
   var failure: String?
+  /// Whether a failed test failed to reach the server, rather than not running against it.
+  var serverFailure = false
   /// The status is state ("Passed", "Failed"); this is its text.
   var statusLabel: String { String(localized: String.LocalizationValue(status)) }
   var scope: String {
@@ -121,7 +123,9 @@ struct ProbeResult {
     default: String(localized: "Proxy HTTP")
     }
   }
-  func current(for node: ServerNode) -> Bool { revision == node.revision && Date().timeIntervalSince(date) < 300 }
+  func current(for node: ServerNode, now: Date = Date()) -> Bool { revision == node.revision && now.timeIntervalSince(date) < 300 }
+  /// What Select unreachable ticks: a current test that failed to reach the server.
+  func unreachable(for node: ServerNode, now: Date = Date()) -> Bool { status == "Failed" && serverFailure && current(for: node, now: now) }
   func currentMilliseconds(for node: ServerNode) -> Int? {
     guard current(for: node), status == "Passed", let milliseconds, milliseconds >= 0 else { return nil }
     return milliseconds
@@ -141,20 +145,27 @@ struct ExitResult {
   }
 }
 
-/// Home's filtered and grouped servers, rebuilt only when what they show changes.
+/// Home's servers as its three lists show them, rebuilt only when what they show changes.
 @MainActor final class ServerListCache {
   struct Key: Equatable {
-    var catalog: Int, search: String, country: String, filter: String, order: String, favoritesFirst: Bool, pinned: [String]
+    // "all" groups by subscription and country, "country" by country alone, "favorites" not at all.
+    var catalog: Int, filter: String, order: String, favoritesFirst: Bool, pinned: [String]
     // Latency order follows results; the other orders ignore them.
     var latencies: [String: Int]
   }
-  typealias Group = (code: String, location: ServerLocation?, nodes: [ServerNode])
+  /// A country's servers. `id` is what a closed group is remembered by: `<subscription>:<code>`
+  /// under a subscription, `:<code>` in the list by country.
+  struct Country: Identifiable { let id: String, code: String, location: ServerLocation?, nodes: [ServerNode] }
+  struct Source: Identifiable { let id: String, name: String, countries: [Country] }
+  static let maxClosedGroups = 256
   private var key: Key?
   private(set) var builds = 0
+  /// Every server of the list, in the order shown; the whole list for "favorites".
   private(set) var visible: [ServerNode] = []
-  private(set) var groups: [Group] = []
-  private(set) var locations: [ServerLocation] = []
-  private(set) var hasOther = false
+  /// The subscriptions of "all", pinned ones first.
+  private(set) var sources: [Source] = []
+  /// The countries of "country", across subscriptions.
+  private(set) var countries: [Country] = []
 
   // shortcut: a latency order keeps results that age past five minutes until anything else changes.
   func update(_ key: Key, subscriptions: [ServerSubscription], probes: [String: ProbeResult]) {
@@ -162,46 +173,47 @@ struct ExitResult {
     self.key = key
     builds += 1
     func score(_ node: ServerNode) -> Int { guard let p = probes[node.id], p.current(for: node), let ms = p.milliseconds else { return .max }; return ms }
-    let favoritesFirst = key.favoritesFirst && key.filter != "recent"
-    var all: [ServerNode] = [], visible: [ServerNode] = []
-    for source in subscriptions {
-      let nodes = source.nodes
-      all += nodes
-      let values = nodes.filter { node in
-        node.matches(key.search, provider: source.name) &&
-        (key.country.isEmpty || (ServerLocation.fromName(node.name)?.code ?? "other") == key.country) &&
-        (key.filter == "all" || key.filter == "favorites" && node.favorite || key.filter == "recent" && node.lastSuccess != nil)
-      }
-      var sorted: [ServerNode]
-      switch key.order {
-      case "name": sorted = values.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
-      case "latency": sorted = values.sorted { score($0) < score($1) }
-      default: sorted = key.filter == "recent" ? values.sorted { ($0.lastSuccess ?? .distantPast) > ($1.lastSuccess ?? .distantPast) } : values
-      }
-      visible += favoritesFirst ? sorted.filter(\.favorite) + sorted.filter { !$0.favorite } : sorted
-    }
-    self.visible = visible
-    groups = Dictionary(grouping: visible, by: { ServerLocation.fromName($0.name)?.code ?? "other" }).map { code, nodes in
-      let positions = Dictionary(uniqueKeysWithValues: nodes.enumerated().map { ($0.element.id, $0.offset) })
-      let sorted = nodes.sorted { a, b in
+    let ordered = subscriptions.filter { key.pinned.contains($0.id) } + subscriptions.filter { !key.pinned.contains($0.id) }
+    let positions = Dictionary(ordered.flatMap(\.nodes).enumerated().map { ($0.element.id, $0.offset) }, uniquingKeysWith: { first, _ in first })
+    func sorted(_ nodes: [ServerNode]) -> [ServerNode] {
+      nodes.sorted { a, b in
         let aPinned = key.pinned.contains(a.subscriptionID), bPinned = key.pinned.contains(b.subscriptionID)
         if aPinned != bPinned { return aPinned }
-        if favoritesFirst && a.favorite != b.favorite { return a.favorite }
-        if key.filter == "recent", a.lastSuccess != b.lastSuccess { return (a.lastSuccess ?? .distantPast) > (b.lastSuccess ?? .distantPast) }
-        if key.filter != "recent" && key.order == "name" {
+        if key.favoritesFirst && a.favorite != b.favorite { return a.favorite }
+        if key.order == "name" {
           let compared = a.name.localizedStandardCompare(b.name)
           if compared != .orderedSame { return compared == .orderedAscending }
         }
-        if key.filter != "recent" && key.order == "latency" && score(a) != score(b) { return score(a) < score(b) }
-        return positions[a.id]! < positions[b.id]!
+        if key.order == "latency" && score(a) != score(b) { return score(a) < score(b) }
+        return (positions[a.id] ?? .max) < (positions[b.id] ?? .max)
       }
-      return (code, nodes.first.flatMap { ServerLocation.fromName($0.name) }, sorted)
-    }.sorted { a, b in
-      if a.code == "other" { return false }; if b.code == "other" { return true }
-      return (a.location?.name ?? "").localizedStandardCompare(b.location?.name ?? "") == .orderedAscending
     }
-    locations = Array(Set(all.compactMap { ServerLocation.fromName($0.name) })).sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
-    hasOther = all.contains { ServerLocation.fromName($0.name) == nil }
+    func grouped(_ nodes: [ServerNode], under source: String) -> [Country] {
+      Dictionary(grouping: nodes, by: { ServerLocation.fromName($0.name)?.code ?? "other" }).map { code, nodes in
+        Country(id: "\(source):\(code)", code: code, location: nodes.first.flatMap { ServerLocation.fromName($0.name) }, nodes: sorted(nodes))
+      }.sorted { a, b in
+        if a.code == "other" { return false }; if b.code == "other" { return true }
+        return (a.location?.name ?? "").localizedStandardCompare(b.location?.name ?? "") == .orderedAscending
+      }
+    }
+    sources = []; countries = []
+    switch key.filter {
+    case "favorites": visible = sorted(ordered.flatMap(\.nodes).filter(\.favorite))
+    case "country":
+      countries = grouped(ordered.flatMap(\.nodes), under: "")
+      visible = countries.flatMap(\.nodes)
+    default:
+      sources = ordered.filter { !$0.nodes.isEmpty }.map { Source(id: $0.id, name: $0.name, countries: grouped($0.nodes, under: $0.id)) }
+      visible = sources.flatMap { $0.countries.flatMap(\.nodes) }
+    }
+  }
+
+  /// The closed groups after `group` is opened or closed. Groups of a subscription that is gone
+  /// are dropped, so the list cannot grow without end.
+  static func toggled(_ group: String, closed: [String], subscriptions: [String]) -> [String] {
+    var next = Set(closed.filter { $0.hasPrefix(":") || subscriptions.contains(String($0.prefix { $0 != ":" })) })
+    if next.remove(group) == nil { next.insert(group) }
+    return Array(next.sorted().prefix(maxClosedGroups))
   }
 }
 
@@ -233,6 +245,9 @@ struct IOSPreferences: Codable, Equatable {
   // Optional, so that preferences saved before it still decode; nil is on.
   var favoritesFirst: Bool?
   var pinned: [String] = []
+  // The subscriptions and countries closed on Home; all others show their servers. Optional,
+  // as `favoritesFirst` is.
+  var closedGroups: [String]?
   var expiryReminders = false
   var autoUpdateHours = 4
   var probeMode = "proxy"

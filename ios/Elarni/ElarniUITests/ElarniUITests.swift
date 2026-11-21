@@ -16,28 +16,51 @@ final class ElarniUITests: XCTestCase {
     XCTAssertEqual(app.buttons["selectedServer"].label, "Fixture")
     importClipboard(app, text: "socks://127.0.0.1:1084#Germany%20Second%20provider\nsocks://127.0.0.1:1085#Germany%20Netherlands%20chain")
     XCTAssertFalse(app.tabBars.buttons["Servers"].exists)
-    XCTAssertLessThan(app.buttons["connect"].frame.maxY, app.textFields["serverSearch"].frame.minY)
+    XCTAssertLessThan(app.buttons["connect"].frame.maxY, app.buttons["Test visible servers"].frame.minY)
+    // Home has no search field or server options menu; a subscription's server list keeps its search.
+    XCTAssertFalse(app.textFields["serverSearch"].exists)
+    XCTAssertFalse(app.buttons["Server options"].exists)
     app.buttons["selectedServer"].tap()
-    let search = app.textFields["serverSearch"]
-    XCTAssertTrue(search.waitForExistence(timeout: 5))
-    search.tap(); search.typeText("Germany\n")
+    // Every subscription and country starts open: a server shows without opening its group.
     let germany = app.buttons["server.Germany Demo"]
     XCTAssertTrue(germany.waitForExistence(timeout: 5))
-    XCTAssertFalse(app.buttons["server.Fixture"].exists)
-    XCTAssertFalse(app.buttons["server.Netherlands Demo"].exists)
+    XCTAssertTrue(app.staticTexts["source.Local profiles"].exists)
     XCTAssertTrue(app.staticTexts["countryFlag.DE"].firstMatch.exists)
+    // Touch and hold on a subscription offers the actions of its page; a local group has no feed to refresh.
+    app.staticTexts["source.Local profiles"].press(forDuration: 1)
+    XCTAssertTrue(app.buttons["Pin"].waitForExistence(timeout: 5), "Home's subscription has no touch-and-hold menu")
+    for action in ["Rename", "Share", "Delete subscription"] { XCTAssertTrue(app.buttons[action].exists, action) }
+    XCTAssertFalse(app.buttons["Refresh"].exists)
+    app.buttons["Pin"].tap()
+    XCTAssertTrue(germany.waitForExistence(timeout: 5), "the touch and hold folded the subscription")
+    app.staticTexts["source.Local profiles"].press(forDuration: 1)
+    XCTAssertTrue(app.buttons["Unpin"].waitForExistence(timeout: 5))
+    app.buttons["Unpin"].tap()
+    // By country gathers the servers of every subscription, one group per country.
+    serverFilter(app, "By country")
+    XCTAssertTrue(germany.waitForExistence(timeout: 5))
+    XCTAssertFalse(app.staticTexts["source.Local profiles"].exists)
     XCTAssertEqual(app.staticTexts.matching(identifier: "country.DE").count, 1)
     XCTAssertTrue(app.buttons.containing(.staticText, identifier: "country.DE").firstMatch.label.contains("3 servers"))
     XCTAssertTrue(app.buttons["server.Germany Second provider"].exists)
+    let netherlands = app.buttons["server.Netherlands Demo"]
+    reveal(netherlands, in: app)
+    // A closed country hides its servers, and stays closed after a restart (below).
+    app.buttons.containing(.staticText, identifier: "country.NL").firstMatch.tap()
+    XCTAssertTrue(netherlands.waitForNonExistence(timeout: 5))
+    reveal(app.buttons["server.Germany Netherlands chain"], in: app)
     XCTAssertTrue(app.staticTexts["country.other"].exists)
-    XCTAssertTrue(app.buttons["server.Germany Netherlands chain"].exists)
+    serverFilter(app, "All")
+    reveal(germany, in: app)
     germany.tap()
-    app.buttons["Clear search"].tap()
     germany.press(forDuration: 1)
     app.buttons["Favorite"].tap()
     serverFilter(app, "Favorites")
     XCTAssertTrue(germany.waitForExistence(timeout: 5))
     XCTAssertFalse(app.buttons["server.Fixture"].exists)
+    // Favorites are one list: no subscription or country above them.
+    XCTAssertFalse(app.staticTexts["source.Local profiles"].exists)
+    XCTAssertFalse(app.staticTexts["country.DE"].exists)
     germany.press(forDuration: 1)
     XCTAssertTrue(app.buttons["Share"].exists)
     XCTAssertTrue(app.buttons["Test server"].exists)
@@ -56,6 +79,12 @@ final class ElarniUITests: XCTestCase {
     app.launch()
     XCTAssertTrue(app.buttons["selectedServer"].waitForExistence(timeout: 10))
     XCTAssertEqual(app.buttons["selectedServer"].label, "Germany Demo")
+    app.buttons["selectedServer"].tap()
+    serverFilter(app, "By country")
+    XCTAssertTrue(app.staticTexts["country.NL"].waitForExistence(timeout: 5))
+    XCTAssertFalse(netherlands.exists)
+    XCTAssertTrue(germany.exists)
+    serverFilter(app, "All")
     for tab in ["Home", "Subscriptions"] {
       app.tabBars.buttons[tab].tap()
       if tab == "Home" { app.buttons["selectedServer"].tap() }
@@ -138,6 +167,12 @@ final class ElarniUITests: XCTestCase {
     importClipboard(app, text: "socks://127.0.0.1:1080#Kept\nunknown://broken")
     XCTAssertTrue(app.buttons["selectedServer"].waitForExistence(timeout: 15))
     app.tabBars.buttons["Subscriptions"].tap()
+    // The same menu on Subscriptions; Rename asks for the name.
+    app.staticTexts["Local profiles"].firstMatch.press(forDuration: 1)
+    XCTAssertTrue(app.buttons["Rename"].waitForExistence(timeout: 5), "Subscriptions has no touch-and-hold menu")
+    app.buttons["Rename"].tap()
+    XCTAssertTrue(app.alerts["Rename subscription"].waitForExistence(timeout: 5))
+    app.alerts.buttons["Cancel"].tap()
     app.staticTexts["Local profiles"].firstMatch.tap()
     let notice = app.staticTexts["Servers not added"]
     XCTAssertTrue(notice.waitForExistence(timeout: 5), "a local import hides the servers it left out")
@@ -373,6 +408,78 @@ final class ElarniUITests: XCTestCase {
     }
   }
 
+  // The joined network is trusted with one tap and a network out of range is typed; each change is saved at once.
+  @MainActor
+  func testTrustedWiFiTrustsTheJoinedNetworkAndAddsByName() throws {
+    continueAfterFailure = false
+    let app = XCUIApplication()
+    // No simulator has Wi-Fi: the app is told the name iOS would report.
+    app.launchArguments = ["--ui-testing", UUID().uuidString, "--joined-wifi", "Cafe 5G"]
+    app.launch()
+    app.tabBars.buttons["Settings"].tap()
+    settingsCategory(app, "General")
+    let rule = app.switches["connectOnUntrustedWiFi"]
+    reveal(rule, in: app)
+    rule.switches.firstMatch.tap()
+    let link = app.buttons["trustedWiFiNetworks"]
+    XCTAssertTrue(link.waitForExistence(timeout: 10))
+    reveal(link, in: app)
+    XCTAssertTrue(link.label.contains("None"))
+    link.tap()
+    XCTAssertTrue(app.navigationBars["Trusted Wi-Fi"].waitForExistence(timeout: 5))
+    let removals = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Remove '"))
+    XCTAssertTrue(app.staticTexts["Cafe 5G"].waitForExistence(timeout: 5))
+    XCTAssertTrue(app.staticTexts["Not trusted. The VPN connects here."].exists)
+    XCTAssertTrue(app.staticTexts["None. Every Wi-Fi network connects."].exists)
+    XCTAssertEqual(removals.count, 0)
+    func keep(_ name: String) { let shot = XCTAttachment(screenshot: app.screenshot()); shot.name = name; shot.lifetime = .keepAlways; add(shot) }
+    keep("Trusted Wi-Fi - joined network")
+    app.buttons["Trust"].tap()
+    XCTAssertTrue(app.staticTexts["Trusted. The VPN stays as it is here."].waitForExistence(timeout: 10))
+    XCTAssertFalse(app.buttons["Trust"].exists)
+    XCTAssertFalse(app.staticTexts["None. Every Wi-Fi network connects."].exists)
+    XCTAssertEqual(removals.count, 1)
+    keep("Trusted Wi-Fi - trusted")
+    // VoiceOver names every row and button.
+    try app.performAccessibilityAudit(for: [.sufficientElementDescription, .elementDetection, .trait])
+    app.buttons["Remove Cafe 5G"].tap()
+    XCTAssertTrue(app.buttons["Trust"].waitForExistence(timeout: 10))
+    XCTAssertEqual(removals.count, 0)
+    func type(_ name: String) {
+      let button = app.buttons["Add by name"]
+      XCTAssertTrue(button.waitForExistence(timeout: 10))
+      button.tap()
+      let field = app.alerts["Add by name"].textFields["Network name"]
+      XCTAssertTrue(field.waitForExistence(timeout: 5))
+      field.typeText(name)
+      app.alerts["Add by name"].buttons["Add"].tap()
+    }
+    // A typed name loses the spaces around it.
+    type(" Office 5G ")
+    XCTAssertTrue(app.buttons["Remove Office 5G"].waitForExistence(timeout: 10))
+    // A name already on the list is not added again.
+    type("Office 5G")
+    XCTAssertTrue(app.buttons["Add by name"].waitForExistence(timeout: 10))
+    XCTAssertEqual(removals.count, 1)
+    // Wi-Fi takes names of up to 32 bytes.
+    type(String(repeating: "a", count: 33))
+    XCTAssertTrue(app.alerts["Couldn’t complete the operation"].waitForExistence(timeout: 10))
+    XCTAssertTrue(app.alerts.staticTexts["Use up to 64 names of at most 32 bytes each, without tabs."].exists)
+    app.alerts.buttons["OK"].tap()
+    XCTAssertEqual(removals.count, 1)
+    // General counts them, and a new process reads what was stored.
+    app.navigationBars["Trusted Wi-Fi"].buttons["General"].tap()
+    XCTAssertTrue(link.waitForExistence(timeout: 5))
+    XCTAssertTrue(link.label.contains("1"))
+    app.terminate(); app.launch()
+    app.tabBars.buttons["Settings"].tap()
+    settingsCategory(app, "General")
+    reveal(link, in: app)
+    link.tap()
+    XCTAssertTrue(app.buttons["Remove Office 5G"].waitForExistence(timeout: 10))
+    XCTAssertTrue(app.buttons["Trust"].exists)
+  }
+
   // Switches save themselves after a short pause. What is picked or typed is saved by leaving the page as well as by Save;
   // Cancel drops it.
   @MainActor
@@ -445,7 +552,7 @@ final class ElarniUITests: XCTestCase {
     for (category, content) in [
       ("General", "Connection recovery"), ("Appearance", "themePicker"),
       ("Connection", "SOCKS port"), ("DNS", "DNS settings"),
-      ("Apps & routes", "Block traffic without VPN"), ("Advanced", "Enable fragmentation"),
+      ("Apps & routes", "Kill switch"), ("Advanced", "Enable fragmentation"),
       ("Server tests", "Test type"), ("Backup and repair", "Create encrypted backup"),
       ("System info", "Operating system"), ("Route table", "Configured included routes")
     ] {
@@ -520,7 +627,7 @@ final class ElarniUITests: XCTestCase {
     XCTAssertTrue(app.buttons["selectedServer"].waitForExistence(timeout: 15))
     try audit("Home")
     app.buttons["selectedServer"].tap()
-    XCTAssertTrue(app.textFields["serverSearch"].waitForExistence(timeout: 5))
+    XCTAssertTrue(app.buttons["Test visible servers"].waitForExistence(timeout: 5))
     try audit("servers")
     for tab in ["Subscriptions", "Routing"] {
       app.tabBars.buttons[tab].tap()
@@ -581,6 +688,33 @@ final class ElarniUITests: XCTestCase {
   }
 
   @MainActor
+  // An iPhone on its side: the tabs sit in a rail at the leading edge and Home shows the connection beside the servers.
+  func testLandscapeShowsARailAndSplitsHome() {
+    let app = XCUIApplication()
+    app.launchArguments = ["--ui-testing", UUID().uuidString]
+    app.launch()
+    importClipboard(app, text: "socks://127.0.0.1:1080#Rail%20Server")
+    XCTAssertTrue(app.buttons["selectedServer"].waitForExistence(timeout: 15))
+    defer { XCUIDevice.shared.orientation = .portrait }
+    XCUIDevice.shared.orientation = .landscapeLeft
+    let home = app.buttons["rail.0"], connect = app.buttons["connect"], server = app.buttons["server.Rail Server"]
+    XCTAssertTrue(home.waitForExistence(timeout: 5), "landscape shows no rail")
+    XCTAssertTrue(home.isSelected)
+    XCTAssertFalse(app.tabBars.buttons["Subscriptions"].isHittable, "the tab bar stayed beside the rail")
+    XCTAssertTrue(server.waitForExistence(timeout: 5))
+    XCTAssertLessThan(home.frame.maxX, connect.frame.minX, "the rail is not at the leading edge")
+    XCTAssertLessThan(connect.frame.maxX, server.frame.minX, "the connection is not beside the server list")
+    XCTAssertLessThan(server.frame.minY, connect.frame.maxY + 200, "the server list starts below the connection")
+    XCTAssertTrue(app.buttons["Test visible servers"].isHittable)
+    app.buttons["rail.2"].tap()
+    XCTAssertTrue(app.navigationBars["Subscriptions"].waitForExistence(timeout: 5))
+    XCTAssertTrue(app.buttons["rail.2"].isSelected)
+    XCUIDevice.shared.orientation = .portrait
+    XCTAssertTrue(app.tabBars.buttons["Subscriptions"].waitForExistence(timeout: 5), "portrait lost the tab bar")
+    XCTAssertTrue(app.tabBars.buttons["Subscriptions"].isSelected)
+    XCTAssertFalse(app.buttons["rail.0"].exists)
+  }
+
   private func serverFilter(_ app: XCUIApplication, _ filter: String) {
     let segment = app.segmentedControls.buttons[filter]
     if segment.exists { segment.tap() }

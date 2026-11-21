@@ -120,11 +120,11 @@ fun segmentShape(index: Int, count: Int): Shape {
         } } })
 }
 // Like Android's text preferences: the value is the summary and the dialog edits it.
-@Composable fun SettingsText(title: String, value: String, summary: String = value, detail: String = "", number: Boolean = false, lines: Int = 1, enabled: Boolean = true, change: (String) -> Unit) {
+@Composable fun SettingsText(title: String, value: String, summary: String = value, detail: String = "", number: Boolean = false, lines: Int = 1, enabled: Boolean = true, icon: String = "", change: (String) -> Unit) {
     var open by rememberSaveable { mutableStateOf(false) }
     var draft by rememberSaveable(stateSaver = TextFieldValue.Saver) { mutableStateOf(TextFieldValue()) }
     // The cursor starts after the value, as in Android's EditTextPreference.
-    SettingsTile(title, summary.ifEmpty { tr(R.string.not_set) }, enabled = enabled) { draft = TextFieldValue(value, TextRange(value.length)); open = true }
+    SettingsTile(title, summary.ifEmpty { tr(R.string.not_set) }, icon, enabled) { draft = TextFieldValue(value, TextRange(value.length)); open = true }
     if (open) {
         val focus = remember { FocusRequester() }
         AlertDialog(onDismissRequest = { open = false }, title = { Text(title) },
@@ -137,6 +137,32 @@ fun segmentShape(index: Int, count: Int): Shape {
             } },
             confirmButton = { TextButton({ change(draft.text); open = false }) { Text(tr(R.string.ok)) } },
             dismissButton = { TextButton({ open = false }) { Text(tr(R.string.cancel)) } })
+    }
+}
+/** The trusted Wi-Fi names: the joined network is trusted with one tap, another is typed. Each change is saved at once. */
+@Composable fun TrustedWiFiEditor(catalog: Catalog, busy: Boolean, activity: MainActivity) {
+    val trusted = catalog.settings.strings("trustedWiFiNetworks")
+    var joined by remember { mutableStateOf<String?>(null) }
+    // Asked again on return: the answer to a location request changes what Android shows.
+    LifecycleResumeEffect(activity.wifiAnswers) { val stop = WiFiRule.watchName(activity) { joined = it }; onPauseOrDispose { stop(); joined = null } }
+    fun save(names: List<String>) = activity.runShown("settings", obj("settings" to obj("trustedWiFiNetworks" to JSONArray(names))))
+    SettingsColumn {
+        joined?.let { name ->
+            SettingsGroup(tr(R.string.connected_now)) {
+                SettingsTile(name, tr(if (name in trusted) R.string.trusted_the_vpn_stays_as_it else R.string.not_trusted_the_vpn_connects_here), icon = "wifi",
+                    trailing = if (name in trusted) null else {{ Button({ save(trusted + name) }, enabled = !busy) { Text(tr(R.string.trust)) } }})
+            }
+        }
+        SettingsGroup(tr(R.string.trusted), footer = tr(R.string.joining_a_trusted_network_leaves)) {
+            if (trusted.isEmpty()) SettingsTile(tr(R.string.none_every_wi_fi_network_connects))
+            trusted.forEach { name ->
+                SettingsTile(name, icon = "wifi", trailing = { IconButton({ save(trusted - name) }, enabled = !busy) { RouteIcon("clear", tr(R.string.remove_name, name)) } })
+            }
+            SettingsText(tr(R.string.add_by_name), "", tr(R.string.for_a_network_that_is_not), icon = "add") { typed ->
+                val name = typed.trim()
+                if (name.isNotEmpty() && name !in trusted) save(trusted + name)
+            }
+        }
     }
 }
 @Composable private fun EditorActions(busy: Boolean, cancel: () -> Unit, save: () -> Unit, label: String = tr(R.string.save_changes)) {
@@ -187,7 +213,7 @@ private fun canonical(json: String) = JSONObject(json).let { value -> value.keys
     val fields = remember(section, LocalConfiguration.current) { Settings.fields.filter { it.section == section } }
     val current = buildMap {
         fields.forEach { put(it.key, saved.get(it.key).toString()) }
-        listOf("includedRoutes", "excludedRoutes", "trustedWiFiNetworks").forEach { put(it, saved.strings(it).joinToString("\n")) }
+        listOf("includedRoutes", "excludedRoutes").forEach { put(it, saved.strings(it).joinToString("\n")) }
     }
     val values = remember(section, activity.interaction) { activity.interaction.fields("settings-$section") { current } }
     // What the draft started from: a save sends only the edits made here, so a setting changed elsewhere since, such as Home's sort, stays.
@@ -202,10 +228,13 @@ private fun canonical(json: String) = JSONObject(json).let { value -> value.keys
     // Android's battery dialog answers with no result; back from it, the tile reads the answer again.
     var batteryExempt by remember { mutableStateOf(true) }
     LifecycleResumeEffect(Unit) { batteryExempt = activity.batteryExempt(); onPauseOrDispose {} }
+    // Back from Android's notification dialog or its notification settings, the reminders tile reads them again.
+    var remindersShown by remember { mutableStateOf(true) }
+    LifecycleResumeEffect(activity.notificationAnswers) { remindersShown = ElarniApplication.instance.canShowReminders(); onPauseOrDispose {} }
     /** Saves the edits: only the flipped switches after their pause, or the whole draft for Save changes and for leaving ([move]). */
     fun apply(switchesOnly: Boolean, move: String? = null) {
         val edits = fields.filter { it.key !in immediate && edited(it.key) && (!switchesOnly || it.initial is Boolean) }
-        val lists = if (switchesOnly) emptyList() else when (section) { "Apps & routes" -> listOf("includedRoutes", "excludedRoutes"); "General" -> listOf("trustedWiFiNetworks"); else -> emptyList() }.filter(::edited)
+        val lists = if (switchesOnly) emptyList() else when (section) { "Apps & routes" -> listOf("includedRoutes", "excludedRoutes"); else -> emptyList() }.filter(::edited)
         if (edits.isEmpty() && lists.isEmpty()) {
             // Flipped back within the pause: nothing to save.
             if (switchesOnly && activity.interaction.saveStatus == "saving") activity.interaction.saveStatus = ""
@@ -237,6 +266,7 @@ private fun canonical(json: String) = JSONObject(json).let { value -> value.keys
     @Composable fun toggle(item: SettingField) = SettingsSwitch(item.title, saved.optBoolean(item.key), item.detail, enabled = !busy) {
         activity.runShown("settings", obj("settings" to obj(item.key to it)))
         if (item.key == "connectOnUntrustedWiFi" && it && !WiFiRule.namesAllowed(activity)) activity.allowWiFiNames()
+        if (item.key == "expiryReminders" && it && activity.notificationsDenied()) activity.askNotifications()
     }
     @Composable fun field(field: SettingField) {
         val value = (if (edited(field.key)) values[field.key] else current[field.key]) ?: field.initial.toString()
@@ -256,7 +286,7 @@ private fun canonical(json: String) = JSONObject(json).let { value -> value.keys
                     "preferredIP" -> listOf(tr(R.string.automatic), "IPv4", "IPv6")
                     "profilePreferredIP" -> listOf(tr(R.string.use_profile), tr(R.string.automatic), "IPv4", "IPv6")
                     "sort" -> listOf(tr(R.string.provider_order), tr(R.string.alphabetical), tr(R.string.lowest_latency))
-                    "probeMode" -> listOf(tr(R.string.proxy), tr(R.string.current_rules_active_tunnel), tr(R.string.direct_tcp_2), tr(R.string.direct_icmp_2))
+                    "probeMode" -> listOf(tr(R.string.proxy), tr(R.string.direct_tcp_2), tr(R.string.direct_icmp_2))
                     "probeVariant" -> listOf(tr(R.string.single_request), tr(R.string.double_request), "Keep-alive")
                     "profileDNSMode" -> listOf(tr(R.string.provider_profile), "1.1.1.1", tr(R.string.routing_profile))
                     "tlsFingerprint" -> listOf(tr(R.string.from_the_server), "Chrome", "Firefox", "Safari", tr(R.string.random_browser), tr(R.string.randomized))
@@ -280,16 +310,20 @@ private fun canonical(json: String) = JSONObject(json).let { value -> value.keys
     val listed = fields.filter { item -> item.key !in immediate && item.key !in addressing && item.key != "updateFeedURL" && section != "Apps & routes" &&
         !(item.key == "httpPort" && values["httpInboundEnabled"] != "true" ||
             item.key in listOf("fragmentPackets", "fragmentLength", "fragmentInterval") && values["fragmentationEnabled"] != "true" ||
-            section == "Server tests" && item.key in listOf("probeMethod", "probeVariant", "probeURL", "probeExpectedStatus", "probeExpectedBody") && values["probeMode"] !in listOf("proxy", "activeProxy")) }
+            section == "Server tests" && item.key in listOf("probeMethod", "probeVariant", "probeURL", "probeExpectedStatus", "probeExpectedBody") && values["probeMode"] != "proxy") }
     SettingsColumn {
         if (section == "General") SettingsGroup(tr(R.string.connection_2)) {
             SettingsTile(tr(R.string.connection_recovery), if (catalog.data.mapObject("automation").optBoolean("enabled")) tr(R.string.on) else tr(R.string.off)) { navigate("automation", "") }
             SettingsTile(tr(R.string.run_in_the_background), if (batteryExempt) tr(R.string.allowed) else tr(R.string.android_may_stop_the_vpn_while),
                 trailing = if (batteryExempt) null else {{ TextButton({ activity.allowBackground() }) { Text(tr(R.string.allow)) } }})
-            fields.filter { it.key in immediate && it.key != "allowExternalControl" && it.key != "autoUpdate" }.forEach { toggle(it) }
+            fields.filter { it.key in immediate && it.key != "allowExternalControl" && it.key != "autoUpdate" }.forEach {
+                toggle(it)
+                if (it.key == "expiryReminders" && saved.optBoolean("expiryReminders") && !remindersShown) SettingsTile(tr(R.string.allow_notifications), tr(R.string.reminders_need_elarni_s_notifications),
+                    trailing = { TextButton({ activity.allowNotifications() }) { Text(tr(R.string.allow)) } })
+            }
             if (saved.optBoolean("connectOnUntrustedWiFi")) {
-                SettingsText(tr(R.string.trusted_wi_fi_networks), values["trustedWiFiNetworks"] ?: "", lines(values["trustedWiFiNetworks"] ?: "").joinToString(", ")
-                    .ifEmpty { tr(R.string.none_every_wi_fi_network_connects) }, tr(R.string.one_network_name_per_line), lines = 3) { values["trustedWiFiNetworks"] = it }
+                SettingsTile(tr(R.string.trusted_wi_fi_networks), saved.strings("trustedWiFiNetworks").joinToString(", ")
+                    .ifEmpty { tr(R.string.none_every_wi_fi_network_connects) }) { navigate("trustedWiFi", "") }
                 if (!namesAllowed) SettingsTile(tr(R.string.allow_location_all_the_time), tr(R.string.android_shows_wi_fi_names_only),
                     trailing = { TextButton({ activity.allowWiFiNames() }) { Text(tr(R.string.allow)) } })
             }
@@ -306,7 +340,7 @@ private fun canonical(json: String) = JSONObject(json).let { value -> value.keys
                     } } }) { navigate("credentials", "") }
                 // Android owns the block; only a running VPN can read whether it is on.
                 val lockdown = activity.repository.engine.service?.isLockdownEnabled
-                SettingsTile(tr(R.string.block_traffic_without_vpn), listOfNotNull(lockdown?.let { if (it) tr(R.string.on) else tr(R.string.off) },
+                SettingsTile(tr(R.string.kill_switch), listOfNotNull(lockdown?.let { if (it) tr(R.string.on) else tr(R.string.off) },
                     tr(R.string.android_manages_this_turn_on_always)).joinToString(" · "),
                     trailing = { TextButton({ activity.vpnSettings() }) { Text(tr(R.string.open)) } })
             }
@@ -867,6 +901,17 @@ fun withSites(text: String, sites: List<String>): String {
     }
 }
 
+/** What a saved backup left out and why, in one message, as on the desktop; null when it left out nothing. */
+fun backupLeftOut(excluded: List<JSONObject>): String? {
+    val (forbidden, unrefreshed) = excluded.partition { it.string("reason") == "sharing_disabled" }.let { (a, b) -> a.map { it.string("name") } to b.map { it.string("name") } }
+    return listOfNotNull(
+        forbidden.takeIf { it.isNotEmpty() }?.let { trPlural(R.plurals.backup_saved_without_forbidden, it.size, it.size, it.joinToString(", ")) },
+        unrefreshed.takeIf { it.isNotEmpty() }?.let {
+            trPlural(if (forbidden.isEmpty()) R.plurals.backup_saved_without_unrefreshed else R.plurals.backup_also_without_unrefreshed, it.size, it.size, it.joinToString(", "))
+        },
+    ).joinToString(" ").ifEmpty { null }
+}
+
 @Composable fun BackupEditor(restore: Boolean, busy: Boolean, activity: MainActivity, done: () -> Unit) {
     var password by rememberDraft(activity, "backup-password") { "" }; var repeat by rememberDraft(activity, "backup-repeat") { "" }; var error by remember { mutableStateOf<String?>(null) }
     FormColumn {
@@ -878,7 +923,7 @@ fun withSites(text: String, sites: List<String>): String {
         EditorActions(busy, done, {
             if (!restore && password != repeat) error = tr(R.string.the_passwords_do_not_match)
             else if (restore) activity.saveReviewed("restore", obj("text" to (activity.interaction.restore ?: ""), "password" to password))
-            else activity.run("backup", obj("password" to password)) { password = ""; repeat = ""; activity.save(it.getString("text"), "elarni-backup.rvbackup"); done() }
+            else activity.run("backup", obj("password" to password)) { password = ""; repeat = ""; activity.save(it.getString("text"), "elarni-backup.rvbackup", backupLeftOut(it.objects("excluded"))); done() }
         }, if (restore) tr(R.string.restore) else tr(R.string.export_backup))
     }
 }
@@ -987,9 +1032,9 @@ fun withSites(text: String, sites: List<String>): String {
     val clock by rememberClock()
     var expected by rememberSaveable { mutableStateOf(saved.optInt("probeExpectedStatus", 204).toString()) }; var body by rememberDraft(activity, "ping-body-$id") { saved.string("probeExpectedBody") }
     FormColumn {
-        ChoiceField(tr(R.string.test_method), protocol, listOf("proxy", "activeProxy", "tcp", "icmp"), listOf(tr(R.string.proxy), tr(R.string.active_proxy_2), tr(R.string.direct_tcp_2), tr(R.string.direct_icmp_2))) { protocol = it }
+        ChoiceField(tr(R.string.test_method), protocol, listOf("proxy", "tcp", "icmp"), listOf(tr(R.string.proxy), tr(R.string.direct_tcp_2), tr(R.string.direct_icmp_2))) { protocol = it }
         TextField(tr(R.string.timeout_in_seconds_1_15), timeout) { timeout = it }
-        if (protocol in listOf("proxy", "activeProxy")) {
+        if (protocol == "proxy") {
             TextField(tr(R.string.test_url), url) { url = it }
             ChoiceField(tr(R.string.http_method), method, listOf("HEAD", "GET")) { method = it }
             ChoiceField(tr(R.string.probe_mode), mode, listOf("default", "double", "keepalive"), listOf(tr(R.string.single_request), tr(R.string.double_request), "Keep-alive")) { mode = it }

@@ -73,8 +73,10 @@ class Repository(private val app: ElarniApplication) {
     private var storageFailure: String? = null
     /** The stored data failed to load, so the catalog in memory is a placeholder that must never replace it. */
     private var loadFailed = false
-    /** The saved catalog cannot be read, which only a reset gets past. A refused change reports the same code and needs none. */
-    val catalogUnreadable get() = loadFailed && storageFailure == "storage_corrupt"
+    /** The saved catalog cannot be read, which only a reset gets past: it is damaged, or its key is gone for good.
+     *  A refused change reports the same code and needs none. */
+    val catalogUnreadable get() = loadFailed && storageFailure in unreadable
+    companion object { /** The codes a saved catalog that cannot be read fails with. */ val unreadable = setOf("storage_corrupt", "storage_locked") }
     private var automation = Automation(JSONObject())
     private var approval: Approval? = null
     /** Routes whose background refresh raised an approval, until when the other routes go first. */
@@ -96,9 +98,11 @@ class Repository(private val app: ElarniApplication) {
                         if (saved.optInt("journalVersion") != 1) throw AppFailure("storage_corrupt")
                         // Recovery publishes only the last committed configuration, never an interrupted candidate.
                         catalog = Catalog(saved.getJSONObject("committed"))
+                        // Before validation, which derives the DNS flag from the mode and so hides the old pair.
+                        val dnsMigrated = catalog.migrateDNS()
                         catalog.validate()
                         // A catalog that allowed external control before keys existed gets one, which Settings shows.
-                        if (catalog.migrateSessionLimits() or catalog.ensureControlKey() or saved.has("pending")) persist(catalog)
+                        if (dnsMigrated or catalog.migrateSessionLimits() or catalog.ensureControlKey() or saved.has("pending")) persist(catalog)
                     }
                     automation = Automation(catalog.data.mapObject("automationEpisode"))
                     automation.intent = catalog.data.optBoolean("connectionIntent")
@@ -173,7 +177,7 @@ class Repository(private val app: ElarniApplication) {
         store.save(saved)
     }
     private fun state(value: String) {
-        if (value != mutable.value.connection) livenessAt = null
+        if (value != mutable.value.connection) { livenessAt = null; deadCore.reset() }
         // A new start counts from zero again.
         if (value != "connected" || mutable.value.connection != "connected") trafficSample = null
         mutable.update { val kept = value == "connected" && it.connection == "connected"
@@ -185,12 +189,16 @@ class Repository(private val app: ElarniApplication) {
     private var trafficSample: LongArray? = null
     private var livenessAt: Double? = null
     private var livenessUplink = 0L
+    /** The liveness checks of the running core that restart it. */
+    private val deadCore = DeadCore()
+    private val crashRestarts = CrashRestarts()
     // The downlink proves nothing: listener replies and direct routes move it while the server is gone.
     private fun uplink() = Native.call("getRuntimeMetrics").optLong("uplinkBytes")
     // The counter restarts with the core, so each reading is the next baseline.
     private fun uplinkGrew(): Boolean { val now = uplink(); return (now > livenessUplink).also { livenessUplink = now } }
     // "connected" means only that the core runs. Checks the server once after Connect, then each
-    // interval while traffic leaves or the last check failed. It only reports, and says whether it probed.
+    // interval while traffic leaves or the last check failed, and says whether it probed. A server that
+    // passed traffic and then failed two checks in a row gets a new core, as on desktop; failover has its own path.
     private fun liveness(catalog: Catalog, generation: Long): Boolean {
         val last = livenessAt
         if (last != null) {
@@ -201,15 +209,17 @@ class Repository(private val app: ElarniApplication) {
         val targets = configured.ifEmpty { Automation.livenessTargets.let { all -> (0 until all.length()).map(all::getJSONObject) } }
         val ok = targets.any { target -> runCatching { engine.probe(catalog, catalog.selected, target.copy().put("protocol", "activeProxy").put("method", "GET").put("timeout", 5)) }.isSuccess }
         check(generation)
-        checked(ok)
+        if (checked(ok) && automation.online && connectionWanted() && !catalog.data.mapObject("automation").optBoolean("enabled")) restartInTunnel(generation)
         return true
     }
-    /** Shows a check of the connected server; the traffic baseline starts after the check's own requests. */
-    private fun checked(ok: Boolean) {
-        if (!engine.running || mutable.value.connection != "connected") return
+    /** Shows a check of the connected server and says whether its core should restart; the traffic baseline starts after the check's own requests. */
+    private fun checked(ok: Boolean): Boolean {
+        if (!engine.running || mutable.value.connection != "connected") return false
         livenessAt = Automation.clock(); livenessUplink = uplink()
+        val dead = deadCore.checked(catalog.selected + ":" + catalog.nodeOrNull(catalog.selected)?.string("configurationRevision", catalog.selected), ok)
         mutable.update { it.copy(liveness = if (ok) "ok" else "noTraffic", noTrafficSince = if (ok) null else it.noTrafficSince ?: System.currentTimeMillis()) }
         publish()
+        return dead
     }
     fun cancel(): Long { val generation = epoch.incrementAndGet(); Native.cancelOperations(); return generation }
     fun beginConnectionRequest(): Long { stopRequested.set(false); return cancel() }
@@ -272,7 +282,7 @@ class Repository(private val app: ElarniApplication) {
                 if (restart && catalog.settings.optBoolean("disconnectOnSleep") && !app.getSystemService(android.os.PowerManager::class.java).isInteractive) {
                     automation.sleeping = true; state("paused"); return
                 }
-                start(catalog, generation)
+                start(catalog, generation, requireListedApp = true)
                 catalog.node(catalog.selected).put("lastSuccessAt", now()).put("lastSuccessRevision", catalog.node(catalog.selected).string("configurationRevision"))
                 // Start wrote intent, assets and the success time; an approval built before them would undo them.
                 // A save that fails must not undo a start that worked.
@@ -303,15 +313,20 @@ class Repository(private val app: ElarniApplication) {
             state("disconnected")
         }
     }
-    private fun start(value: Catalog, generation: Long) {
+    /** [requireListedApp] refuses a tunnel none of the listed apps can enter, which would take every app, each going
+     *  direct, and show Connected. Connect, its retry and a settings change ask for it; a refresh must not fail for a
+     *  per-app setting, and a running tunnel's own restart (a listed app removed, another network) starts as before. */
+    private fun start(value: Catalog, generation: Long, keepTunnel: Boolean = wantsRecovery(), requireListedApp: Boolean = false) {
         check(generation)
+        // Before the running tunnel stops.
+        if (requireListedApp && engine.noListedAppInstalled(value.settings)) throw AppFailure("per_app_none_installed")
         val route = value.routeFor(value.selected)
         if (route != null) {
             if (route.mapObject("profile").objects("ManagedSources").any { !route.mapObject("lists").has(it.string("id")) }) { value.refreshManaged(route.getString("id")); edits++ }
             if (route.string("assetRevision").isEmpty()) { assets.prepare(value, route.getString("id")); edits++ }
         }
         check(generation)
-        engine.start(value, keepTunnel = wantsRecovery()) { check(generation) }
+        engine.start(value, keepTunnel) { check(generation) }
     }
     private fun apply(candidate: Catalog, generation: Long, refresh: Boolean = false): JSONObject {
         check(generation); candidate.reconcileSelection(); candidate.validate()
@@ -342,7 +357,7 @@ class Repository(private val app: ElarniApplication) {
                 persist(before, candidate); journal = true
                 state("connecting")
                 if (candidate.selected.isEmpty()) { engine.stop(); candidate.data.put("connectionIntent", false); automation.stop() }
-                else { start(candidate, generation); started = true }
+                else { start(candidate, generation, requireListedApp = !refresh); started = true }
             }
             check(generation)
             persist(candidate)
@@ -386,6 +401,9 @@ class Repository(private val app: ElarniApplication) {
             throw error
         }
     }
+    /** The result of a refresh that applied, which says when it replaced the selected server [before], one now gone. */
+    private fun replacing(before: String, refresh: () -> JSONObject) =
+        refresh().also { if (catalog.replacedSelection(before)) it.put("selectedServerReplaced", true) }
     private fun canonicalRouting(value: Catalog) = Catalog.canonical(obj("settings" to Settings.runtime(value.settings), "routes" to JSONArray(value.routes.map { obj("id" to it.string("id"), "enabled" to it.optBoolean("enabled", true), "model" to it.mapObject("routeModel"), "assets" to it.string("assetRevision")) }), "assignments" to value.assignments))
     suspend fun execute(command: String, args: JSONObject = JSONObject()): JSONObject = withContext(Dispatchers.IO) {
         ready.await(); mutex.withLock {
@@ -453,7 +471,9 @@ class Repository(private val app: ElarniApplication) {
             "exportRouting" -> return obj("text" to catalog.route(id).getJSONObject("profile").toString(2))
             "decodeRouting" -> return Native.domain("decodeRouting", obj("content" to args.getString("text"))).getJSONObject("import")
             "exportPerApp" -> return obj("text" to Settings.perAppExport(catalog.settings.getString("perAppMode"), catalog.settings.strings("perAppProcesses"), catalog.settings.mapObject("perAppTargets")))
-            "backup" -> return try { Native.call("sealCatalogBackup", obj("catalog" to catalog.backup(), "password" to args.getString("password"))) }
+            // Subscriptions a backup may not hold are left out; the result names them.
+            "backup" -> return try { val (document, excluded) = catalog.backup()
+                Native.call("sealCatalogBackup", obj("catalog" to document, "password" to args.getString("password"))).put("excluded", JSONArray(excluded)) }
                 // Sealing validates the catalog as a restore would; a refusal names the limits, not a bad password.
                 catch (error: AppFailure) { throw if (error.code == "invalid_backup") AppFailure("backup_unsupported") else error }
             "diagnostics" -> return obj("text" to diagnostics().toString(2))
@@ -541,7 +561,7 @@ class Repository(private val app: ElarniApplication) {
                 try {
                     warning = candidate.refresh(id, format = args.string("format").takeIf(String::isNotEmpty))
                     // A failure to apply counts as a failed refresh too, so the retry delays apply.
-                    if (warning == null) { check(generation); return apply(candidate, generation, refresh = true) }
+                    if (warning == null) { check(generation); return replacing(catalog.selected) { apply(candidate, generation, refresh = true) } }
                 } catch (error: Exception) {
                     if (error is ResourceReview) throw error
                     // The candidate may hold half the update; record the failure on the applied catalog.
@@ -557,7 +577,7 @@ class Repository(private val app: ElarniApplication) {
                 val approved = value.candidate.copy()
                 val next = approved.refresh(value.warning.getString("subscriptionId"), value.warning.getJSONArray("chain"), value.warning.string("format"))
                 if (next != null) return challenge(approved, next)
-                return apply(approved, generation)
+                return replacing(catalog.selected) { apply(approved, generation) }
             }
             "select" -> {
                 if (candidate.node(id).string("format") != "xrayProfile") throw AppFailure("unsupported_profile")
@@ -581,8 +601,10 @@ class Repository(private val app: ElarniApplication) {
                 } else source.put("manualName", name(requested)).put("name", name(requested))
             }
             "pinSource" -> candidate.source(id).put("pinned", args.getBoolean("value"))
-            // A new random key changes this subscription's device ID only.
+            // A new random key changes this subscription's device ID only. The next background refresh sends it at once:
+            // after a device reply the provider may take it.
             "resetDeviceID" -> candidate.source(id).also { if (!it.has("url")) throw AppFailure("invalid_input") }.put("deviceSalt", newId())
+                .put("nextRefreshAt", now())
             "deleteNode", "deleteNodes" -> {
                 val ids = if (command == "deleteNode") listOf(id) else {
                     val requested = args.optJSONArray("ids") ?: throw AppFailure("invalid_input")
@@ -755,6 +777,22 @@ class Repository(private val app: ElarniApplication) {
         try { state("connecting"); start(catalog, generation); automation.healthy(Automation.clock()); state("connected") }
         catch (error: Exception) { if (code(error) != "cancelled") { state("failed"); automation.schedule(Automation.clock()); report(error) } }
     }
+    /** The user still wants the connection, and neither the screen pause nor a Disconnect holds it. */
+    private fun connectionWanted() = automation.intent && !automation.sleeping && !stopRequested.get()
+    /** Restarts the core inside the interface it has, so nothing leaves outside the VPN meanwhile. Without recovery to
+     *  retry it, a start that fails releases the interface: Android has no kill switch of the app's own to keep it for.
+     *  A Disconnect or Cancel meanwhile is no failure, as for [restart]. */
+    private fun restartInTunnel(generation: Long) {
+        try { state("connecting"); start(catalog, generation, keepTunnel = true); automation.healthy(Automation.clock()); state("connected") }
+        catch (error: Exception) {
+            if (code(error) == "cancelled") return
+            val recovery = wantsRecovery()
+            if (!recovery) runCatching { engine.stop() }
+            state("failed")
+            if (recovery) automation.schedule(Automation.clock())
+            report(error)
+        }
+    }
     suspend fun screenChanged(sleeping: Boolean) {
         ready.await(); mutex.withLock {
             if (!catalog.settings.optBoolean("disconnectOnSleep")) return
@@ -779,7 +817,14 @@ class Repository(private val app: ElarniApplication) {
             val config = catalog.data.optJSONObject("automation") ?: Automation.defaults()
             var probed = false
             if (engine.running) {
-                if (!Native.call("getXrayState").optBoolean("running")) { try { engine.stop(releaseTunnel = !wantsRecovery()) } finally { state("failed") } }
+                if (!Native.call("getXrayState").optBoolean("running")) {
+                    // Without recovery, a core that stopped by itself starts again at once inside its interface, so nothing
+                    // leaves outside the VPN meanwhile; twice in ten minutes at most, so one that keeps stopping cannot loop.
+                    if (!wantsRecovery() && connectionWanted() && crashRestarts.allow(time)) {
+                        runCatching { engine.stop(releaseTunnel = false) }
+                        restartInTunnel(generation)
+                    } else try { engine.stop(releaseTunnel = !wantsRecovery()) } finally { state("failed") }
+                }
                 else {
                     val monitoring = catalog.settings.optBoolean("monitoringEnabled")
                     // A widget alone reads the counters for its speed line; the app reads them only on screen: for Home's speed
@@ -838,7 +883,7 @@ class Repository(private val app: ElarniApplication) {
                 if (automation.begin(time)) {
                     // A failed save must not hold the retry back.
                     catalog.data.put("automationEpisode", automation.episode()); runCatching { persist(catalog) }.onFailure { if (it is Exception) report(it) }
-                    try { state("connecting"); start(catalog, generation); automation.healthy(Automation.clock()); state("connected") }
+                    try { state("connecting"); start(catalog, generation, requireListedApp = true); automation.healthy(Automation.clock()); state("connected") }
                     catch (error: Exception) { check(generation); state("failed"); automation.schedule(Automation.clock()) }
                 }
             }

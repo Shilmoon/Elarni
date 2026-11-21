@@ -17,7 +17,8 @@ nothing they build is published.
    and MSI, the source archives and the unsigned APK, and records build provenance for each file.
 2. On the release machine, which holds the Android signing key and the release key, sign the APK,
    write `SHA256SUMS`, sign it (below) and upload a draft release at the run's commit with every file
-   of the run plus `SHA256SUMS` and `SHA256SUMS.sig`. The maintainer's scripts for this step
+   of the run plus `SHA256SUMS` and `SHA256SUMS.sig`. Write the draft's notes as
+   [Release notes](#release-notes) says. The maintainer's scripts for this step
    (`assemble.sh`, `gh_release.py`) live on that machine, not in this repository.
 3. Run the workflow with stage `publish` and the tag. It publishes only a draft that is one build's
    whole set of files (`scripts/release_draft.py`): the draft's target is a commit; every file is in
@@ -38,6 +39,43 @@ cosign verify-blob SHA256SUMS --bundle SHA256SUMS.sigstore.json \
 sha256sum -c SHA256SUMS
 ```
 
+## Release notes
+
+The notes on a GitHub release are written for the people who use the app. They are not a copy
+of `CHANGELOG.md`: the changelog keeps every change in full, the notes say what a user will
+notice, in about 30 to 50 lines. Take the latest release as the model.
+
+In this order:
+
+1. **Summary.** One or two sentences that name the two to four changes that matter most. No
+   version, build number, commit or signing detail.
+2. **`### Before you upgrade`**, only when the user has to do something or something they rely
+   on behaves differently.
+3. **`### New`, `### Improved` (or `### Faster`), `### Fixed`.** Leave out an empty one.
+4. A link to the version's section of `CHANGELOG.md` at the release tag.
+5. **`### Download`.** One line per platform with direct links to the files, the version the
+   APK installs over, and the SmartScreen hint for Windows.
+6. **Verify a download**, folded in `<details>`: the commit and build run, the checksum,
+   provenance and signature checks, the APK certificate SHA-256 and the line about the GPL
+   source archives.
+
+Each entry:
+
+- One sentence, two at most, about what the user now sees or can do. Start with the platform
+  when it is not all of them: `Windows, Linux: …`.
+- Use the names the app shows, in bold (**Test all**). Leave out the names of internal parts.
+- Do not tell how the bug worked or how it was fixed. Give a number only when the number is
+  the news (478 to 112 MB), and then only one comparison.
+- At most six entries under New and ten under Fixed. Pick the ones most users will notice and
+  join related ones; the rest stay in the full list.
+- Changes to source-only platforms (macOS, iPhone), tests, CI and recording builds stay in
+  `CHANGELOG.md`.
+- Dependency and advisory updates share one line: `Security updates: Go 1.27.4, …`.
+
+To change the notes of a published release, save the current text first
+(`gh release view <tag> --json body -q .body`), then `gh release edit <tag> --notes-file <file>`.
+The app's update check reads the tag and the files, not the notes.
+
 ## Updates
 
 Desktop and Android release builds read
@@ -46,6 +84,8 @@ cannot be read) and show a notice when it names a newer version; pre-release tag
 Settings › General › Update feed changes it to another HTTPS address, serving a GitHub
 `releases/latest` reply or `{"version": "0.4.1", "url": "https://…"}`, or clears it to turn the
 check off; debug builds start with it off. The default feed needs the repository to be public.
+A headless daemon (`elarni-cli daemon`, the Linux boot service) never checks; a server is
+updated with its package ([HEADLESS.md](HEADLESS.md)).
 
 An install from the MSI, the `.deb`, the AppImage or the APK also replaces itself with the
 release the feed names (Settings › General › Install updates automatically, on by default). It
@@ -168,3 +208,4 @@ See [linux/README.md](../linux/README.md) for installation.
 - Record idle cost with `python scripts/measure-idle --seconds 300`.
 - Publish the packages, `SHA256SUMS`, source archives, notices and release notes
   together.
+- Read the notes against [Release notes](#release-notes): short, for users, the full list linked.

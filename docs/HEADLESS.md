@@ -20,6 +20,13 @@ Without the app, `elarni-cli daemon` runs it without a window; stop it with
 app bundle. A Linux daemon needs no desktop session; see
 [linux/HEADLESS.md](../linux/HEADLESS.md) for its keyring and boot service.
 Linux and Windows daemons reconnect on the next start unless you ran `disconnect`.
+They write what the window would show to stderr, one line each: `notice: <code>`
+(for example `connection_stopped` or `scheduled_refresh_failed`), and
+`state: <state>` when a notice, a connect or a catalog change leaves the connection
+in a new state. `call readLogs` reads the core's log.
+
+A daemon never checks for or installs updates; only the app's window does. Update
+a server with its package: on Linux, `sudo apt install ./elarni_*_amd64.deb`.
 
 ```sh
 elarni-cli import profile.txt          # - reads stdin
@@ -40,6 +47,27 @@ or `socket_unavailable`. Pass credentials
 in files or stdin, not as arguments. A new subscription source returns
 `riskCodes`, the `destinations` it downloads from and a `challenge`; review them, then
 `refresh <id> <challenge>`.
+
+### Unreadable saved data
+
+On Linux and Windows, a catalog that can never be read again (`storage_corrupt`:
+a damaged file, a Windows profile whose keys changed, a reset Linux keyring) can
+be set aside. With the app running, `elarni-cli call storageStatus` says why the
+catalog did not load and whether it is `resettable`; `elarni-cli call
+resetStorage` then renames the file to `catalog.unreadable-<UTC time>.enc` (Linux)
+or `.dpapi` (Windows) in the same folder and starts with an empty catalog. Restore
+a backup or add the subscriptions again afterward. A busy store, a locked keyring
+or a missing `secret-tool` is never reset.
+
+A daemon exits at start instead. Stop it, move the catalog out of its data folder,
+then start it again:
+
+- Linux: `catalog.enc` in `$XDG_DATA_HOME/Elarni`, by default
+  `~/.local/share/Elarni` (`/var/lib/elarni/data/Elarni` for the root service).
+  A damaged key item refuses even an empty catalog; remove it with
+  `secret-tool clear application com.elarni.Elarni catalog <data folder>`, where
+  the data folder is the one above, without a trailing slash.
+- Windows: `catalog.dpapi` in `%LOCALAPPDATA%\Elarni`.
 
 ## Endpoint
 
@@ -62,6 +90,7 @@ your user. Nothing listens on the network.
 |---|---|
 | `state`, `subscriptions`, `routingProfiles`, `tunnelSettings`, `automationStatus`, `runtimeMetrics` | None |
 | `inboundCredentials` | None; returns the saved SOCKS/HTTP `username` and `password`, or `{}` |
+| `readLogs` | Optional `after`, the last `seq` you read; returns the log `level` and the `entries` after it, each with its `seq`. Linux and Windows keep the last 1000 lines and return the newest `seq` as `last`. |
 | `connect`, `disconnect`, `repairTunnel` | None |
 | `systemInfo`, `routeTable` | None |
 | `setLaunchAtLogin` | `enabled` (boolean); controls desktop login registration. Not exposed by the Linux standalone service: manage it with systemd. |
@@ -86,8 +115,10 @@ your user. Nothing listens on the network.
 | `configureAutomation` | `schemaVersion:1`, `enabled`, `policy` (`fixed`, `lowestLatency`, `orderedFallback`), `subscriptionID`, `nodeIDs`, `targets`; each target has `id`, `url`, `expectedStatus`, `expectedBody`. Select a member node first. |
 | `pingNode` | `nodeId`, `protocol`, `method`, `mode`, `timeout`, `url`, `expectedStatus`, `expectedBody`; same options as the GUI. An ICMP probe may stop and restore a system VPN. |
 | `shareClient` | `id`, optional `subscription:true`; returns export text and QR data subject to provider restrictions. |
-| `exportCatalogBackup` | `password`; returns encrypted backup in `data.text`. |
+| `exportCatalogBackup` | `password`; returns encrypted backup in `data.text`, and in `data.excluded` the subscriptions it left out, each a `name` and a `reason`: `sharing_disabled` (the provider forbids backups) or `sharing_refresh_required` (never updated, so unknown). Fails with that reason only when nothing else is left to save. |
 | `restoreCatalogBackup` | `password`, `content` (the encrypted text returned above). Disconnect before restoring. |
+| `storageStatus` | None. Linux and Windows: `code` (why the catalog did not load; null once it loads) and `resettable`. |
+| `resetStorage` | None. Linux and Windows, only while `storageStatus` says `resettable`: sets the unreadable catalog aside and starts empty; returns `setAside`, `name` and `state`. |
 | `exportEvidence` | Optional `issueCodes` array; returns redacted diagnostics directly. |
 | `markRecording` | Recording builds only ([DIAGNOSTICS.md](DIAGNOSTICS.md)). None; notes "problem seen now" in the connection recording (setting `recordDiagnostics`). |
 | `exportRecording` | Recording builds only. `destination`: absolute path of a new ZIP, written on the controller's host as the controller's user. macOS ignores it and returns `path`, a ZIP in the sandboxed app's temporary folder. |

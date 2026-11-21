@@ -37,6 +37,8 @@ struct DesktopHost {
   GstElement* frames = nullptr;
   std::string icon;
   std::vector<std::string> links;
+  // The tray's Quit or Ctrl+Q asked for the close: it quits even with a tray.
+  bool quitting = false;
 };
 
 namespace {
@@ -651,7 +653,8 @@ void tray_action(GtkMenuItem* item, gpointer data) {
     g_autoptr(FlValue) action = fl_value_new_string(GTK_WIDGET(item) == host->connect ? "connect" : "disconnect");
     notify(host->desktop, "action", action);
   } else if (g_object_get_data(G_OBJECT(item), "quit")) {
-    // Closing the window sends Dart the exit request, which restores the system proxy.
+    // Closing the window sends Dart the exit request, which restores the system proxy and disconnects.
+    host->quitting = true;
     gtk_window_close(host->window);
   } else gtk_window_present(host->window);
 }
@@ -679,6 +682,13 @@ void desktop_call(FlMethodChannel*, FlMethodCall* call, gpointer data) {
     else success(call);
   } else if (method == "requestNotifications") {
     g_autoptr(FlValue) value = fl_value_new_bool(true); success(call, value);
+  } else if (method == "showTrayHint") {
+    // Shown once, when a close first hid the window to the tray.
+    g_autoptr(GNotification) notification = g_notification_new("Elarni");
+    g_notification_set_body(notification, localized("Elarni keeps running in the tray. Use Quit in the tray menu to stop it.",
+        "Elarni продолжает работать в трее. Чтобы закрыть приложение, выберите «Выйти» в меню трея."));
+    g_application_send_notification(G_APPLICATION(host->app), "tray-hint", notification);
+    success(call);
   } else if (method == "showExpiryReminder") {
     auto* count = field(args, "count", FL_VALUE_TYPE_INT);
     if (!count || fl_value_get_int(count) < 1 || fl_value_get_int(count) > 1024) { fail(call, "invalid_request"); return; }
@@ -779,7 +789,9 @@ void sleep_changed(GDBusConnection*, const gchar*, const gchar*, const gchar*, c
   notify(host->platform, "sleepChanged", value);
 }
 void quit_action(GSimpleAction*, GVariant*, gpointer data) {
-  gtk_window_close(static_cast<DesktopHost*>(data)->window);
+  auto* host = static_cast<DesktopHost*>(data);
+  host->quitting = true;
+  gtk_window_close(host->window);
 }
 void settings_action(GSimpleAction*, GVariant*, gpointer data) {
   auto* host = static_cast<DesktopHost*>(data);
@@ -848,6 +860,18 @@ void desktop_host_links(DesktopHost* host, char** arguments) {
     host->links.emplace_back(*item);
   }
   if (!host->links.empty()) notify(host->platform, "linksAvailable", nullptr);
+}
+bool desktop_host_hides_on_close(DesktopHost* host) {
+  if (!host || host->quitting || !host->indicator) return false;
+  // Without a status-notifier host (stock GNOME) nothing could show the window again.
+  gboolean connected = FALSE;
+  g_object_get(host->indicator, "connected", &connected, nullptr);
+  return connected;
+}
+void desktop_host_closed_to_tray(DesktopHost* host) {
+  if (!host) return;
+  g_autoptr(FlValue) action = fl_value_new_string("closedToTray");
+  notify(host->desktop, "action", action);
 }
 void desktop_host_free(DesktopHost* host) {
   if (!host) return;

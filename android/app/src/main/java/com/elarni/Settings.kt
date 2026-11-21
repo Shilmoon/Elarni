@@ -10,6 +10,31 @@ import java.net.InetAddress
 data class SettingField(val key: String, val title: String, val initial: Any,
     val section: String, val choices: List<String> = emptyList(), val detail: String = "")
 
+/**
+ * DNS is one choice, profileDNSMode, as on the other platforms: the provider profile's DNS ("inherit"), 1.1.1.1
+ * ("default") or the routing profile's ("routing"). The core's useDNSFromJSON flag follows from it. Kept apart from
+ * [Settings], whose titles need the application, so unit tests can call it.
+ */
+object DnsChoice {
+    /** Every save and load: the flag says whether the mode uses a profile's DNS. */
+    fun derive(value: JSONObject) {
+        (value.opt("profileDNSMode") as? String)?.let { value.put("useDNSFromJSON", it != "default") }
+    }
+
+    /**
+     * A pair saved while the flag was a setting of its own, read once at load before [derive]. With the flag off the
+     * core gave "inherit" 1.1.1.1, so that pair becomes "default"; "routing" was picked on purpose and keeps the
+     * routing profile's DNS. Not part of [Settings.normalize]: an edit's patch still carries the old flag.
+     * Returns whether the stored pair changed.
+     */
+    fun migrate(value: JSONObject): Boolean {
+        val mode = value.opt("profileDNSMode"); val flag = value.opt("useDNSFromJSON")
+        if (flag == false && mode == "inherit") value.put("profileDNSMode", "default")
+        derive(value)
+        return value.opt("profileDNSMode") != mode || value.opt("useDNSFromJSON") != flag
+    }
+}
+
 object Settings {
     val logLevels = listOf("none", "error", "warning", "info", "debug")
     /** A section's name in the interface language; [SettingField.section] stays the English key. */
@@ -44,7 +69,6 @@ object Settings {
         SettingField("updateFeedURL", tr(R.string.update_feed), if (BuildConfig.DEBUG) "" else UpdateCheck.ELARNI_RELEASES, "General", detail = tr(R.string.leave_empty_to_turn_the_check)),
         SettingField("autoUpdate", tr(R.string.install_updates_automatically), true, "General", detail = tr(R.string.elarni_downloads_a_new_release_on)),
         SettingField("allowExternalControl", tr(R.string.let_other_apps_control_the_connection), false, "General", detail = tr(R.string.automation_apps_such_as_tasker_can)),
-        SettingField("useDNSFromJSON", tr(R.string.use_profile_dns), true, "DNS"),
         SettingField("profileDNSMode", tr(R.string.dns_override), "inherit", "DNS", listOf("inherit", "default", "routing")),
         SettingField("bootstrapDNS", tr(R.string.bootstrap_dns_server), "1.1.1.1", "DNS", detail = tr(R.string.numeric_ipv4_or_ipv6_address_used)),
         SettingField("sniffingEnabled", tr(R.string.traffic_sniffing), true, "Advanced"),
@@ -64,7 +88,7 @@ object Settings {
         // Chosen on the Logs screen, not in a settings section.
         SettingField("logLevel", tr(R.string.log_level), "warning", "Logs", logLevels),
         SettingField("includeAllNetworks", tr(R.string.capture_all_ip_routes), false, "Apps & routes", detail = tr(R.string.overrides_the_included_route_list_excluded)),
-        SettingField("probeMode", tr(R.string.test_type), "proxy", "Server tests", listOf("proxy", "activeProxy", "tcp", "icmp")),
+        SettingField("probeMode", tr(R.string.test_type), "proxy", "Server tests", listOf("proxy", "tcp", "icmp")),
         SettingField("probeTimeout", tr(R.string.timeout_in_seconds_1_15), 5, "Server tests"),
         SettingField("probeMethod", tr(R.string.http_method), "GET", "Server tests", listOf("GET", "HEAD")),
         SettingField("probeVariant", tr(R.string.test_mode), "default", "Server tests", listOf("default", "double", "keepalive")),
@@ -96,15 +120,20 @@ object Settings {
         put("includedRoutes", JSONArray(listOf("0.0.0.0/0", "::/0")))
         put("excludedRoutes", JSONArray())
         put("trustedWiFiNetworks", JSONArray())
+        // The core still reads the flag; [DnsChoice] derives it from profileDNSMode.
+        put("useDNSFromJSON", true)
     }
     fun normalize(raw: JSONObject, credentials: JSONObject?): JSONObject {
         val value = defaults().merge(raw)
         if (value.opt("schemaVersion") != 1) throw AppFailure("invalid_settings")
+        // "Current rules / active tunnel" is no longer a choice; it was a proxy test of the selected server.
+        if (value.opt("probeMode") == "activeProxy") value.put("probeMode", "proxy")
         fields.forEach { field ->
             val item = value.get(field.key)
             if (field.initial is Boolean && item !is Boolean || field.initial is Int && item !is Int ||
                 field.initial is String && item !is String || field.choices.isNotEmpty() && item !in field.choices) throw AppFailure("invalid_settings")
         }
+        DnsChoice.derive(value)
         fun range(key: String, lower: Int, upper: Int) {
             if (value.getInt(key) !in lower..upper) throw AppFailure("invalid_settings")
         }

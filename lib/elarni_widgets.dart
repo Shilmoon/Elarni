@@ -629,11 +629,80 @@ enum SettingsCategory {
   };
 }
 
+/// A heading between the rows of a settings category.
+class ElarniSettingsSection extends StatelessWidget {
+  const ElarniSettingsSection(this.title, {super.key});
+  final String title;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.fromLTRB(16, 24, 16, 8),
+    child: Semantics(
+      header: true,
+      child: Text(
+        title,
+        style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+      ),
+    ),
+  );
+}
+
+/// The words a settings row is found by: its label, its help and the text
+/// under the label. A row's own button or menu is not what it is called.
+String settingSearchText(Widget? row) => switch (row) {
+  Text(:final data?) => data,
+  ElarniHelpLabel(:final title, :final help) => '$title $help',
+  ElarniCheckboxTile(
+    title: final Widget? title,
+    subtitle: final Widget? subtitle,
+  ) ||
+  ElarniSwitchTile(
+    title: final Widget? title,
+    subtitle: final Widget? subtitle,
+  ) ||
+  ElarniSelectTile(
+    title: final Widget? title,
+    subtitle: final Widget? subtitle,
+  ) ||
+  ListTile(
+    title: final Widget? title,
+    subtitle: final Widget? subtitle,
+  ) => '${settingSearchText(title)} ${settingSearchText(subtitle)}',
+  ElarniSelect(:final label?) => label,
+  TextField(:final decoration?) => decoration.labelText ?? '',
+  ButtonStyleButton(:final child) ||
+  SingleChildRenderObjectWidget(:final child) => settingSearchText(child),
+  MultiChildRenderObjectWidget(:final children) =>
+    children.map(settingSearchText).join(' '),
+  _ => '',
+};
+
+/// The rows of one settings category that [query] finds, by their own words
+/// or by the heading they stand under. Headings themselves are left out.
+List<Widget> settingSearchResults(List<Widget> rows, String query) {
+  final words = query.trim().toLowerCase();
+  var underMatchingHeading = false;
+  return [
+    for (final row in rows)
+      if (row case ElarniSettingsSection(:final title))
+        ...() {
+          underMatchingHeading = title.toLowerCase().contains(words);
+          return const <Widget>[];
+        }()
+      else if (underMatchingHeading ||
+          settingSearchText(row).toLowerCase().contains(words))
+        row,
+  ];
+}
+
 class ElarniSettings extends StatelessWidget {
   const ElarniSettings({
     required this.category,
     required this.onSelect,
     required this.children,
+    required this.search,
+    required this.onSearch,
+    this.results,
     this.help,
     super.key,
   });
@@ -641,6 +710,12 @@ class ElarniSettings extends StatelessWidget {
   final ValueChanged<SettingsCategory> onSelect;
   final List<Widget> children;
   final String? help;
+
+  /// The search field's text, and the rows it found in each category while it
+  /// is not empty. Results take the place of the open category.
+  final TextEditingController search;
+  final ValueChanged<String> onSearch;
+  final List<(SettingsCategory, List<Widget>)>? results;
 
   @override
   Widget build(BuildContext context) {
@@ -650,43 +725,99 @@ class ElarniSettings extends StatelessWidget {
         final compact =
             constraints.maxWidth < 740 ||
             MediaQuery.textScalerOf(context).scale(1) >= 1.5;
+        final searchField = TextField(
+          key: const Key('settings-search'),
+          controller: search,
+          onChanged: onSearch,
+          decoration: InputDecoration(
+            hintText: l10n.searchSettings,
+            prefixIcon: const Icon(CupertinoIcons.search, size: 19),
+            suffixIcon: results == null
+                ? null
+                : IconButton(
+                    tooltip: l10n.clearSearch,
+                    icon: const Icon(CupertinoIcons.xmark, size: 16),
+                    onPressed: () {
+                      search.clear();
+                      onSearch('');
+                    },
+                  ),
+          ),
+        );
         final content = ListView(
-          key: ValueKey('settings-list-${category.name}'),
+          key: ValueKey(
+            results == null
+                ? 'settings-list-${category.name}'
+                : 'settings-list-search',
+          ),
           padding: EdgeInsets.all(compact ? 16 : 32),
           children: [
-            if (help case final help?)
-              DefaultTextStyle.merge(
-                style: Theme.of(context).textTheme.titleLarge,
-                child: ElarniHelpLabel(category.label, help: help),
-              )
-            else
-              Text(
-                category.label,
-                style: Theme.of(context).textTheme.titleLarge,
-              ),
-            const SizedBox(height: 24),
-            ...children,
+            if (results case final results?) ...[
+              if (results.isEmpty)
+                Text(
+                  l10n.noMatchingSettings,
+                  style: TextStyle(color: scheme.onSurfaceVariant),
+                ),
+              for (final (found, rows) in results) ...[
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+                  child: Semantics(
+                    header: true,
+                    child: Text(
+                      found.label.toUpperCase(),
+                      style: TextStyle(
+                        fontSize: 12,
+                        letterSpacing: .6,
+                        color: scheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ),
+                ),
+                ...rows,
+              ],
+            ] else ...[
+              if (help case final help?)
+                DefaultTextStyle.merge(
+                  style: Theme.of(context).textTheme.titleLarge,
+                  child: ElarniHelpLabel(category.label, help: help),
+                )
+              else
+                Text(
+                  category.label,
+                  style: Theme.of(context).textTheme.titleLarge,
+                ),
+              const SizedBox(height: 24),
+              ...children,
+            ],
           ],
         );
         if (compact) {
           return Column(
             children: [
               Padding(
-                padding: const EdgeInsets.all(12),
-                child: ElarniSelect<SettingsCategory>(
-                  key: const Key('settings-category'),
-                  value: category,
-                  isExpanded: true,
-                  label: l10n.settingsCategory,
-                  items: [
-                    for (final value in SettingsCategory.values)
-                      DropdownMenuItem(value: value, child: Text(value.label)),
-                  ],
-                  onChanged: (value) {
-                    if (value != null) onSelect(value);
-                  },
-                ),
+                padding: const EdgeInsets.fromLTRB(12, 12, 12, 0),
+                child: searchField,
               ),
+              if (results == null)
+                Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: ElarniSelect<SettingsCategory>(
+                    key: const Key('settings-category'),
+                    value: category,
+                    isExpanded: true,
+                    label: l10n.settingsCategory,
+                    items: [
+                      for (final value in SettingsCategory.values)
+                        DropdownMenuItem(
+                          value: value,
+                          child: Text(value.label),
+                        ),
+                    ],
+                    onChanged: (value) {
+                      if (value != null) onSelect(value);
+                    },
+                  ),
+                ),
               Expanded(child: content),
             ],
           );
@@ -705,11 +836,8 @@ class ElarniSettings extends StatelessWidget {
                   ),
                   children: [
                     Padding(
-                      padding: const EdgeInsets.fromLTRB(12, 0, 12, 18),
-                      child: Text(
-                        l10n.settings,
-                        style: Theme.of(context).textTheme.titleMedium,
-                      ),
+                      padding: const EdgeInsets.only(bottom: 6),
+                      child: searchField,
                     ),
                     for (final group in {
                       l10n.settingsGroupPreferences: [
@@ -746,7 +874,7 @@ class ElarniSettings extends StatelessWidget {
                           padding: const EdgeInsets.only(bottom: 4),
                           child: ListTile(
                             key: Key('settings-tab-${value.name}'),
-                            selected: value == category,
+                            selected: results == null && value == category,
                             selectedTileColor: scheme.primary.withValues(
                               alpha: .12,
                             ),
@@ -893,16 +1021,6 @@ class ElarniShell extends StatelessWidget {
               ),
               child: Row(
                 children: [
-                  // The sidebar already switches pages in a wide window.
-                  if (page != DesktopPage.home && compact) ...[
-                    IconButton(
-                      key: const Key('settings-back'),
-                      tooltip: l10n.backToHome,
-                      onPressed: () => onNavigate(DesktopPage.home),
-                      icon: const Icon(CupertinoIcons.chevron_left, size: 20),
-                    ),
-                    const SizedBox(width: 8),
-                  ],
                   Expanded(
                     child: Row(
                       children: [
@@ -934,46 +1052,45 @@ class ElarniShell extends StatelessWidget {
                 ],
               ),
             );
-            final content = Column(
-              children: [
-                if (compact)
-                  Container(
-                    color: scheme.surfaceContainerLow,
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        destination(
-                          DesktopPage.home,
-                          CupertinoIcons.house,
-                          l10n.home,
-                        ),
-                        destination(
-                          DesktopPage.subscriptions,
-                          CupertinoIcons.rectangle_stack,
-                          l10n.subscriptions,
-                        ),
-                        destination(
-                          DesktopPage.routing,
-                          CupertinoIcons.arrow_branch,
-                          l10n.routing,
-                        ),
-                        destination(
-                          DesktopPage.settings,
-                          CupertinoIcons.gear_alt,
-                          l10n.settings,
-                        ),
-                      ],
+            // As on the phone apps, a narrow window keeps its pages in reach
+            // of the bottom edge.
+            final bottomBar = Container(
+              decoration: BoxDecoration(
+                color: scheme.surfaceContainerLow,
+                border: Border(top: BorderSide(color: scheme.outlineVariant)),
+              ),
+              child: Row(
+                children: [
+                  for (final (target, icon, label) in [
+                    (DesktopPage.home, CupertinoIcons.house, l10n.home),
+                    (
+                      DesktopPage.subscriptions,
+                      CupertinoIcons.rectangle_stack,
+                      l10n.subscriptions,
                     ),
-                  ),
-                Expanded(child: child),
-              ],
+                    (
+                      DesktopPage.routing,
+                      CupertinoIcons.arrow_branch,
+                      l10n.routing,
+                    ),
+                    (
+                      DesktopPage.settings,
+                      CupertinoIcons.gear_alt,
+                      l10n.settings,
+                    ),
+                  ])
+                    Expanded(
+                      child: Center(child: destination(target, icon, label)),
+                    ),
+                ],
+              ),
             );
             return Column(
               children: [
                 toolbar,
                 Expanded(
                   child: compact
-                      ? content
+                      ? child
                       : Row(
                           children: [
                             Container(
@@ -1016,10 +1133,11 @@ class ElarniShell extends StatelessWidget {
                                 ],
                               ),
                             ),
-                            Expanded(child: content),
+                            Expanded(child: child),
                           ],
                         ),
                 ),
+                if (compact) bottomBar,
               ],
             );
           },

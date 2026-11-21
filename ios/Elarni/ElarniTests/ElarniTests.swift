@@ -171,6 +171,18 @@ final class ElarniTests: XCTestCase {
     XCTAssertEqual((groups.first?["nodes"] as? [[String: Any]])?.first?["name"] as? String, "QR Fixture")
   }
 
+  // A backup leaves out what it may not hold instead of failing; the notice names those subscriptions and why.
+  func testASavedBackupNamesTheSubscriptionsItLeftOut() {
+    XCTAssertNil(IOSAppModel.backupLeftOut([]))
+    XCTAssertEqual(IOSAppModel.backupLeftOut([["name": "Provider A", "reason": "sharing_disabled"], ["name": "Provider B", "reason": "sharing_disabled"]]),
+      "Backup saved without 2 subscriptions: Provider A, Provider B. Their providers do not allow backups.")
+    XCTAssertEqual(IOSAppModel.backupLeftOut([["name": "Fresh", "reason": "sharing_refresh_required"]]),
+      "Backup saved without 1 subscription: Fresh. Update it once first.")
+    XCTAssertEqual(IOSAppModel.backupLeftOut([["name": "Fresh", "reason": "sharing_refresh_required"], ["name": "Provider A", "reason": "sharing_disabled"]]),
+      "Backup saved without 1 subscription: Provider A. Its provider does not allow backups. "
+        + "Also left out 1 subscription that was never updated: Fresh. Update it once first.")
+  }
+
   func testEncryptedBackupRestoresSelectionRoutingAndCredentials() async throws {
     let fixture = try CatalogFixture(); defer { fixture.remove() }
     let store = try fixture.store()
@@ -182,7 +194,9 @@ final class ElarniTests: XCTestCase {
     _ = try store.routing.importContent("{\"Name\":\"Backup rules\",\"GlobalProxy\":true,\"BlockSites\":[\"example.invalid\"],\"RemoteDNSType\":\"DoU\",\"DomesticDNSType\":\"DoU\",\"RemoteDNSIP\":\"1.1.1.1\",\"DomesticDNSIP\":\"1.1.1.1\"}", selectedSubscriptionID: source)
     let routes = try XCTUnwrap(store.routing.snapshot()["profiles"] as? [[String: Any]])
     _ = try store.routing.assign(subscriptionID: source, profileID: XCTUnwrap(routes.first?["id"] as? String))
-    let payload = try store.backupCatalog()
+    let backup = try store.backupCatalog()
+    XCTAssertTrue(backup.excluded.isEmpty)
+    let payload = backup.document
     let password = "synthetic-backup-password"
     let encrypted = try await NativeAPI.perform("sealCatalogBackup", ["catalog": payload, "password": password])
     let text = try XCTUnwrap(encrypted["text"] as? String)
@@ -476,30 +490,58 @@ final class ElarniTests: XCTestCase {
     XCTAssertEqual(ExitResult(ip: "203.0.113.7", country: "T1", revision: "r").countryName, "Tor")
   }
 
-  // Home groups its servers once per change, with favorites first unless turned off.
-  func testServerListGroupsOncePerChangeWithFavoritesFirst() {
+  // Home builds its lists once per change: by subscription and country, by country alone, and
+  // the favorites without groups.
+  func testServerListBuildsItsThreeListsOncePerChange() {
     func node(_ id: String, _ name: String, favorite: Bool = false) -> [String: Any] { ["id": id, "name": name, "protocol": "vless", "favorite": favorite] }
-    let source = ServerSubscription(raw: ["id": "s", "name": "Provider",
-      "nodes": [node("a", "🇳🇱 Amsterdam"), node("b", "🇳🇱 Rotterdam", favorite: true), node("c", "🇩🇪 Berlin")]])
+    let sources = [
+      ServerSubscription(raw: ["id": "s", "name": "Provider",
+        "nodes": [node("a", "🇳🇱 Amsterdam"), node("b", "🇳🇱 Rotterdam", favorite: true), node("c", "🇩🇪 Berlin")]]),
+      ServerSubscription(raw: ["id": "t", "name": "Travel", "nodes": [node("d", "🇳🇱 Utrecht", favorite: true), node("e", "Private server")]]),
+    ]
     let cache = ServerListCache()
-    var key = ServerListCache.Key(catalog: 1, search: "", country: "", filter: "all", order: "provider", favoritesFirst: true, pinned: [], latencies: [:])
-    cache.update(key, subscriptions: [source], probes: [:])
-    cache.update(key, subscriptions: [source], probes: [:])
+    var key = ServerListCache.Key(catalog: 1, filter: "all", order: "provider", favoritesFirst: true, pinned: [], latencies: [:])
+    cache.update(key, subscriptions: sources, probes: [:])
+    cache.update(key, subscriptions: sources, probes: [:])
     XCTAssertEqual(cache.builds, 1)
-    XCTAssertEqual(cache.visible.map(\.id), ["b", "a", "c"])
-    XCTAssertEqual(cache.groups.map(\.code), ["DE", "NL"])
-    XCTAssertEqual(cache.groups.last?.nodes.map(\.id), ["b", "a"])
-    XCTAssertEqual(cache.locations.map(\.code), ["DE", "NL"])
-    XCTAssertFalse(cache.hasOther)
+    XCTAssertEqual(cache.sources.map(\.name), ["Provider", "Travel"])
+    XCTAssertEqual(cache.sources.map { $0.countries.map(\.id) }, [["s:DE", "s:NL"], ["t:NL", "t:other"]])
+    XCTAssertEqual(cache.sources[0].countries[1].nodes.map(\.id), ["b", "a"])
+    XCTAssertEqual(cache.visible.map(\.id), ["c", "b", "a", "d", "e"])
+    XCTAssertTrue(cache.countries.isEmpty)
     key.favoritesFirst = false
-    cache.update(key, subscriptions: [source], probes: [:])
+    cache.update(key, subscriptions: sources, probes: [:])
     XCTAssertEqual(cache.builds, 2)
-    XCTAssertEqual(cache.groups.last?.nodes.map(\.id), ["a", "b"])
-    key.catalog = 2
-    key.search = "Berlin"
-    cache.update(key, subscriptions: [source], probes: [:])
-    XCTAssertEqual(cache.builds, 3)
-    XCTAssertEqual(cache.visible.map(\.id), ["c"])
+    XCTAssertEqual(cache.sources[0].countries[1].nodes.map(\.id), ["a", "b"])
+    // By country: one group per country, with the servers of every subscription.
+    key.filter = "country"
+    cache.update(key, subscriptions: sources, probes: [:])
+    XCTAssertTrue(cache.sources.isEmpty)
+    XCTAssertEqual(cache.countries.map(\.id), [":DE", ":NL", ":other"])
+    XCTAssertEqual(cache.countries[1].nodes.map(\.id), ["a", "b", "d"])
+    key.pinned = ["t"]
+    cache.update(key, subscriptions: sources, probes: [:])
+    XCTAssertEqual(cache.countries[1].nodes.map(\.id), ["d", "a", "b"])
+    key.filter = "all"
+    cache.update(key, subscriptions: sources, probes: [:])
+    XCTAssertEqual(cache.sources.map(\.name), ["Travel", "Provider"])
+    // Favorites: one list, no groups.
+    key.filter = "favorites"; key.pinned = []
+    cache.update(key, subscriptions: sources, probes: [:])
+    XCTAssertEqual(cache.visible.map(\.id), ["b", "d"])
+    XCTAssertTrue(cache.sources.isEmpty && cache.countries.isEmpty)
+    XCTAssertEqual(cache.builds, 6)
+  }
+
+  // A closed subscription or country is remembered; what a removed subscription left is not.
+  func testClosedGroupsToggleAndForgetRemovedSubscriptions() throws {
+    XCTAssertEqual(ServerListCache.toggled("s:NL", closed: [], subscriptions: ["s"]), ["s:NL"])
+    XCTAssertEqual(ServerListCache.toggled("s", closed: ["s:NL"], subscriptions: ["s"]), ["s", "s:NL"])
+    XCTAssertEqual(ServerListCache.toggled("s:NL", closed: ["s:NL", ":DE", "gone", "gone:NL"], subscriptions: ["s"]), [":DE"])
+    // Preferences saved before the list remembered anything still load.
+    let saved = try JSONEncoder().encode(IOSPreferences())
+    XCTAssertFalse(String(decoding: saved, as: UTF8.self).contains("closedGroups"))
+    XCTAssertNil(try JSONDecoder().decode(IOSPreferences.self, from: saved).closedGroups)
   }
 
   // Xray-core #6663: Go's HTTP/2 client gave each XHTTP upload a buffer as large as the
@@ -923,6 +965,71 @@ final class ElarniTests: XCTestCase {
     IOSOnDemandRestart.setArmed(true, in: nil)
     IOSOnDemandRestart.userStopped(now: stop, in: nil)
     XCTAssertFalse(IOSOnDemandRestart.restarted(now: stop + 2, in: nil))
+  }
+
+  // A stop with iOS's own VPN switch is the user's: the extension notes it until the app's own
+  // stop or the next tunnel, so an earlier stop cannot hide a later lost connection.
+  func testAStopFromTheSystemSwitchIsNotedUntilTheNextTunnel() throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    let shared = IOSConnectionAlerts.directory
+    IOSConnectionAlerts.directory = directory
+    defer { IOSConnectionAlerts.directory = shared; try? FileManager.default.removeItem(at: directory) }
+    XCTAssertFalse(IOSConnectionAlerts.stoppedByUser(), "a stop was noted before any")
+    IOSConnectionAlerts.userStopped()
+    XCTAssertTrue(IOSConnectionAlerts.stoppedByUser(), "the stop was not noted")
+    XCTAssertTrue(IOSConnectionAlerts.stoppedByUser(), "reading the stop forgot it")
+    IOSConnectionAlerts.connected()
+    IOSConnectionAlerts.disarm()
+    XCTAssertFalse(IOSConnectionAlerts.stoppedByUser(), "a new tunnel kept the stop of the one before")
+    IOSConnectionAlerts.userStopped()
+    IOSConnectionAlerts.clear()
+    XCTAssertFalse(IOSConnectionAlerts.stoppedByUser(), "the app's Connect kept an earlier stop")
+    // A build without the App Group has no folder to note it in.
+    IOSConnectionAlerts.directory = nil
+    IOSConnectionAlerts.userStopped()
+    XCTAssertFalse(IOSConnectionAlerts.stoppedByUser())
+  }
+
+  // The app reports a VPN that went down without a Stop, but not one the user stopped with iOS's switch.
+  func testAStopFromTheSystemSwitchIsNotReportedAsALostConnection() async throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    let shared = IOSConnectionAlerts.directory
+    IOSConnectionAlerts.directory = directory
+    defer { IOSConnectionAlerts.directory = shared; try? FileManager.default.removeItem(at: directory) }
+    let model = IOSAppModel()
+    await model.start()
+    let group = try await importLocal(model, "socks://127.0.0.1:1080#Switch%20Server")
+    try await model.select(try XCTUnwrap(group.nodes.first))
+    let tunnel = FixtureTunnel(plan: Data())
+    tunnel.session.fixtureStatus = .disconnected
+    model.vpn.manager = tunnel
+    try await model.vpn.refreshProvider()
+    // The simulator cannot start a tunnel, but Connect still records the intent.
+    await model.connect()
+    func runThenStop(bySwitch: Bool) async throws {
+      model.notice = nil
+      tunnel.session.fixtureStatus = .connected
+      try await model.vpn.refreshProvider()
+      model.noteUnexpectedDisconnect()
+      if bySwitch { IOSConnectionAlerts.userStopped() }
+      tunnel.session.fixtureStatus = .disconnected
+      try await model.vpn.refreshProvider()
+      model.noteUnexpectedDisconnect()
+    }
+    try await runThenStop(bySwitch: true)
+    XCTAssertNil(model.notice, "a stop with iOS's VPN switch was reported as a lost connection")
+    // The app's own stop is not the switch's: a tunnel lost after it is reported.
+    tunnel.session.fixtureStatus = .connected
+    try await model.vpn.refreshProvider()
+    try await model.vpn.disconnect()
+    XCTAssertFalse(IOSConnectionAlerts.stoppedByUser(), "the app's own stop was kept as a stop with iOS's switch")
+    try await runThenStop(bySwitch: false)
+    XCTAssertTrue(model.notice?.contains("without a Stop") == true, "a lost connection was not reported: \(model.notice ?? "nil")")
+    await model.disconnect()
+    model.vpn.manager = nil
+    try await model.delete(group)
   }
 
   // The extension cannot read the VPN configuration, so the app notes for it whether On Demand is armed.
@@ -1435,6 +1542,29 @@ final class ElarniTests: XCTestCase {
     }
     XCTAssertEqual(model.probes[node.id]?.status, "Passed", "Direct TCP measured the exit behind the entry server")
     try await model.delete(group)
+  }
+
+  // Select unreachable ticks a server whose latest test is current and failed to reach it,
+  // not one whose test could not run against it, an old one or one of an earlier configuration.
+  func testSelectUnreachableTicksOnlyACurrentFailureToReachTheServer() {
+    let now = Date(timeIntervalSince1970: 1_800_000_000)
+    let node = ServerNode(raw: ["id": "a", "configurationRevision": "r1"], subscriptionID: "s")
+    func failed(_ error: Error, age: TimeInterval = 10, revision: String = "r1") -> ProbeResult {
+      ProbeResult(milliseconds: nil, status: "Failed", revision: revision, date: now - age, mode: "proxy",
+        failure: "", serverFailure: IOSAppModel.probeFailedToReachServer(error))
+    }
+    func native(_ code: String) -> IOSProbeFailure { IOSProbeFailure(code: code, stage: nil, cleanupPending: false, receivedHTTP: false) }
+    let reached: [Error] = [native("timeout"), native("failed"), native("eof"), IOSAppError.operationTimedOut, IOSAppError.providerUnavailable]
+    for error in reached { XCTAssertTrue(failed(error).unreachable(for: node, now: now), "\(error)") }
+    let notRun: [Error] = [native("probe_busy"), native("canceled"), native("invalid_target"), native("invalid_configuration"),
+      IOSAppError.busy, IOSAppError.invalidSettings, IOSAppError.nativeFailure, IOSAppError.unsupportedProcessRouting,
+      AutomationFailure.staleContext, AutomationFailure.providerFailure, IOSPlatformError.signingRequired]
+    for error in notRun { XCTAssertFalse(failed(error).unreachable(for: node, now: now), "\(error)") }
+    XCTAssertTrue(failed(native("timeout"), age: 299).unreachable(for: node, now: now))
+    XCTAssertFalse(failed(native("timeout"), age: 300).unreachable(for: node, now: now), "As old as the list marks stale")
+    XCTAssertFalse(failed(native("timeout"), age: 3 * 3600).unreachable(for: node, now: now))
+    XCTAssertFalse(failed(native("timeout"), revision: "r0").unreachable(for: node, now: now), "A test of an earlier configuration")
+    XCTAssertFalse(ProbeResult(milliseconds: 40, status: "Passed", revision: "r1", date: now, mode: "proxy").unreachable(for: node, now: now))
   }
 
   // Pull to refresh refreshes each subscription in turn. One that needs approval

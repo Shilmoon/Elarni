@@ -42,6 +42,8 @@ class InteractionModel : ViewModel() {
     var restore by mutableStateOf<String?>(null)
     var fileAction = "import"
     var export: ByteArray? = null
+    /** What to say once [export] is saved, instead of "File saved." */
+    var exportNotice: String? = null
     var camera: Uri? = null
     var share by mutableStateOf<JSONObject?>(null)
     var dismissEditor by mutableStateOf(false)
@@ -85,13 +87,26 @@ class MainActivity : ComponentActivity() {
         }
     }
     private val notifications = registerForActivityResult(ActivityResultContracts.RequestPermission()) { /* The foreground connection remains accessible in Android's active-apps UI. */ }
+    // Each answer to the reminders' notification request makes Settings check the notifications again.
+    var notificationAnswers by mutableIntStateOf(0)
+    private val reminderNotifications = registerForActivityResult(ActivityResultContracts.RequestPermission()) { notificationAnswers++ }
+    /** Android 13 and later show an app's notifications only once it may post them. */
+    fun notificationsDenied() = Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED
+    fun askNotifications() = reminderNotifications.launch(Manifest.permission.POST_NOTIFICATIONS)
+    // After a final no, Android shows no dialog, and notifications turned off in its settings stay off with the permission; only those settings turn them on.
+    fun allowNotifications() {
+        if (notificationsDenied() && (notificationAnswers == 0 || shouldShowRequestPermissionRationale(Manifest.permission.POST_NOTIFICATIONS))) askNotifications()
+        else try { startActivity(Intent(AndroidSettings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(AndroidSettings.EXTRA_APP_PACKAGE, packageName)) }
+        catch (_: ActivityNotFoundException) { appSettings() }
+    }
     private val openFile = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> if (uri != null) read(uri, interaction.fileAction) }
     private val createFile = registerForActivityResult(ActivityResultContracts.CreateDocument("application/octet-stream")) { uri ->
         val bytes = interaction.export; interaction.export = null
+        val notice = interaction.exportNotice; interaction.exportNotice = null
         if (uri != null && bytes != null) repository.scope.launch {
             try {
                 contentResolver.openOutputStream(uri, "wt")?.use { it.write(bytes) } ?: throw AppFailure("file_unavailable")
-                withContext(Dispatchers.Main) { interaction.notice = tr(R.string.file_saved) }
+                withContext(Dispatchers.Main) { interaction.notice = notice ?: tr(R.string.file_saved) }
             }
             catch (_: Exception) { repository.report(AppFailure("file_unavailable")) }
         }
@@ -215,6 +230,7 @@ class MainActivity : ComponentActivity() {
                         if (move != null) interaction.leave = move else interaction.dismissEditor = true
                     }
                     if (result.optBoolean("reconnectAfterReview")) interaction.notice = tr(R.string.destination_approved_tap_connect)
+                    if (result.optBoolean("selectedServerReplaced")) interaction.notice = tr(R.string.selected_server_replaced)
                     done(result)
                 }
             }
@@ -232,7 +248,10 @@ class MainActivity : ComponentActivity() {
         repository.scope.launch {
             for (id in ids) {
                 if (repository.state.value.approval != null) break
-                try { repository.execute("refresh", obj("id" to id)) } catch (_: AppFailure) { }
+                try {
+                    if (repository.execute("refresh", obj("id" to id)).optBoolean("selectedServerReplaced"))
+                        withContext(Dispatchers.Main) { interaction.notice = tr(R.string.selected_server_replaced) }
+                } catch (_: AppFailure) { }
             }
         }
     /** Saves an editor's draft and closes the editor, or with [move] makes that move, once the draft is stored. */
@@ -274,7 +293,7 @@ class MainActivity : ComponentActivity() {
             } catch (error: Exception) { repository.report(if (error is AppFailure) error else AppFailure("file_unavailable")) }
         }
     }
-    fun save(text: String, name: String) { interaction.export = text.toByteArray(Charsets.UTF_8); createFile.launch(name) }
+    fun save(text: String, name: String, notice: String? = null) { interaction.export = text.toByteArray(Charsets.UTF_8); interaction.exportNotice = notice; createFile.launch(name) }
     // Outside the repository lock, so a mark lands while a connect is stuck.
     fun markRecording() {
         repository.scope.launch {
@@ -289,7 +308,7 @@ class MainActivity : ComponentActivity() {
         repository.scope.launch {
             try {
                 val bytes = repository.engine.exportRecording()
-                withContext(Dispatchers.Main) { interaction.export = bytes; createFile.launch("elarni-recording.zip") }
+                withContext(Dispatchers.Main) { interaction.export = bytes; interaction.exportNotice = null; createFile.launch("elarni-recording.zip") }
             } catch (error: Exception) { repository.report(if (error is AppFailure) error else AppFailure("recording_failed")) }
         }
     }

@@ -101,6 +101,11 @@ enum TunnelState {
   failed,
 }
 
+/// A subscription a backup left out, by name: its provider forbids backups
+/// (`sharing_disabled`), or it was never updated, so whether its provider
+/// allows them is unknown (`sharing_refresh_required`).
+typedef BackupExclusion = ({String name, String reason});
+
 abstract interface class TunnelControl {
   void setImportListener(void Function(String? error)? listener);
   Future<SubscriptionSnapshot> setNodeFavorite(String nodeId, bool favorite);
@@ -200,8 +205,20 @@ abstract interface class TunnelControl {
     String id,
     Map<String, Object?> options,
   );
-  Future<void> exportCatalogBackup(String password);
+  /// Saves an encrypted backup and returns the subscriptions it left out.
+  Future<List<BackupExclusion>> exportCatalogBackup(String password);
   Future<SubscriptionSnapshot> restoreCatalogBackup(String password);
+
+  /// Desktop core only (Windows and Linux): why the saved catalog could not
+  /// be loaded, `{'code': String?, 'resettable': bool}`; the code is null
+  /// once it loads. Asking starts no load.
+  Future<Map<String, Object?>> storageStatus();
+
+  /// Desktop core only: sets a catalog that cannot be read again aside in
+  /// its folder and starts with an empty one, `{'setAside': bool, 'name':
+  /// String?, 'state': String}`. Refused (`busy`) unless [storageStatus]
+  /// says it is resettable.
+  Future<Map<String, Object?>> resetStorage();
   Future<void> repairTunnel();
   Future<SubscriptionSnapshot> deleteSubscription(String id);
   Future<NodeSelectionResult> selectNode(String id);
@@ -388,15 +405,30 @@ final class NativeTunnelControl implements TunnelControl {
   };
 
   @override
-  Future<void> exportCatalogBackup(String password) async {
-    await _mapResult('exportCatalogBackup', {'password': password});
-  }
+  Future<List<BackupExclusion>> exportCatalogBackup(String password) async => [
+    for (final item
+        in (await _mapResult('exportCatalogBackup', {
+              'password': password,
+            }))['excluded']
+            as List? ??
+        const [])
+      if (item case {'name': final String name, 'reason': final String reason})
+        (name: name, reason: reason),
+  ];
 
   @override
   Future<SubscriptionSnapshot> restoreCatalogBackup(String password) async =>
       SubscriptionSnapshot.fromMap(
         await _mapResult('restoreCatalogBackup', {'password': password}),
       );
+
+  @override
+  Future<Map<String, Object?>> storageStatus() =>
+      _mapResult('storageStatus', <String, Object?>{});
+
+  @override
+  Future<Map<String, Object?>> resetStorage() =>
+      _mapResult('resetStorage', <String, Object?>{});
 
   @override
   Future<void> repairTunnel() async {
@@ -1486,7 +1518,11 @@ final class SubscriptionSafetyWarning {
 }
 
 final class SubscriptionOperationResult {
-  const SubscriptionOperationResult({required this.snapshot, this.warning});
+  const SubscriptionOperationResult({
+    required this.snapshot,
+    this.warning,
+    this.notice,
+  });
 
   factory SubscriptionOperationResult.fromMap(Map<String, Object?> value) {
     final warning = value['warning'];
@@ -1499,11 +1535,16 @@ final class SubscriptionOperationResult {
           : SubscriptionSafetyWarning.fromMap(
               Map<String, Object?>.from(warning as Map),
             ),
+      notice: value['notice'] as String?,
     );
   }
 
   final SubscriptionSnapshot snapshot;
   final SubscriptionSafetyWarning? warning;
+
+  /// What the refresh changed that the user should know, worded by macOS
+  /// (the selected server it replaced); Windows and Linux use the listener.
+  final String? notice;
 }
 
 /// A subscription download failure's short label and its text, which says whether

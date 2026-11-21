@@ -15,10 +15,19 @@ void main() {
         'Select a server first. This routing link turns its profile on for the selected server’s subscription.',
     'scheduled_refresh_failed':
         'A scheduled subscription or routing refresh failed.',
+    'scheduled_refresh_needs_review':
+        'A subscription was not updated because the network answered unexpectedly. Elarni tries again in two hours; open Subscriptions to review it now.',
+    // A refresh took a per-app server; the running tunnel kept its settings.
+    'per_app_target_missing':
+        'A server that an app is routed through is gone from its subscription. The connection keeps the old settings; choose another server for that app in Per-app routing.',
+    'managed_list_missing':
+        'A domain list of the routing profile is not downloaded yet, so its rules do not apply. Elarni downloads it now that the connection is up.',
     'connection_stopped':
         'Connection stopped unexpectedly. Reconnect to retry.',
     'connection_stopped_blocked':
-        'Connection stopped unexpectedly. Block traffic without VPN keeps traffic blocked until you reconnect, or use Repair VPN setup to lift the block.',
+        'Connection stopped unexpectedly. The kill switch keeps traffic blocked until you reconnect. Disconnecting, quitting Elarni or Repair VPN setup lifts the block.',
+    'connection_stopped_proxy_blocked':
+        'Connection stopped unexpectedly. The kill switch keeps the system proxy on Elarni, so apps that follow it have no connection until you reconnect. Disconnect to lift the block.',
     'connection_stopped_repair':
         'Connection stopped unexpectedly. Reconnect to retry; if sites stay unreachable, use Repair VPN setup.',
     'vpn_dns_release_failed':
@@ -27,8 +36,16 @@ void main() {
         'The system proxy setting could not be restored. Check it in your system network settings.',
     'system_proxy_not_set:10891':
         'The system proxy could not be set. Apps can still use the HTTP proxy at 127.0.0.1:10891.',
+    'system_proxy_changed':
+        'Another program changed the system proxy. Elarni set it again.',
+    'system_proxy_taken':
+        'Another program keeps changing the system proxy, so Elarni left it. Apps that follow the system proxy may not use the VPN. Use VPN mode, or stop the other program.',
     'storage_unavailable':
-        'Elarni could not read or save its catalog. Restart Elarni. If this continues, restore an encrypted backup.',
+        'Elarni could not read or save its data. Restart Elarni and check the free disk space.',
+    'storage_busy':
+        'Elarni’s data is in use by another copy of Elarni. Close the other copy or stop its background service. Elarni tries again by itself.',
+    'storage_corrupt':
+        'Elarni cannot read its saved data on this computer. Reset Elarni in Settings › Backup and repair, then restore a backup or add your subscriptions again.',
   };
 
   test('each backend notice code reads in the interface language', () {

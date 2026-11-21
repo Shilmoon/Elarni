@@ -214,6 +214,78 @@ String routeEnforcementText(String code) => switch (code) {
   _ => l10n.routeEnforcementDefaultRoutes,
 };
 
+/// How long a server test stays current; the list marks an older one stale.
+const probeFreshness = Duration(minutes: 5);
+
+/// Whether [result] is current for a server whose configuration is
+/// [revision], as the list's stale mark counts it.
+bool probeFresh(PingResult result, String? revision, DateTime now) {
+  final age = now.millisecondsSinceEpoch / 1000 - result.timestamp;
+  return age >= 0 &&
+      age < probeFreshness.inSeconds &&
+      revision == result.configurationRevision;
+}
+
+/// A server test that failed without a result: when it ended, and whether it
+/// failed to reach the server.
+typedef PingFailure = ({DateTime at, bool unreachable});
+
+/// The record a failed server test leaves at [at], or null when the test
+/// never ran (busy or cancelled). It is unreachable unless the test was
+/// refused before reaching the server, or [cutShort] by the bulk test's bound
+/// before the user's timeout.
+PingFailure? pingFailureFor(
+  Object error,
+  DateTime at, {
+  bool cutShort = false,
+}) {
+  final code = error is PlatformException ? error.code : null;
+  if (const {'busy', 'cancelled', 'operation_cancelled'}.contains(code))
+    return null;
+  final notRun =
+      error is FormatException ||
+      code != null &&
+          (const {
+                'not_connected',
+                'unsupported_ping_method',
+                'disconnect_to_test',
+                'unavailableProbePath',
+                'icmp_restore_failed',
+                'stale_probe',
+                'native_unavailable',
+                'listener_unavailable',
+                'per_app_target_missing',
+                'missing_geodata',
+                'missing_credentials',
+                'unsupported_profile',
+                'unsupported_operation',
+                'no_selected_subscription',
+              }.contains(code) ||
+              // Settings and catalog checks, and macOS's checks of the active tunnel.
+              code.startsWith('invalid_') ||
+              code.startsWith('storage_') ||
+              code.startsWith('automation_'));
+  return (at: at, unreachable: !notRun && !cutShort);
+}
+
+/// Whether Select unreachable ticks a server: its latest test is still
+/// current and failed to reach the server. A [result] wins over a [failure],
+/// as in the server's row.
+bool pingUnreachable({
+  required PingResult? result,
+  required PingFailure? failure,
+  required String? revision,
+  required DateTime now,
+}) {
+  if (result != null) {
+    return (result.status != 'success' || result.latencyMs < 0) &&
+        probeFresh(result, revision, now);
+  }
+  if (failure == null || !failure.unreachable) return false;
+  final age = now.difference(failure.at);
+  return !age.isNegative && age < probeFreshness;
+}
+
 class ElarniHome extends StatefulWidget {
   const ElarniHome({
     required this.tunnelControl,
@@ -246,6 +318,7 @@ class ElarniHome extends StatefulWidget {
 class _ElarniHomeState extends State<ElarniHome> {
   final _editorSaving = ValueNotifier<bool>(false);
   final TextEditingController _nodeSearch = TextEditingController();
+  final TextEditingController _settingsSearch = TextEditingController();
   final TextEditingController _pingURL = TextEditingController(
     text: DesktopIntegration.defaultPingURL,
   );
@@ -275,7 +348,8 @@ class _ElarniHomeState extends State<ElarniHome> {
   String? _routesError;
   bool _routesBusy = false;
   final Map<String, PingResult> _pingResults = <String, PingResult>{};
-  final Set<String> _pingUnavailable = <String>{};
+  // Failed tests without a result; only some of them speak about the server.
+  final Map<String, PingFailure> _pingUnavailable = <String, PingFailure>{};
   final Set<String> _pingSkipped = <String>{};
   final Set<String> _pingPending = <String>{};
   // When each server was last tested, so a failed one is not retried by every group open.
@@ -339,6 +413,9 @@ class _ElarniHomeState extends State<ElarniHome> {
 
   /// A button for the message it was made with; a later message hides it.
   ({String message, String label, VoidCallback onPressed})? _messageAction;
+  // The desktop core's catalog cannot be read again: Backup offers Reset.
+  bool _storageResettable = false;
+  Future<String?>? _storageCheck;
   bool _working = false;
   bool get _busy => _working;
   set _busy(bool value) {
@@ -369,9 +446,16 @@ class _ElarniHomeState extends State<ElarniHome> {
   String? _locationFilter;
   String? _healthRevision;
   DesktopPage _page = DesktopPage.home;
-  String? _expandedSubscription;
-  final Set<String> _collapsedSubscriptions = {};
-  final Map<String, bool> _expandedCountries = {};
+  // The Home groups closed, once one was opened or closed in this run;
+  // until then those the preferences remember.
+  Set<String>? _closedGroupsNow;
+
+  /// The subscription the Subscriptions page shows, once one was chosen.
+  String? _shownSubscription;
+  bool _subscriptionFavorites = false;
+  final _subscriptionDetailsTile = ExpansibleController();
+  final _subscriptionsScroll = ScrollController();
+  final _subscriptionFooter = GlobalKey();
   SettingsCategory _settingsCategory = SettingsCategory.general;
   // The Routing page's tab: 0 routing profiles, 1 per-app routing.
   int _routingTab = 0;
@@ -454,6 +538,9 @@ class _ElarniHomeState extends State<ElarniHome> {
     _pingSaveTimer?.cancel();
     _editorSaving.dispose();
     _nodeSearch.dispose();
+    _settingsSearch.dispose();
+    _subscriptionDetailsTile.dispose();
+    _subscriptionsScroll.dispose();
     widget.tunnelControl.setImportListener(null);
     _pingURL.dispose();
     _pingExpectedStatus.dispose();
@@ -548,6 +635,7 @@ class _ElarniHomeState extends State<ElarniHome> {
     // The resolver skips its callback when the language returns to the system
     // one, so [appLocale] follows the Localizations scope, rebuilding with it.
     appLocale = Localizations.localeOf(context);
+    linuxStorageText = widget.linux;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       widget.desktop.status(
@@ -585,10 +673,13 @@ class _ElarniHomeState extends State<ElarniHome> {
       bool value,
       TunnelSettings Function(bool) update, {
       String? help,
+      Future<void> Function(TunnelSettings)? save,
     }) => ElarniCheckboxTile(
       title: help == null ? Text(title) : ElarniHelpLabel(title, help: help),
       value: value,
-      onChanged: _busy ? null : (enabled) => _saveSettings(update(enabled)),
+      onChanged: _busy
+          ? null
+          : (enabled) => (save ?? _saveSettings)(update(enabled)),
     );
     Widget numberSetting(
       String title,
@@ -615,16 +706,7 @@ class _ElarniHomeState extends State<ElarniHome> {
               },
       ),
     );
-    Widget section(String title) => Padding(
-      padding: const EdgeInsets.fromLTRB(16, 24, 16, 8),
-      child: Semantics(
-        header: true,
-        child: Text(
-          title,
-          style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
-        ),
-      ),
-    );
+    Widget section(String title) => ElarniSettingsSection(title);
     Widget action({
       required Widget title,
       Widget? subtitle,
@@ -803,6 +885,8 @@ class _ElarniHomeState extends State<ElarniHome> {
           ),
           if (_automation['wifi'] == 'locationDenied')
             ListTile(subtitle: Text(l10n.windowsWifiLocationHelp)),
+          if (_automation['wifi'] == 'nameUnreadable')
+            ListTile(subtitle: Text(l10n.linuxWifiNameHelp)),
         ],
         ElarniCheckboxTile(
           title: Text(l10n.launchAtLogin),
@@ -997,12 +1081,10 @@ class _ElarniHomeState extends State<ElarniHome> {
                   ? null
                   : (value) {
                       if (value == null) return;
-                      final tun = value == 'tun';
-                      _saveSettings(
+                      _saveVpnMode(
                         _settings.copyWith(
-                          xrayTunEnabled: tun,
+                          xrayTunEnabled: value == 'tun',
                           systemProxyEnabled: value == 'systemProxy',
-                          perAppMode: tun ? _settings.perAppMode : 'off',
                         ),
                       );
                     },
@@ -1012,10 +1094,8 @@ class _ElarniHomeState extends State<ElarniHome> {
           toggle(
             'Xray TUN',
             _settings.xrayTunEnabled,
-            (value) => _settings.copyWith(
-              xrayTunEnabled: value,
-              perAppMode: value ? _settings.perAppMode : 'off',
-            ),
+            (value) => _settings.copyWith(xrayTunEnabled: value),
+            save: _saveVpnMode,
           ),
         if (widget.windows) ...[
           ElarniCheckboxTile(
@@ -1033,15 +1113,19 @@ class _ElarniHomeState extends State<ElarniHome> {
         // macOS has no guard of its own: the switch is Include all networks.
         ElarniCheckboxTile(
           title: ElarniHelpLabel(
-            l10n.blockTrafficWithoutVpn,
+            l10n.killSwitch,
             help: widget.desktopCore
-                ? l10n.blockTrafficDesktopHelp
-                : l10n.blockTrafficMacHelp,
+                ? l10n.killSwitchDesktopHelp
+                : l10n.killSwitchMacHelp,
           ),
           value: widget.desktopCore
               ? _settings.blockWithoutVPN
               : _settings.includeAllNetworks,
-          onChanged: _busy || widget.desktopCore && !_settings.xrayTunEnabled
+          onChanged:
+              _busy ||
+                  widget.desktopCore &&
+                      !_settings.xrayTunEnabled &&
+                      !_settings.systemProxy
               ? null
               : (value) {
                   final next = widget.desktopCore
@@ -1419,6 +1503,13 @@ class _ElarniHomeState extends State<ElarniHome> {
       ],
       SettingsCategory.backup: () => [
         section(l10n.backups),
+        if (_storageResettable)
+          action(
+            label: l10n.reset,
+            title: Text(l10n.resetElarni),
+            subtitle: Text(l10n.resetElarniHelp),
+            onPressed: _busy ? null : _resetStorage,
+          ),
         action(
           label: l10n.export,
           title: Text(l10n.createEncryptedBackup),
@@ -1547,10 +1638,6 @@ class _ElarniHomeState extends State<ElarniHome> {
                   value: 'proxy',
                   child: Text(l10n.testThroughProxy),
                 ),
-                DropdownMenuItem(
-                  value: 'activeProxy',
-                  child: Text(l10n.currentRulesActiveTunnel),
-                ),
                 DropdownMenuItem(value: 'tcp', child: Text(l10n.directTcp)),
                 DropdownMenuItem(value: 'icmp', child: Text(l10n.directIcmp)),
               ],
@@ -1562,7 +1649,7 @@ class _ElarniHomeState extends State<ElarniHome> {
                     },
             ),
             const SizedBox(height: 12),
-            if (const {'proxy', 'activeProxy'}.contains(_pingProtocol)) ...[
+            if (_pingProtocol == 'proxy') ...[
               ElarniSelect<String>(
                 isExpanded: true,
                 label: l10n.httpMethod,
@@ -1573,7 +1660,7 @@ class _ElarniHomeState extends State<ElarniHome> {
                 ],
                 onChanged:
                     _pingControlsDisabled ||
-                        !const {'proxy', 'activeProxy'}.contains(_pingProtocol)
+                        _pingProtocol != 'proxy'
                     ? null
                     : (value) {
                         setState(() => _pingMethod = value!);
@@ -1601,7 +1688,7 @@ class _ElarniHomeState extends State<ElarniHome> {
                 ],
                 onChanged:
                     _pingControlsDisabled ||
-                        !const {'proxy', 'activeProxy'}.contains(_pingProtocol)
+                        _pingProtocol != 'proxy'
                     ? null
                     : (value) {
                         setState(() => _pingMode = value!);
@@ -1631,7 +1718,7 @@ class _ElarniHomeState extends State<ElarniHome> {
             ),
           ],
         ),
-        if (const {'proxy', 'activeProxy'}.contains(_pingProtocol)) ...[
+        if (_pingProtocol == 'proxy') ...[
           section(l10n.httpRequest),
           TextField(
             key: const Key('ping-url'),
@@ -1674,11 +1761,15 @@ class _ElarniHomeState extends State<ElarniHome> {
         ),
       ],
     };
+    // As the shell and the settings, a narrow window keeps its width for content.
     Widget pageList(
       String key,
       String title,
       List<Widget> children, {
+      required bool narrowPage,
       Widget? action,
+      String? caption,
+      ScrollController? controller,
     }) => Material(
       color: Theme.of(context).colorScheme.surfaceContainerLow,
       child: Align(
@@ -1687,21 +1778,40 @@ class _ElarniHomeState extends State<ElarniHome> {
           constraints: const BoxConstraints(maxWidth: 920),
           child: ListView(
             key: ValueKey(key),
-            padding: const EdgeInsets.all(24),
+            controller: controller,
+            padding: EdgeInsets.all(narrowPage ? 16 : 24),
             children: [
               Row(
                 children: [
                   Expanded(
-                    child: Text(
-                      title,
-                      style: Theme.of(context).textTheme.headlineMedium
-                          ?.copyWith(fontWeight: FontWeight.w600),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          title,
+                          style: Theme.of(context).textTheme.headlineMedium
+                              ?.copyWith(fontWeight: FontWeight.w600),
+                        ),
+                        if (caption != null)
+                          Padding(
+                            padding: const EdgeInsets.only(top: 2),
+                            child: Text(
+                              caption,
+                              style: TextStyle(
+                                fontSize: 13,
+                                color: Theme.of(
+                                  context,
+                                ).colorScheme.onSurfaceVariant,
+                              ),
+                            ),
+                          ),
+                      ],
                     ),
                   ),
                   ?action,
                 ],
               ),
-              const SizedBox(height: 20),
+              SizedBox(height: caption == null ? 20 : 16),
               for (final child in children)
                 if (child is Card)
                   Padding(
@@ -1726,98 +1836,135 @@ class _ElarniHomeState extends State<ElarniHome> {
         child: Stack(
           children: [
             Positioned.fill(
-              child: switch (_page) {
-                DesktopPage.settings => ElarniSettings(
-                  category: _settingsCategory,
-                  help: _settingsCategory == SettingsCategory.routes
-                      ? l10n.routeTableHelp
-                      : null,
-                  onSelect: _selectSettingsCategory,
-                  children: settingsSections[_settingsCategory]!(),
-                ),
-                DesktopPage.routing => pageList(
-                  'routing-list',
-                  l10n.routing,
-                  [
-                    DefaultTabController(
-                      // An import that opens the profiles moves the tab too.
-                      key: ValueKey((_routingTab, _routingTabRefusals)),
-                      length: 2,
-                      initialIndex: _routingTab,
-                      child: TabBar(
-                        isScrollable: true,
-                        tabAlignment: TabAlignment.start,
-                        onTap: (index) => unawaited(_openRoutingTab(index)),
-                        tabs: [
-                          Tab(text: l10n.routingProfiles),
-                          Tab(text: l10n.perAppRouting),
+              child: LayoutBuilder(
+                builder: (context, constraints) {
+                  final narrowPage = constraints.maxWidth < 700;
+                  return switch (_page) {
+                    DesktopPage.settings => ElarniSettings(
+                      category: _settingsCategory,
+                      help: _settingsCategory == SettingsCategory.routes
+                          ? l10n.routeTableHelp
+                          : null,
+                      onSelect: _selectSettingsCategory,
+                      search: _settingsSearch,
+                      onSearch: (_) => setState(() {}),
+                      // A search builds every category; a category's own name
+                      // finds all of its rows.
+                      results: switch (_settingsSearch.text
+                          .trim()
+                          .toLowerCase()) {
+                        '' => null,
+                        final query => [
+                          for (final category in SettingsCategory.values)
+                            if (category.label.toLowerCase().contains(query)
+                                    ? settingsSections[category]!()
+                                    : settingSearchResults(
+                                        settingsSections[category]!(),
+                                        query,
+                                      )
+                                case final rows when rows.isNotEmpty)
+                              (category, rows),
                         ],
-                      ),
+                      },
+                      children: settingsSections[_settingsCategory]!(),
                     ),
-                    const SizedBox(height: 12),
-                    if (_routingTab == 0)
-                      ..._routingItems()
-                    else
-                      Padding(
-                        padding: const EdgeInsets.fromLTRB(20, 8, 20, 0),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              l10n.perAppRoutingIntro,
-                              style: TextStyle(
-                                color: Theme.of(
-                                  context,
-                                ).colorScheme.onSurfaceVariant,
-                              ),
-                            ),
-                            const SizedBox(height: 16),
-                            perAppRouting(),
-                          ],
+                    DesktopPage.routing => pageList(
+                      'routing-list',
+                      l10n.routing,
+                      [
+                        DefaultTabController(
+                          // An import that opens the profiles moves the tab too.
+                          key: ValueKey((_routingTab, _routingTabRefusals)),
+                          length: 2,
+                          initialIndex: _routingTab,
+                          child: TabBar(
+                            isScrollable: true,
+                            tabAlignment: TabAlignment.start,
+                            onTap: (index) => unawaited(_openRoutingTab(index)),
+                            tabs: [
+                              Tab(text: l10n.routingProfiles),
+                              Tab(text: l10n.perAppRouting),
+                            ],
+                          ),
                         ),
-                      ),
-                  ],
-                  action: _routingTab == 0
-                      ? IconButton(
-                          tooltip: l10n.refreshProfiles,
-                          onPressed: _busy ? null : _refreshRouting,
-                          icon: const Icon(CupertinoIcons.arrow_clockwise),
-                        )
-                      : null,
-                ),
-                DesktopPage.subscriptions => pageList(
-                  'subscriptions-list',
-                  l10n.subscriptions,
-                  [
-                    if (_subscriptions.subscriptions.isEmpty) ...[
-                      const SizedBox(height: 12),
-                      Text(l10n.noSubscriptionsYet),
-                      const SizedBox(height: 8),
-                      Text(l10n.addSubscriptionToStart),
-                    ],
-                    // Built only here: each card parses every server name.
-                    for (final group in _subscriptions.subscriptions)
-                      _subscriptionCard(group),
-                  ],
-                  action:
-                      _subscriptions.subscriptions.any(
-                        (group) => !group.isLocal,
-                      )
-                      ? IconButton(
-                          key: const Key('refresh-all-subscriptions'),
-                          tooltip: l10n.refreshAllSubscriptions,
-                          onPressed: _busy || _refreshingAll
-                              ? null
-                              : _refreshAllSubscriptions,
-                          icon: const Icon(CupertinoIcons.arrow_clockwise),
-                        )
-                      : null,
-                ),
-                DesktopPage.home => _homeContent(
-                  memorySummary,
-                  activitySummary,
-                ),
-              },
+                        const SizedBox(height: 12),
+                        if (_routingTab == 0)
+                          ..._routingItems()
+                        else
+                          Padding(
+                            padding: EdgeInsets.fromLTRB(
+                              narrowPage ? 0 : 20,
+                              8,
+                              narrowPage ? 0 : 20,
+                              0,
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  l10n.perAppRoutingIntro,
+                                  style: TextStyle(
+                                    color: Theme.of(
+                                      context,
+                                    ).colorScheme.onSurfaceVariant,
+                                  ),
+                                ),
+                                const SizedBox(height: 16),
+                                perAppRouting(),
+                              ],
+                            ),
+                          ),
+                      ],
+                      narrowPage: narrowPage,
+                      action: _routingTab == 0
+                          ? IconButton(
+                              tooltip: l10n.refreshProfiles,
+                              onPressed: _busy ? null : _refreshRouting,
+                              icon: const Icon(CupertinoIcons.arrow_clockwise),
+                            )
+                          : null,
+                    ),
+                    DesktopPage.subscriptions => pageList(
+                      'subscriptions-list',
+                      l10n.subscriptions,
+                      [
+                        if (_subscriptions.subscriptions.isEmpty) ...[
+                          const SizedBox(height: 12),
+                          Text(l10n.noSubscriptionsYet),
+                          const SizedBox(height: 8),
+                          Text(l10n.addSubscriptionToStart),
+                        ],
+                        // Built only here: the table parses every server name.
+                        if (_shownGroup case final group?)
+                          ..._subscriptionPage(group, narrow: narrowPage),
+                      ],
+                      narrowPage: narrowPage,
+                      controller: _subscriptionsScroll,
+                      caption: _subscriptions.subscriptions.isEmpty
+                          ? null
+                          : '${l10n.subscriptionCount(_subscriptions.subscriptions.length)}'
+                                ' · ${l10n.serverCount(_subscriptions.subscriptions.fold(0, (count, group) => count + group.nodes.length))}',
+                      action:
+                          _subscriptions.subscriptions.any(
+                            (group) => !group.isLocal,
+                          )
+                          ? IconButton(
+                              key: const Key('refresh-all-subscriptions'),
+                              tooltip: l10n.refreshAllSubscriptions,
+                              onPressed: _busy || _refreshingAll
+                                  ? null
+                                  : _refreshAllSubscriptions,
+                              icon: const Icon(CupertinoIcons.arrow_clockwise),
+                            )
+                          : null,
+                    ),
+                    DesktopPage.home => _homeContent(
+                      memorySummary,
+                      activitySummary,
+                    ),
+                  };
+                },
+              ),
             ),
             if (_message != null)
               Positioned(

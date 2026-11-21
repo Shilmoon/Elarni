@@ -113,7 +113,7 @@ void main() {
     );
 
     testWidgets(
-      'favorites and recent selection on ${platform.name}',
+      'favorites, By country and the last connection on ${platform.name}',
       (tester) async {
         final control = ConvenienceControl()..snapshot = fixture();
         await tester.binding.setSurfaceSize(const Size(1280, 900));
@@ -133,8 +133,16 @@ void main() {
         await tester.pumpAndSettle();
         expect(find.byKey(const ValueKey('node:a')), findsOneWidget);
         expect(find.byKey(const ValueKey('node:b')), findsNothing);
-        await tester.tap(find.widgetWithText(ChoiceChip, 'Recent'));
+        // The third list needs no desktop host: a phone has it too.
+        expect(find.widgetWithText(ChoiceChip, 'Recent'), findsNothing);
+        await tester.tap(find.widgetWithText(ChoiceChip, 'By country'));
         await tester.pumpAndSettle();
+        expect(find.byKey(const ValueKey('node:a')), findsOneWidget);
+        expect(find.byKey(const ValueKey('node:b')), findsOneWidget);
+        expect(
+          find.byKey(const ValueKey('server-subscription:source')),
+          findsNothing,
+        );
         // The row keeps only the server; its last connection is in the tooltip.
         expect(find.textContaining('configuration changed'), findsNothing);
         expect(

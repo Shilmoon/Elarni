@@ -82,6 +82,17 @@ class CatalogTest {
         assertNull(published.nodeOrNull("b"))
     }
 
+    // The app says the server changed only when a refresh replaced the one that is gone.
+    @Test fun aReplacedSelectionIsOneThatIsGone() {
+        fun catalog(selected: String?, vararg ids: String) = Catalog(obj("selectedNodeId" to (selected ?: JSONObject.NULL),
+            "subscriptions" to JSONArray(listOf(obj("id" to "s", "nodes" to JSONArray(ids.map { obj("id" to it) }))))))
+        assertTrue(catalog("b", "b", "c").replacedSelection("a"))
+        assertFalse("The server is still there", catalog("b", "a", "b").replacedSelection("a"))
+        assertFalse("The selection did not move", catalog("a", "a", "b").replacedSelection("a"))
+        assertFalse("No server took over", catalog(null, "b").replacedSelection("a"))
+        assertFalse("Nothing was selected before", catalog("b", "b").replacedSelection(""))
+    }
+
     @Test fun probeKeyNamesTheHandshakeSNI() {
         fun node(security: String, serverName: String? = null, address: String = "1.2.3.4") = obj("config" to obj("outbounds" to JSONArray(listOf(obj(
             "protocol" to "vless", "settings" to obj("vnext" to JSONArray(listOf(obj("address" to address, "port" to 443)))),
@@ -109,6 +120,19 @@ class CatalogTest {
             apps("bypass", listOf("com.shared.one", "com.shared.two"), obj("com.shared.two" to "routing")))
         assertEquals("The first listed target wins for a shared UID", false to listOf("com.shared.one", "com.shared.two"),
             apps("bypass", listOf("com.shared.one", "com.shared.two"), obj("com.shared.one" to "direct", "com.shared.two" to "routing")))
+    }
+
+    // Only listed apps with none of them installed took every app into the tunnel, all going direct, and showed Connected.
+    @Test fun onlyListedAppsWithNoneInstalledIsRefused() {
+        val uids = mapOf("com.a" to 10001, "com.elarni" to 10000)
+        fun refused(mode: String, listed: List<String>) =
+            Catalog.noListedAppInstalled(obj("perAppMode" to mode, "perAppProcesses" to JSONArray(listed)), "com.elarni") { uids[it] }
+        assertTrue("No listed app installed", refused("proxyOnly", listOf("com.gone", "com.also.gone")))
+        assertTrue("This app never enters its own tunnel", refused("proxyOnly", listOf("com.gone", "com.elarni")))
+        assertFalse("One listed app installed", refused("proxyOnly", listOf("com.gone", "com.a")))
+        assertFalse("An empty list keeps every app in the tunnel", refused("proxyOnly", emptyList()))
+        assertFalse("Bypass with no listed app installed keeps every app in the tunnel", refused("bypass", listOf("com.gone")))
+        assertFalse("Off", refused("off", listOf("com.gone")))
     }
 
     @Test fun listedAppUidsChangeOnlyWhenAListedAppIsInstalledRemovedOrReinstalled() {
@@ -146,6 +170,121 @@ class CatalogTest {
         assertEquals("A server without a revision of its own goes by its id", "plain",
             Catalog.lastSuccessful(listOf(obj("id" to "plain", "format" to "xrayProfile", "lastSuccessAt" to 50.0, "lastSuccessRevision" to "plain")), "")?.getString("id"))
         assertNull("Nothing worked yet", Catalog.lastSuccessful(listOf(node("never", null), node("unrecorded", 400.0, success = null)), ""))
+    }
+
+    @Test fun closedServerGroupsToggleAndForgetRemovedSubscriptions() {
+        assertEquals(setOf("s:NL"), Catalog.toggledGroup("s:NL", emptySet(), listOf("s")))
+        assertEquals(setOf("s", "s:NL"), Catalog.toggledGroup("s", setOf("s:NL"), listOf("s")))
+        assertEquals("Opening removes the group; a removed subscription's groups go with it, the list by country's stay",
+            setOf(":DE"), Catalog.toggledGroup("s:NL", setOf("s:NL", ":DE", "gone", "gone:NL"), listOf("s")))
+    }
+
+    // Home's update line. Failure modes: one provider that stays unreachable pins the line at its old fetch although the
+    // rest just updated; a subscription whose update failed goes uncounted; a subscription never fetched reads as updated.
+    @Test fun homeFreshnessCountsTheSubscriptionsThatUpdated() {
+        fun source(status: String, fetched: Double?) = obj("url" to "https://provider.example/s", "status" to status).apply { if (fetched != null) put("lastSuccessfulFetch", fetched) }
+        assertEquals("The oldest updated list decides", 100.0 to 0, Catalog.freshness(listOf(source("ready", 500.0), source("ready", 100.0))))
+        assertEquals("A failed update does not hold the time back; it is counted", 500.0 to 1, Catalog.freshness(listOf(source("ready", 500.0), source("failed", 100.0))))
+        assertEquals("Nor does one that stopped at a review", 500.0 to 1, Catalog.freshness(listOf(source("ready", 500.0), source("needsApproval", 100.0))))
+        assertEquals("A first download that failed is counted as well", 500.0 to 1, Catalog.freshness(listOf(source("ready", 500.0), source("failed", null))))
+        assertEquals("With no list updated, the oldest of them all decides", 100.0 to 2, Catalog.freshness(listOf(source("failed", 500.0), source("failed", 100.0))))
+        assertEquals("A subscription still waiting for its first download is not updated yet", null to 0, Catalog.freshness(listOf(source("ready", 500.0), source("pending", null))))
+        assertEquals(null to 1, Catalog.freshness(listOf(source("failed", null))))
+        assertEquals(null to 0, Catalog.freshness(emptyList()))
+    }
+
+    // A provider that wants this device registered, or has too many, is asked again at the regular interval: the
+    // user may free a slot on its site or reset the device ID. Ordinary failures keep their short retries.
+    @Test fun deviceReplyIsAskedAgainOneIntervalLater() {
+        val catalog = Catalog(obj("subscriptions" to JSONArray()))
+        for (code in listOf("hwid_required", "hwid_limit")) {
+            catalog.putSource(obj("id" to "s", "url" to "https://provider.example/feed", "status" to "ready",
+                "fetchOptions" to obj("refreshHours" to "6"), "nextRefreshAt" to 1.0))
+            for (attempt in 1..3) {
+                val before = now()
+                catalog.refreshFailed("s", code)
+                val after = now()
+                val source = catalog.source("s")
+                assertEquals(code, source.getString("refreshError"))
+                assertEquals(attempt, source.getInt("failures"))
+                val at = source.getDouble("nextRefreshAt")
+                assertTrue("$code, attempt $attempt", at >= before + 6 * 3600 && at <= after + 6 * 3600)
+                assertEquals(at, catalog.nextRefresh(source)!!, 0.0)
+            }
+        }
+        val before = now()
+        catalog.refreshFailed("s", "fetch_failed")
+        assertTrue("Other failures keep the short retries", catalog.source("s").getDouble("nextRefreshAt") in before + 1800..now() + 1800)
+    }
+
+    @Test fun deviceReplySavedWithNoTimeByAnOlderVersionIsDue() {
+        val catalog = Catalog(JSONObject())
+        fun parked(code: String) = obj("id" to "s", "url" to "https://provider.example/feed", "status" to "failed", "refreshError" to code,
+            "failures" to 1, "fetchOptions" to obj("refreshHours" to "6"), "nextRefreshAt" to JSONObject.NULL)
+        for (code in listOf("hwid_required", "hwid_limit")) {
+            val time = now()
+            assertTrue("$code, never refreshed", catalog.nextRefresh(parked(code))!! <= now())
+            assertTrue(catalog.nextRefresh(parked(code))!! >= time)
+            assertEquals("An interval after the last success", time - 3600 + 6 * 3600,
+                catalog.nextRefresh(parked(code).put("lastSuccessfulFetch", time - 3600))!!, 0.0)
+        }
+        assertNull("Only the device replies were saved with no time", catalog.nextRefresh(parked("fetch_failed")))
+    }
+
+    private fun backupNode(id: String, address: String, hideURL: Boolean = false) = obj("id" to id, "name" to id, "format" to "xrayProfile",
+        "config" to obj("outbounds" to JSONArray(listOf(obj("protocol" to "vless", "settings" to obj("address" to address, "port" to 443)))))).apply { if (hideURL) put("hideURL", true) }
+    private fun backupSource(id: String, name: String, nodes: List<JSONObject>, url: String? = null, hideURL: Boolean? = null) =
+        obj("id" to id, "name" to name, "nodes" to JSONArray(nodes), "metadata" to JSONObject().apply { if (hideURL != null) put("hideURL", hideURL) })
+            .apply { if (url != null) put("url", url) }
+    private fun backupRoute(id: String, provider: String? = null) = obj("id" to id, "profile" to obj("Name" to id), "original" to obj("Name" to id), "enabled" to true, "edited" to false)
+        .apply { if (provider != null) put("providerSubscriptionId", provider) }
+    private fun backupCatalog(selected: String?, sources: List<JSONObject>, routes: List<JSONObject> = emptyList(), assignments: JSONObject = JSONObject()) =
+        Catalog(obj("subscriptions" to JSONArray(sources), "profiles" to JSONArray(routes), "assignments" to assignments).apply { if (selected != null) put("selectedNodeId", selected) })
+
+    // One subscription whose provider forbids backups, or that was never updated, used to refuse the backup of everything else.
+    @Test fun aBackupLeavesOutAndNamesWhatItMayNotHold() {
+        val catalog = backupCatalog("forbidden-1", listOf(
+            backupSource("local", "My servers", listOf(backupNode("local-1", "local.example")), hideURL = false),
+            backupSource("provider", "Allowed provider", listOf(backupNode("provider-1", "allowed.example")), "https://allowed.example/sub", false),
+            backupSource("forbidden", "No backups", listOf(backupNode("forbidden-1", "forbidden.example")), "https://forbidden.example/sub", true),
+            // A hidden import keeps its own local group, flagged per server.
+            backupSource("hidden", "Hidden import", listOf(backupNode("hidden-1", "hidden.example", hideURL = true))),
+            // Never updated: whether its provider allows backups is unknown.
+            backupSource("fresh", "Never updated", listOf(backupNode("fresh-1", "fresh.example")), "https://fresh.example/sub"),
+        ), listOf(backupRoute("route-local"), backupRoute("route-provider", "provider"), backupRoute("route-forbidden", "forbidden"), backupRoute("route-fresh", "fresh")),
+            obj("local" to "route-forbidden", "provider" to "route-provider", "forbidden" to "route-forbidden", "fresh" to "route-local"))
+        val (document, excluded) = catalog.backup()
+        assertEquals(listOf("No backups" to "sharing_disabled", "Hidden import" to "sharing_disabled", "Never updated" to "sharing_refresh_required"),
+            excluded.map { it.getString("name") to it.getString("reason") })
+        assertEquals(listOf("local", "provider"), document.objects("subscriptions").map { it.getString("id") })
+        // Nothing of a left-out subscription is in the file: no server, no link, no routing profile of its provider.
+        val text = document.toString()
+        for (private in listOf("forbidden.example", "hidden.example", "fresh.example", "route-forbidden", "route-fresh")) assertFalse(private, text.contains(private))
+        assertTrue("The selection was a left-out server", document.string("selectedNodeId").isEmpty())
+        assertEquals(listOf("route-local", "route-provider"), document.objects("routes").map { it.getString("id") })
+        assertEquals("provider", document.objects("routes")[1].getString("providerSubscriptionId"))
+        assertEquals(mapOf("provider" to "route-provider"), document.mapObject("assignments").let { a -> a.keys().asSequence().associateWith { a.getString(it) } })
+        assertEquals("The catalog itself is unchanged", 5, catalog.sources.size)
+        assertEquals("forbidden-1", catalog.selected)
+        val kept = backupCatalog("local-1", listOf(backupSource("local", "My servers", listOf(backupNode("local-1", "local.example"))),
+            backupSource("forbidden", "No backups", listOf(backupNode("forbidden-1", "forbidden.example")), hideURL = true))).backup()
+        assertEquals("A selection the backup holds stays", "local-1", kept.document.string("selectedNodeId"))
+    }
+
+    @Test fun aBackupWithNothingLeftToSaveFailsWithTheFirstRefusal() {
+        val forbidden = backupSource("forbidden", "No backups", listOf(backupNode("forbidden-1", "forbidden.example")), "https://forbidden.example/sub", true)
+        val fresh = backupSource("fresh", "Never updated", listOf(backupNode("fresh-1", "fresh.example")), "https://fresh.example/sub")
+        fun refusal(catalog: Catalog) = (runCatching { catalog.backup() }.exceptionOrNull() as? AppFailure)?.code
+        // A left-out provider's routing profile is not left to save.
+        assertEquals("sharing_disabled", refusal(backupCatalog(null, listOf(forbidden, fresh), listOf(backupRoute("route-forbidden", "forbidden")), obj("forbidden" to "route-forbidden"))))
+        assertEquals("sharing_refresh_required", refusal(backupCatalog(null, listOf(fresh, forbidden))))
+        // A routing profile of the user's own is worth saving alone.
+        val (document, excluded) = backupCatalog(null, listOf(fresh), listOf(backupRoute("route-local")), obj("fresh" to "route-local")).backup()
+        assertEquals(0, document.objects("subscriptions").size)
+        assertEquals(listOf("route-local"), document.objects("routes").map { it.getString("id") })
+        assertEquals(0, document.mapObject("assignments").length())
+        assertEquals(listOf("sharing_refresh_required"), excluded.map { it.getString("reason") })
+        assertTrue("An empty catalog leaves out nothing", backupCatalog(null, emptyList()).backup().excluded.isEmpty())
     }
 
     @Test fun retryDelayAndCanonicalForm() {

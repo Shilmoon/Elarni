@@ -9,6 +9,9 @@ import java.net.URI
 
 class ResourceReview(val catalog: Catalog, val routeID: String, val url: String, val warning: JSONObject) : Exception()
 
+/** A backup to seal, and the subscriptions it left out: each a name and a reason, sharing_disabled or sharing_refresh_required. */
+data class Backup(val document: JSONObject, val excluded: List<JSONObject>)
+
 /** Value catalog: every editor works on a copy; only Repository publishes it.
  *  A [snapshot] is a published copy that nothing edits, such as the one the screens read many times in a frame:
  *  it reads its lists and settings once. */
@@ -68,6 +71,13 @@ class Catalog(val data: JSONObject, private val snapshot: Boolean = false) {
         if (value.getInt("tcpMaxConnections") == 256) value.put("tcpMaxConnections", 2048)
         if (value.getInt("udpMaxConnections") == 128) value.put("udpMaxConnections", 1024)
         data.put("settings", value).put("sessionLimitsMigrated", true)
+        return true
+    }
+    /** Resolves a DNS pair saved while "Use profile DNS" was its own switch; see [DnsChoice.migrate]. Before [validate]. */
+    fun migrateDNS(): Boolean {
+        val value = settings
+        if (!DnsChoice.migrate(value)) return false
+        data.put("settings", value)
         return true
     }
     /** Allowing other apps makes the key their broadcasts carry, once: turning it off and on keeps the apps working. */
@@ -280,12 +290,20 @@ class Catalog(val data: JSONObject, private val snapshot: Boolean = false) {
     fun refreshFailed(id: String, code: String) {
         val item = source(id)
         val failures = item.optInt("failures") + 1
+        // A provider that wants this device registered, or has too many, is asked again at the regular interval:
+        // the user may free a slot on its site or reset the device ID meanwhile.
         item.put("status", "failed").put("refreshError", code).put("failures", failures)
-            .put("nextRefreshAt", if (code in listOf("hwid_required", "hwid_limit")) JSONObject.NULL else now() + retryDelay(failures))
+            .put("nextRefreshAt", if (code in deviceReplies) now() + refreshHours(item).coerceIn(1, 168) * 3600 else now() + retryDelay(failures))
     }
     fun nextRefresh(item: JSONObject): Double? {
         if (!item.has("url") || item.string("status") == "needsApproval") return null
-        if (item.optInt("failures") > 0) return if (item.isNull("nextRefreshAt")) null else item.optDouble("nextRefreshAt")
+        if (item.optInt("failures") > 0) return when {
+            !item.isNull("nextRefreshAt") -> item.optDouble("nextRefreshAt")
+            // Older versions saved no time after a device reply and never asked again.
+            item.string("refreshError") in deviceReplies ->
+                if (item.has("lastSuccessfulFetch")) item.getDouble("lastSuccessfulFetch") + refreshHours(item).coerceIn(1, 168) * 3600 else now()
+            else -> null
+        }
         val hours = refreshHours(item)
         if (item.has("lastSuccessfulFetch") && item.optInt("refreshInterval") != hours * 3600) return item.getDouble("lastSuccessfulFetch") + hours * 3600
         return if (item.isNull("nextRefreshAt")) null else item.optDouble("nextRefreshAt")
@@ -297,6 +315,9 @@ class Catalog(val data: JSONObject, private val snapshot: Boolean = false) {
     fun reconcileSelection() {
         if (selected.isNotEmpty() && nodes.none { it.string("id") == selected }) data.put("selectedNodeId", JSONObject.NULL)
     }
+    /** Whether the selection moved off [previous] because that server is gone. */
+    fun replacedSelection(previous: String) =
+        previous.isNotEmpty() && selected.isNotEmpty() && selected != previous && nodeOrNull(previous) == null
     fun selectGroup(nodeId: String, groupName: String, choice: String) {
         val node = node(nodeId)
         val group = node.mapObject("config").objects("elarniGroups").firstOrNull { it.string("name") == groupName } ?: throw AppFailure("invalid_input")
@@ -538,18 +559,36 @@ class Catalog(val data: JSONObject, private val snapshot: Boolean = false) {
         }
         return Native.call("clientQR", obj("text" to text)).put("text", text)
     }
-    fun backup(): JSONObject {
-        sources.forEach { if (it.mapObject("metadata").optBoolean("hideURL") || it.objects("nodes").any { node -> node.optBoolean("hideURL") }) throw AppFailure("sharing_disabled")
-            if (it.has("url") && !it.mapObject("metadata").has("hideURL")) throw AppFailure("sharing_refresh_required") }
+    /** The backup [Backup.document], without the subscriptions a backup may not hold, which [Backup.excluded] names with the reason: their
+     *  provider forbids sharing (sharing_disabled), or they were downloaded and never refreshed, so whether it allows it is unknown
+     *  (sharing_refresh_required). Nothing of such a subscription is saved: not its servers, its provider's routing profiles, or the
+     *  assignments and selection that point at them. As on the desktop, when that leaves nothing to save the first refusal stands. */
+    fun backup(): Backup {
+        val excluded = mutableListOf<JSONObject>(); val left = mutableSetOf<String>()
+        val included = sources.filter { source ->
+            val reason = when {
+                source.mapObject("metadata").optBoolean("hideURL") || source.objects("nodes").any { it.optBoolean("hideURL") } -> "sharing_disabled"
+                source.has("url") && !source.mapObject("metadata").has("hideURL") -> "sharing_refresh_required"
+                else -> null
+            }
+            if (reason != null) { left.add(source.string("id")); excluded.add(obj("name" to source.string("name"), "reason" to reason)) }
+            reason == null
+        }
+        val kept = routes.filter { it.string("providerSubscriptionId") !in left }
+        if (included.isEmpty() && kept.isEmpty()) excluded.firstOrNull()?.let { throw AppFailure(it.getString("reason")) }
+        val keptRoutes = kept.map { it.string("id") }.toSet()
         fun pick(source: JSONObject, keys: List<String>) = JSONObject().apply { keys.forEach { if (source.has(it) && !source.isNull(it)) put(it, source.get(it)) } }
         val nodeKeys = listOf("id", "name", "providerName", "format", "config", "groupOverrides", "ipPreference", "favorite")
-        return obj("version" to 1, "selectedNodeId" to data.opt("selectedNodeId"), "assignments" to assignments,
-            "subscriptions" to JSONArray(sources.map { source -> pick(source, listOf("id", "name", "url", "shareLink", "fallbackHosts", "fetchOptions", "manualRouting"))
+        val selection = data.opt("selectedNodeId").takeIf { included.any { source -> source.objects("nodes").any { it.string("id") == selected } } }
+        val document = obj("version" to 1, "selectedNodeId" to selection,
+            "assignments" to JSONObject().apply { assignments.let { all -> all.keys().forEach { if (it !in left && all.getString(it) in keptRoutes) put(it, all.getString(it)) } } },
+            "subscriptions" to JSONArray(included.map { source -> pick(source, listOf("id", "name", "url", "shareLink", "fallbackHosts", "fetchOptions", "manualRouting"))
                 .put("nodes", JSONArray(source.objects("nodes").map { pick(it, nodeKeys) }))
                 .apply { if (source.objects("hiddenNodes").isNotEmpty()) put("hiddenNodes", JSONArray(source.objects("hiddenNodes").map { pick(it, nodeKeys) })) } }),
-            "routes" to JSONArray(routes.map { route -> pick(route, listOf("id", "profile", "providerSubscriptionId", "enabled", "edited")).apply {
+            "routes" to JSONArray(kept.map { route -> pick(route, listOf("id", "profile", "providerSubscriptionId", "enabled", "edited")).apply {
                 if (route.string("providerSubscriptionId").isNotEmpty()) put("providerProfile", route.getJSONObject("original"))
             } }))
+        return Backup(document, excluded)
     }
     fun restoreBackup(backup: JSONObject) {
         val sourceIDs = mutableMapOf<String, String>(); val nodeIDs = mutableMapOf<String, String>(); val routeIDs = mutableMapOf<String, String>()
@@ -652,6 +691,11 @@ class Catalog(val data: JSONObject, private val snapshot: Boolean = false) {
                 else -> null
             }
         }
+        /** Whether Only listed apps names apps of which none is installed besides [self]: [tunnelApps] would then take every
+         *  app into the tunnel, and every one would go direct. An empty list is not refused. */
+        fun noListedAppInstalled(settings: JSONObject, self: String, uid: (String) -> Int?) =
+            settings.string("perAppMode") == "proxyOnly" &&
+                settings.strings("perAppProcesses").let { listed -> listed.isNotEmpty() && listed.none { it != self && uid(it) != null } }
         /**
          * Each listed app's UID, or null for one not installed. Android works out the tunnel's apps by UID when the VPN
          * starts, and so do the per-app rules, so an app installed, removed or reinstalled later needs a new start.
@@ -660,6 +704,7 @@ class Catalog(val data: JSONObject, private val snapshot: Boolean = false) {
             if (settings.string("perAppMode") == "off") null else settings.strings("perAppProcesses").associateWith(uid)
         // Subscriptions, managed lists and geodata retry a failed refresh after 60, 300, then 1800 s.
         fun retryDelay(failures: Int) = listOf(60, 300, 1800)[(failures - 1).coerceIn(0, 2)]
+        private val deviceReplies = setOf("hwid_required", "hwid_limit")
         /** Whether a refresh stored for [at] is due at [time]. [longest] is the furthest ahead its schedule writes a time; one further
          *  away than that, and an hour for a clock corrected by minutes, was written under a clock since set back and would take years. */
         fun refreshDue(at: Double, time: Double, longest: Double) = at <= time || at > time + longest + 3600
@@ -680,6 +725,19 @@ class Catalog(val data: JSONObject, private val snapshot: Boolean = false) {
         /** As on the iPhone: the server that last worked with its current configuration, offered unless it is [selected] already. */
         fun lastSuccessful(nodes: List<JSONObject>, selected: String) = nodes.filter { it.string("format") == "xrayProfile" && successCurrent(it) }
             .maxByOrNull { it.optDouble("lastSuccessAt", 0.0) }?.takeIf { it.string("id") != selected }
+        /** Home's update line for the subscriptions with a link: when those whose last update worked were fetched, the oldest
+         *  deciding (null while one still waits for its first download), and how many the last update left as they were. */
+        fun freshness(remote: List<JSONObject>): Pair<Double?, Int> {
+            val (stale, current) = remote.partition { it.string("status") in listOf("failed", "needsApproval") }
+            // With nothing updated, the line says how old the lists in use are.
+            val counted = current.ifEmpty { stale }
+            return (if (counted.all { it.has("lastSuccessfulFetch") }) counted.minOfOrNull { it.optDouble("lastSuccessfulFetch") } else null) to stale.size
+        }
+        /** The closed server groups after [group] is opened or closed; what a removed subscription left is dropped. */
+        fun toggledGroup(group: String, closed: Set<String>, sources: Collection<String>): Set<String> {
+            val kept = closed.filter { it.startsWith(":") || it.substringBefore(":") in sources }.toSet()
+            return (if (group in kept) kept - group else kept + group).sorted().take(256).toSet()
+        }
         fun isRoutingLink(text: String) = listOf("happ://routing/", "elarni://routing/", "incy://routing/").any { text.startsWith(it) }
         // Panels such as 3x-ui send their Happ routing to every client (3x-ui #5999), so links addressed to Elarni win when a feed has any.
         fun addressedRouting(links: List<String>) = links.filter { it.startsWith("elarni://routing/") }.ifEmpty { links }

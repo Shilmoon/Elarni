@@ -32,6 +32,8 @@ sudo apt install libgtk-3-0 libayatana-appindicator3-1 libgstreamer1.0-0 \
 - Data lives in `~/.local/share/Elarni`, settings in `~/.config/Elarni`. Removing
   the package keeps them.
 - On GNOME, enable the AppIndicator extension to see the status icon.
+- Closing the window keeps Elarni running in the tray, as on Windows, when the desktop shows
+  tray icons; **Quit Elarni** in the tray menu or Ctrl+Q stops it and disconnects.
 - If the VPN helper is killed, DNS stays redirected until Elarni's next start,
   Connect or **Repair VPN setup**.
 

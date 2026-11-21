@@ -33,13 +33,15 @@
     <string name="check_the_automation_s_group_selected">Проверьте группу автоматизации, выбранные серверы и разные HTTP-цели проверки.</string>
     <string name="select_installed_android_apps_and_a">Выберите установленные приложения Android и допустимый режим маршрутизации. Профили из других операционных систем здесь не подходят.</string>
     <string name="an_app_in_per_app_routing">Приложение в «Маршрутизации приложений» использует сервер, которого больше нет. Выберите для него другую цель в «Маршрутизации приложений».</string>
+    <string name="none_of_the_apps_chosen_for_the_vpn">Ни одно из приложений, выбранных для VPN, не установлено. Выберите приложения в «Маршрутизации приложений» или выключите её.</string>
     <string name="use_up_to_64_wi_fi">Не больше 64 имён Wi-Fi, каждое до 32 байт, без табуляций.</string>
     <string name="use_an_https_address_for_the">Укажите для источника обновлений адрес https:// или оставьте поле пустым.</string>
     <string name="some_settings_are_invalid_check_port">Некоторые настройки недопустимы. Проверьте номера портов, диапазоны, адреса DNS и обязательные данные для входа.</string>
     <string name="the_connection_could_not_start_check">Не удалось начать подключение. Проверьте сервер, сеть, порты прокси и файлы маршрутизации и повторите.</string>
     <string name="this_profile_could_not_be_imported">Не удалось импортировать профиль. Проверьте ссылку или конфигурацию целиком и попробуйте снова.</string>
     <string name="this_server_has_no_encryption">У этого сервера нет шифрования: ни TLS, ни REALITY, ни шифрования VLESS. Elarni принимает такой сервер только в частной сети.</string>
-    <string name="your_encrypted_catalog_could_not_be">Не удалось открыть или сохранить зашифрованный каталог. Имеющиеся данные сохранены. Разблокируйте устройство и перезапустите приложение. Если это не помогает, начать заново можно только очистив хранилище Elarni в настройках Android › Приложения: серверы и настройки будут удалены.</string>
+    <string name="elarni_cannot_read_its_saved_data">Elarni не может прочитать сохранённые данные на этом устройстве. Сбросьте Elarni, затем восстановите резервную копию или снова добавьте подписки.</string>
+    <string name="elarni_could_not_open_or_save_its">Elarni не удалось открыть или сохранить зашифрованные данные. Имеющиеся данные сохранены. Перезапустите Elarni. Если это не помогает, начать заново можно только очистив хранилище Elarni в настройках Android › Приложения: серверы и настройки будут удалены.</string>
     <string name="android_could_not_start_the_service">Android не смог запустить службу из фона. Откройте Elarni и нажмите «Подключить».</string>
     <string name="android_has_not_made_the_vpn">Android не подготовил сеть VPN. Переподключитесь или проверьте настройки VPN Android.</string>
     <string name="android_revoked_vpn_access_open_elarni">Android отозвал доступ к VPN. Откройте Elarni и подключитесь, чтобы снова разрешить доступ.</string>
@@ -78,7 +80,6 @@
     <string name="network">Сеть</string>
     <string name="available">Доступно</string>
     <string name="unavailable">Недоступно</string>
-    <string name="block_without_vpn">Блокировать без VPN</string>
     <string name="on">Вкл.</string>
     <string name="always_on_vpn">Постоянный VPN</string>
     <string name="vpn_permission">Разрешение VPN</string>
@@ -212,6 +213,8 @@
     <string name="delete_subscription">Удалить подписку</string>
     <string name="rename">Переименовать</string>
     <string name="pin_subscription">Закрепить подписку</string>
+    <string name="pin">Закрепить</string>
+    <string name="unpin">Открепить</string>
     <string name="download_options">Параметры загрузки</string>
     <string name="download_format">Формат загрузки</string>
     <string name="original">Оригинал</string>
@@ -265,8 +268,8 @@
     <string name="checking_exit">Проверка выхода…</string>
     <string name="search_results">Результаты поиска</string>
     <string name="favorites">Избранные</string>
-    <string name="recent_servers">Недавние серверы</string>
     <string name="all_servers">Все серверы</string>
+    <string name="by_country">По странам</string>
     <string name="no_servers_match_this_filter">Нет серверов под этот фильтр.</string>
     <string name="test_server">Проверить сервер</string>
     <string name="remove_favorite">Убрать из избранного</string>
@@ -287,7 +290,6 @@
     <string name="country">Страна</string>
     <string name="server_options">Параметры серверов</string>
     <string name="all">Все</string>
-    <string name="recent">Недавние</string>
     <string name="press_connect_only_apps_set_to">Нажмите «Подключить». Через локальный прокси идут только настроенные на него приложения; чтобы подключить все приложения, включите «Системный VPN» в «Настройки › Подключение».</string>
     <string name="press_connect_android_asks_once_to">Нажмите «Подключить». Android один раз попросит разрешить VPN-подключение.</string>
     <string name="open_file">Открыть файл</string>
@@ -370,7 +372,6 @@
     <string name="timeout_in_seconds_1_15">Тайм-аут в секундах · 1–15</string>
     <string name="test_method">Способ проверки</string>
     <string name="proxy">Прокси</string>
-    <string name="active_proxy_2">Активный прокси</string>
     <string name="direct_tcp_2">Прямой TCP</string>
     <string name="direct_icmp_2">Прямой ICMP</string>
     <string name="test_all_servers">Проверить все серверы</string>
@@ -512,17 +513,26 @@
     <string name="open_server_list">Открыть список серверов</string>
     <string name="open">Открыть</string>
     <string name="android_manages_this_turn_on_always">Этим управляет Android: включите «Постоянный VPN» и «Блокировать подключения без VPN».</string>
-    <string name="block_traffic_without_vpn">Блокировать трафик без VPN</string>
+    <string name="kill_switch">Kill switch</string>
     <string name="show">Показать</string>
     <string name="allow">Разрешить</string>
     <string name="allow_location_all_the_time">Разрешить геолокацию всегда</string>
-    <string name="android_shows_wi_fi_names_only">Android показывает имена Wi-Fi только приложениям, которым всегда разрешена геолокация, и только при включённой геолокации.</string>
+    <string name="android_shows_wi_fi_names_only">Android показывает имена Wi-Fi только приложениям, которым всегда разрешена геолокация, и только при включённой геолокации. До тех пор Elarni считает любую сеть Wi-Fi недоверенной и подключается.</string>
+    <string name="allow_notifications">Разрешить уведомления</string>
+    <string name="reminders_need_elarni_s_notifications">Для напоминаний нужны уведомления Elarni. Они выключены в настройках Android.</string>
     <string name="none_every_wi_fi_network_connects">Нет. Подключение в любой сети Wi-Fi.</string>
-    <string name="one_network_name_per_line">Одно имя сети на строку.</string>
+    <string name="connected_now">Подключена сейчас</string>
+    <string name="trust">Доверять</string>
+    <string name="trusted">Доверенные</string>
+    <string name="not_trusted_the_vpn_connects_here">Не доверенная. VPN здесь подключается.</string>
+    <string name="trusted_the_vpn_stays_as_it">Доверенная. VPN здесь остаётся как есть.</string>
+    <string name="add_by_name">Добавить по имени</string>
+    <string name="for_a_network_that_is_not">Для сети, к которой вы сейчас не подключены</string>
+    <string name="remove_name">Удалить %1$s</string>
+    <string name="joining_a_trusted_network_leaves">При входе в доверенную сеть VPN остаётся как есть.</string>
     <string name="trusted_wi_fi_networks">Доверенные сети Wi-Fi</string>
     <string name="connection_2">Подключение</string>
     <string name="provider_profile">Профиль провайдера</string>
-    <string name="current_rules_active_tunnel">Текущие правила / активный туннель</string>
     <string name="use_profile">Как в профиле</string>
     <string name="evergreen">Вечнозелёный</string>
     <string name="blue">Синий</string>
@@ -563,7 +573,6 @@
     <string name="bootstrap_dns_server">Начальный DNS-сервер</string>
     <string name="numeric_ipv4_or_ipv6_address_used">Числовой адрес IPv4 или IPv6, через который вне туннеля определяются адреса серверов.</string>
     <string name="dns_override">Свой DNS</string>
-    <string name="use_profile_dns">DNS из профиля</string>
     <string name="let_other_apps_control_the_connection">Разрешить другим приложениям управлять подключением</string>
     <string name="automation_apps_such_as_tasker_can">Приложения автоматизации вроде Tasker смогут подключать и отключать VPN с ключом управления. Что они отправляют, описано в «Ярлыках».</string>
     <string name="control_key">Ключ управления</string>
@@ -582,8 +591,9 @@
     <string name="profile_ip_override">IP для профилей</string>
     <string name="preferred_ip">Предпочтительный IP</string>
     <string name="resolve_server_before_connecting">Разрешать адрес сервера перед подключением</string>
-    <string name="joining_a_wi_fi_network_that">Подключение к сети Wi-Fi не из списка доверенных включает VPN. Доверенные сети, мобильный интернет и остановленное вами подключение остаются как есть до следующей сети.</string>
+    <string name="joining_a_wi_fi_network_that">Подключение к сети Wi-Fi не из списка доверенных включает VPN. Доверенные сети, мобильный интернет и остановленное вами подключение остаются как есть до следующей сети. Пока VPN выключен, Elarni продолжает работать, чтобы следить за Wi-Fi, и показывает уведомление.</string>
     <string name="connect_on_untrusted_wi_fi">Подключаться в недоверенных сетях Wi-Fi</string>
+    <string name="watching_for_untrusted_wi_fi">Следит за недоверенными сетями Wi-Fi</string>
     <string name="pause_when_screen_turns_off">Пауза при выключении экрана</string>
     <string name="connect_after_device_restart">Подключаться после перезагрузки</string>
     <string name="requires_prior_vpn_consent_unlock_the">Нужно заранее выданное разрешение на VPN. После перезагрузки разблокируйте устройство.</string>
@@ -611,6 +621,7 @@
     <string name="share_qr_code">Поделиться QR-кодом</string>
     <string name="the_clipboard_is_empty_copy_a">Буфер обмена пуст. Сначала скопируйте ссылку или конфигурацию.</string>
     <string name="destination_approved_tap_connect">Адрес подтверждён. Нажмите «Подключить».</string>
+    <string name="selected_server_replaced">Выбранного сервера больше нет в его подписке. Elarni выбрал другой сервер.</string>
     <string name="file_saved">Файл сохранён.</string>
     <string name="section_general">Общие</string>
     <string name="section_appearance">Внешний вид</string>
@@ -687,6 +698,24 @@
         <item quantity="many">Назначен %d подпискам</item>
         <item quantity="other">Назначен %d подпискам</item>
     </plurals>
+    <plurals name="backup_saved_without_forbidden">
+        <item quantity="one">Копия сохранена без %1$d подписки, провайдер которой запрещает резервное копирование: %2$s.</item>
+        <item quantity="few">Копия сохранена без %1$d подписок, провайдеры которых запрещают резервное копирование: %2$s.</item>
+        <item quantity="many">Копия сохранена без %1$d подписок, провайдеры которых запрещают резервное копирование: %2$s.</item>
+        <item quantity="other">Копия сохранена без %1$d подписки, провайдеры которых запрещают резервное копирование: %2$s.</item>
+    </plurals>
+    <plurals name="backup_saved_without_unrefreshed">
+        <item quantity="one">Копия сохранена без %1$d подписки, которая ещё не обновлялась: %2$s. Обновите хотя бы раз перед копированием.</item>
+        <item quantity="few">Копия сохранена без %1$d подписок, которые ещё не обновлялись: %2$s. Обновите их хотя бы раз перед копированием.</item>
+        <item quantity="many">Копия сохранена без %1$d подписок, которые ещё не обновлялись: %2$s. Обновите их хотя бы раз перед копированием.</item>
+        <item quantity="other">Копия сохранена без %1$d подписки, которые ещё не обновлялись: %2$s. Обновите их хотя бы раз перед копированием.</item>
+    </plurals>
+    <plurals name="backup_also_without_unrefreshed">
+        <item quantity="one">Также не сохранена %1$d подписка, которая ещё не обновлялась: %2$s. Обновите хотя бы раз перед копированием.</item>
+        <item quantity="few">Также не сохранены %1$d подписки, которые ещё не обновлялись: %2$s. Обновите их хотя бы раз перед копированием.</item>
+        <item quantity="many">Также не сохранено %1$d подписок, которые ещё не обновлялись: %2$s. Обновите их хотя бы раз перед копированием.</item>
+        <item quantity="other">Также не сохранено %1$d подписки, которые ещё не обновлялись: %2$s. Обновите их хотя бы раз перед копированием.</item>
+    </plurals>
     <plurals name="every_hours">
         <item quantity="one">Каждый %d ч</item>
         <item quantity="few">Каждые %d ч</item>
@@ -741,6 +770,12 @@
         <item quantity="few">Обновлено %d ч назад</item>
         <item quantity="many">Обновлено %d ч назад</item>
         <item quantity="other">Обновлено %d ч назад</item>
+    </plurals>
+    <plurals name="subscriptions_not_updated">
+        <item quantity="one">%d не обновлена</item>
+        <item quantity="few">%d не обновлены</item>
+        <item quantity="many">%d не обновлено</item>
+        <item quantity="other">%d не обновлены</item>
     </plurals>
     <plurals name="updated_days_ago">
         <item quantity="one">Обновлено %d день назад</item>

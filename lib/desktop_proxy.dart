@@ -38,6 +38,7 @@ final class DesktopProxy {
     Future<bool> Function(String prompt)? confirmLink,
     Duration? replyTimeout,
     Duration? helperExitGrace,
+    Duration? managedListTimeout,
     int? automationProbeSeconds,
     int? automationRetrySeconds,
     List<CatalogMap>? livenessTargets,
@@ -58,6 +59,7 @@ final class DesktopProxy {
        // Tests shorten these waits; the defaults bound real helpers and networks.
        _replyTimeout = replyTimeout ?? const Duration(seconds: 20),
        _helperExitGrace = helperExitGrace ?? const Duration(seconds: 10),
+       _managedListTimeout = managedListTimeout ?? const Duration(seconds: 10),
        _automationProbeSeconds = automationProbeSeconds ?? 5,
        _automationRetrySeconds = automationRetrySeconds,
        _livenessTargets = livenessTargets ?? DesktopProxy.defaultHealthTargets,
@@ -89,13 +91,16 @@ final class DesktopProxy {
   _cameraScan;
   final void Function()? _cancelCamera;
   final Duration _replyTimeout, _helperExitGrace, _refreshInterval;
+  // How long Connect waits, in total, for routing lists never downloaded.
+  final Duration _managedListTimeout;
   final Future<WiFiReading> Function() _wifiNetwork;
   final Duration _wifiInterval;
   // Null where System proxy mode does not apply: tests and the headless daemon.
   final SystemProxySession? _systemProxy;
   bool _proxyReleased = false;
   Timer? _wifiTimer;
-  // The network last acted on; null before the first reading.
+  // The network last acted on: its name, or for a name that cannot be read,
+  // a NUL and the addresses it was read on; null before the first reading.
   ({String? name})? _wifi;
   String? _wifiStatus, _wifiPath;
   int _wifiSkips = 0;
@@ -153,8 +158,11 @@ final class DesktopProxy {
         })
       >{};
   final _refreshBackoff = <String, ({DateTime until, int failures})>{};
+  // Subscriptions whose scheduled refresh met a risky answer since their last
+  // update; each is announced once.
+  final _reviewNoticed = <String>{};
   Future<void>? _initializing, _stopping;
-  // With Block traffic without VPN the core keeps its kill switch after a
+  // With the Kill switch setting the core keeps its kill switch after a
   // tunnel that ended by itself and, when asked, between a restart's two
   // tunnels. _guardKept: one is in place, so no lookup is answered.
   // _guardHeld: a restart's stop kept it, and a plain stop lifts it.
@@ -163,6 +171,10 @@ final class DesktopProxy {
   // The addresses each server name last resolved to, for starts under a kept
   // kill switch.
   final _hostAddresses = <String, List<InternetAddress>>{};
+  // Where the OS proxy was last sent, and whether the last start found a
+  // listener port taken by another program.
+  int? _proxyPort;
+  var _listenerTaken = false;
   Future<CatalogMap>? _disconnecting;
   Future<Process>? _process, _lease;
   StreamIterator<List<int>>? _leaseOutput;
@@ -178,6 +190,11 @@ final class DesktopProxy {
   String? _coreVersion;
   ({Object? enabled, int at})? _vpnService;
   Timer? _timer, _initRetry;
+  // Why the last load failed, until one succeeds: its error code, and the
+  // revision of a stored catalog that decrypted but was not one ('' else).
+  // storageStatus reports them; resetStorage sets that catalog aside.
+  String? _initFailure;
+  String _rejectedRevision = '';
   void Function(String?)? _listener;
   bool _disposed = false, _storageLost = false;
   int _generation = 0;
@@ -348,6 +365,7 @@ final class DesktopProxy {
             _listener?.call(code);
         }
 
+        _rejectedRevision = '';
         final CatalogMap stored;
         try {
           if (_catalogIO == null) {
@@ -383,6 +401,7 @@ final class DesktopProxy {
             rethrow;
           } on Object {
             // Not a catalog, whatever it is: it stays on disk untouched.
+            _rejectedRevision = _revision;
             throw desktopError('storage_corrupt');
           }
           final migrated = _catalog!.migrateSessionLimits();
@@ -417,6 +436,8 @@ final class DesktopProxy {
           _automation.intent = false;
           _automation.status = 'unreadableConfiguration';
         }
+        _initFailure = null;
+        _rejectedRevision = '';
         if (!_disposed) {
           if ((Platform.isWindows || Platform.isLinux) && _platformIO == null) {
             _platform.setMethodCallHandler((call) async {
@@ -442,14 +463,59 @@ final class DesktopProxy {
           );
         }
       }().onError<Object>((error, stack) {
-        // A locked keyring or busy store at login must not need an app restart, but
-        // the UI's 1 Hz polling must not respawn the core or re-prompt every second.
-        _initRetry = Timer(
-          const Duration(seconds: 10),
-          () => _initializing = null,
-        );
+        _failInitialization(error);
         Error.throwWithStackTrace(error, stack);
       });
+
+  // A locked keyring or busy store at login must not need an app restart, but
+  // the UI's 1 Hz polling must not respawn the core or re-prompt every second.
+  void _failInitialization(Object error) {
+    _initFailure = error is PlatformException ? error.code : 'operation_failed';
+    _initRetry = Timer(const Duration(seconds: 10), () => _initializing = null);
+  }
+
+  // Only a catalog that cannot be read again is reset, never a busy store or
+  // a locked keyring that a retry or an unlock may still open.
+  bool get _resettable => !_storageLost && _initFailure == 'storage_corrupt';
+
+  CatalogMap _storageStatus() {
+    final code = _storageLost ? 'storage_unavailable' : _initFailure;
+    return {'code': code, 'resettable': _resettable};
+  }
+
+  // Sets the unreadable catalog aside in its folder, never deleting it, and
+  // loads again, which starts an empty catalog. The reset stands in for the
+  // load until that load ends, so neither a retry nor another command reads
+  // the store between the two.
+  Future<CatalogMap> _resetStorage() async {
+    // A load in flight decides whether the store is still unreadable.
+    await _initializing?.then<void>((_) {}, onError: (Object _) {});
+    if (_disposed) throw desktopError('cancelled');
+    if (!_resettable) throw desktopError('busy');
+    _initRetry?.cancel();
+    final rejected = _rejectedRevision;
+    final reset = () async {
+      final CatalogMap aside;
+      try {
+        // The lease of the failed load, or a new one if its core exited.
+        if (_catalogIO == null && _lease == null)
+          await _native('acquireCatalog', {});
+        aside = await _storage('setAsideCatalog', {'revision': rejected});
+      } on Object catch (error) {
+        _failInitialization(error);
+        rethrow;
+      }
+      _initializing = null;
+      await _initialize();
+      return <String, Object?>{
+        'setAside': aside['setAside'] == true,
+        'name': aside['name'] is String ? aside['name'] : null,
+        'state': _state,
+      };
+    }();
+    _initializing = reset;
+    return reset;
+  }
 
   Future<void> _retireAssets() async {
     if (!(Platform.isWindows || Platform.isLinux) ||
@@ -775,31 +841,52 @@ final class DesktopProxy {
     }
   }
 
-  /// Puts the user's proxy setting back. Quitting the window does not wait
-  /// for [dispose], and the OS proxy must not outlive its listener.
+  /// Puts the user's proxy setting back. A quit waits for [dispose] only so
+  /// long, and the OS proxy must not outlive its listener.
   Future<void> releaseSystemProxy() async {
     _proxyReleased = true;
     await _syncSystemProxy();
   }
 
-  // The OS proxy follows a running System proxy session; any other state gives
-  // the user's own setting back.
+  // The OS proxy follows a running System proxy session, restarts included:
+  // a server switch, a settings change or failover keeps it on the listener,
+  // so apps that follow it never go direct in between. A first start points
+  // it only once its listener is up. Any other state gives the user's own
+  // setting back. No elevated helper runs in this mode, so its kill switch is
+  // the setting itself: it stays on the listener, closed or not, while the
+  // session is down against the user's wish. Apps that follow the setting
+  // then get no connection instead of a direct one, until a reconnect, a
+  // disconnect or a quit.
   Future<void> _syncSystemProxy() async {
     final settings = _catalog?.settings;
+    final wanted =
+        !_disposed &&
+        !_proxyReleased &&
+        settings != null &&
+        settings.systemProxy &&
+        switch (_state) {
+          'connected' || 'reconnecting' || 'reasserting' => true,
+          // Set only by a session that was up: a restart keeps the setting.
+          // The catalog is the running one until the restart succeeds, so the
+          // port is the one Elarni's listener had.
+          'connecting' => _proxyPort != null,
+          // Never a port another program holds: the setting would hand it
+          // this user's traffic.
+          'failed' => settings.blockWithoutVPN && !_listenerTaken,
+          _ => false,
+        };
     final code = await _systemProxy?.sync(
-      !_disposed &&
-              !_proxyReleased &&
-              settings != null &&
-              settings.systemProxy &&
-              {'connected', 'reconnecting', 'reasserting'}.contains(_state)
-          ? settings.httpPort
-          : null,
+      _proxyPort = wanted ? settings.httpPort : null,
     );
     if (code != null) _listener?.call(code);
   }
 
-  Future<void> dispose() async {
+  /// Ends the connection and the helpers. With the kill switch on, the
+  /// helper lifts its block first; [keepBlock] (a quit for an update)
+  /// leaves it in place until the new build connects.
+  Future<void> dispose({bool keepBlock = false}) async {
     if (_disposed) return;
+    // Commands are refused from here on; only this stop still reaches the helper.
     _disposed = true;
     await _syncSystemProxy();
     _timer?.cancel();
@@ -807,7 +894,7 @@ final class DesktopProxy {
     _automationTimer?.cancel();
     _wifiTimer?.cancel();
     _listener = null;
-    await _disconnect();
+    await _disconnect(release: !keepBlock);
     try {
       await _initializing;
     } on Object {

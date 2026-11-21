@@ -59,6 +59,7 @@ class Engine(private val app: ElarniApplication, private val assets: RoutingAsse
     /** The listed apps' UIDs the running tunnel and per-app rules took, or null when per-app routing does not apply. */
     private var listedUids: Map<String, Int?>? = null
     private fun uid(name: String) = runCatching { app.packageManager.getApplicationInfo(name, 0).uid }.getOrNull()
+    fun noListedAppInstalled(settings: JSONObject) = Catalog.noListedAppInstalled(settings, app.packageName, ::uid)
     /** Whether a listed app was installed, removed or reinstalled since the running tunnel started. */
     fun listedAppsChanged() = running && listedUids?.let { it != it.keys.associateWith(::uid) } == true
     private val dns = Executors.newFixedThreadPool(32)

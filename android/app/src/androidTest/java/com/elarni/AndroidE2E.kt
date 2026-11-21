@@ -295,7 +295,7 @@ class AndroidE2E {
         assertFalse(backup.contains("p@ss"))
         call("restore", obj("text" to backup, "password" to "synthetic backup password"))
         val before = snapshot().data.toString()
-        val invalid = snapshot().backup()
+        val invalid = snapshot().backup().document
         invalid.objects("subscriptions").single().objects("nodes").single().getJSONObject("config").objects("outbounds").first().getJSONObject("settings").remove("uuid")
         val sealed = sealByHand(invalid, "synthetic backup password")
         assertEquals("invalid_backup", expectFailure { call("restore", obj("text" to sealed, "password" to "synthetic backup password")) })
@@ -351,7 +351,15 @@ class AndroidE2E {
         keys.deleteEntry("${context.packageName}.$name.v1")
         assertEquals("storage_locked", expectFailure { store.load() })
         assertTrue(file.readBytes().contentEquals(good))
+        assertEquals("A save keeps a file whose key is gone", "storage_unavailable", expectFailure { store.save(obj("secret" to "replacement")) })
+        assertTrue(file.readBytes().contentEquals(good))
+        // Reset clears the app's data, the file with it: the store starts over under a new key.
         file.delete()
+        assertNull(store.load())
+        store.save(original)
+        assertEquals(original.toString(), store.load().toString())
+        file.delete()
+        keys.deleteEntry("${context.packageName}.$name.v1")
     }
     @Test fun e_stopAfterFailedLoadKeepsStoredData() {
         val store = EncryptedStore(ui.activity)

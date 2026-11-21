@@ -96,6 +96,24 @@ struct SubscriptionChecks {
       try expect(candidate.register(urlText: "https://example.org/added") == added, "a readable duplicate was added again")
     }
 
+    // A refresh that drops the selected server hands over instead of disconnecting, as on the iPhone.
+    try check("a refresh that removed the selected server picks an allowed server, then its subscription's") {
+      let nodes: [(id: String, subscriptionID: String, format: String?)] = [
+        ("other-1", "other", nil), ("proxy", "feed", "telegram"), ("feed-1", "feed", "xrayProfile"), ("feed-2", "feed", nil),
+      ]
+      func pick(_ allowed: [String], enabled: Bool, from subscription: String = "feed") -> String? {
+        SubscriptionStore.refreshFallback(allowed: allowed, automationEnabled: enabled, removedFrom: subscription, nodes: nodes)
+      }
+      try expect(pick(["gone", "other-1", "feed-2"], enabled: true) == "other-1",
+        "recovery's first allowed server that is still there did not come first")
+      try expect(pick(["other-1"], enabled: false) == "feed-1",
+        "allowed servers counted while recovery is off")
+      try expect(pick(["gone", "proxy"], enabled: true) == "feed-1",
+        "a removed allowed server or a Telegram proxy was picked")
+      try expect(pick([], enabled: false, from: "other") == "other-1", "the removed server's subscription was not used")
+      try expect(pick([], enabled: false, from: "empty") == nil, "a server of another subscription replaced the removed one")
+    }
+
     try check("bulk tests run at most two probes per SNI, keyed by the name the handshake sends") {
       func key(_ outbound: [String: Any]) throws -> String? { probeKey(outbound: try JSONSerialization.data(withJSONObject: outbound)) }
       try expect(key(["protocol": "vless", "settings": ["address": "192.0.2.1"],
@@ -316,13 +334,13 @@ struct SubscriptionChecks {
     try check("refresh scheduling recovers after a previous failure") {
       let now = Date(timeIntervalSince1970: 1000)
       var schedule = RefreshSchedule.initial(last: nil, now: now, interval: 3600)
-      schedule.failed(now: now, interval: 3600, category: "refresh", authorization: false)
+      schedule.failed(now: now, interval: 3600, category: "refresh", failure: .other)
       try expect(schedule.retryAt == now.addingTimeInterval(60), "first retry delay")
       schedule.succeeded(now: now, interval: 3600, jitter: 0)
       try expect(schedule.due == now.addingTimeInterval(3600), "next successful refresh")
       try expect(schedule.retryIndex == 0 && schedule.retryAt == nil && schedule.errorCategory == nil && !schedule.paused, "refresh error state was retained")
     }
-    try check("subscription intervals update persisted deadlines without clearing retries or approval pauses") {
+    try check("subscription intervals update persisted deadlines without clearing retries; an older version's pause is due at its retry") {
       let scheduleDirectory = directory.appendingPathComponent("intervals")
       try FileManager.default.createDirectory(at: scheduleDirectory, withIntermediateDirectories: true)
       let last = Date(timeIntervalSince1970: 1_700_000_000)
@@ -350,16 +368,16 @@ struct SubscriptionChecks {
       }
       let saved = try open()
       saved.now = { last.addingTimeInterval(5 * 3600) }
-      try expect(Set(saved.dueSubscriptions()) == ["ready", "retry"], "four-hour default not applied to old catalog")
+      try expect(Set(saved.dueSubscriptions()) == ["ready", "retry", "paused"], "four-hour default not applied to old catalog, or a pause kept")
       saved.autoUpdateInterval = { 12 * 3600 }
-      try expect(saved.dueSubscriptions() == ["retry"], "interval change cleared retry or approval state")
+      try expect(saved.dueSubscriptions() == ["retry", "paused"], "interval change cleared retry state")
       let snapshots = saved.snapshot()["subscriptions"] as! [[String: Any]]
       try expect(snapshots.first { $0["id"] as? String == "ready" }?["nextRefreshAt"] as? Double == last.timeIntervalSince1970 + 12 * 3600,
         "displayed deadline disagrees with scheduler")
       let reopened = try open()
       reopened.autoUpdateInterval = { 12 * 3600 }
       reopened.now = { last.addingTimeInterval(13 * 3600) }
-      try expect(Set(reopened.dueSubscriptions()) == ["ready", "retry"], "new interval lost after reopening")
+      try expect(Set(reopened.dueSubscriptions()) == ["ready", "retry", "paused"], "new interval lost after reopening")
       try expect(reopened.nextRefreshDate() == last.addingTimeInterval(60), "retry deadline changed with interval")
     }
     // Schedules written while the device clock ran a month ahead, then corrected, and ones written now.
@@ -392,23 +410,23 @@ struct SubscriptionChecks {
       try expect(succeeded.dueSubscriptions() == ["ahead"], "a refresh scheduled under a clock that ran ahead was not due")
       try expect(succeeded.nextRefreshDate().map { $0 <= clockNow } == true, "the next refresh waits for the clock that ran ahead")
       let retrying = try scheduledSubscriptions("clock-ahead-retry", ["retry": persisted(clockAhead) {
-        $0.failed(now: clockAhead, interval: 4 * 3600, category: "refresh", authorization: false)
+        $0.failed(now: clockAhead, interval: 4 * 3600, category: "refresh", failure: .other)
       }])
       try expect(retrying.dueSubscriptions() == ["retry"], "a retry scheduled under a clock that ran ahead was not due")
       try expect(retrying.nextRefreshDate().map { $0 <= clockNow } == true, "the retry waits for the clock that ran ahead")
       // A refresh that then fails starts over from now, as one whose time had passed does.
       var failing = RefreshSchedule(nextRefreshAt: clockAhead.addingTimeInterval(4 * 3600))
-      failing.failed(now: clockNow, interval: 4 * 3600, category: "refresh", authorization: false)
+      failing.failed(now: clockNow, interval: 4 * 3600, category: "refresh", failure: .other)
       try expect(failing.nextRefreshAt == clockNow.addingTimeInterval(4 * 3600), "a failure kept the deadline of the clock that ran ahead")
       var waiting = RefreshSchedule(nextRefreshAt: clockNow.addingTimeInterval(4.4 * 3600))
-      waiting.failed(now: clockNow, interval: 4 * 3600, category: "refresh", authorization: false)
+      waiting.failed(now: clockNow, interval: 4 * 3600, category: "refresh", failure: .other)
       try expect(waiting.nextRefreshAt == clockNow.addingTimeInterval(4.4 * 3600), "a failure moved a deadline within its interval")
     }
     try check("a subscription deadline within its jittered interval or last retry delay is not due early") {
       let jittered = try persisted(clockNow) { $0.succeeded(now: clockNow, interval: 4 * 3600, jitter: 1) }
       let lastRetry = try persisted(clockNow) {
         $0.retryIndex = 2
-        $0.failed(now: clockNow, interval: 4 * 3600, category: "refresh", authorization: false)
+        $0.failed(now: clockNow, interval: 4 * 3600, category: "refresh", failure: .other)
       }
       let both = try scheduledSubscriptions("clock-in-schedule", ["jittered": jittered, "retry": lastRetry])
       try expect(both.dueSubscriptions().isEmpty, "a deadline the schedule wrote was due early")
@@ -420,11 +438,38 @@ struct SubscriptionChecks {
       try expect(alone.dueSubscriptions().isEmpty && alone.nextRefreshDate() == clockNow.addingTimeInterval(4 * 3600 * 1.1),
         "the longest jittered interval was not kept")
     }
-    try check("a paused subscription stays paused when its deadline was written while the clock ran ahead") {
-      let paused = try scheduledSubscriptions("clock-ahead-paused", ["paused": persisted(clockAhead) {
-        $0.failed(now: clockAhead, interval: 4 * 3600, category: "authorization", authorization: true)
+    try check("an approval requirement retries in two hours, a device reply an interval later, and neither pauses") {
+      let now = Date(timeIntervalSince1970: 1000)
+      var approval = RefreshSchedule(nextRefreshAt: now.addingTimeInterval(600), retryIndex: 2)
+      approval.failed(now: now, interval: 4 * 3600, category: "authorization", failure: .approval)
+      try expect(approval.due == now.addingTimeInterval(7200) && approval.retryIndex == 0 && !approval.paused,
+        "an approval requirement did not retry in two hours")
+      var short = RefreshSchedule.initial(last: nil, now: now, interval: 3600)
+      short.failed(now: now, interval: 3600, category: "authorization", failure: .approval)
+      try expect(short.due == now.addingTimeInterval(3600), "an approval retry waited longer than the interval")
+      var device = RefreshSchedule(nextRefreshAt: now.addingTimeInterval(600), retryIndex: 1, retryAt: now.addingTimeInterval(60))
+      device.failed(now: now, interval: 6 * 3600, category: "authorization", failure: .device)
+      try expect(device.due == now.addingTimeInterval(6 * 3600) && device.retryAt == nil && device.retryIndex == 0 && !device.paused,
+        "a device reply was not asked again an interval later")
+      device.failed(now: now.addingTimeInterval(6 * 3600), interval: 6 * 3600, category: "authorization", failure: .device)
+      try expect(device.due == now.addingTimeInterval(12 * 3600), "a repeated device reply took a short retry")
+    }
+    try check("an approval retry or an older version's pause written while the clock ran ahead is due now") {
+      let approval = try scheduledSubscriptions("clock-ahead-approval", ["approval": persisted(clockAhead) {
+        $0.failed(now: clockAhead, interval: 4 * 3600, category: "authorization", failure: .approval)
       }])
-      try expect(paused.dueSubscriptions().isEmpty && paused.nextRefreshDate() == nil, "a paused subscription was scheduled")
+      try expect(approval.dueSubscriptions() == ["approval"] && approval.nextRefreshDate().map { $0 <= clockNow } == true,
+        "an approval retry written under a clock that ran ahead was not due")
+      let paused = try scheduledSubscriptions("clock-ahead-paused", ["paused": persisted(clockAhead) {
+        $0.errorCategory = "authorization"; $0.paused = true
+      }])
+      try expect(paused.dueSubscriptions() == ["paused"] && paused.nextRefreshDate().map { $0 <= clockNow } == true,
+        "a schedule an older version paused was not due")
+      let waiting = try scheduledSubscriptions("paused-in-schedule", ["paused": persisted(clockNow.addingTimeInterval(3600)) {
+        $0.errorCategory = "authorization"; $0.paused = true
+      }])
+      try expect(waiting.dueSubscriptions().isEmpty && waiting.nextRefreshDate() == clockNow.addingTimeInterval(3600),
+        "a schedule an older version paused was not due at its deadline")
     }
     try check("a managed list deadline written while the clock ran ahead is due now, one within its jitter is not") {
       let routes = try RoutingStore(directory: directory.appendingPathComponent("managed-clock"))
@@ -442,14 +487,46 @@ struct SubscriptionChecks {
         try routes.restore(JSONSerialization.data(withJSONObject: checkpoint))
       }
       let jittered = try persisted(clockNow) { $0.succeeded(now: clockNow, interval: 86400, jitter: 1) }
-      let paused = try persisted(clockAhead) { $0.failed(now: clockAhead, interval: 86400, category: "authorization", authorization: true) }
+      let approval = try persisted(clockNow) { $0.failed(now: clockNow, interval: 86400, category: "authorization", failure: .approval) }
       try restore(["ahead": persisted(clockAhead) { $0.succeeded(now: clockAhead, interval: 86400, jitter: 0) },
-        "jittered": jittered, "paused": paused])
+        "jittered": jittered, "approval": approval])
       try expect(routes.dueManagedSources().map { $0.sourceID } == ["ahead"], "a list scheduled under a clock that ran ahead was not due, or another was")
       try expect(routes.nextManagedDate().map { $0 <= clockNow } == true, "the next list refresh waits for the clock that ran ahead")
-      try restore(["jittered": jittered, "paused": paused])
+      try restore(["jittered": jittered])
       try expect(routes.dueManagedSources().isEmpty && routes.nextManagedDate() == clockNow.addingTimeInterval(86400 * 1.1),
         "the longest jittered list interval was not kept")
+      // A list that met an answer needing approval is tried again in two hours, not paused.
+      try restore(["jittered": jittered, "approval": approval])
+      try expect(routes.dueManagedSources().isEmpty && routes.nextManagedDate() == clockNow.addingTimeInterval(7200),
+        "a list that needed approval was not retried in two hours")
+    }
+    try check("Connect downloads the lists the selected profile never downloaded, unless they wait for approval") {
+      let routes = try RoutingStore(directory: directory.appendingPathComponent("managed-missing"))
+      try routes.importProvider(#"{"Name":"Managed fixture","RemoteDNSType":"DoU","RemoteDNSIP":"1.1.1.1","DomesticDNSType":"DoU","DomesticDNSIP":"8.8.8.8","DirectSites":["full:example.com"]}"#,
+        subscriptionID: "managed")
+      routes.now = { clockNow }
+      var checkpoint = try JSONSerialization.jsonObject(with: routes.checkpoint()) as! [String: Any]
+      var profiles = checkpoint["profiles"] as! [[String: Any]]
+      let profileID = profiles[0]["id"] as! String
+      let failed = try persisted(clockNow) { $0.failed(now: clockNow, interval: 86400, category: "refresh", failure: .other) }
+      let waiting = try persisted(clockNow) { $0.failed(now: clockNow, interval: 86400, category: "authorization", failure: .approval) }
+      let due = try persisted(clockNow) { _ in }
+      let lists: [(String, [String: Any], Bool)] = [("fetched", due, true), ("never", due, false),
+        ("waiting", waiting, false), ("failed", failed, false)]
+      profiles[0]["managedSources"] = lists.map { id, schedule, fetched -> [String: Any] in
+        var state: [String: Any] = ["source": ["id": id, "url": "https://fixture.invalid/\(id).txt", "destination": "direct", "matchMode": "exact"],
+          "domains": fetched ? ["\(id).example"] : [String](), "schedule": schedule]
+        if fetched { state["lastSuccessfulFetch"] = clockNow.timeIntervalSinceReferenceDate }
+        return state
+      }
+      checkpoint["profiles"] = profiles
+      try routes.restore(JSONSerialization.data(withJSONObject: checkpoint))
+      try expect(routes.missingManagedSources(subscriptionID: "managed").map { "\($0.profileID) \($0.sourceID)" } ==
+        ["\(profileID) never", "\(profileID) failed"], "the lists without a download were not the ones Connect tries")
+      try expect(routes.missingManagedSources(subscriptionID: "other").isEmpty && routes.missingManagedSources(subscriptionID: nil).isEmpty,
+        "a subscription without the profile has missing lists")
+      _ = try routes.setEnabled(id: profileID, enabled: false)
+      try expect(routes.missingManagedSources(subscriptionID: "managed").isEmpty, "a profile that is off has missing lists")
     }
     try check("duplicate node matching retains the selected node first") {
       try expect(prioritizingSelection(["first", "selected"], selected: "selected") == ["selected", "first"], "selected duplicate priority")
@@ -553,6 +630,12 @@ struct SubscriptionChecks {
       let shared = try localStore.sharingText(id: vpnID, subscription: false)
       try expect(try localStore.parseImport(Data(shared.utf8)).nodes.first?.name == "Test", "shared server cannot be imported")
       try expect(localStore.selectedNodeID() == vpnID, "Telegram action changed VPN selection")
+      // What a refresh that removed the selected server reads from the catalog.
+      try expect(localStore.refreshFallback(allowed: [telegramID], automationEnabled: true, removedFrom: localID) == vpnID,
+        "the catalog's fallback was not its first VPN server")
+      let names = localStore.names(nodeID: vpnID)
+      try expect(names?.server == "Test" && names?.subscription == group["name"] as? String && localStore.names(nodeID: "gone") == nil,
+        "a server's name or its subscription's was not the one the window shows")
       let reopened = try SubscriptionStore(directory: localDirectory,
         routing: RoutingStore(directory: localDirectory.appendingPathComponent("routing")), secretAccess: localSecrets.access())
       try expect(reopened.selectedNodeID() == vpnID && reopened.dueSubscriptions().isEmpty, "local profiles did not survive relaunch")
@@ -735,6 +818,7 @@ struct SubscriptionChecks {
     passed += try await nodeEditChecks()
     passed += try await hiddenServerChecks(fixture: url)
     passed += try await refreshConcurrencyChecks(fixture: url)
+    passed += try await scheduledRetryChecks(fixture: url)
     passed += try await backupChecks(vless: vless, telegram: telegram, clash: clash, fixture: url)
 
     if CommandLine.arguments.dropFirst().contains("--live-subscription") {
@@ -1546,14 +1630,23 @@ struct SubscriptionChecks {
     _ = try await store.selectProfileGroup(nodeID: clashNode, group: "PROXY", choice: "two")
     _ = try await store.setNodeIPPreference(nodeID: clashNode, preference: "ipv6")
     let remoteID = try store.register(urlText: fixture.appendingPathComponent("feed").absoluteString)
-    try rejects { _ = try store.backupCatalog() }
+    // A subscription never refreshed is left out and named, and the rest is saved.
+    let partial = try store.backupCatalog()
+    let remoteName = (store.snapshot()["subscriptions"] as! [[String: Any]]).first { $0["id"] as? String == remoteID }!["name"] as! String
+    try expect(partial.excluded == [["name": remoteName, "reason": "sharing_refresh_required"]] &&
+      (partial.document["subscriptions"] as! [[String: Any]]).map { $0["id"] as! String } == [groups[0]["id"] as! String] &&
+      partial.document["selectedNodeId"] as? String == clashNode &&
+      !String(decoding: try JSONSerialization.data(withJSONObject: partial.document), as: UTF8.self).contains(remoteID),
+      "an unrefreshed subscription was not left out of the backup on its own")
     var operation = try await store.refresh(id: remoteID)
     for _ in 0..<8 {
       guard let challenge = operation.warning?.challenge else { break }
       operation = try await store.refresh(id: remoteID, challenge: challenge)
     }
     try expect(operation.warning == nil, "backup fixture approvals did not converge")
-    let backup = try store.backupCatalog()
+    let saved = try store.backupCatalog()
+    try expect(saved.excluded.isEmpty, "a refreshed catalog left a subscription out of its backup")
+    let backup = saved.document
     let previous = store.snapshot() as NSDictionary
     let routes = store.routing.snapshot() as NSDictionary
     let oldSecrets = secrets.values
@@ -1607,9 +1700,95 @@ struct SubscriptionChecks {
     try expect((recovered.snapshot() as NSDictionary).isEqual(before), "invalid backup partially published")
     let hidden = try recovered.registerProfiles("#hide-url: yes\n" + vless)
     _ = try await recovered.refresh(id: hidden)
-    try rejects { _ = try recovered.backupCatalog() }
-    print("PASS unknown and hidden provider backup restrictions and invalid restore are enforced")
+    // The restored remote still waits for its approval, so it was never refreshed here.
+    let names = Dictionary(uniqueKeysWithValues: (recovered.snapshot()["subscriptions"] as! [[String: Any]]).map { ($0["id"] as! String, $0["name"] as! String) })
+    let limited = try recovered.backupCatalog()
+    try expect(limited.excluded == [["name": names[restoredRemote]!, "reason": "sharing_refresh_required"], ["name": names[hidden]!, "reason": "sharing_disabled"]],
+      "the backup did not name the subscriptions it left out")
+    let limitedText = String(decoding: try JSONSerialization.data(withJSONObject: limited.document), as: UTF8.self)
+    try expect((limited.document["subscriptions"] as! [[String: Any]]).map { $0["id"] as! String } == [mixedID] &&
+      !limitedText.contains(restoredRemote) && !limitedText.contains(hidden), "a left-out subscription reached the backup")
+    try expect((limited.document["assignments"] as! [String: String])[restoredRemote] == nil &&
+      (limited.document["routes"] as! [[String: Any]]).allSatisfy { $0["providerSubscriptionId"] as? String != restoredRemote },
+      "a left-out subscription's routing reached the backup")
+    let unchanged = recovered.snapshot() as NSDictionary
+    _ = try recovered.beginBackupRestore(limited.document)
+    try recovered.rollbackPublication()
+    try expect((recovered.snapshot() as NSDictionary).isEqual(unchanged), "a backup that left subscriptions out did not restore")
+    // With nothing else to save, the refusal stands.
+    let lone = try SubscriptionStore(directory: directory.appendingPathComponent("lone"),
+      routing: RoutingStore(directory: directory.appendingPathComponent("lone-routing")), secretAccess: MemorySecrets().access())
+    lone.publishRefresh = { [weak lone] candidate in
+      guard let lone else { throw SubscriptionError.invalidState }
+      _ = try lone.beginPublication(candidate)
+      try lone.finishPublication(candidate)
+    }
+    _ = try await lone.refresh(id: try lone.registerProfiles("#hide-url: yes\n" + vless))
+    try rejects { _ = try lone.backupCatalog() }
+    print("PASS unknown and hidden provider subscriptions are left out of backups and invalid restore is refused")
     return 3
+  }
+
+  /// A refresh nobody started that meets an answer needing approval, or a device reply, is tried again later
+  /// instead of never; Reset device ID makes it due at once.
+  static func scheduledRetryChecks(fixture: URL) async throws -> Int {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent("elarni-retries-\(UUID())")
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let store = try SubscriptionStore(directory: directory,
+      routing: RoutingStore(directory: directory.appendingPathComponent("routing")), secretAccess: MemorySecrets().access())
+    store.publishRefresh = { [weak store] candidate in
+      guard let store else { throw Failure(message: "retry fixture store released") }
+      _ = try store.beginPublication(candidate)
+      try store.finishPublication(candidate)
+    }
+    var clock = Date()
+    store.now = { clock }
+    func mode(_ value: String) async throws {
+      _ = try await URLSession.shared.data(from: fixture.appendingPathComponent("mode")
+        .appending(queryItems: [URLQueryItem(name: "value", value: value)]))
+    }
+    func status() -> String? { (store.snapshot()["subscriptions"] as! [[String: Any]])[0]["status"] as? String }
+    try await mode("baseline")
+    // The loopback fixture over plain HTTP needs the user's approval.
+    let id = try store.register(urlText: fixture.appendingPathComponent("feed").absoluteString)
+    for _ in 0..<2 {
+      let automatic = try await store.refresh(id: id, interactive: false)
+      try expect(automatic.warning == nil && status() == "approval_required", "a refresh nobody started asked for approval")
+      try expect(store.dueSubscriptions().isEmpty && store.nextRefreshDate() == clock.addingTimeInterval(7200),
+        "an approval requirement was not retried in two hours")
+      clock = clock.addingTimeInterval(7200)
+      try expect(store.dueSubscriptions() == [id], "the approval retry was not due")
+    }
+    var result = try await store.refresh(id: id)
+    try expect(result.warning?.challenge != nil, "the user's refresh did not offer the approval")
+    for _ in 0..<8 {
+      guard let challenge = result.warning?.challenge else { break }
+      result = try await store.refresh(id: id, challenge: challenge)
+    }
+    try expect(result.warning == nil && status() == "ready", "the approved refresh did not publish")
+    print("PASS a refresh nobody started that needs approval asks for nothing and is retried in two hours")
+
+    // The fixture's provider names a six-hour interval.
+    try await mode("device_limit")
+    for interactive in [true, false] {
+      do { _ = try await store.refresh(id: id, interactive: interactive); throw Failure(message: "a device limit published") }
+      catch let failure as Failure { throw failure }
+      catch { }
+      try expect(status() == "device_limit" && store.dueSubscriptions().isEmpty &&
+        store.nextRefreshDate() == clock.addingTimeInterval(6 * 3600), "a device reply was not asked again an interval later")
+      clock = clock.addingTimeInterval(6 * 3600)
+      try expect(store.dueSubscriptions() == [id], "the device reply's next refresh was not due")
+    }
+    // Hours before that next refresh, Reset device ID makes it due.
+    clock = clock.addingTimeInterval(-5 * 3600)
+    try expect(store.dueSubscriptions().isEmpty, "the device reply's next refresh was due early")
+    _ = try store.resetDeviceID(subscriptionID: id)
+    try expect(store.dueSubscriptions() == [id] && store.nextRefreshDate() == clock, "a device ID reset did not make the refresh due")
+    try await mode("baseline")
+    _ = try await store.refresh(id: id, interactive: false)
+    try expect(status() == "ready", "the refresh after a device ID reset failed")
+    print("PASS a device reply is asked again an interval later, and at once after Reset device ID")
+    return 2
   }
 
   static func refreshConcurrencyChecks(fixture: URL) async throws -> Int {
@@ -1812,7 +1991,7 @@ struct SubscriptionChecks {
     try expect(names(store) == ["First", "Mine"], "a refresh added a hidden server back")
     try expect((group(store)["hiddenNodes"] as! [[String: Any]]).map { $0["id"] as! String } == [ids[2]], "the hidden server was not listed")
     try expect(secrets.values.keys.contains { $0.hasSuffix(ref) }, "a hidden server's secret was reclaimed")
-    _ = try store.beginBackupRestore(try store.backupCatalog())
+    _ = try store.beginBackupRestore(try store.backupCatalog().document)
     try store.finishBackupRestore()
     guard let mine = (group(store)["nodes"] as! [[String: Any]]).first(where: { $0["name"] as? String == "Mine" }) else {
       throw Failure(message: "a restore lost a renamed server")

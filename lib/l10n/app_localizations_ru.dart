@@ -100,11 +100,11 @@ class AppLocalizationsRu extends AppLocalizations {
 
   @override
   String get issueInvalidRouteEnforcementRemedy =>
-      'Замените 0.0.0.0/0 и ::/0 конкретными маршрутами или выключите принудительность. Для полного туннеля выключите принудительность и включите «Блокировать трафик без VPN».';
+      'Замените 0.0.0.0/0 и ::/0 конкретными маршрутами или выключите принудительность. Для полного туннеля выключите принудительность и включите «Kill switch».';
 
   @override
   String get issueInvalidRouteEnforcement =>
-      '«Принудительным маршрутам туннеля» нужны конкретные включённые маршруты, и их нельзя совмещать с «Блокировать трафик без VPN».';
+      '«Принудительным маршрутам туннеля» нужны конкретные включённые маршруты, и их нельзя совмещать с «Kill switch».';
 
   @override
   String get issueRouteModelTooLargeRemedy =>
@@ -116,11 +116,30 @@ class AppLocalizationsRu extends AppLocalizations {
 
   @override
   String get issueStorageUnavailableRemedy =>
-      'Перезапустите Elarni. Если ошибка повторится, восстановите зашифрованную резервную копию.';
+      'Перезапустите Elarni и проверьте, хватает ли места на диске.';
+
+  @override
+  String get issueStorageUnavailableLinuxRemedy =>
+      'Разблокируйте связку ключей и проверьте, что установлен secret-tool, затем перезапустите Elarni.';
 
   @override
   String get issueStorageUnavailable =>
-      'Elarni не удалось прочитать или сохранить свой каталог.';
+      'Elarni не удалось прочитать или сохранить свои данные.';
+
+  @override
+  String get issueStorageBusyRemedy =>
+      'Закройте другую копию или остановите её фоновую службу. Elarni повторит попытку сам.';
+
+  @override
+  String get issueStorageBusy => 'Данные Elarni заняты другой копией Elarni.';
+
+  @override
+  String get issueStorageCorruptRemedy =>
+      'Сбросьте Elarni в «Настройки › Резервная копия и исправление», затем восстановите копию или снова добавьте подписки.';
+
+  @override
+  String get issueStorageCorrupt =>
+      'Elarni не может прочитать свои сохранённые данные на этом компьютере.';
 
   @override
   String get issueBusyRemedy => 'Дождитесь её завершения и повторите попытку.';
@@ -385,7 +404,7 @@ class AppLocalizationsRu extends AppLocalizations {
 
   @override
   String get routeEnforcementWithBlock =>
-      '«Принудительные маршруты туннеля» нельзя совмещать с «Блокировать трафик без VPN». Выключите одно из них.';
+      '«Принудительные маршруты туннеля» нельзя совмещать с «Kill switch». Выключите одно из них.';
 
   @override
   String get routeEnforcementDefaultRoutes =>
@@ -466,9 +485,6 @@ class AppLocalizationsRu extends AppLocalizations {
 
   @override
   String get home => 'Главная';
-
-  @override
-  String get backToHome => 'Назад на главную';
 
   @override
   String get settingsGroupSupport => 'Поддержка';
@@ -677,7 +693,7 @@ class AppLocalizationsRu extends AppLocalizations {
 
   @override
   String get appRoutingNotFirewall =>
-      'DNS и локальные SOCKS/HTTP-слушатели сохраняют свои правила. Маршрутизация приложений — не межсетевой экран и не аварийный выключатель.';
+      'DNS и локальные SOCKS/HTTP-слушатели сохраняют свои правила. Маршрутизация приложений — не межсетевой экран и не kill switch.';
 
   @override
   String get macMatchingHelp =>
@@ -1135,8 +1151,12 @@ class AppLocalizationsRu extends AppLocalizations {
       'Подключение неожиданно прервалось. Переподключитесь, чтобы повторить; если сайты останутся недоступны, используйте «Исправить настройку VPN».';
 
   @override
+  String get connectionStoppedProxyBlocked =>
+      'Подключение неожиданно прервалось. «Kill switch» оставляет системный прокси на Elarni, поэтому приложения, которые им пользуются, остаются без связи, пока вы не переподключитесь. Чтобы снять блокировку, отключитесь.';
+
+  @override
   String get connectionStoppedBlocked =>
-      'Подключение неожиданно прервалось. «Блокировать трафик без VPN» не пропускает трафик, пока вы не переподключитесь; чтобы снять блокировку, используйте «Исправить настройку VPN».';
+      'Подключение неожиданно прервалось. «Kill switch» не пропускает трафик, пока вы не переподключитесь. Блокировку снимает отключение, выход из Elarni или «Исправить настройку VPN».';
 
   @override
   String get windowsDnsNotRestored =>
@@ -1152,8 +1172,32 @@ class AppLocalizationsRu extends AppLocalizations {
   }
 
   @override
+  String get systemProxyChanged =>
+      'Другая программа изменила системный прокси. Elarni настроил его снова.';
+
+  @override
+  String get systemProxyTaken =>
+      'Другая программа раз за разом меняет системный прокси, поэтому Elarni оставил его ей. Приложения, которые его учитывают, могут работать в обход VPN. Включите «Системный VPN» или остановите другую программу.';
+
+  @override
   String get scheduledRefreshFailed =>
       'Не удалось выполнить плановое обновление подписки или маршрутизации.';
+
+  @override
+  String get scheduledRefreshNeedsReview =>
+      'Подписка не обновилась: сеть ответила не так, как ожидалось. Elarni попробует снова через два часа; чтобы проверить её сейчас, откройте «Подписки».';
+
+  @override
+  String get perAppTargetGoneKept =>
+      'Сервер, через который направлено приложение, пропал из подписки. Подключение работает с прежними настройками; выберите для этого приложения другой сервер в «Маршрутизации приложений».';
+
+  @override
+  String get selectedServerReplaced =>
+      'Выбранного сервера больше нет в его подписке. Elarni выбрал другой сервер.';
+
+  @override
+  String get managedListMissing =>
+      'Список доменов профиля маршрутизации ещё не загружен, поэтому его правила не действуют. Elarni загрузит его теперь, когда подключение установлено.';
 
   @override
   String get groupSelectionFailed =>
@@ -1415,9 +1459,6 @@ class AppLocalizationsRu extends AppLocalizations {
   String get httpMethod => 'Метод HTTP';
 
   @override
-  String get currentRulesActiveTunnel => 'Текущие правила / активный туннель';
-
-  @override
   String get testType => 'Тип проверки';
 
   @override
@@ -1656,15 +1697,15 @@ class AppLocalizationsRu extends AppLocalizations {
   String get serverAddressing => 'Адресация серверов';
 
   @override
-  String get blockTrafficMacHelp =>
+  String get killSwitchMacHelp =>
       'macOS держит весь трафик внутри туннеля, в том числе во время переподключения. Исключения маршрутов не действуют.';
 
   @override
-  String get blockTrafficDesktopHelp =>
-      'Если VPN неожиданно остановится, ничего не уйдёт с этого устройства мимо него, пока вы не переподключитесь или не используете «Исправить настройку VPN». Отключение снимает блокировку. Нужен системный VPN; нельзя совмещать с «Принудительными маршрутами туннеля».';
+  String get killSwitchDesktopHelp =>
+      'Если VPN неожиданно остановится, ничего не уйдёт с этого устройства мимо него, пока вы не переподключитесь или не используете «Исправить настройку VPN». Отключение снимает блокировку. В режиме «Системный прокси» системный прокси остаётся на Elarni: приложения, которые им пользуются, остаются без связи, пока вы не переподключитесь или не отключитесь, а приложения, которые его не используют, не защищены. Недоступно в режиме «Только локальный прокси»; нельзя совмещать с «Принудительными маршрутами туннеля».';
 
   @override
-  String get blockTrafficWithoutVpn => 'Блокировать трафик без VPN';
+  String get killSwitch => 'Kill switch';
 
   @override
   String get connectWithoutAdminApprovalHelp =>
@@ -1808,7 +1849,11 @@ class AppLocalizationsRu extends AppLocalizations {
 
   @override
   String get windowsWifiLocationHelp =>
-      'Windows скрывает от Elarni имя сети Wi-Fi. Включите «Службы определения местоположения» и «Разрешить классическим приложениям доступ к расположению» в «Параметры › Конфиденциальность и защита › Расположение».';
+      'Windows скрывает от Elarni имя сети Wi-Fi. Включите «Службы определения местоположения» и «Разрешить классическим приложениям доступ к расположению» в «Параметры › Конфиденциальность и защита › Расположение». До тех пор любая сеть Wi-Fi считается недоверенной.';
+
+  @override
+  String get linuxWifiNameHelp =>
+      'Elarni не может прочитать имя сети Wi-Fi в этой системе: для этого нужен nmcli из NetworkManager или iw. До тех пор любая сеть Wi-Fi считается недоверенной.';
 
   @override
   String get noTrustedWifi => 'Нет. Подключение в любой сети Wi-Fi.';
@@ -1873,7 +1918,7 @@ class AppLocalizationsRu extends AppLocalizations {
 
   @override
   String get enforceRoutesMacHelp =>
-      'Принудительности нужны конкретные включённые маршруты; маршруты по умолчанию, такие как 0.0.0.0/0 и ::/0, не поддерживаются. Для полного туннеля выключите принудительность и включите «Блокировать трафик без VPN» в настройках подключения.';
+      'Принудительности нужны конкретные включённые маршруты; маршруты по умолчанию, такие как 0.0.0.0/0 и ::/0, не поддерживаются. Для полного туннеля выключите принудительность и включите «Kill switch» в настройках подключения.';
 
   @override
   String get enforceRoutesDesktopHelp =>
@@ -1981,7 +2026,7 @@ class AppLocalizationsRu extends AppLocalizations {
   String get searchServers => 'Поиск серверов';
 
   @override
-  String get filterRecent => 'Недавние';
+  String get filterByCountry => 'По странам';
 
   @override
   String get filterFavorites => 'Избранные';
@@ -2002,6 +2047,37 @@ class AppLocalizationsRu extends AppLocalizations {
 
   @override
   String get noMatchingServers => 'Нет подходящих серверов';
+
+  @override
+  String get searchSettings => 'Поиск настроек';
+
+  @override
+  String get noMatchingSettings => 'Нет подходящих настроек';
+
+  @override
+  String get selectServers => 'Выбрать серверы';
+
+  @override
+  String get testAll => 'Проверить все';
+
+  @override
+  String get serverColumn => 'Сервер';
+
+  @override
+  String get latencyColumn => 'Задержка';
+
+  @override
+  String subscriptionCount(int count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: '$count подписки',
+      many: '$count подписок',
+      few: '$count подписки',
+      one: '$count подписка',
+    );
+    return '$_temp0';
+  }
 
   @override
   String get noServersInSubscription => 'В этой подписке нет серверов';
@@ -2101,9 +2177,6 @@ class AppLocalizationsRu extends AppLocalizations {
 
   @override
   String get showAllServers => 'Показать все серверы';
-
-  @override
-  String get noSuccessfulConnections => 'Успешных подключений пока нет';
 
   @override
   String get noFavoriteServers => 'Нет избранных серверов';
@@ -2967,8 +3040,77 @@ class AppLocalizationsRu extends AppLocalizations {
   String get encryptedBackupSaved => 'Зашифрованная копия сохранена.';
 
   @override
+  String backupSavedWithoutForbidden(int count, String names) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other:
+          'Копия сохранена без $count подписки, провайдеры которых запрещают резервное копирование: $names.',
+      many:
+          'Копия сохранена без $count подписок, провайдеры которых запрещают резервное копирование: $names.',
+      few:
+          'Копия сохранена без $count подписок, провайдеры которых запрещают резервное копирование: $names.',
+      one:
+          'Копия сохранена без $count подписки, провайдер которой запрещает резервное копирование: $names.',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String backupSavedWithoutUnrefreshed(int count, String names) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other:
+          'Копия сохранена без $count подписки, которые ещё не обновлялись: $names. Обновите их хотя бы раз перед копированием.',
+      many:
+          'Копия сохранена без $count подписок, которые ещё не обновлялись: $names. Обновите их хотя бы раз перед копированием.',
+      few:
+          'Копия сохранена без $count подписок, которые ещё не обновлялись: $names. Обновите их хотя бы раз перед копированием.',
+      one:
+          'Копия сохранена без $count подписки, которая ещё не обновлялась: $names. Обновите хотя бы раз перед копированием.',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String backupAlsoWithoutUnrefreshed(int count, String names) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other:
+          'Также не сохранено $count подписки, которые ещё не обновлялись: $names. Обновите их хотя бы раз перед копированием.',
+      many:
+          'Также не сохранено $count подписок, которые ещё не обновлялись: $names. Обновите их хотя бы раз перед копированием.',
+      few:
+          'Также не сохранены $count подписки, которые ещё не обновлялись: $names. Обновите их хотя бы раз перед копированием.',
+      one:
+          'Также не сохранена $count подписка, которая ещё не обновлялась: $names. Обновите хотя бы раз перед копированием.',
+    );
+    return '$_temp0';
+  }
+
+  @override
   String get backupRestored =>
       'Копия восстановлена. Перед подключением обновите подписки и данные маршрутизации.';
+
+  @override
+  String get resetElarni => 'Сбросить Elarni';
+
+  @override
+  String get resetElarniHelp =>
+      'Сохранённые данные не удаётся прочитать. Сброс сохранит их в отдельном файле и начнёт с пустого списка.';
+
+  @override
+  String get resetElarniQuestion => 'Сбросить Elarni?';
+
+  @override
+  String get resetElarniBody =>
+      'Сохранённые данные Elarni на этом компьютере не удаётся прочитать. Сброс сохранит нечитаемый файл и начнёт с пустого списка: подписки, серверы и настройки придётся восстановить из копии или добавить заново. Провайдеры, которые считают устройства, увидят этот компьютер как новое устройство.';
+
+  @override
+  String get elarniWasReset =>
+      'Elarni сброшен. Восстановите копию или добавьте подписку.';
 
   @override
   String get chooseBackupAndRestore => 'Выбрать копию и восстановить';
@@ -2991,7 +3133,7 @@ class AppLocalizationsRu extends AppLocalizations {
 
   @override
   String get createBackupHelp =>
-      'Сохраняет подписки, серверы, выбор в группах и маршрутизацию в файл, защищённый паролем. Сначала обновите подписки; провайдеры, запрещающие обмен, запрещают и резервное копирование. Сохраните пароль: восстановить его нельзя.';
+      'Сохраняет подписки, серверы, выбор в группах и маршрутизацию в файл, защищённый паролем. Подписки, провайдер которых запрещает обмен, и ещё ни разу не обновлённые подписки в копию не попадают. Сохраните пароль: восстановить его нельзя.';
 
   @override
   String get restoreBackupReplacesHelp =>

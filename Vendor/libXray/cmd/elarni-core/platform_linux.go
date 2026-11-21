@@ -163,7 +163,7 @@ func platformRequest(method string, payload json.RawMessage) (any, error, bool) 
 			}
 		}
 		return nil, nil, false
-	case "acquireCatalog", "loadCatalog", "saveCatalog":
+	case "acquireCatalog", "loadCatalog", "saveCatalog", "setAsideCatalog":
 		root, err := linuxCatalogRoot()
 		if err != nil {
 			return nil, err, true
@@ -199,6 +199,11 @@ func linuxTool(name string, directories ...string) string {
 }
 
 var linuxSecretTool = func() string { return linuxTool("secret-tool", "/usr/bin", "/run/current-system/sw/bin") }
+
+var linuxGdbus = func() string { return linuxTool("gdbus", "/usr/bin", "/run/current-system/sw/bin") }
+
+// A key item that holds no key: set aside clears it, since it decrypts nothing.
+var errMalformedCatalogKey = errors.New("storage_corrupt")
 
 func linuxCatalogLock(root, name string) (*os.File, error) {
 	if os.MkdirAll(root, 0700) != nil {
@@ -238,15 +243,20 @@ func linuxCatalogKey(root string, create bool) ([]byte, error) {
 		key, err := hex.DecodeString(strings.TrimSpace(output.String()))
 		if err != nil || len(key) != 32 {
 			clear(key)
-			return nil, errors.New("storage_corrupt")
+			return nil, errMalformedCatalogKey
 		}
 		return key, nil
 	}
-	if !create || ctx.Err() != nil {
+	var exit *exec.ExitError
+	if ctx.Err() != nil || !errors.As(err, &exit) || exit.ExitCode() != 1 {
 		return nil, errors.New("storage_unavailable")
 	}
-	var exit *exec.ExitError
-	if !errors.As(err, &exit) || exit.ExitCode() != 1 {
+	if !create {
+		// lookup exits 1 for a missing item and for a keyring that did not
+		// unlock alike; only the Secret Service can tell them apart.
+		if linuxCatalogKeyGone(root) {
+			return nil, errors.New("storage_corrupt")
+		}
 		return nil, errors.New("storage_unavailable")
 	}
 	key := make([]byte, 32)
@@ -262,6 +272,38 @@ func linuxCatalogKey(root string, create bool) ([]byte, error) {
 		return nil, errors.New("storage_unavailable")
 	}
 	return key, nil
+}
+
+// linuxCatalogKeyGone reports whether the Secret Service answered that it holds
+// no item with the key's attributes, locked or not: then nothing can decrypt
+// the catalog again (a keyring reset). secret-tool cannot say so: its search
+// skips locked items. Anything else, from a missing gdbus to output that is
+// not two empty arrays, counts as a keyring that may still unlock.
+func linuxCatalogKeyGone(root string) bool {
+	tool := linuxGdbus()
+	if tool == "" {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	quoted := strings.NewReplacer(`\`, `\\`, `'`, `\'`).Replace(root)
+	command := exec.CommandContext(ctx, tool, "call", "--session", "--dest", "org.freedesktop.secrets",
+		"--object-path", "/org/freedesktop/secrets", "--method", "org.freedesktop.Secret.Service.SearchItems",
+		"{'application': 'com.elarni.Elarni', 'catalog': '"+quoted+"'}")
+	var output bytes.Buffer
+	command.Stdout = &output
+	// SearchItems returns the unlocked matches, then the locked ones.
+	return command.Run() == nil && strings.TrimSpace(output.String()) == "(@ao [], @ao [])"
+}
+
+// clearLinuxCatalogKey deletes a key item that holds no key.
+func clearLinuxCatalogKey(root string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	if exec.CommandContext(ctx, linuxSecretTool(), "clear", "application", "com.elarni.Elarni", "catalog", root).Run() != nil {
+		return errors.New("storage_unavailable")
+	}
+	return nil
 }
 
 func protectLinuxCatalog(key, data []byte, decrypt bool) ([]byte, error) {
@@ -335,6 +377,9 @@ func catalogOperation(root, method string, payload json.RawMessage) (any, error)
 	}
 	defer lock.Close()
 	path := filepath.Join(root, "catalog.enc")
+	if method == "setAsideCatalog" {
+		return setAsideCatalog(root, path, payload)
+	}
 	current, key, err := readCatalog(path)
 	if err != nil {
 		return nil, err
@@ -386,14 +431,59 @@ func catalogOperation(root, method string, payload json.RawMessage) (any, error)
 	if writeErr != nil || syncErr != nil || closeErr != nil || os.Rename(file.Name(), path) != nil {
 		return nil, errors.New("storage_unavailable")
 	}
-	directory, err := os.Open(root)
-	if err != nil {
-		return nil, errors.New("storage_unavailable")
-	}
-	err = directory.Sync()
-	directory.Close()
-	if err != nil {
+	if syncLinuxDirectory(root) != nil {
 		return nil, errors.New("storage_unavailable")
 	}
 	return map[string]any{"revision": current.Revision}, nil
+}
+
+func syncLinuxDirectory(root string) error {
+	directory, err := os.Open(root)
+	if err != nil {
+		return err
+	}
+	defer directory.Close()
+	return directory.Sync()
+}
+
+// setAsideCatalog moves a catalog that cannot be used to a new name in its
+// folder, so the next load starts empty; nothing deletes it. A key item that
+// holds no key is cleared too, as it blocks even an empty catalog; a key that
+// is well formed stays, so the moved file stays readable with it. The caller
+// holds catalog.lock.
+func setAsideCatalog(root, path string, payload json.RawMessage) (any, error) {
+	rejected, err := setAsideRevision(payload)
+	if err != nil {
+		return nil, err
+	}
+	current, key, err := readCatalog(path)
+	clear(key)
+	malformed := errors.Is(err, errMalformedCatalogKey)
+	unusable, err := catalogUnusable(err, current, rejected)
+	if err != nil {
+		return nil, err
+	}
+	result := map[string]any{"setAside": false}
+	if unusable {
+		target, err := unreadableCatalogPath(root, ".enc")
+		if err != nil {
+			return nil, err
+		}
+		if os.Rename(path, target) != nil || syncLinuxDirectory(root) != nil {
+			return nil, errors.New("storage_unavailable")
+		}
+		result = map[string]any{"setAside": true, "name": filepath.Base(target)}
+	} else if current.Revision == "" {
+		// No catalog to read, but its key item would refuse the first save.
+		key, err := linuxCatalogKey(root, false)
+		clear(key)
+		malformed = errors.Is(err, errMalformedCatalogKey)
+	}
+	if malformed {
+		if err := clearLinuxCatalogKey(root); err != nil {
+			return nil, err
+		}
+		result["setAside"] = true
+	}
+	return result, nil
 }

@@ -352,7 +352,7 @@ struct CoreChecks {
       try expect(v6.includedRoutes?.first?.destinationNetworkPrefixLength == 32, "IPv6 included prefix")
       try expect(v6.excludedRoutes?.map(\.destinationNetworkPrefixLength) == [128, 48, 8], "IPv6 exclusions")
       try expect(v6.excludedRoutes?.last?.destinationAddress == "ff00::", "IPv6 multicast exclusion")
-      // Block traffic without VPN (includeAllNetworks) keeps discovery in the tunnel.
+      // The kill switch (includeAllNetworks) keeps discovery in the tunnel.
       let blocked = try TunnelSettingsFactory.make(plan: value, excludedEndpointAddresses: ["203.0.113.1", "2001:db8::1"], keepDiscovery: true)
       try expect(blocked.ipv4Settings?.excludedRoutes?.map(\.destinationAddress) == ["203.0.113.1", "192.0.2.0"], "blocked IPv4 exclusions")
       try expect(blocked.ipv6Settings?.excludedRoutes?.map(\.destinationNetworkPrefixLength) == [128, 48], "blocked IPv6 exclusions")
@@ -442,6 +442,95 @@ struct CoreChecks {
       try expect(restored.episode.exhausted && restored.scheduleRetry(now: 0, jitter: 0) == nil, "relaunch renewed budget")
       policy.stop()
       try expect(policy.retryAt == nil && policy.measurements.isEmpty, "stop retained work")
+    }
+
+    // As on Windows, Linux and Android (test/windows_automation_test.dart): a spent episode starts over by itself.
+    try check("unattended retry waits past the SNI freeze, longer each time, and honors manual stop") {
+      var policy = AutomationPolicy(savedEpisode: .init(attempts: 6))
+      policy.pathChanged("ethernet", available: true, now: 0)
+      // TSPU freezes an SNI for about 120 s after a burst of handshakes.
+      var now = 0.0
+      for wait in [150.0, 300, 600, 600] {
+        try expect(!policy.rearmUnattended(now: now, intent: true), "re-armed before the wait")
+        try expect(!policy.rearmUnattended(now: now + wait - 1, intent: true) && policy.episode.exhausted,
+                   "re-armed before \(wait) s")
+        try expect(policy.rearmUnattended(now: now + wait, intent: true), "no re-arm after \(wait) s")
+        try expect(!policy.episode.exhausted && policy.episode.attempts == 0 && policy.healthAt == now + wait,
+                   "re-arm left the spent episode")
+        now += wait
+        // The next episode fails too.
+        policy.expireEpisode()
+      }
+      // A passing check starts the waits over.
+      policy.healthy(now: now, jitter: 0)
+      policy.expireEpisode()
+      try expect(!policy.rearmUnattended(now: now, intent: true) && policy.rearmUnattended(now: now + 150, intent: true),
+                 "a passing check kept the longer wait")
+      now += 150
+      try expect(policy.scheduleRetry(now: now, jitter: 0) == now + 1, "a re-armed episode has no fresh budget")
+      policy.expireEpisode()
+      try expect(!policy.rearmUnattended(now: now + 40, intent: true), "re-armed at once")
+      // Without the intent to be connected the wait starts again.
+      try expect(!policy.rearmUnattended(now: now + 340, intent: false), "re-armed without intent")
+      try expect(!policy.rearmUnattended(now: now + 340, intent: true) && policy.rearmUnattended(now: now + 640, intent: true),
+                 "the wait kept counting while the intent was gone")
+      policy.expireEpisode()
+      policy.stop()
+      try expect(!policy.rearmUnattended(now: 2000, intent: true) && policy.retryAt == nil && !policy.episode.exhausted,
+                 "stop left an episode to re-arm")
+      // An episode a relaunch found interrupted starts over after the first wait, not never.
+      var relaunched = AutomationPolicy(savedEpisode: .init(attempts: 0, interrupted: true))
+      relaunched.pathChanged("wifi", available: true, now: 10)
+      try expect(relaunched.episode.exhausted && relaunched.scheduleRetry(now: 10, jitter: 0) == nil, "relaunch renewed budget")
+      try expect(!relaunched.rearmUnattended(now: 10, intent: true) && relaunched.rearmUnattended(now: 160, intent: true),
+                 "an interrupted episode never re-armed")
+      // Asleep, an exhausted episode waits.
+      var sleeping = AutomationPolicy(savedEpisode: .init(attempts: 6))
+      sleeping.pathChanged("wifi", available: true, now: 0)
+      sleeping.sleepChanged(true, now: 0)
+      try expect(!sleeping.rearmUnattended(now: 1000, intent: true), "re-armed while asleep")
+    }
+
+    try check("a network that returns starts a new episode; an address change keeps it") {
+      var policy = AutomationPolicy()
+      policy.pathChanged("1:10.0.0.2", available: true, now: 0)
+      _ = policy.scheduleRetry(now: 0, jitter: 0)
+      try expect(policy.beginRetry(now: 1), "first retry")
+      policy.pathChanged("1:10.0.0.3", available: true, now: 2)
+      try expect(policy.episode.attempts == 1, "a flapping link renewed the budget")
+      var now = 3.0
+      for _ in 0..<10 where !policy.episode.exhausted {
+        guard let due = policy.scheduleRetry(now: now, jitter: 0) else { break }
+        now = due
+        _ = policy.beginRetry(now: now)
+      }
+      try expect(policy.episode.exhausted, "the episode never ran out")
+      policy.pathChanged("1:10.0.0.4", available: true, now: 100)
+      try expect(policy.episode.exhausted, "an address change renewed a spent episode")
+      policy.pathChanged("", available: false, now: 200)
+      try expect(!policy.online, "the network did not go")
+      policy.pathChanged("1:10.0.0.3", available: true, now: 900)
+      try expect(!policy.episode.exhausted && policy.episode.attempts == 0 && policy.retryAt == nil && policy.healthAt == 900,
+                 "a network that came back left the spent episode")
+    }
+
+    try check("a core that stopped by itself restarts at most twice in ten minutes") {
+      var budget = CoreRestartBudget()
+      try expect(budget.allows(now: 0) && budget.take(now: 0), "first restart refused")
+      try expect(budget.take(now: 300), "second restart refused")
+      try expect(!budget.allows(now: 599) && !budget.take(now: 599), "a third restart within ten minutes")
+      // Ten minutes after a restart it no longer counts.
+      try expect(budget.allows(now: 600) && budget.take(now: 600), "the first restart never expired")
+      try expect(!budget.take(now: 899) && budget.take(now: 900), "the second restart expired early or never")
+      // The provider's own failure states, as the iPhone app reads them; a switch in progress is not one.
+      for state in ["protectedFailure", "quarantinedFailClosed"] {
+        try expect(CoreRestartBudget.coreFailed(["state": state]), state)
+      }
+      try expect(CoreRestartBudget.coreFailed(["state": "connected", "resourceRecoveryRequired": true]), "a failed packet bridge")
+      for state in ["reasserting", "connected", "connecting", "disconnecting"] {
+        try expect(!CoreRestartBudget.coreFailed(["state": state, "resourceRecoveryRequired": false]), state + " counted as failed")
+      }
+      try expect(!CoreRestartBudget.coreFailed([:]), "an unanswered provider counted as failed")
     }
 
     try check("automatic selection requires a measured improvement and respects cooldown") {

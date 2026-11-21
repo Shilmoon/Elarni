@@ -420,7 +420,7 @@ try:
                 return any(ipaddress.ip_address(address) in p for p in prefixes)
             for address in ('8.8.8.8', '198.18.0.1', '203.0.113.9', '255.255.255.254', '2001:db8::1', '2a00::1'):
                 assert captured(address), 'Missing capture route for ' + address + ': ' + str(routes)
-            # LAN discovery stays on the physical network unless Block traffic without VPN keeps
+            # LAN discovery stays on the physical network unless the kill switch keeps
             # everything in the tunnel; Windows then picks another interface's discovery routes.
             blocked = mode == 'block-broker-death'
             # The adapter keeps Windows' own routes to these, demoted below every other interface's.
@@ -609,7 +609,7 @@ try:
             broker.stdin.close()
             broker.wait(timeout=15)
         if mode == 'block-broker-death':
-            # Block traffic without VPN fails closed: the helper's guard outlives its broker...
+            # The kill switch fails closed: the helper's guard outlives its broker...
             wait_clean(adapter, dns=False)
             try:
                 with physical_connection():

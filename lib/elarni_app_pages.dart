@@ -151,13 +151,7 @@ extension _HomePages on _ElarniHomeState {
 
   List<SubscriptionNode> _filteredNodes(SubscriptionGroup group) {
     final nodes = group.nodes
-        .where(
-          (node) => _nodeFilter == 'favorites'
-              ? node.favorite
-              : _nodeFilter == 'recent'
-              ? node.lastSuccessAt != null
-              : true,
-        )
+        .where((node) => _nodeFilter != 'favorites' || node.favorite)
         .where(
           (node) =>
               _locationFilter == null || _locationKey(node) == _locationFilter,
@@ -171,10 +165,14 @@ extension _HomePages on _ElarniHomeState {
                   .contains(_search),
         )
         .toList();
-    if (_nodeFilter == 'recent') {
-      nodes.sort((a, b) => b.lastSuccessAt!.compareTo(a.lastSuccessAt!));
-      return nodes;
-    }
+    return _orderedNodes(group, nodes);
+  }
+
+  /// [nodes] of [group] in the saved order, favorites first when that is on.
+  List<SubscriptionNode> _orderedNodes(
+    SubscriptionGroup group,
+    List<SubscriptionNode> nodes,
+  ) {
     if (widget.desktop.sort != 'provider') {
       final positions = {
         for (var i = 0; i < group.nodes.length; i++) group.nodes[i].id: i,
@@ -496,7 +494,10 @@ extension _HomePages on _ElarniHomeState {
 
   Widget _providerNotice(SubscriptionGroup group, {bool compact = false}) =>
       ProviderNotice(
-        key: PageStorageKey('notice:${group.id}'),
+        // Home and the Subscriptions page each remember their own notice.
+        key: PageStorageKey(
+          '${compact ? 'subscription-notice' : 'notice'}:${group.id}',
+        ),
         group: group,
         compact: compact,
         onOpenLink: _busy ? null : () => _openProviderLink(group.id, 'banner'),
@@ -844,7 +845,13 @@ extension _HomePages on _ElarniHomeState {
             child: Text(l10n.reconnect),
           ),
           TextButton(
-            onPressed: _busy ? null : _repairTunnel,
+            // No helper holds System proxy mode's block: a disconnect gives
+            // the proxy setting back.
+            onPressed: _busy
+                ? null
+                : widget.desktopCore && _settings.systemProxy
+                ? _disconnect
+                : _repairTunnel,
             child: Text(l10n.liftBlock),
           ),
         ],
@@ -1173,7 +1180,7 @@ extension _HomePages on _ElarniHomeState {
               group: group,
               refreshFailed: _failedRefreshes.containsKey(group.id),
               onOpen: () => _set(() {
-                _expandedSubscription = group.id;
+                _shownSubscription = group.id;
                 _page = DesktopPage.subscriptions;
               }),
             ),
@@ -1192,6 +1199,9 @@ extension _HomePages on _ElarniHomeState {
     SubscriptionGroup group, {
     bool subscriptionView = false,
     bool selecting = false,
+    bool flag = false,
+    // Named where no subscription header stands above the row.
+    bool subscription = false,
   }) {
     final scheme = Theme.of(context).colorScheme;
     final result = _pingResults[node.id];
@@ -1212,7 +1222,7 @@ extension _HomePages on _ElarniHomeState {
         ? l10n.testing
         : _pingSkipped.contains(node.id)
         ? l10n.skipped
-        : _pingUnavailable.contains(node.id)
+        : _pingUnavailable.containsKey(node.id)
         ? l10n.unavailable
         : l10n.ping;
     // Rename any server; remove any but the selected or last one. A
@@ -1232,10 +1242,25 @@ extension _HomePages on _ElarniHomeState {
           // A provider that hides its link hides its servers' links too.
           if (group.metadata['hideURL'] != true)
             PopupMenuItem(value: 'share', child: Text(l10n.shareServer)),
+          // The backend refuses what a provider hides and configs that are
+          // not Xray JSON.
+          if (subscriptionView &&
+              node.isVPN &&
+              group.metadata['hideURL'] != true)
+            PopupMenuItem(
+              key: ValueKey('node-config:${node.id}'),
+              value: 'config',
+              child: Text(l10n.serverConfig),
+            ),
           if (node.isVPN)
             PopupMenuItem(value: 'ip', child: Text(l10n.serverIpType)),
           if (node.isVPN)
-            PopupMenuItem(value: 'exit', child: Text(l10n.checkExit)),
+            PopupMenuItem(
+              key: ValueKey('check-exit:${node.id}'),
+              value: 'exit',
+              enabled: !_exitPending.contains(node.id),
+              child: Text(l10n.checkExit),
+            ),
           if (!node.selected && group.nodes.length > 1)
             PopupMenuItem(
               value: 'delete',
@@ -1247,6 +1272,7 @@ extension _HomePages on _ElarniHomeState {
       if (action == 'rename') await _renameNode(node);
       if (action == 'share')
         await _shareSubscription(node.id, subscription: false);
+      if (action == 'config') await _editNodeConfig(node, group);
       if (action == 'ip') await _chooseNodeIPPreference(node);
       if (action == 'exit') await _checkExit(node);
       if (action == 'delete') await _deleteNode(node, group);
@@ -1291,10 +1317,14 @@ extension _HomePages on _ElarniHomeState {
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(8),
                       ),
-                      contentPadding: const EdgeInsets.symmetric(
+                      contentPadding: EdgeInsets.symmetric(
                         horizontal: 14,
-                        vertical: 5,
+                        vertical: subscriptionView ? 0 : 5,
                       ),
+                      // Table rows stand closer than Home's list.
+                      visualDensity: subscriptionView
+                          ? const VisualDensity(vertical: -2)
+                          : null,
                       leading: selecting
                           ? Checkbox(
                               key: ValueKey('select-node:${node.id}'),
@@ -1329,10 +1359,60 @@ extension _HomePages on _ElarniHomeState {
                                 size: 19,
                               ),
                             ),
-                      title: Text(
-                        ServerLocation.displayName(node.name),
-                        style: const TextStyle(fontSize: 16),
-                      ),
+                      // A table row keeps its name on one line and marks
+                      // the selected server beside it.
+                      title: subscriptionView
+                          ? Row(
+                              children: [
+                                Flexible(
+                                  child: Text(
+                                    ServerLocation.displayName(node.name),
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(fontSize: 16),
+                                  ),
+                                ),
+                                if (node.selected)
+                                  Padding(
+                                    padding: const EdgeInsets.only(left: 8),
+                                    child: Icon(
+                                      CupertinoIcons.checkmark_circle_fill,
+                                      key: const ValueKey('selected-server'),
+                                      size: 17,
+                                      color: scheme.primary,
+                                    ),
+                                  ),
+                              ],
+                            )
+                          : flag && named != null
+                          ? Row(
+                              children: [
+                                Flexible(
+                                  child: Text(
+                                    ServerLocation.displayName(node.name),
+                                    style: const TextStyle(fontSize: 16),
+                                    // A wrapped name keeps the flag beside it.
+                                    textWidthBasis: TextWidthBasis.longestLine,
+                                  ),
+                                ),
+                                const SizedBox(width: 9),
+                                Tooltip(
+                                  message: named.name,
+                                  // Smaller than a group's flag, to sit in a line of text.
+                                  child: SizedBox(
+                                    width: 24,
+                                    height: 17.6,
+                                    child: FittedBox(
+                                      child: LocationFlag(location: named),
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            )
+                          : Text(
+                              ServerLocation.displayName(node.name),
+                              style: const TextStyle(fontSize: 16),
+                            ),
                       subtitle: Padding(
                         padding: const EdgeInsets.only(top: 6),
                         child: Column(
@@ -1345,9 +1425,9 @@ extension _HomePages on _ElarniHomeState {
                               children: [
                                 ProtocolTag(node.protocol),
                                 Text(
-                                  subscriptionView
-                                      ? '${node.transport} · ${node.security}'
-                                      : group.name,
+                                  subscription
+                                      ? group.name
+                                      : '${node.transport} · ${node.security}',
                                   style: TextStyle(
                                     fontSize: 12,
                                     color: scheme.onSurfaceVariant,
@@ -1403,7 +1483,7 @@ extension _HomePages on _ElarniHomeState {
                       ),
                       onTap: selecting
                           ? (node.selected ? null : toggleSelected)
-                          : subscriptionView || _profileEditsDisabled
+                          : _profileEditsDisabled
                           ? null
                           : node.isVPN
                           ? () => _selectNode(node.id)
@@ -1411,88 +1491,90 @@ extension _HomePages on _ElarniHomeState {
                       trailing: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          // The backend refuses what a provider hides and
-                          // configs that are not Xray JSON.
-                          if (subscriptionView &&
-                              node.isVPN &&
-                              group.metadata['hideURL'] != true)
-                            IconButton(
-                              key: ValueKey('node-config:${node.id}'),
-                              tooltip: l10n.serverConfig,
-                              onPressed: _busy
-                                  ? null
-                                  : () => _editNodeConfig(node, group),
-                              icon: const Icon(
-                                CupertinoIcons.chevron_left_slash_chevron_right,
-                                size: 18,
-                              ),
+                          // A table row's name keeps its room beside a long state.
+                          ConstrainedBox(
+                            constraints: BoxConstraints(
+                              maxWidth:
+                                  subscriptionView && constraints.maxWidth < 440
+                                  ? 96
+                                  : double.infinity,
                             ),
-                          if (subscriptionView &&
-                              !selecting &&
-                              node.isVPN &&
-                              exit == null)
-                            TextButton(
-                              key: ValueKey('check-exit:${node.id}'),
-                              onPressed: _busy || _exitPending.contains(node.id)
-                                  ? null
-                                  : () => _checkExit(node),
-                              child: Text(
-                                _exitPending.contains(node.id)
-                                    ? l10n.checking
-                                    : l10n.checkExit,
-                              ),
-                            ),
-                          Tooltip(
-                            message: node.isVPN
-                                ? [
-                                    '${node.protocol} · ${node.transport} · ${node.security}',
-                                    if (node.lastSuccessAt != null)
-                                      _successDescription(node),
-                                    if (result != null)
-                                      _probeDescription(result),
-                                    _pingSkipped.contains(node.id)
-                                        ? l10n.unsupportedTest
-                                        : l10n.testServerLatency,
-                                  ].join('\n')
-                                : l10n.openInTelegram,
-                            child: TextButton(
-                              key: ValueKey('ping:${node.id}'),
-                              onPressed:
-                                  (_busy ||
-                                      node.isVPN &&
-                                          (_pinging || _pingCancelled))
-                                  ? null
-                                  : node.isVPN
-                                  ? () => _pingNode(node.id)
-                                  : () => _openTelegram(node.id),
-                              style: TextButton.styleFrom(
-                                foregroundColor: scheme.onSurfaceVariant,
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 6,
+                            child: Tooltip(
+                              message: node.isVPN
+                                  ? [
+                                      '${node.protocol} · ${node.transport} · ${node.security}',
+                                      if (node.lastSuccessAt != null)
+                                        _successDescription(node),
+                                      if (result != null)
+                                        _probeDescription(result),
+                                      _pingSkipped.contains(node.id)
+                                          ? l10n.unsupportedTest
+                                          : l10n.testServerLatency,
+                                    ].join('\n')
+                                  : l10n.openInTelegram,
+                              child: TextButton(
+                                key: ValueKey('ping:${node.id}'),
+                                onPressed:
+                                    (_busy ||
+                                        node.isVPN &&
+                                            (_pinging || _pingCancelled))
+                                    ? null
+                                    : node.isVPN
+                                    ? () => _pingNode(node.id)
+                                    : () => _openTelegram(node.id),
+                                style: TextButton.styleFrom(
+                                  foregroundColor: scheme.onSurfaceVariant,
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 6,
+                                  ),
+                                  // Room for the actions button without narrowing the name.
+                                  minimumSize: const Size(36, 40),
                                 ),
-                                // Room for the actions button without narrowing the name.
-                                minimumSize: const Size(36, 40),
+                                child:
+                                    node.isVPN &&
+                                        result != null &&
+                                        result.status == 'success' &&
+                                        result.latencyMs >= 0 &&
+                                        _probeFresh(result)
+                                    ? LatencyBadge(result.latencyMs)
+                                    : Text(
+                                        node.isVPN ? pingLabel : l10n.open,
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
                               ),
-                              child:
-                                  node.isVPN &&
-                                      result != null &&
-                                      result.status == 'success' &&
-                                      result.latencyMs >= 0 &&
-                                      _probeFresh(result)
-                                  ? LatencyBadge(result.latencyMs)
-                                  : Text(node.isVPN ? pingLabel : l10n.open),
                             ),
                           ),
-                          if (node.selected)
+                          if (node.selected && !subscriptionView)
                             Icon(
                               CupertinoIcons.checkmark_circle_fill,
                               size: 18,
                               color: scheme.primary,
                             ),
+                          if (subscriptionView && !selecting)
+                            IconButton(
+                              key: ValueKey('favorite:${node.id}'),
+                              tooltip: node.favorite
+                                  ? l10n.removeFavorite
+                                  : l10n.addFavorite,
+                              isSelected: node.favorite,
+                              padding: EdgeInsets.zero,
+                              constraints: const BoxConstraints(
+                                minWidth: 32,
+                                minHeight: 32,
+                              ),
+                              onPressed: _busy
+                                  ? null
+                                  : () => _toggleFavorite(node),
+                              icon: const Icon(CupertinoIcons.star, size: 18),
+                              selectedIcon: const Icon(
+                                CupertinoIcons.star_fill,
+                                size: 18,
+                              ),
+                            ),
                           // The same menu as a right click or long press, for those who never try one.
-                          if (!subscriptionView &&
-                              !selecting &&
-                              constraints.maxWidth >= 360)
+                          if (!selecting &&
+                              (subscriptionView || constraints.maxWidth >= 360))
                             Builder(
                               builder: (button) => IconButton(
                                 key: ValueKey('server-menu:${node.id}'),
@@ -1630,10 +1712,14 @@ extension _HomePages on _ElarniHomeState {
       contentPadding: const EdgeInsets.fromLTRB(20, 16, 20, 4),
       onTap: _search.isNotEmpty
           ? null
-          : () => _set(() {
-              if (!_collapsedSubscriptions.remove(group.id))
-                _collapsedSubscriptions.add(group.id);
-            }),
+          : () {
+              if (_toggleGroup(group.id))
+                _pingOpened([
+                  for (final country in _countryGroups(group))
+                    if (country.open)
+                      for (final entry in country.nodes) entry.node,
+                ]);
+            },
       title: Text(
         group.name,
         style: const TextStyle(fontWeight: FontWeight.w600),
@@ -1679,7 +1765,7 @@ extension _HomePages on _ElarniHomeState {
     return [
       for (final code in codes)
         _countryGroup(
-          '${subscription?.id}:$code',
+          '${subscription?.id ?? ''}:$code',
           countries[code],
           byCountry[code]!,
         ),
@@ -1691,10 +1777,46 @@ extension _HomePages on _ElarniHomeState {
     ServerLocation? location,
     List<({SubscriptionNode node, SubscriptionGroup group})> nodes,
   ) {
+    _sortServers(nodes);
+    final selected = nodes.any((entry) => entry.node.selected);
+    return (
+      key: key,
+      location: location,
+      nodes: nodes,
+      selected: selected,
+      open: _search.isNotEmpty || !_closedGroups.contains(key),
+    );
+  }
+
+  /// The Home groups the user closed: a subscription's id, `<id>:<country>`
+  /// for a country in it and `:<country>` for one in the By country list.
+  Set<String> get _closedGroups =>
+      _closedGroupsNow ?? widget.desktop.closedGroups;
+
+  /// Opens or closes a Home group and remembers that; true when it opened.
+  bool _toggleGroup(String key) {
+    final ids = {for (final group in _subscriptions.subscriptions) group.id};
+    final closed = {
+      for (final other in _closedGroups)
+        // A removed subscription's groups are forgotten.
+        if (other.startsWith(':') || ids.contains(other.split(':').first))
+          other,
+    };
+    final open = closed.remove(key);
+    if (!open) closed.add(key);
+    _set(() => _closedGroupsNow = closed);
+    unawaited(widget.desktop.rememberClosedGroups(closed));
+    return open;
+  }
+
+  /// Orders servers of several subscriptions as the sort menu says.
+  void _sortServers(
+    List<({SubscriptionNode node, SubscriptionGroup group})> nodes,
+  ) {
     final positions = {
       for (var i = 0; i < nodes.length; i++) nodes[i].node.id: i,
     };
-    if (widget.desktop.sort != 'provider' && _nodeFilter != 'recent') {
+    if (widget.desktop.sort != 'provider') {
       nodes.sort((a, b) {
         final pinned = (widget.desktop.pinned.contains(a.group.id) ? 0 : 1)
             .compareTo(widget.desktop.pinned.contains(b.group.id) ? 0 : 1);
@@ -1711,25 +1833,36 @@ extension _HomePages on _ElarniHomeState {
             : positions[a.node.id]!.compareTo(positions[b.node.id]!);
       });
     }
-    final selected = nodes.any((entry) => entry.node.selected);
-    return (
-      key: key,
-      location: location,
-      nodes: nodes,
-      selected: selected,
-      open:
-          _search.isNotEmpty ||
-          (_expandedCountries[key] ?? (selected || location == null)),
-    );
   }
 
-  /// The servers in Home's open groups, which a launch tests.
+  /// The favorites of every subscription in one list: they are few and picked
+  /// by name, so no subscription or country group stands between them.
+  List<({SubscriptionNode node, SubscriptionGroup group})> _favoriteServers() {
+    final servers = [
+      for (final group in _displayGroups())
+        for (final node in _displayNodes(group)) (node: node, group: group),
+    ];
+    _sortServers(servers);
+    return servers;
+  }
+
+  /// The servers Home lists: those of its open groups.
+  List<SubscriptionNode> _shownServers() => [
+    if (_nodeFilter == 'favorites')
+      for (final entry in _favoriteServers()) entry.node
+    else
+      for (final group in _nodeFilter == 'country' ? [null] : _displayGroups())
+        if (group == null ||
+            _search.isNotEmpty ||
+            !_closedGroups.contains(group.id))
+          for (final country in _countryGroups(group))
+            if (country.open)
+              for (final entry in country.nodes) entry.node,
+  ];
+
+  /// The servers a launch tests.
   List<String> _openServerIds() => [
-    for (final group in _displayGroups())
-      if (_search.isNotEmpty || !_collapsedSubscriptions.contains(group.id))
-        for (final country in _countryGroups(group))
-          if (country.open)
-            for (final entry in country.nodes) entry.node.id,
+    for (final node in _shownServers()) node.id,
   ];
 
   // Builders, so that a long list makes only the rows on screen.
@@ -1754,8 +1887,6 @@ extension _HomePages on _ElarniHomeState {
                 Text(
                   _nodeFilter == 'favorites'
                       ? l10n.noFavoriteServers
-                      : _nodeFilter == 'recent'
-                      ? l10n.noSuccessfulConnections
                       : l10n.noMatchingServers,
                 ),
                 TextButton(
@@ -1771,16 +1902,27 @@ extension _HomePages on _ElarniHomeState {
             ),
           ),
         ];
-      return [
-        for (final group in groups)
-          // A search shows every match, so it opens closed subscriptions.
-          if (_search.isNotEmpty ||
-              !_collapsedSubscriptions.contains(group.id)) ...[
-            () => _serverSubscriptionHeader(group, open: true),
-            ..._serverItems(subscription: group),
-          ] else
-            () => _serverSubscriptionHeader(group, open: false),
-      ];
+      if (_nodeFilter == 'favorites')
+        return [
+          for (final entry in _favoriteServers())
+            () => _serverRow(
+              entry.node,
+              entry.group,
+              flag: true,
+              subscription: true,
+            ),
+        ];
+      // By country puts every subscription's servers under one country.
+      if (_nodeFilter != 'country')
+        return [
+          for (final group in groups)
+            // A search shows every match, so it opens closed subscriptions.
+            if (_search.isNotEmpty || !_closedGroups.contains(group.id)) ...[
+              () => _serverSubscriptionHeader(group, open: true),
+              ..._serverItems(subscription: group),
+            ] else
+              () => _serverSubscriptionHeader(group, open: false),
+        ];
     }
     final countries = _countryGroups(subscription);
     return [
@@ -1814,9 +1956,17 @@ extension _HomePages on _ElarniHomeState {
             () => country.selected
                 ? ColoredBox(
                     color: scheme.primary.withValues(alpha: .08),
-                    child: _serverRow(entry.node, entry.group),
+                    child: _serverRow(
+                      entry.node,
+                      entry.group,
+                      subscription: subscription == null,
+                    ),
                   )
-                : _serverRow(entry.node, entry.group),
+                : _serverRow(
+                    entry.node,
+                    entry.group,
+                    subscription: subscription == null,
+                  ),
           () => Container(
             height: 8,
             decoration: BoxDecoration(
@@ -1865,9 +2015,7 @@ extension _HomePages on _ElarniHomeState {
           onTap: _search.isNotEmpty
               ? null
               : () {
-                  final open = !country.open;
-                  _set(() => _expandedCountries[country.key] = open);
-                  if (open)
+                  if (_toggleGroup(country.key))
                     _pingOpened(country.nodes.map((entry) => entry.node));
                 },
           leading: Column(
@@ -1898,38 +2046,71 @@ extension _HomePages on _ElarniHomeState {
     );
   }
 
-  // A running test turns the button into one that cancels it.
-  Widget _pingAllButton({String? subscriptionId}) => _pinging
-      ? IconButton(
-          key: subscriptionId == null
-              ? const Key('ping-cancel')
-              : ValueKey('subscription-ping-cancel:$subscriptionId'),
-          tooltip: l10n.cancelTests,
-          onPressed: _busy ? null : _cancelPings,
-          icon: const Icon(CupertinoIcons.stop_fill, size: 20),
-        )
-      : IconButton(
-          key: subscriptionId == null
-              ? const Key('ping-all')
-              : ValueKey('subscription-ping-all:$subscriptionId'),
-          tooltip: _pingProtocol == 'icmp'
-              ? l10n.useNodePingForIcmp
-              : subscriptionId == null
-              ? l10n.testAllNodes
-              : l10n.testSubscriptionNodes,
-          onPressed:
-              _pingControlsDisabled ||
-                  _pingProtocol == 'icmp' ||
-                  !_subscriptions.subscriptions.any(
-                    (group) =>
-                        (subscriptionId == null ||
-                            group.id == subscriptionId) &&
-                        group.nodes.any((node) => node.isVPN),
-                  )
-              ? null
-              : () => _pingAllNodes(subscriptionId: subscriptionId),
-          icon: const Icon(CupertinoIcons.gauge, size: 20),
-        );
+  /// The three buttons beside the Subscriptions search share one line of a
+  /// narrow window.
+  static const _toolbarButtonPadding = EdgeInsets.symmetric(horizontal: 12);
+
+  // A running test turns the button into one that cancels it. The
+  // Subscriptions page names its button; Home has room for an icon only.
+  Widget _pingAllButton({String? subscriptionId}) {
+    final cancelKey = subscriptionId == null
+        ? const Key('ping-cancel')
+        : ValueKey('subscription-ping-cancel:$subscriptionId');
+    final startKey = subscriptionId == null
+        ? const Key('ping-all')
+        : ValueKey('subscription-ping-all:$subscriptionId');
+    final start =
+        _pingControlsDisabled ||
+            _pingProtocol == 'icmp' ||
+            !_subscriptions.subscriptions.any(
+              (group) =>
+                  (subscriptionId == null || group.id == subscriptionId) &&
+                  group.nodes.any((node) => node.isVPN),
+            )
+        ? null
+        : () => _pingAllNodes(subscriptionId: subscriptionId);
+    final startTip = _pingProtocol == 'icmp'
+        ? l10n.useNodePingForIcmp
+        : subscriptionId == null
+        ? l10n.testAllNodes
+        : l10n.testSubscriptionNodes;
+    if (subscriptionId != null) {
+      return _pinging
+          ? Tooltip(
+              message: l10n.cancelTests,
+              child: OutlinedButton.icon(
+                key: cancelKey,
+                style: OutlinedButton.styleFrom(padding: _toolbarButtonPadding),
+                onPressed: _busy ? null : _cancelPings,
+                icon: const Icon(CupertinoIcons.stop_fill, size: 16),
+                label: Text(l10n.cancel),
+              ),
+            )
+          : Tooltip(
+              message: startTip,
+              child: OutlinedButton.icon(
+                key: startKey,
+                style: OutlinedButton.styleFrom(padding: _toolbarButtonPadding),
+                onPressed: start,
+                icon: const Icon(CupertinoIcons.gauge, size: 17),
+                label: Text(l10n.testAll),
+              ),
+            );
+    }
+    return _pinging
+        ? IconButton(
+            key: cancelKey,
+            tooltip: l10n.cancelTests,
+            onPressed: _busy ? null : _cancelPings,
+            icon: const Icon(CupertinoIcons.stop_fill, size: 20),
+          )
+        : IconButton(
+            key: startKey,
+            tooltip: startTip,
+            onPressed: start,
+            icon: const Icon(CupertinoIcons.gauge, size: 20),
+          );
+  }
 
   Widget _subscriptionActions(
     SubscriptionGroup group,
@@ -1939,8 +2120,19 @@ extension _HomePages on _ElarniHomeState {
     icon: const Icon(CupertinoIcons.ellipsis),
     onSelected: (action) {
       // Item flags were read when the menu opened; a tray Connect may have started since.
-      if (_busy && action != 'pin') return;
+      if (_busy && !const {'pin', 'details', 'routing'}.contains(action)) {
+        return;
+      }
       switch (action) {
+        case 'select':
+          _set(() {
+            _selectingSubscription = group.id;
+            _selectedServers.clear();
+          });
+        case 'details':
+          _revealSubscriptionFooter(details: true);
+        case 'routing':
+          _revealSubscriptionFooter();
         case 'pin':
           final pins = {...widget.desktop.pinned};
           if (!pins.remove(group.id)) pins.add(group.id);
@@ -1963,6 +2155,19 @@ extension _HomePages on _ElarniHomeState {
       }
     },
     itemBuilder: (context) => [
+      // Hiding, deleting or sharing several servers at once.
+      if (group.nodes.length > 1)
+        PopupMenuItem(
+          key: ValueKey('select-servers:${group.id}'),
+          value: 'select',
+          enabled: !_busy,
+          child: Text(l10n.selectServers),
+        ),
+      // Both are under the table, which can be long.
+      if (_subscriptionDetails(group).isNotEmpty || !group.isLocal)
+        PopupMenuItem(value: 'details', child: Text(l10n.details)),
+      PopupMenuItem(value: 'routing', child: Text(l10n.routingProfile)),
+      const PopupMenuDivider(),
       if (widget.desktop.available)
         PopupMenuItem(
           value: 'pin',
@@ -2031,30 +2236,21 @@ extension _HomePages on _ElarniHomeState {
     ],
   );
 
-  Widget _subscriptionCard(SubscriptionGroup group) {
-    final scheme = Theme.of(context).colorScheme;
-    final search = _subscriptionSearches[group.id] ?? '';
-    final nodes = group.nodes
-        .where(
-          (node) =>
-              search.isEmpty ||
-              '${node.name} ${ServerLocation.fromName(node.name)?.name ?? ''} ${node.protocol} ${node.transport} ${node.security}'
-                  .toLowerCase()
-                  .contains(search),
-        )
-        .toList();
-    final details = _subscriptionDetails(group);
-    final selecting = _selectingSubscription == group.id;
-    final selectedCount = group.nodes
-        .where((node) => _selectedServers.contains(node.id))
-        .length;
-    bool unreachable(String id) {
-      final result = _pingResults[id];
-      return _pingUnavailable.contains(id) ||
-          result != null &&
-              (result.status != 'success' || result.latencyMs < 0);
-    }
+  /// The subscription the Subscriptions page shows: the one chosen there or
+  /// opened from Home, else the selected server's, else the first.
+  SubscriptionGroup? get _shownGroup {
+    final groups = _subscriptions.subscriptions;
+    return groups
+            .where((group) => group.id == _shownSubscription)
+            .firstOrNull ??
+        groups
+            .where((group) => group.nodes.any((node) => node.selected))
+            .firstOrNull ??
+        groups.firstOrNull;
+  }
 
+  /// A subscription's server count and, when it is not simply ready, its state.
+  String _subscriptionSummaryLine(SubscriptionGroup group) {
     final failure = _failedRefreshes[group.id];
     final status = group.metadata['enabled'] == false
         ? l10n.accountDisabled
@@ -2067,349 +2263,421 @@ extension _HomePages on _ElarniHomeState {
         : group.status == 'ready'
         ? null
         : _subscriptionStatus(group.status);
-    return Card(
-      key: ValueKey('subscription:${group.id}'),
-      child: ExpansionTile(
-        key: PageStorageKey<String>(
-          'subscriptions:${group.id}:$_expandedSubscription',
-        ),
-        initiallyExpanded: _expandedSubscription == group.id,
-        tilePadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
-        shape: const Border(),
-        collapsedShape: const Border(),
-        title: Row(
-          children: [
-            Expanded(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    group.name,
-                    style: const TextStyle(
-                      fontSize: 20,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    '${l10n.serverCount(group.nodes.length)}'
-                    '${status == null ? '' : ' · $status'}',
-                    style: Theme.of(context).textTheme.bodyMedium,
-                  ),
-                ],
-              ),
-            ),
-            if (failure != null && group.actions.contains('support'))
-              TextButton(
-                key: ValueKey('subscription-support:${group.id}'),
-                onPressed: _busy
-                    ? null
-                    : () => _openProviderLink(group.id, 'support'),
-                child: Text(l10n.settingsGroupSupport),
-              ),
-            if (!group.isLocal)
-              IconButton(
-                key: ValueKey('refresh-subscription:${group.id}'),
-                tooltip: l10n.refreshNamed(group.name),
-                onPressed: _busy ? null : () => _refreshSubscription(group.id),
-                icon: const Icon(CupertinoIcons.arrow_clockwise, size: 19),
-              ),
-            _subscriptionActions(group),
-          ],
-        ),
-        // A closed card does not make its rows.
-        children: [
-          Builder(
-            builder: (_) => Column(
+    return '${l10n.serverCount(group.nodes.length)}'
+        '${status == null ? '' : ' · $status'}';
+  }
+
+  /// Brings the routing profile and the details, which are under the table,
+  /// into view; [details] opens them first.
+  void _revealSubscriptionFooter({bool details = false}) {
+    if (details) _subscriptionDetailsTile.expand();
+    void show({required bool retry}) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        final footer = _subscriptionFooter.currentContext;
+        if (footer != null) {
+          // No further than needed; from its top when it is taller than the page.
+          final taller =
+              footer.size!.height >
+              _subscriptionsScroll.position.viewportDimension;
+          Scrollable.ensureVisible(
+            footer,
+            duration: const Duration(milliseconds: 200),
+            alignmentPolicy: taller
+                ? ScrollPositionAlignmentPolicy.explicit
+                : ScrollPositionAlignmentPolicy.keepVisibleAtEnd,
+          );
+        } else if (retry && _subscriptionsScroll.hasClients) {
+          // Under a long table they are not built until scrolled to.
+          _subscriptionsScroll.jumpTo(
+            _subscriptionsScroll.position.maxScrollExtent,
+          );
+          show(retry: false);
+        }
+      });
+      WidgetsBinding.instance.ensureVisualUpdate();
+    }
+
+    show(retry: true);
+  }
+
+  /// The Subscriptions page under its title: one subscription, chosen in a
+  /// menu, with its servers in a table.
+  List<Widget> _subscriptionPage(
+    SubscriptionGroup group, {
+    required bool narrow,
+  }) {
+    final scheme = Theme.of(context).colorScheme;
+    final search = _subscriptionSearches[group.id] ?? '';
+    final nodes = _orderedNodes(group, [
+      for (final node in group.nodes)
+        if ((!_subscriptionFavorites || node.favorite) &&
+            (search.isEmpty ||
+                '${node.name} ${ServerLocation.fromName(node.name)?.name ?? ''} ${node.protocol} ${node.transport} ${node.security}'
+                    .toLowerCase()
+                    .contains(search)))
+          node,
+    ]);
+    final details = _subscriptionDetails(group);
+    final selecting = _selectingSubscription == group.id;
+    final selectedCount = group.nodes
+        .where((node) => _selectedServers.contains(node.id))
+        .length;
+    final picker = ElarniSelect<String>(
+      key: const Key('subscription-picker'),
+      value: group.id,
+      isExpanded: true,
+      items: [
+        for (final item in _subscriptions.subscriptions)
+          DropdownMenuItem(
+            value: item.id,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(20, 0, 20, 12),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      if (details.isNotEmpty || !group.isLocal)
-                        ExpansionTile(
-                          key: PageStorageKey(
-                            'subscription-details:${group.id}',
-                          ),
-                          title: Text(
-                            l10n.details,
-                            style: TextStyle(fontSize: 13),
-                          ),
-                          tilePadding: EdgeInsets.zero,
-                          shape: const Border(),
-                          collapsedShape: const Border(),
-                          childrenPadding: const EdgeInsets.only(bottom: 16),
-                          children: [
-                            SelectionArea(
-                              child: Column(
-                                key: PageStorageKey(
-                                  'subscription-metadata:${group.id}',
-                                ),
-                                children: [
-                                  for (final (label, value) in details)
-                                    _detailRow(label, value),
-                                  if (!group.isLocal)
-                                    ..._providerDetailRows(group),
-                                ],
-                              ),
-                            ),
-                          ],
-                        ),
-                      if (ProviderNotice.messages(group).isNotEmpty) ...[
-                        const SizedBox(height: 8),
-                        _providerNotice(group, compact: true),
-                      ],
-                      const SizedBox(height: 16),
-                      LayoutBuilder(
-                        builder: (context, constraints) {
-                          final label = Text(
-                            l10n.routingProfile,
-                            style: TextStyle(color: scheme.onSurfaceVariant),
-                          );
-                          final picker = ElarniSelect<String>(
-                            key: ValueKey('subscription-routing:${group.id}'),
-                            value: _routing.assignments[group.id] ?? '',
-                            isExpanded: true,
-                            items: [
-                              DropdownMenuItem(
-                                value: '',
-                                child: Text(l10n.noCustomRouting),
-                              ),
-                              for (final profile in _routing.profiles)
-                                DropdownMenuItem(
-                                  value: profile.id,
-                                  child: Text(profile.name),
-                                ),
-                            ],
-                            onChanged: _busy
-                                ? null
-                                : (value) => _runRouting(
-                                    () => widget.tunnelControl
-                                        .assignRoutingProfile(
-                                          group.id,
-                                          value == null || value.isEmpty
-                                              ? null
-                                              : value,
-                                        ),
-                                  ),
-                          );
-                          if (constraints.maxWidth < 400 ||
-                              MediaQuery.textScalerOf(context).scale(1) >=
-                                  1.5) {
-                            return Column(
-                              crossAxisAlignment: CrossAxisAlignment.stretch,
-                              children: [label, picker],
-                            );
-                          }
-                          return Row(
-                            children: [
-                              Expanded(child: label),
-                              const SizedBox(width: 16),
-                              Flexible(child: picker),
-                            ],
-                          );
-                        },
-                      ),
-                      if (_routing.profiles.any(
-                        (profile) =>
-                            profile.id == _routing.assignments[group.id] &&
-                            profile.providerSubscriptionId == group.id,
-                      ))
-                        Padding(
-                          padding: const EdgeInsets.only(top: 4),
-                          child: Text(
-                            l10n.setByYourProvider,
-                            textAlign: TextAlign.end,
-                            style: TextStyle(
-                              fontSize: 12,
-                              color: scheme.onSurfaceVariant,
-                            ),
-                          ),
-                        ),
-                      const Divider(height: 24),
-                    ],
+                Text(
+                  item.name,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w600,
                   ),
                 ),
-                ExpansionTile(
-                  key: PageStorageKey('subscription-servers:${group.id}'),
-                  initiallyExpanded: true,
-                  title: Text(l10n.servers),
-                  tilePadding: const EdgeInsets.symmetric(horizontal: 20),
-                  shape: const Border(),
-                  collapsedShape: const Border(),
-                  children: [
-                    if (selecting)
-                      Padding(
-                        padding: const EdgeInsets.fromLTRB(20, 8, 20, 12),
-                        child: Wrap(
-                          spacing: 8,
-                          runSpacing: 8,
-                          crossAxisAlignment: WrapCrossAlignment.center,
-                          children: [
-                            Semantics(
-                              liveRegion: true,
-                              child: Text(l10n.selectedCount(selectedCount)),
-                            ),
-                            TextButton(
-                              onPressed: () => _set(
-                                () => _selectedServers.addAll([
-                                  for (final node in nodes)
-                                    if (!node.selected &&
-                                        node.isVPN &&
-                                        unreachable(node.id))
-                                      node.id,
-                                ]),
-                              ),
-                              child: Text(l10n.selectUnreachable),
-                            ),
-                            // A local group has no subscription link to share.
-                            if (group.isLocal)
-                              TextButton(
-                                key: ValueKey('share-servers:${group.id}'),
-                                onPressed: _busy || selectedCount == 0
-                                    ? null
-                                    : () => _shareSelected(group),
-                                child: Text(l10n.share),
-                              ),
-                            TextButton(
-                              // A subscription keeps at least one server.
-                              onPressed:
-                                  _busy ||
-                                      selectedCount == 0 ||
-                                      selectedCount >= group.nodes.length
-                                  ? null
-                                  : () => _deleteSelected(group),
-                              child: Text(
-                                group.isLocal ? l10n.delete : l10n.hide,
-                              ),
-                            ),
-                            TextButton(
-                              onPressed: () => _set(() {
-                                _selectingSubscription = null;
-                                _selectedServers.clear();
-                              }),
-                              child: Text(l10n.cancel),
-                            ),
-                          ],
-                        ),
-                      )
-                    else
-                      Padding(
-                        padding: const EdgeInsets.fromLTRB(20, 8, 20, 12),
-                        child: Row(
-                          children: [
-                            Expanded(
-                              child: TextFormField(
-                                key: PageStorageKey(
-                                  'subscription-search:${group.id}',
-                                ),
-                                initialValue: search,
-                                decoration: InputDecoration(
-                                  hintText: l10n.searchServers,
-                                  prefixIcon: Icon(
-                                    CupertinoIcons.search,
-                                    size: 19,
-                                  ),
-                                ),
-                                onChanged: (value) => _set(
-                                  () => _subscriptionSearches[group.id] = value
-                                      .trim()
-                                      .toLowerCase(),
-                                ),
-                              ),
-                            ),
-                            const SizedBox(width: 10),
-                            if (group.nodes.length > 1)
-                              TextButton(
-                                key: ValueKey('select-servers:${group.id}'),
-                                onPressed: _busy
-                                    ? null
-                                    : () => _set(() {
-                                        _selectingSubscription = group.id;
-                                        _selectedServers.clear();
-                                      }),
-                                child: Text(l10n.select),
-                              ),
-                            _pingAllButton(subscriptionId: group.id),
-                          ],
-                        ),
-                      ),
-                    if (nodes.isEmpty)
-                      Padding(
-                        padding: const EdgeInsets.all(24),
-                        child: Text(
-                          group.nodes.isEmpty
-                              ? l10n.noServersInSubscription
-                              : l10n.noMatchingServers,
-                        ),
-                      ),
-                    for (final node in nodes) ...[
-                      _serverRow(
-                        node,
-                        group,
-                        subscriptionView: true,
-                        selecting: selecting,
-                      ),
-                      for (final choice in node.groups)
-                        Padding(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 20,
-                            vertical: 8,
-                          ),
-                          child: ElarniSelect<String>(
-                            key: ValueKey('${node.id}:${choice.name}'),
-                            value: choice.selected,
-                            isExpanded: true,
-                            label: choice.name,
-                            items: choice.options
-                                .map(
-                                  (option) => DropdownMenuItem(
-                                    value: option,
-                                    child: Text(option),
-                                  ),
-                                )
-                                .toList(),
-                            onChanged: _busy
-                                ? null
-                                : (value) {
-                                    if (value != null)
-                                      _selectProfileGroup(
-                                        node.id,
-                                        choice.name,
-                                        value,
-                                      );
-                                  },
-                          ),
-                        ),
-                    ],
-                    if (group.hiddenNodes.isNotEmpty)
-                      ListTile(
-                        key: ValueKey('hidden-servers:${group.id}'),
-                        contentPadding: const EdgeInsets.symmetric(
-                          horizontal: 20,
-                        ),
-                        leading: const Icon(CupertinoIcons.eye_slash, size: 19),
-                        title: Text(
-                          l10n.hiddenServersCount(group.hiddenNodes.length),
-                        ),
-                        trailing: TextButton(
-                          onPressed: _busy
-                              ? null
-                              : () => _showHiddenServers(group),
-                          child: Text(l10n.showAgain),
-                        ),
-                      ),
-                    const SizedBox(height: 16),
-                  ],
+                const SizedBox(height: 2),
+                Text(
+                  _subscriptionSummaryLine(item),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: scheme.onSurfaceVariant,
+                  ),
                 ),
               ],
             ),
           ),
-        ],
+      ],
+      onChanged: (id) => _set(() {
+        _shownSubscription = id;
+        _selectingSubscription = null;
+        _selectedServers.clear();
+        _subscriptionDetailsTile.collapse();
+      }),
+    );
+    final searchField = TextFormField(
+      key: PageStorageKey('subscription-search:${group.id}'),
+      initialValue: search,
+      decoration: InputDecoration(
+        hintText: l10n.searchServers,
+        prefixIcon: const Icon(CupertinoIcons.search, size: 19),
+      ),
+      onChanged: (value) => _set(
+        () => _subscriptionSearches[group.id] = value.trim().toLowerCase(),
       ),
     );
+    final filters = [
+      Semantics(
+        selected: _subscriptionFavorites,
+        child: OutlinedButton.icon(
+          key: const Key('subscription-favorites'),
+          style: OutlinedButton.styleFrom(
+            padding: _toolbarButtonPadding,
+            backgroundColor: _subscriptionFavorites
+                ? scheme.primary.withValues(alpha: .14)
+                : null,
+          ),
+          onPressed: () =>
+              _set(() => _subscriptionFavorites = !_subscriptionFavorites),
+          icon: Icon(
+            _subscriptionFavorites
+                ? CupertinoIcons.star_fill
+                : CupertinoIcons.star,
+            size: 16,
+          ),
+          label: Text(l10n.filterFavorites),
+        ),
+      ),
+      if (widget.desktop.available) _serverSortMenu(labelled: true),
+      _pingAllButton(subscriptionId: group.id),
+    ];
+    final selection = Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      children: [
+        Semantics(
+          liveRegion: true,
+          child: Text(l10n.selectedCount(selectedCount)),
+        ),
+        TextButton(
+          onPressed: () {
+            final now = DateTime.now();
+            _set(
+              () => _selectedServers.addAll([
+                for (final node in nodes)
+                  if (!node.selected &&
+                      node.isVPN &&
+                      pingUnreachable(
+                        result: _pingResults[node.id],
+                        failure: _pingUnavailable[node.id],
+                        revision: node.revision,
+                        now: now,
+                      ))
+                    node.id,
+              ]),
+            );
+          },
+          child: Text(l10n.selectUnreachable),
+        ),
+        // A local group has no subscription link to share.
+        if (group.isLocal)
+          TextButton(
+            key: ValueKey('share-servers:${group.id}'),
+            onPressed: _busy || selectedCount == 0
+                ? null
+                : () => _shareSelected(group),
+            child: Text(l10n.share),
+          ),
+        TextButton(
+          // A subscription keeps at least one server.
+          onPressed:
+              _busy || selectedCount == 0 || selectedCount >= group.nodes.length
+              ? null
+              : () => _deleteSelected(group),
+          child: Text(group.isLocal ? l10n.delete : l10n.hide),
+        ),
+        TextButton(
+          onPressed: () => _set(() {
+            _selectingSubscription = null;
+            _selectedServers.clear();
+          }),
+          child: Text(l10n.cancel),
+        ),
+      ],
+    );
+    final columnStyle = TextStyle(fontSize: 12, color: scheme.onSurfaceVariant);
+    return [
+      Row(
+        children: [
+          Flexible(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 420),
+              child: picker,
+            ),
+          ),
+          const SizedBox(width: 4),
+          if (_failedRefreshes.containsKey(group.id) &&
+              group.actions.contains('support'))
+            TextButton(
+              key: ValueKey('subscription-support:${group.id}'),
+              onPressed: _busy
+                  ? null
+                  : () => _openProviderLink(group.id, 'support'),
+              child: Text(l10n.settingsGroupSupport),
+            ),
+          if (!group.isLocal)
+            IconButton(
+              key: ValueKey('refresh-subscription:${group.id}'),
+              tooltip: l10n.refreshNamed(group.name),
+              onPressed: _busy ? null : () => _refreshSubscription(group.id),
+              icon: const Icon(CupertinoIcons.arrow_clockwise, size: 19),
+            ),
+          _subscriptionActions(group),
+        ],
+      ),
+      if (ProviderNotice.messages(group).isNotEmpty) ...[
+        const SizedBox(height: 12),
+        _providerNotice(group, compact: true),
+      ],
+      const SizedBox(height: 12),
+      if (selecting)
+        selection
+      else if (narrow) ...[
+        searchField,
+        const SizedBox(height: 8),
+        Wrap(spacing: 8, runSpacing: 8, children: filters),
+      ] else
+        Row(
+          children: [
+            Expanded(child: searchField),
+            for (final filter in filters) ...[const SizedBox(width: 8), filter],
+          ],
+        ),
+      const SizedBox(height: 12),
+      Card(
+        key: ValueKey('subscription:${group.id}'),
+        clipBehavior: Clip.antiAlias,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Padding(
+              // The latency heads the column left of the star and the menu.
+              padding: EdgeInsets.fromLTRB(24, 10, selecting ? 24 : 84, 10),
+              child: Row(
+                children: [
+                  Expanded(child: Text(l10n.serverColumn, style: columnStyle)),
+                  Text(l10n.latencyColumn, style: columnStyle),
+                ],
+              ),
+            ),
+            Divider(height: 1, color: scheme.outlineVariant),
+            const SizedBox(height: 6),
+            if (nodes.isEmpty)
+              Padding(
+                padding: const EdgeInsets.all(24),
+                child: Text(
+                  group.nodes.isEmpty
+                      ? l10n.noServersInSubscription
+                      : l10n.noMatchingServers,
+                ),
+              ),
+            for (final node in nodes) ...[
+              _serverRow(
+                node,
+                group,
+                subscriptionView: true,
+                selecting: selecting,
+              ),
+              for (final choice in node.groups)
+                Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 20,
+                    vertical: 8,
+                  ),
+                  child: ElarniSelect<String>(
+                    key: ValueKey('${node.id}:${choice.name}'),
+                    value: choice.selected,
+                    isExpanded: true,
+                    label: choice.name,
+                    items: choice.options
+                        .map(
+                          (option) => DropdownMenuItem(
+                            value: option,
+                            child: Text(option),
+                          ),
+                        )
+                        .toList(),
+                    onChanged: _busy
+                        ? null
+                        : (value) {
+                            if (value != null)
+                              _selectProfileGroup(node.id, choice.name, value);
+                          },
+                  ),
+                ),
+            ],
+            if (group.hiddenNodes.isNotEmpty)
+              ListTile(
+                key: ValueKey('hidden-servers:${group.id}'),
+                contentPadding: const EdgeInsets.symmetric(horizontal: 24),
+                leading: const Icon(CupertinoIcons.eye_slash, size: 19),
+                title: Text(l10n.hiddenServersCount(group.hiddenNodes.length)),
+                trailing: TextButton(
+                  onPressed: _busy ? null : () => _showHiddenServers(group),
+                  child: Text(l10n.showAgain),
+                ),
+              ),
+            const SizedBox(height: 6),
+          ],
+        ),
+      ),
+      Padding(
+        key: _subscriptionFooter,
+        padding: const EdgeInsets.fromLTRB(8, 8, 8, 0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            LayoutBuilder(
+              builder: (context, constraints) {
+                final label = Text(
+                  l10n.routingProfile,
+                  style: TextStyle(color: scheme.onSurfaceVariant),
+                );
+                final picker = ElarniSelect<String>(
+                  key: ValueKey('subscription-routing:${group.id}'),
+                  value: _routing.assignments[group.id] ?? '',
+                  isExpanded: true,
+                  items: [
+                    DropdownMenuItem(
+                      value: '',
+                      child: Text(l10n.noCustomRouting),
+                    ),
+                    for (final profile in _routing.profiles)
+                      DropdownMenuItem(
+                        value: profile.id,
+                        child: Text(profile.name),
+                      ),
+                  ],
+                  onChanged: _busy
+                      ? null
+                      : (value) => _runRouting(
+                          () => widget.tunnelControl.assignRoutingProfile(
+                            group.id,
+                            value == null || value.isEmpty ? null : value,
+                          ),
+                        ),
+                );
+                if (constraints.maxWidth < 400 ||
+                    MediaQuery.textScalerOf(context).scale(1) >= 1.5) {
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [label, const SizedBox(height: 6), picker],
+                  );
+                }
+                return Row(
+                  children: [
+                    Expanded(child: label),
+                    const SizedBox(width: 16),
+                    Flexible(child: picker),
+                  ],
+                );
+              },
+            ),
+            if (_routing.profiles.any(
+              (profile) =>
+                  profile.id == _routing.assignments[group.id] &&
+                  profile.providerSubscriptionId == group.id,
+            ))
+              Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: Text(
+                  l10n.setByYourProvider,
+                  textAlign: TextAlign.end,
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: scheme.onSurfaceVariant,
+                  ),
+                ),
+              ),
+            if (details.isNotEmpty || !group.isLocal)
+              ExpansionTile(
+                key: PageStorageKey('subscription-details:${group.id}'),
+                controller: _subscriptionDetailsTile,
+                // Open at once: the menu's Details scrolls to the opened rows.
+                expansionAnimationStyle: AnimationStyle.noAnimation,
+                title: Text(l10n.details, style: const TextStyle(fontSize: 13)),
+                tilePadding: EdgeInsets.zero,
+                shape: const Border(),
+                collapsedShape: const Border(),
+                childrenPadding: const EdgeInsets.only(bottom: 16),
+                children: [
+                  SelectionArea(
+                    child: Column(
+                      key: PageStorageKey('subscription-metadata:${group.id}'),
+                      children: [
+                        for (final (label, value) in details)
+                          _detailRow(label, value),
+                        if (!group.isLocal) ..._providerDetailRows(group),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+          ],
+        ),
+      ),
+    ];
   }
 
   /// The country a server's name names, or 'other' for none.
@@ -2449,11 +2717,37 @@ extension _HomePages on _ElarniHomeState {
         : last;
   }
 
-  Widget _serverSortMenu() => PopupMenuButton<String>(
-    key: const Key('server-sort'),
+  // Home has room for an icon; the Subscriptions page names the order.
+  Widget _serverSortMenu({bool labelled = false}) => PopupMenuButton<String>(
+    key: Key(labelled ? 'subscription-sort' : 'server-sort'),
     tooltip: l10n.sortServers,
     enabled: !widget.desktop.saving,
-    icon: const Icon(CupertinoIcons.arrow_up_arrow_down, size: 20),
+    icon: labelled
+        ? null
+        : const Icon(CupertinoIcons.arrow_up_arrow_down, size: 20),
+    // The menu button takes the click; the outline only draws it.
+    child: !labelled
+        ? null
+        : ExcludeFocus(
+            child: AbsorbPointer(
+              child: OutlinedButton(
+                style: OutlinedButton.styleFrom(padding: _toolbarButtonPadding),
+                onPressed: widget.desktop.saving ? null : () {},
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(switch (widget.desktop.sort) {
+                      'alphabet' => l10n.alphabetical,
+                      'latency' => l10n.lowestLatency,
+                      _ => l10n.providerOrder,
+                    }),
+                    const SizedBox(width: 8),
+                    const Icon(CupertinoIcons.chevron_down, size: 14),
+                  ],
+                ),
+              ),
+            ),
+          ),
     onSelected: (value) {
       // The menu was built from the preferences of the moment it opened.
       if (!widget.desktop.available || widget.desktop.saving) return;
@@ -2543,12 +2837,18 @@ extension _HomePages on _ElarniHomeState {
             for (final entry in {
               'all': l10n.filterAll,
               'favorites': l10n.filterFavorites,
-              'recent': l10n.filterRecent,
+              'country': l10n.filterByCountry,
             }.entries)
               ChoiceChip(
                 label: Text(entry.value),
                 selected: _nodeFilter == entry.key,
-                onSelected: (_) => _set(() => _nodeFilter = entry.key),
+                onSelected: (_) {
+                  _set(() => _nodeFilter = entry.key);
+                  // These lists show servers that the groups of All may hide,
+                  // and opening a group is what tests a server.
+                  if (entry.key == 'favorites' || entry.key == 'country')
+                    _pingOpened(_shownServers());
+                },
               ),
             if (_locationFilter case final location?)
               InputChip(

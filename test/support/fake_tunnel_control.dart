@@ -127,6 +127,7 @@ class FakeTunnelControl implements TunnelControl {
   final sharedSubscription = <bool>[];
   final savedFetchOptions = <Map<String, Object?>>[];
   final exportedPasswords = <String>[];
+  var backupExclusions = <BackupExclusion>[];
   final restoredPasswords = <String>[];
   int repairCalls = 0;
   Map<String, Object?> automation = {
@@ -176,14 +177,38 @@ class FakeTunnelControl implements TunnelControl {
   }
 
   @override
-  Future<void> exportCatalogBackup(String password) async {
+  Future<List<BackupExclusion>> exportCatalogBackup(String password) async {
     exportedPasswords.add(password);
+    return backupExclusions;
   }
 
   @override
   Future<SubscriptionSnapshot> restoreCatalogBackup(String password) async {
     restoredPasswords.add(password);
     return snapshot;
+  }
+
+  /// The desktop core's storage replies: by default a catalog that loaded.
+  Map<String, Object?> storageStatusValue = const {
+    'code': null,
+    'resettable': false,
+  };
+  int storageStatusCalls = 0;
+  int resetStorageCalls = 0;
+  Object? resetStorageError;
+
+  @override
+  Future<Map<String, Object?>> storageStatus() async {
+    storageStatusCalls++;
+    return storageStatusValue;
+  }
+
+  @override
+  Future<Map<String, Object?>> resetStorage() async {
+    resetStorageCalls++;
+    if (resetStorageError case final Object error) throw error;
+    storageStatusValue = const {'code': null, 'resettable': false};
+    return {'setAside': true, 'name': null, 'state': phase};
   }
 
   @override

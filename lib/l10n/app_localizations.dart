@@ -263,13 +263,13 @@ abstract class AppLocalizations {
   /// No description provided for @issueInvalidRouteEnforcementRemedy.
   ///
   /// In en, this message translates to:
-  /// **'Replace 0.0.0.0/0 and ::/0 with specific routes, or turn enforcement off. For a full tunnel, turn enforcement off and use Block traffic without VPN.'**
+  /// **'Replace 0.0.0.0/0 and ::/0 with specific routes, or turn enforcement off. For a full tunnel, turn enforcement off and use the kill switch.'**
   String get issueInvalidRouteEnforcementRemedy;
 
   /// No description provided for @issueInvalidRouteEnforcement.
   ///
   /// In en, this message translates to:
-  /// **'Enforce tunnel routes needs specific included routes and cannot be combined with Block traffic without VPN.'**
+  /// **'Enforce tunnel routes needs specific included routes and cannot be combined with the kill switch.'**
   String get issueInvalidRouteEnforcement;
 
   /// No description provided for @issueRouteModelTooLargeRemedy.
@@ -287,14 +287,44 @@ abstract class AppLocalizations {
   /// No description provided for @issueStorageUnavailableRemedy.
   ///
   /// In en, this message translates to:
-  /// **'Restart Elarni. If this continues, restore an encrypted backup.'**
+  /// **'Restart Elarni and check the free disk space.'**
   String get issueStorageUnavailableRemedy;
+
+  /// No description provided for @issueStorageUnavailableLinuxRemedy.
+  ///
+  /// In en, this message translates to:
+  /// **'Unlock your keyring and check that secret-tool is installed, then restart Elarni.'**
+  String get issueStorageUnavailableLinuxRemedy;
 
   /// No description provided for @issueStorageUnavailable.
   ///
   /// In en, this message translates to:
-  /// **'Elarni could not read or save its catalog.'**
+  /// **'Elarni could not read or save its data.'**
   String get issueStorageUnavailable;
+
+  /// No description provided for @issueStorageBusyRemedy.
+  ///
+  /// In en, this message translates to:
+  /// **'Close the other copy or stop its background service. Elarni tries again by itself.'**
+  String get issueStorageBusyRemedy;
+
+  /// No description provided for @issueStorageBusy.
+  ///
+  /// In en, this message translates to:
+  /// **'Elarni’s data is in use by another copy of Elarni.'**
+  String get issueStorageBusy;
+
+  /// No description provided for @issueStorageCorruptRemedy.
+  ///
+  /// In en, this message translates to:
+  /// **'Reset Elarni in Settings › Backup and repair, then restore a backup or add your subscriptions again.'**
+  String get issueStorageCorruptRemedy;
+
+  /// No description provided for @issueStorageCorrupt.
+  ///
+  /// In en, this message translates to:
+  /// **'Elarni cannot read its saved data on this computer.'**
+  String get issueStorageCorrupt;
 
   /// No description provided for @issueBusyRemedy.
   ///
@@ -719,7 +749,7 @@ abstract class AppLocalizations {
   /// No description provided for @routeEnforcementWithBlock.
   ///
   /// In en, this message translates to:
-  /// **'Enforce tunnel routes cannot be combined with Block traffic without VPN. Turn one of them off.'**
+  /// **'Enforce tunnel routes cannot be combined with the kill switch. Turn one of them off.'**
   String get routeEnforcementWithBlock;
 
   /// No description provided for @routeEnforcementDefaultRoutes.
@@ -853,12 +883,6 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Home'**
   String get home;
-
-  /// No description provided for @backToHome.
-  ///
-  /// In en, this message translates to:
-  /// **'Back to Home'**
-  String get backToHome;
 
   /// No description provided for @settingsGroupSupport.
   ///
@@ -1970,10 +1994,16 @@ abstract class AppLocalizations {
   /// **'Connection stopped unexpectedly. Reconnect to retry; if sites stay unreachable, use Repair VPN setup.'**
   String get connectionStoppedRepair;
 
+  /// No description provided for @connectionStoppedProxyBlocked.
+  ///
+  /// In en, this message translates to:
+  /// **'Connection stopped unexpectedly. The kill switch keeps the system proxy on Elarni, so apps that follow it have no connection until you reconnect. Disconnect to lift the block.'**
+  String get connectionStoppedProxyBlocked;
+
   /// No description provided for @connectionStoppedBlocked.
   ///
   /// In en, this message translates to:
-  /// **'Connection stopped unexpectedly. Block traffic without VPN keeps traffic blocked until you reconnect, or use Repair VPN setup to lift the block.'**
+  /// **'Connection stopped unexpectedly. The kill switch keeps traffic blocked until you reconnect. Disconnecting, quitting Elarni or Repair VPN setup lifts the block.'**
   String get connectionStoppedBlocked;
 
   /// No description provided for @windowsDnsNotRestored.
@@ -1994,11 +2024,47 @@ abstract class AppLocalizations {
   /// **'The system proxy could not be set. Apps can still use the HTTP proxy at 127.0.0.1:{port}.'**
   String systemProxyNotSet(Object port);
 
+  /// No description provided for @systemProxyChanged.
+  ///
+  /// In en, this message translates to:
+  /// **'Another program changed the system proxy. Elarni set it again.'**
+  String get systemProxyChanged;
+
+  /// No description provided for @systemProxyTaken.
+  ///
+  /// In en, this message translates to:
+  /// **'Another program keeps changing the system proxy, so Elarni left it. Apps that follow the system proxy may not use the VPN. Use VPN mode, or stop the other program.'**
+  String get systemProxyTaken;
+
   /// No description provided for @scheduledRefreshFailed.
   ///
   /// In en, this message translates to:
   /// **'A scheduled subscription or routing refresh failed.'**
   String get scheduledRefreshFailed;
+
+  /// No description provided for @scheduledRefreshNeedsReview.
+  ///
+  /// In en, this message translates to:
+  /// **'A subscription was not updated because the network answered unexpectedly. Elarni tries again in two hours; open Subscriptions to review it now.'**
+  String get scheduledRefreshNeedsReview;
+
+  /// No description provided for @perAppTargetGoneKept.
+  ///
+  /// In en, this message translates to:
+  /// **'A server that an app is routed through is gone from its subscription. The connection keeps the old settings; choose another server for that app in Per-app routing.'**
+  String get perAppTargetGoneKept;
+
+  /// No description provided for @selectedServerReplaced.
+  ///
+  /// In en, this message translates to:
+  /// **'The server you had selected is gone from its subscription. Elarni selected another server.'**
+  String get selectedServerReplaced;
+
+  /// No description provided for @managedListMissing.
+  ///
+  /// In en, this message translates to:
+  /// **'A domain list of the routing profile is not downloaded yet, so its rules do not apply. Elarni downloads it now that the connection is up.'**
+  String get managedListMissing;
 
   /// No description provided for @groupSelectionFailed.
   ///
@@ -2419,12 +2485,6 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'HTTP method'**
   String get httpMethod;
-
-  /// No description provided for @currentRulesActiveTunnel.
-  ///
-  /// In en, this message translates to:
-  /// **'Current rules / active tunnel'**
-  String get currentRulesActiveTunnel;
 
   /// No description provided for @testType.
   ///
@@ -2870,23 +2930,23 @@ abstract class AppLocalizations {
   /// **'Server addressing'**
   String get serverAddressing;
 
-  /// No description provided for @blockTrafficMacHelp.
+  /// No description provided for @killSwitchMacHelp.
   ///
   /// In en, this message translates to:
   /// **'macOS keeps all traffic inside the tunnel, including while it reconnects. Route exclusions do not apply.'**
-  String get blockTrafficMacHelp;
+  String get killSwitchMacHelp;
 
-  /// No description provided for @blockTrafficDesktopHelp.
+  /// No description provided for @killSwitchDesktopHelp.
   ///
   /// In en, this message translates to:
-  /// **'If the VPN stops unexpectedly, nothing leaves this device outside it until you reconnect or use Repair VPN setup. Disconnecting lifts the block. Needs System-wide VPN; cannot be combined with Enforce tunnel routes.'**
-  String get blockTrafficDesktopHelp;
+  /// **'If the VPN stops unexpectedly, nothing leaves this device outside it until you reconnect or use Repair VPN setup. Disconnecting lifts the block. In System proxy mode the system proxy stays on Elarni instead: apps that follow it get no connection until you reconnect or disconnect, and apps that ignore it are not covered. Not available with Local proxy only; cannot be combined with Enforce tunnel routes.'**
+  String get killSwitchDesktopHelp;
 
-  /// No description provided for @blockTrafficWithoutVpn.
+  /// No description provided for @killSwitch.
   ///
   /// In en, this message translates to:
-  /// **'Block traffic without VPN'**
-  String get blockTrafficWithoutVpn;
+  /// **'Kill switch'**
+  String get killSwitch;
 
   /// No description provided for @connectWithoutAdminApprovalHelp.
   ///
@@ -3131,8 +3191,14 @@ abstract class AppLocalizations {
   /// No description provided for @windowsWifiLocationHelp.
   ///
   /// In en, this message translates to:
-  /// **'Windows keeps the Wi-Fi name from Elarni. Turn on Location services and Let desktop apps access your location in Settings › Privacy & security › Location.'**
+  /// **'Windows keeps the Wi-Fi name from Elarni. Turn on Location services and Let desktop apps access your location in Settings › Privacy & security › Location. Until then every Wi-Fi network counts as untrusted.'**
   String get windowsWifiLocationHelp;
+
+  /// No description provided for @linuxWifiNameHelp.
+  ///
+  /// In en, this message translates to:
+  /// **'Elarni cannot read the Wi-Fi name on this system: it needs NetworkManager\'s nmcli or iw. Until then every Wi-Fi network counts as untrusted.'**
+  String get linuxWifiNameHelp;
 
   /// No description provided for @noTrustedWifi.
   ///
@@ -3245,7 +3311,7 @@ abstract class AppLocalizations {
   /// No description provided for @enforceRoutesMacHelp.
   ///
   /// In en, this message translates to:
-  /// **'Enforcement requires specific included routes; default routes such as 0.0.0.0/0 and ::/0 are unsupported. For a full tunnel, turn enforcement off and use Block traffic without VPN in Connection settings.'**
+  /// **'Enforcement requires specific included routes; default routes such as 0.0.0.0/0 and ::/0 are unsupported. For a full tunnel, turn enforcement off and use the kill switch in Connection settings.'**
   String get enforceRoutesMacHelp;
 
   /// No description provided for @enforceRoutesDesktopHelp.
@@ -3422,11 +3488,11 @@ abstract class AppLocalizations {
   /// **'Search servers'**
   String get searchServers;
 
-  /// No description provided for @filterRecent.
+  /// No description provided for @filterByCountry.
   ///
   /// In en, this message translates to:
-  /// **'Recent'**
-  String get filterRecent;
+  /// **'By country'**
+  String get filterByCountry;
 
   /// No description provided for @filterFavorites.
   ///
@@ -3463,6 +3529,48 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'No matching servers'**
   String get noMatchingServers;
+
+  /// No description provided for @searchSettings.
+  ///
+  /// In en, this message translates to:
+  /// **'Search settings'**
+  String get searchSettings;
+
+  /// No description provided for @noMatchingSettings.
+  ///
+  /// In en, this message translates to:
+  /// **'No settings match'**
+  String get noMatchingSettings;
+
+  /// No description provided for @selectServers.
+  ///
+  /// In en, this message translates to:
+  /// **'Select servers'**
+  String get selectServers;
+
+  /// No description provided for @testAll.
+  ///
+  /// In en, this message translates to:
+  /// **'Test all'**
+  String get testAll;
+
+  /// No description provided for @serverColumn.
+  ///
+  /// In en, this message translates to:
+  /// **'Server'**
+  String get serverColumn;
+
+  /// No description provided for @latencyColumn.
+  ///
+  /// In en, this message translates to:
+  /// **'Latency'**
+  String get latencyColumn;
+
+  /// No description provided for @subscriptionCount.
+  ///
+  /// In en, this message translates to:
+  /// **'{count, plural, =1{1 subscription} other{{count} subscriptions}}'**
+  String subscriptionCount(int count);
 
   /// No description provided for @noServersInSubscription.
   ///
@@ -3631,12 +3739,6 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Show all servers'**
   String get showAllServers;
-
-  /// No description provided for @noSuccessfulConnections.
-  ///
-  /// In en, this message translates to:
-  /// **'No successful connections yet'**
-  String get noSuccessfulConnections;
 
   /// No description provided for @noFavoriteServers.
   ///
@@ -5030,11 +5132,59 @@ abstract class AppLocalizations {
   /// **'Encrypted backup saved.'**
   String get encryptedBackupSaved;
 
+  /// No description provided for @backupSavedWithoutForbidden.
+  ///
+  /// In en, this message translates to:
+  /// **'{count, plural, =1{Backup saved without 1 subscription: {names}. Its provider does not allow backups.} other{Backup saved without {count} subscriptions: {names}. Their providers do not allow backups.}}'**
+  String backupSavedWithoutForbidden(int count, String names);
+
+  /// No description provided for @backupSavedWithoutUnrefreshed.
+  ///
+  /// In en, this message translates to:
+  /// **'{count, plural, =1{Backup saved without 1 subscription: {names}. Update it once first.} other{Backup saved without {count} subscriptions: {names}. Update them once first.}}'**
+  String backupSavedWithoutUnrefreshed(int count, String names);
+
+  /// No description provided for @backupAlsoWithoutUnrefreshed.
+  ///
+  /// In en, this message translates to:
+  /// **'{count, plural, =1{Also left out 1 subscription that was never updated: {names}. Update it once first.} other{Also left out {count} subscriptions that were never updated: {names}. Update them once first.}}'**
+  String backupAlsoWithoutUnrefreshed(int count, String names);
+
   /// No description provided for @backupRestored.
   ///
   /// In en, this message translates to:
   /// **'Backup restored. Refresh subscription and routing data before connecting.'**
   String get backupRestored;
+
+  /// No description provided for @resetElarni.
+  ///
+  /// In en, this message translates to:
+  /// **'Reset Elarni'**
+  String get resetElarni;
+
+  /// No description provided for @resetElarniHelp.
+  ///
+  /// In en, this message translates to:
+  /// **'Saved data cannot be read. Reset sets it aside and starts empty.'**
+  String get resetElarniHelp;
+
+  /// No description provided for @resetElarniQuestion.
+  ///
+  /// In en, this message translates to:
+  /// **'Reset Elarni?'**
+  String get resetElarniQuestion;
+
+  /// No description provided for @resetElarniBody.
+  ///
+  /// In en, this message translates to:
+  /// **'Elarni’s saved data on this computer cannot be read. Reset keeps the unreadable file and starts with an empty list: subscriptions, servers and settings must be restored from a backup or added again. Providers that count devices will see this computer as a new device.'**
+  String get resetElarniBody;
+
+  /// No description provided for @elarniWasReset.
+  ///
+  /// In en, this message translates to:
+  /// **'Elarni was reset. Restore a backup or add a subscription.'**
+  String get elarniWasReset;
 
   /// No description provided for @chooseBackupAndRestore.
   ///
@@ -5075,7 +5225,7 @@ abstract class AppLocalizations {
   /// No description provided for @createBackupHelp.
   ///
   /// In en, this message translates to:
-  /// **'Saves subscriptions, servers, group choices and routing in a password-protected file. Refresh subscriptions first; providers that disable sharing also disable backup. Keep the password: it cannot be recovered.'**
+  /// **'Saves subscriptions, servers, group choices and routing in a password-protected file. It leaves out subscriptions whose provider disables sharing and ones never updated. Keep the password: it cannot be recovered.'**
   String get createBackupHelp;
 
   /// No description provided for @restoreBackupReplacesHelp.

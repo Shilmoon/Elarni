@@ -27,12 +27,17 @@
   "issueAssetsMissing": "The routing profile’s geofiles are missing.",
   "issueMissingGeodataRemedy": "Open Routing and use Refresh routing data, then connect again. If that does not help, fix the profile or its geofile links.",
   "issueMissingGeodata": "The routing profile’s geofiles lack codes that its proxy rules or servers need.",
-  "issueInvalidRouteEnforcementRemedy": "Replace 0.0.0.0/0 and ::/0 with specific routes, or turn enforcement off. For a full tunnel, turn enforcement off and use Block traffic without VPN.",
-  "issueInvalidRouteEnforcement": "Enforce tunnel routes needs specific included routes and cannot be combined with Block traffic without VPN.",
+  "issueInvalidRouteEnforcementRemedy": "Replace 0.0.0.0/0 and ::/0 with specific routes, or turn enforcement off. For a full tunnel, turn enforcement off and use the kill switch.",
+  "issueInvalidRouteEnforcement": "Enforce tunnel routes needs specific included routes and cannot be combined with the kill switch.",
   "issueRouteModelTooLargeRemedy": "Remove some rules or managed lists, then connect again.",
   "issueRouteModelTooLarge": "The routing profile is too large: its rules and lists exceed 8 MB.",
-  "issueStorageUnavailableRemedy": "Restart Elarni. If this continues, restore an encrypted backup.",
-  "issueStorageUnavailable": "Elarni could not read or save its catalog.",
+  "issueStorageUnavailableRemedy": "Restart Elarni and check the free disk space.",
+  "issueStorageUnavailableLinuxRemedy": "Unlock your keyring and check that secret-tool is installed, then restart Elarni.",
+  "issueStorageUnavailable": "Elarni could not read or save its data.",
+  "issueStorageBusyRemedy": "Close the other copy or stop its background service. Elarni tries again by itself.",
+  "issueStorageBusy": "Elarni’s data is in use by another copy of Elarni.",
+  "issueStorageCorruptRemedy": "Reset Elarni in Settings › Backup and repair, then restore a backup or add your subscriptions again.",
+  "issueStorageCorrupt": "Elarni cannot read its saved data on this computer.",
   "issueBusyRemedy": "Wait for it to finish, then retry.",
   "issueBusy": "Another operation is in progress.",
   "issueVpnGuardStaleRemedy": "Use Repair VPN setup and allow the administrator permission request.",
@@ -124,7 +129,7 @@
   "proxyAddressOnly": "Use only the address and port, without a login or path.",
   "proxyIsOwnPort": "That is Elarni's own proxy port. Use the other app's port.",
   "routeEnforcementWithIncludeAll": "Enforce tunnel routes cannot be combined with Include all networks. Turn one of them off.",
-  "routeEnforcementWithBlock": "Enforce tunnel routes cannot be combined with Block traffic without VPN. Turn one of them off.",
+  "routeEnforcementWithBlock": "Enforce tunnel routes cannot be combined with the kill switch. Turn one of them off.",
   "routeEnforcementDefaultRoutes": "Enforce tunnel routes needs specific included routes. Replace 0.0.0.0/0 and ::/0 with specific routes, or turn enforcement off.",
   "providerAttentionLastReported": "Provider attention required · Last reported information",
   "notDownloadedYet": "Not downloaded yet",
@@ -185,7 +190,6 @@
   "routing": "Routing",
   "subscriptions": "Subscriptions",
   "home": "Home",
-  "backToHome": "Back to Home",
   "settingsGroupSupport": "Support",
   "settingsGroupNetwork": "Network",
   "settingsGroupPreferences": "Preferences",
@@ -514,7 +518,8 @@
   "routingProfilesNotLoaded": "Routing profiles could not be loaded.",
   "connectionStoppedUnexpectedly": "Connection stopped unexpectedly. Reconnect to retry.",
   "connectionStoppedRepair": "Connection stopped unexpectedly. Reconnect to retry; if sites stay unreachable, use Repair VPN setup.",
-  "connectionStoppedBlocked": "Connection stopped unexpectedly. Block traffic without VPN keeps traffic blocked until you reconnect, or use Repair VPN setup to lift the block.",
+  "connectionStoppedProxyBlocked": "Connection stopped unexpectedly. The kill switch keeps the system proxy on Elarni, so apps that follow it have no connection until you reconnect. Disconnect to lift the block.",
+  "connectionStoppedBlocked": "Connection stopped unexpectedly. The kill switch keeps traffic blocked until you reconnect. Disconnecting, quitting Elarni or Repair VPN setup lifts the block.",
   "windowsDnsNotRestored": "Disconnected, but Windows DNS could not be restored yet. If sites stay unreachable, use Repair VPN setup.",
   "systemProxyNotRestored": "The system proxy setting could not be restored. Check it in your system network settings.",
   "systemProxyNotSet": "The system proxy could not be set. Apps can still use the HTTP proxy at 127.0.0.1:{port}.",
@@ -525,7 +530,13 @@
       }
     }
   },
+  "systemProxyChanged": "Another program changed the system proxy. Elarni set it again.",
+  "systemProxyTaken": "Another program keeps changing the system proxy, so Elarni left it. Apps that follow the system proxy may not use the VPN. Use VPN mode, or stop the other program.",
   "scheduledRefreshFailed": "A scheduled subscription or routing refresh failed.",
+  "scheduledRefreshNeedsReview": "A subscription was not updated because the network answered unexpectedly. Elarni tries again in two hours; open Subscriptions to review it now.",
+  "perAppTargetGoneKept": "A server that an app is routed through is gone from its subscription. The connection keeps the old settings; choose another server for that app in Per-app routing.",
+  "selectedServerReplaced": "The server you had selected is gone from its subscription. Elarni selected another server.",
+  "managedListMissing": "A domain list of the routing profile is not downloaded yet, so its rules do not apply. Elarni downloads it now that the connection is up.",
   "groupSelectionFailed": "Group selection failed. The saved selection was restored.",
   "serverIpPreferenceNotApplied": "Could not apply the server IP preference.",
   "telegramNotOpened": "Telegram could not be opened. Check that it is installed.",
@@ -658,7 +669,6 @@
   "timeout": "Timeout",
   "testMode": "Test mode",
   "httpMethod": "HTTP method",
-  "currentRulesActiveTunnel": "Current rules / active tunnel",
   "testType": "Test type",
   "refreshingEllipsis": "Refreshing…",
   "refresh": "Refresh",
@@ -753,9 +763,9 @@
   "defaultIpTypeHelp": "Used by servers without an override.",
   "defaultIpType": "Default IP type",
   "serverAddressing": "Server addressing",
-  "blockTrafficMacHelp": "macOS keeps all traffic inside the tunnel, including while it reconnects. Route exclusions do not apply.",
-  "blockTrafficDesktopHelp": "If the VPN stops unexpectedly, nothing leaves this device outside it until you reconnect or use Repair VPN setup. Disconnecting lifts the block. Needs System-wide VPN; cannot be combined with Enforce tunnel routes.",
-  "blockTrafficWithoutVpn": "Block traffic without VPN",
+  "killSwitchMacHelp": "macOS keeps all traffic inside the tunnel, including while it reconnects. Route exclusions do not apply.",
+  "killSwitchDesktopHelp": "If the VPN stops unexpectedly, nothing leaves this device outside it until you reconnect or use Repair VPN setup. Disconnecting lifts the block. In System proxy mode the system proxy stays on Elarni instead: apps that follow it get no connection until you reconnect or disconnect, and apps that ignore it are not covered. Not available with Local proxy only; cannot be combined with Enforce tunnel routes.",
+  "killSwitch": "Kill switch",
   "connectWithoutAdminApprovalHelp": "The Elarni VPN service starts the VPN helper for this Windows account, so connecting asks for no approval. Turning this on or off asks for approval once.",
   "connectWithoutAdminApproval": "Connect without administrator approval",
   "accentColor": "Accent color",
@@ -841,7 +851,8 @@
   "loginStateUnavailable": "Registration state is unavailable.",
   "loginApprovalRequired": "Approval is required in macOS Login Items settings.",
   "launchAtLogin": "Launch app at login",
-  "windowsWifiLocationHelp": "Windows keeps the Wi-Fi name from Elarni. Turn on Location services and Let desktop apps access your location in Settings › Privacy & security › Location.",
+  "windowsWifiLocationHelp": "Windows keeps the Wi-Fi name from Elarni. Turn on Location services and Let desktop apps access your location in Settings › Privacy & security › Location. Until then every Wi-Fi network counts as untrusted.",
+  "linuxWifiNameHelp": "Elarni cannot read the Wi-Fi name on this system: it needs NetworkManager's nmcli or iw. Until then every Wi-Fi network counts as untrusted.",
   "noTrustedWifi": "None. Every Wi-Fi network connects.",
   "trustedWifiNetworks": "Trusted Wi-Fi networks",
   "untrustedWifiMacHelp": "Joining a Wi-Fi network that is not on your trusted list connects, even before you press Connect. Trusted networks and wired connections leave the VPN as it is. Disconnect pauses this until your next Connect.",
@@ -860,7 +871,7 @@
   "compatibilityRouteExclusions": "Compatibility route exclusions",
   "includeAllNetworksHelp": "VPN routes apply in System VPN mode. Include all networks captures both IP families and respects your exclusions.",
   "includeAllNetworks": "Include all networks",
-  "enforceRoutesMacHelp": "Enforcement requires specific included routes; default routes such as 0.0.0.0/0 and ::/0 are unsupported. For a full tunnel, turn enforcement off and use Block traffic without VPN in Connection settings.",
+  "enforceRoutesMacHelp": "Enforcement requires specific included routes; default routes such as 0.0.0.0/0 and ::/0 are unsupported. For a full tunnel, turn enforcement off and use the kill switch in Connection settings.",
   "enforceRoutesDesktopHelp": "VPN routes apply in System VPN mode. Enforcement blocks physical bypass of specific included routes while connected.",
   "enforceTunnelRoutes": "Enforce tunnel routes",
   "advancedNetworkRoutes": "Advanced network routes",
@@ -964,7 +975,7 @@
   "loginNotRegistered": "Not registered.",
   "loginRegistered": "Registered for your account.",
   "searchServers": "Search servers",
-  "filterRecent": "Recent",
+  "filterByCountry": "By country",
   "filterFavorites": "Favorites",
   "filterAll": "All",
   "servers": "Servers",
@@ -978,6 +989,14 @@
     }
   },
   "noMatchingServers": "No matching servers",
+  "searchSettings": "Search settings",
+  "noMatchingSettings": "No settings match",
+  "selectServers": "Select servers",
+  "testAll": "Test all",
+  "serverColumn": "Server",
+  "latencyColumn": "Latency",
+  "subscriptionCount": "{count, plural, =1{1 subscription} other{{count} subscriptions}}",
+  "@subscriptionCount": {"placeholders": {"count": {"type": "int"}}},
   "noServersInSubscription": "No servers in this subscription",
   "delete": "Delete",
   "selectUnreachable": "Select unreachable",
@@ -1027,7 +1046,6 @@
   "clearSearch": "Clear search",
   "noServersYet": "No servers yet",
   "showAllServers": "Show all servers",
-  "noSuccessfulConnections": "No successful connections yet",
   "noFavoriteServers": "No favorite servers",
   "onboardingStep3Proxy": "Press Connect. Only apps set to use the local proxy go through it; turn on System-wide VPN in Settings > Connection to connect all apps.",
   "onboardingStep3Vpn": "Press Connect. Administrator approval is requested on the first VPN connection in this app session.",
@@ -1602,14 +1620,52 @@
   "refreshBeforeBackup": "Refresh every subscription before creating a backup.",
   "sharingDisabledByProvider": "A provider has disabled sharing and backups.",
   "encryptedBackupSaved": "Encrypted backup saved.",
+  "backupSavedWithoutForbidden": "{count, plural, =1{Backup saved without 1 subscription: {names}. Its provider does not allow backups.} other{Backup saved without {count} subscriptions: {names}. Their providers do not allow backups.}}",
+  "@backupSavedWithoutForbidden": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      },
+      "names": {
+        "type": "String"
+      }
+    }
+  },
+  "backupSavedWithoutUnrefreshed": "{count, plural, =1{Backup saved without 1 subscription: {names}. Update it once first.} other{Backup saved without {count} subscriptions: {names}. Update them once first.}}",
+  "@backupSavedWithoutUnrefreshed": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      },
+      "names": {
+        "type": "String"
+      }
+    }
+  },
+  "backupAlsoWithoutUnrefreshed": "{count, plural, =1{Also left out 1 subscription that was never updated: {names}. Update it once first.} other{Also left out {count} subscriptions that were never updated: {names}. Update them once first.}}",
+  "@backupAlsoWithoutUnrefreshed": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      },
+      "names": {
+        "type": "String"
+      }
+    }
+  },
   "backupRestored": "Backup restored. Refresh subscription and routing data before connecting.",
+  "resetElarni": "Reset Elarni",
+  "resetElarniHelp": "Saved data cannot be read. Reset sets it aside and starts empty.",
+  "resetElarniQuestion": "Reset Elarni?",
+  "resetElarniBody": "Elarni’s saved data on this computer cannot be read. Reset keeps the unreadable file and starts with an empty list: subscriptions, servers and settings must be restored from a backup or added again. Providers that count devices will see this computer as a new device.",
+  "elarniWasReset": "Elarni was reset. Restore a backup or add a subscription.",
   "chooseBackupAndRestore": "Choose backup and restore",
   "saveBackup": "Save backup",
   "backupPasswordRules": "Use at least 12 characters and matching passwords.",
   "confirmPassword": "Confirm password",
   "atLeast12Characters": "At least 12 characters",
   "backupPassword": "Backup password",
-  "createBackupHelp": "Saves subscriptions, servers, group choices and routing in a password-protected file. Refresh subscriptions first; providers that disable sharing also disable backup. Keep the password: it cannot be recovered.",
+  "createBackupHelp": "Saves subscriptions, servers, group choices and routing in a password-protected file. It leaves out subscriptions whose provider disables sharing and ones never updated. Keep the password: it cannot be recovered.",
   "restoreBackupReplacesHelp": "Replaces subscriptions, servers and routing. Automatic failover is disabled. Refresh subscriptions and downloaded routing data afterward. Tunnel settings and login credentials stay on this device.",
   "trustedWifiRules": "Use up to 64 names of at most 32 bytes each, without tabs.",
   "oneNetworkPerLine": "One network name per line",

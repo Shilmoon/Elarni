@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 from pathlib import Path
+import re
 import runpy
 import signal
 import subprocess
@@ -20,6 +21,18 @@ def session(core):
         client=Core(core)
         try: return client.request(method,payload,success=success)
         finally: client.close()
+    def failure(method, payload):
+        client=Core(core)
+        try:
+            client.send(method,payload)
+            reply=client.replies.get(timeout=55)
+            assert not reply.get('success'), f'{method}: unexpected success'
+            return reply.get('error')
+        finally: client.close()
+    root=str(Path(os.environ['XDG_DATA_HOME'])/'Elarni')
+    def secret_tool(*args, value=None):
+        return subprocess.run(['secret-tool',*args,'application','com.elarni.Elarni','catalog',root],
+                              input=value,capture_output=True,text=True,timeout=20)
     control=str(Path(os.environ['XDG_RUNTIME_DIR'])/'keyring')
     os.environ['GNOME_KEYRING_CONTROL']=control
     daemon = subprocess.Popen(['gnome-keyring-daemon','--foreground','--components=secrets','--control-directory',control,'--unlock'],
@@ -38,8 +51,16 @@ def session(core):
             if ready.returncode==0 and str(daemon.pid) in ready.stdout: break
             time.sleep(.1)
         else: raise AssertionError('Private Secret Service did not start')
+    # The core's own query: it tells a key item that is gone from a locked one.
+    searches={}
+    def search(state):
+        found=dbus('org.freedesktop.Secret.Service.SearchItems',"{'application': 'com.elarni.Elarni', 'catalog': '"+root+"'}")
+        assert found.returncode==0, found.stderr
+        searches[state]=found.stdout.strip()
+        return searches[state]
     try:
         wait_service()
+        assert search('no item')=='(@ao [], @ao [])'
         owner=Core(core)
         owner.request('acquireCatalog',{})
         other=Core(core)
@@ -52,6 +73,7 @@ def session(core):
         encrypted=path.read_bytes()
         assert encrypted.startswith(b'RVL1') and b'elarni-synthetic-private-profile' not in encrypted
         assert path.stat().st_mode & 0o777 == 0o600
+        assert re.fullmatch(r"\(\[objectpath '[^']+'\], @ao \[\]\)",search('unlocked item'))
         owner.close()
         owner=Core(core)
         owner.request('acquireCatalog',{})
@@ -110,7 +132,10 @@ def session(core):
         collection=alias.stdout.split("'")[1]
         locked=dbus('org.freedesktop.Secret.Service.Lock',"[objectpath '"+collection+"']")
         assert locked.returncode==0
-        request('loadCatalog',{},success=False)
+        assert re.fullmatch(r"\(@ao \[\], \[objectpath '[^']+'\]\)",search('locked item'))
+        # A locked keyring may still unlock: it is never offered for a reset.
+        assert failure('loadCatalog',{})=='storage_unavailable'
+        assert failure('setAsideCatalog',{'revision':''})=='storage_unavailable'
         request('saveCatalog',{'revision':saved['revision'],'catalog':catalog},success=False)
         assert path.read_bytes()==encrypted, 'Locked keyring changed the catalog'
         # --unlock initializes a new daemon; --replace is necessary to recover
@@ -123,10 +148,37 @@ def session(core):
         wait_service()
         assert request('loadCatalog',{})['catalog']==catalog
         corrupt=bytearray(encrypted);corrupt[-1]^=0x80;path.write_bytes(corrupt)
-        request('loadCatalog',{},success=False)
+        assert failure('loadCatalog',{})=='storage_corrupt'
         request('saveCatalog',{'revision':saved['revision'],'catalog':catalog},success=False)
         assert path.read_bytes()==corrupt, 'Corrupt data was overwritten'
         path.write_bytes(encrypted)
+        # A keyring reset loses the key item for good: the catalog can never
+        # be read again, so a reset sets it aside, keeps its bytes and starts empty.
+        cleared=secret_tool('clear');assert cleared.returncode==0, cleared.stderr
+        assert search('removed item')=='(@ao [], @ao [])'
+        assert failure('loadCatalog',{})=='storage_corrupt'
+        assert failure('saveCatalog',{'revision':saved['revision'],'catalog':catalog})=='storage_corrupt'
+        assert path.read_bytes()==encrypted, 'A catalog without its key was replaced'
+        def reset():
+            aside=request('setAsideCatalog',{'revision':''})
+            assert aside['setAside'] is True and re.fullmatch(r'catalog\.unreadable-\d{8}T\d{6}Z(-\d+)?\.enc',aside['name']), aside
+            assert not path.exists()
+            assert request('loadCatalog',{})['revision']==''
+            fresh=request('saveCatalog',{'revision':'','catalog':catalog})
+            loaded=request('loadCatalog',{})
+            assert loaded['catalog']==catalog and loaded['revision']==fresh['revision']
+            return path.with_name(aside['name']),fresh
+        kept,saved=reset()
+        assert kept.read_bytes()==encrypted, 'Reset changed the set-aside catalog'
+        assert (path.parent/'session.lock').exists(), 'Reset removed the lease lock'
+        encrypted=path.read_bytes()
+        # A key item that holds no key blocks every catalog; a reset clears it.
+        damaged=secret_tool('store','--label=Elarni catalog key',value='not a key\n')
+        assert damaged.returncode==0, damaged.stderr
+        assert failure('loadCatalog',{})=='storage_corrupt'
+        damaged_kept,saved=reset()
+        assert damaged_kept.read_bytes()==encrypted and kept.read_bytes()!=encrypted
+        encrypted=path.read_bytes()
         owner.close()
         daemon.terminate();daemon.wait(timeout=5)
         os.environ['DBUS_SESSION_BUS_ADDRESS']='unix:path='+os.environ['XDG_RUNTIME_DIR']+'/missing-bus'
@@ -135,8 +187,9 @@ def session(core):
         owner.close()
         print(json.dumps({'passed':['lease','encrypted-publication','relaunch','revision-conflict',
             'failed-rename-preservation','death-before-publication','death-after-publication',
-            'locked-keyring-preservation','unlock-recovery','corruption-preservation','unavailable-service'],
-            'failed':0,'skipped':0}),flush=True)
+            'locked-keyring-preservation','unlock-recovery','corruption-preservation','removed-key-reset',
+            'malformed-key-reset','unavailable-service'],'failed':0,'skipped':0}),flush=True)
+        print(json.dumps({'searchItems':searches}),flush=True)
     finally:
         if 'owner' in locals(): owner.close()
         if daemon.poll() is None: daemon.terminate();daemon.wait(timeout=5)

@@ -21,7 +21,7 @@ struct SubscriptionsView: View {
               if !source.local { QuotaView(source: source) }
             }
           }.padding(.vertical, 6)
-        }
+        }.subscriptionMenu(source)
       }
     }.navigationTitle("Subscriptions")
     .refreshable { await model.refreshAll() }
@@ -151,9 +151,10 @@ struct SubscriptionDetailView: View {
               Spacer()
               Button("Cancel") { selecting = false; chosen = [] }.buttonStyle(.borderless).frame(minHeight: 44)
             }
-            // The selected server stays, as the store requires.
+            // A current test that failed to reach the server. The selected server stays, as the store requires.
             Button("Select unreachable") {
-              chosen.formUnion(visible.filter { $0.id != model.selectedID && model.probes[$0.id]?.status == "Failed" }.map(\.id))
+              let now = Date()
+              chosen.formUnion(visible.filter { $0.id != model.selectedID && model.probes[$0.id]?.unreachable(for: $0, now: now) == true }.map(\.id))
             }
             Button(source.local ? String(localized: "Delete \(servers(chosenCount))") : String(localized: "Hide \(servers(chosenCount))"), role: .destructive) { removingChosen = true }
               .disabled(model.busy || chosenCount == 0 || chosenCount >= source.nodes.count)
@@ -222,6 +223,51 @@ struct SubscriptionDetailView: View {
     .sheet(item: $share) { ShareView(item: $0) }
     .sheet(isPresented: $pickingShare) { if let source { ShareServersView(source: source) } }
   }
+}
+
+/// Touch and hold on a subscription, on Subscriptions and on Home: the actions of its page.
+private struct SubscriptionMenu: ViewModifier {
+  @Environment(IOSAppModel.self) private var model
+  let source: ServerSubscription
+  @State private var renaming = false
+  @State private var name = ""
+  @State private var deleting = false
+  @State private var share: SharedText?
+  @State private var pickingShare = false
+  func body(content: Content) -> some View {
+    let pinned = model.preferences.pinned.contains(source.id)
+    content
+      .contextMenu {
+        Group {
+          if !source.local { Button("Refresh", systemImage: "arrow.clockwise") { model.launch { try await model.refresh(source.id) } } }
+          Button(pinned ? String(localized: "Unpin") : String(localized: "Pin"), systemImage: pinned ? "pin.slash" : "pin") {
+            var next = model.preferences; next.pinned.removeAll { $0 == source.id }; if !pinned { next.pinned.append(source.id) }
+            do { try model.savePreferences(next) } catch { model.show(error) }
+          }
+          Button("Rename", systemImage: "pencil") { name = source.name; renaming = true }
+          Button("Share", systemImage: "square.and.arrow.up") {
+            // A local group has no subscription link; its servers are shared as links instead.
+            if source.local { pickingShare = true; return }
+            do { share = SharedText(title: source.name, text: try model.share(id: source.id, subscription: true)) } catch { model.show(error) }
+          }
+          Button("Delete subscription", systemImage: "trash", role: .destructive) { deleting = true }
+        }.disabled(model.busy)
+      }
+      .alert("Rename subscription", isPresented: $renaming) {
+        TextField("Name", text: $name)
+        Button("Save") { model.launch { try model.rename(source, name: name) } }
+        Button("Cancel", role: .cancel) {}
+      }
+      .confirmationDialog("Delete this subscription and its servers?", isPresented: $deleting, titleVisibility: .visible) {
+        Button("Delete subscription", role: .destructive) { model.launch { try await model.delete(source) } }
+      } message: { Text("If it contains the selected server, the VPN will disconnect. Provider routing owned by this subscription is removed too.") }
+      .sheet(item: $share) { ShareView(item: $0) }
+      .sheet(isPresented: $pickingShare) { ShareServersView(source: source) }
+  }
+}
+
+extension View {
+  func subscriptionMenu(_ source: ServerSubscription) -> some View { modifier(SubscriptionMenu(source: source)) }
 }
 
 /// Picks servers of a local group to share as links.

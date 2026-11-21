@@ -25,6 +25,98 @@ extension _HomeController on _ElarniHomeState {
       _recentIssues.add(issue);
       if (_recentIssues.length > 8) _recentIssues.removeAt(0);
     }
+    // Every storage failure shares one support code; the core says which.
+    if (issue.code == 'storage_unavailable') _checkStorage();
+  }
+
+  /// Whether [error] says the desktop core's catalog could not be read or
+  /// saved; then the core is asked why, which words the message.
+  bool _storageFailed(Object error) {
+    if (!widget.desktopCore ||
+        error is! PlatformException ||
+        supportIssueCode(error.code) != 'storage_unavailable')
+      return false;
+    _checkStorage(error.code);
+    return true;
+  }
+
+  // Each failed load asks once, not once per page it failed for.
+  void _checkStorage([String? failed]) {
+    if (!widget.desktopCore) return;
+    _storageCheck ??= _refreshStorage(
+      failed: failed,
+    ).whenComplete(() => _storageCheck = null);
+  }
+
+  /// Asks the desktop core why its catalog did not load, shows that failure's
+  /// text, with Reset where it applies, and returns its code; null once the
+  /// catalog loads. [failed] is the code a command just failed with.
+  Future<String?> _refreshStorage({String? failed}) async {
+    if (!widget.desktopCore) return null;
+    var status = const <String, Object?>{};
+    try {
+      status = await widget.tunnelControl.storageStatus();
+    } on Object {
+      // The failure's own code still says what happened.
+    }
+    if (!mounted) return null;
+    final code = status['code'] is String ? status['code'] as String : failed;
+    final resettable = code != null && status['resettable'] == true;
+    _set(() {
+      _storageResettable = resettable;
+      if (code == null) return;
+      final text = ConnectionIssue.forCode(code).description;
+      _message = text;
+      _messageAction = resettable
+          ? (message: text, label: l10n.reset, onPressed: _resetStorage)
+          : null;
+    });
+    return code;
+  }
+
+  // The core keeps the unreadable file beside the new, empty catalog.
+  Future<void> _resetStorage() async {
+    if (_busy) return;
+    final confirmed = await _showEditorDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(l10n.resetElarniQuestion),
+        content: SizedBox(width: 460, child: Text(l10n.resetElarniBody)),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: Text(l10n.cancel),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: Text(l10n.reset),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted || _busy) return;
+    _set(() {
+      _busy = true;
+      _message = null;
+    });
+    try {
+      await widget.tunnelControl.resetStorage();
+      if (!mounted) return;
+      _set(() {
+        _busy = false;
+        _storageResettable = false;
+      });
+      await _load();
+      if (mounted) _set(() => _message = l10n.elarniWasReset);
+    } on Object catch (error) {
+      if (mounted)
+        _set(() {
+          _busy = false;
+          _recordIssue(ConnectionIssue.from(error));
+        });
+    } finally {
+      if (mounted && _busy) _set(() => _busy = false);
+    }
   }
 
   Future<void> _refreshAutomation() async {
@@ -201,8 +293,8 @@ extension _HomeController on _ElarniHomeState {
         _configureMonitoring();
         await _loadInboundLogin();
       }
-    } on Object {
-      if (mounted) {
+    } on Object catch (error) {
+      if (mounted && !_storageFailed(error)) {
         _set(() => _message = l10n.tunnelSettingsNotLoaded);
       }
     }
@@ -230,12 +322,14 @@ extension _HomeController on _ElarniHomeState {
       !_settings.inboundAuthEnabled;
 
   // Only while it blocks: the connection failed and the guard, or on macOS
-  // Include all networks, keeps traffic from leaving outside the tunnel.
+  // Include all networks, keeps traffic from leaving outside the tunnel. In
+  // System proxy mode the OS proxy stays on the closed listener.
   bool get _blockingWithoutVPN =>
       _stateAvailable &&
       _state == TunnelState.failed &&
       (widget.desktopCore
-          ? _settings.xrayTunEnabled && _settings.blockWithoutVPN
+          ? (_settings.xrayTunEnabled || _settings.systemProxy) &&
+                _settings.blockWithoutVPN
           : _settings.includeAllNetworks);
 
   Future<void> _allowAppsWithoutLogin() async {
@@ -317,6 +411,7 @@ extension _HomeController on _ElarniHomeState {
             _systemInfo = Map<String, Object?>.from(error.details as Map);
           }
         });
+      if (mounted) _storageFailed(error);
     } on Object {
       if (mounted) _set(() => _systemError = l10n.systemInfoUnavailable);
     } finally {
@@ -366,13 +461,8 @@ extension _HomeController on _ElarniHomeState {
     }
   }
 
-  /// "Current rules / active tunnel" measures the selected server's tunnel and
-  /// no other: a request for another server would come back as that one's.
-  bool get _pingsActiveTunnel => _pingProtocol == 'activeProxy';
-
   Future<void> _pingNode(String nodeId) async {
     if (_pingControlsDisabled) return;
-    if (_pingsActiveTunnel) nodeId = _subscriptions.selectedNodeId ?? nodeId;
     if (_pingProtocol == 'icmp' && !await _confirmICMP()) return;
     if (!mounted || _pingControlsDisabled) return;
     final exclusive = _pingProtocol == 'icmp';
@@ -399,8 +489,9 @@ extension _HomeController on _ElarniHomeState {
         _set(() {
           if (_skippedProbe(error)) {
             _pingSkipped.add(nodeId);
-          } else {
-            _pingUnavailable.add(nodeId);
+          } else if (pingFailureFor(error, DateTime.now())
+              case final failure?) {
+            _pingUnavailable[nodeId] = failure;
           }
           _message = switch (error.code) {
             'unsupported_ping_method' => l10n.pingDirectTcpUnsupported,
@@ -412,10 +503,12 @@ extension _HomeController on _ElarniHomeState {
           };
         });
       }
-    } on Object {
+    } on Object catch (error) {
       if (mounted && run == _pingRun) {
         _set(() {
-          _pingUnavailable.add(nodeId);
+          if (pingFailureFor(error, DateTime.now()) case final failure?) {
+            _pingUnavailable[nodeId] = failure;
+          }
           _message = l10n.pingFailedForNode;
         });
       }
@@ -500,12 +593,8 @@ extension _HomeController on _ElarniHomeState {
     return _nodesById[id];
   }
 
-  bool _probeFresh(PingResult result) {
-    final age = DateTime.now().millisecondsSinceEpoch / 1000 - result.timestamp;
-    return age >= 0 &&
-        age < 300 &&
-        _findNode(result.nodeId)?.revision == result.configurationRevision;
-  }
+  bool _probeFresh(PingResult result) =>
+      probeFresh(result, _findNode(result.nodeId)?.revision, DateTime.now());
 
   /// Whether a server's result is older than five minutes, or it has none and was not just tried.
   bool _pingStale(String id) {
@@ -514,7 +603,8 @@ extension _HomeController on _ElarniHomeState {
     if (result != null) return !_probeFresh(result);
     final tried = _pingTriedAt[id];
     return tried == null ||
-        DateTime.now().millisecondsSinceEpoch / 1000 - tried >= 300;
+        DateTime.now().millisecondsSinceEpoch / 1000 - tried >=
+            probeFreshness.inSeconds;
   }
 
   /// Opening a group tests its stale servers, after any test already running.
@@ -549,10 +639,7 @@ extension _HomeController on _ElarniHomeState {
       for (final group in _subscriptions.subscriptions)
         if (subscriptionId == null || group.id == subscriptionId)
           for (final node in group.nodes.where((node) => node.isVPN))
-            if (wanted == null || wanted.contains(node.id))
-              if (!_pingsActiveTunnel ||
-                  node.id == _subscriptions.selectedNodeId)
-                node.id,
+            if (wanted == null || wanted.contains(node.id)) node.id,
     ];
     if (nodeIds.isEmpty) return;
     final run = ++_pingRun;
@@ -602,10 +689,12 @@ extension _HomeController on _ElarniHomeState {
         final nodeId = waiting.removeAt(0);
         if (waiting.isEmpty) queues.remove(key);
         busy[key] = (busy[key] ?? 0) + 1;
+        final bound = _pingTimeout.clamp(5, 7);
+        final watch = Stopwatch()..start();
         try {
           final result = await _measureNode(
             nodeId,
-            timeout: _pingTimeout.clamp(5, 7),
+            timeout: bound,
           ).timeout(const Duration(seconds: 7));
           if (mounted && run == _pingRun) {
             _set(() {
@@ -619,8 +708,18 @@ extension _HomeController on _ElarniHomeState {
                 _pingSkipped.add(nodeId);
                 needsDisconnect |=
                     (error as PlatformException).code == 'disconnect_to_test';
-              } else {
-                _pingUnavailable.add(nodeId);
+              } else if (pingFailureFor(
+                    error,
+                    DateTime.now(),
+                    // Under a longer timeout of the user's, a test that ran
+                    // out the bound was cut short, not given that timeout.
+                    cutShort:
+                        _pingTimeout > bound &&
+                        (error is TimeoutException ||
+                            watch.elapsed >= Duration(seconds: bound)),
+                  )
+                  case final failure?) {
+                _pingUnavailable[nodeId] = failure;
               }
             });
           }
@@ -652,12 +751,17 @@ extension _HomeController on _ElarniHomeState {
       );
       if (mounted && run == _pingRun) {
         _set(() {
-          _pingUnavailable.addAll(
-            nodeIds.where(
-              (id) =>
-                  !_pingResults.containsKey(id) && !_pingSkipped.contains(id),
-            ),
-          );
+          // A server left without a result (its test was busy or cancelled)
+          // shows as unavailable, as before, but says nothing about it.
+          final at = DateTime.now();
+          for (final id in nodeIds) {
+            if (!_pingResults.containsKey(id) && !_pingSkipped.contains(id)) {
+              _pingUnavailable.putIfAbsent(
+                id,
+                () => (at: at, unreachable: false),
+              );
+            }
+          }
           if (report) {
             final tested = nodeIds.where(_pingResults.containsKey).length;
             final skipped = nodeIds.where(_pingSkipped.contains).length;
@@ -720,6 +824,36 @@ extension _HomeController on _ElarniHomeState {
       if (mounted) _set(() => _exitFailed.add(node.id));
     } finally {
       if (mounted) _set(() => _exitPending.remove(node.id));
+    }
+  }
+
+  /// Saves a switch into or out of VPN mode. Per-app routing works only in VPN
+  /// mode, so leaving it turns per-app routing off and remembers its mode, which
+  /// the switch back turns on again if nothing set another meanwhile. The app
+  /// list and targets stay saved either way.
+  Future<void> _saveVpnMode(TunnelSettings next) async {
+    final before = _settings, paused = widget.desktop.pausedPerAppMode;
+    final leaving = before.xrayTunEnabled && !next.xrayTunEnabled;
+    final returning = !before.xrayTunEnabled && next.xrayTunEnabled;
+    final saved = await _saveSettings(
+      next.copyWith(
+        perAppMode: !next.xrayTunEnabled
+            ? 'off'
+            : returning &&
+                  next.perAppMode == 'off' &&
+                  paused.isNotEmpty &&
+                  next.perAppProcesses.isNotEmpty
+            ? paused
+            : next.perAppMode,
+      ),
+    );
+    if (!saved) return;
+    if (leaving) {
+      await widget.desktop.rememberPerAppMode(
+        before.perAppMode == 'off' ? '' : before.perAppMode,
+      );
+    } else if (returning) {
+      await widget.desktop.rememberPerAppMode('');
     }
   }
 
@@ -966,9 +1100,11 @@ extension _HomeController on _ElarniHomeState {
           (value.signature == null ||
               value.signature != _subscriptions.signature))
         _set(() => _applySnapshot(value));
-    } on Object {
+      // The catalog loads again, so nothing is left to reset.
+      if (mounted && _storageResettable) _set(() => _storageResettable = false);
+    } on Object catch (error) {
       _subscriptionsLoaded = false;
-      if (mounted) {
+      if (mounted && !_storageFailed(error)) {
         _set(() => _message = l10n.subscriptionsNotLoaded);
       }
     }
@@ -989,7 +1125,7 @@ extension _HomeController on _ElarniHomeState {
     if (changed) {
       _pingRun++;
       _pingPending.clear();
-      _pingUnavailable.removeWhere((id) => oldNodes[id] != newNodes[id]);
+      _pingUnavailable.removeWhere((id, _) => oldNodes[id] != newNodes[id]);
       _pingSkipped.removeWhere((id) => oldNodes[id] != newNodes[id]);
     }
     _pingResults.removeWhere(
@@ -1145,7 +1281,13 @@ extension _HomeController on _ElarniHomeState {
     var current = operation;
     while (true) {
       if (!mounted) return false;
-      _set(() => _applySnapshot(current.snapshot));
+      final notice = current.notice;
+      _set(() {
+        _applySnapshot(current.snapshot);
+        // macOS words what the refresh changed, such as the server it replaced.
+        if (current.warning == null && notice != null)
+          _message = listenerNotice(notice);
+      });
       final warning = current.warning;
       if (warning == null) return true;
       final approved = await showDialog<bool>(
@@ -1213,9 +1355,6 @@ extension _HomeController on _ElarniHomeState {
       for (final group in _subscriptions.subscriptions) group.id,
     };
     try {
-      final previousRouting = _routing.profiles
-          .map((profile) => profile.id)
-          .toSet();
       final clipboard = source == 'clipboard'
           ? (await Clipboard.getData(Clipboard.kTextPlain))?.text?.trim()
           : null;
@@ -1230,16 +1369,8 @@ extension _HomeController on _ElarniHomeState {
       );
       if (await _applySubscriptionOperation(result)) {
         await _refreshRouting();
-        if (mounted)
-          _set(() {
-            _routingTab = 0;
-            _page =
-                _routing.profiles.any(
-                  (profile) => !previousRouting.contains(profile.id),
-                )
-                ? DesktopPage.routing
-                : DesktopPage.home;
-          });
+        // An import lands on Home, even when it brings a routing profile.
+        if (mounted) _set(() => _page = DesktopPage.home);
       }
     } on Object catch (error) {
       if (mounted &&
@@ -1515,10 +1646,12 @@ extension _HomeController on _ElarniHomeState {
               }.contains(_state) &&
               state == TunnelState.disconnected)
             _connectFailed = true;
-          if (widget.desktopCore &&
-              !_busy &&
-              _state == TunnelState.connected &&
-              state == TunnelState.failed) {
+          // The macOS provider keeps its routes when its core stops, so
+          // the system says reconnecting until the app reads the failure.
+          if (!_busy &&
+              state == TunnelState.failed &&
+              (_state == TunnelState.connected ||
+                  !widget.desktopCore && _state == TunnelState.reasserting)) {
             _message = l10n.connectionStoppedUnexpectedly;
           }
           if (_state != state) {
@@ -1568,8 +1701,8 @@ extension _HomeController on _ElarniHomeState {
     try {
       final value = await widget.tunnelControl.routingProfiles();
       if (mounted) _set(() => _routing = value);
-    } on Object {
-      if (mounted) {
+    } on Object catch (error) {
+      if (mounted && !_storageFailed(error)) {
         _set(() => _message = l10n.routingProfilesNotLoaded);
       }
     }
@@ -1598,6 +1731,8 @@ extension _HomeController on _ElarniHomeState {
   }
 
   void _selectSettingsCategory(SettingsCategory category) {
+    // Choosing a category ends a search.
+    _settingsSearch.clear();
     _set(() => _settingsCategory = category);
     if (category == SettingsCategory.system ||
         category == SettingsCategory.general) {

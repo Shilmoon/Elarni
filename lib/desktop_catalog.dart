@@ -162,22 +162,49 @@ final class DesktopCatalog {
     throw desktopError('invalid_profile');
   }
 
-  CatalogMap backup() {
+  /// The backup [document], without the subscriptions a backup may not hold,
+  /// which [excluded] names with the reason: their provider forbids sharing
+  /// (`sharing_disabled`), or they were downloaded and never refreshed, so
+  /// whether it allows it is unknown (`sharing_refresh_required`). Nothing of
+  /// such a subscription is saved: not its servers, not its provider's routing
+  /// profiles, not the assignments or the selection that point at them. When
+  /// that leaves nothing to save, the first refusal stands.
+  ({CatalogMap document, List<CatalogMap> excluded}) backup() {
+    final included = <CatalogMap>[], excluded = <CatalogMap>[];
+    final left = <Object?>{};
     for (final source in sources) {
-      if (catalogMap(source['metadata'] ?? {})['hideURL'] == true ||
-          catalogList(source['nodes']).any((node) => node['hideURL'] == true)) {
-        throw desktopError('sharing_disabled');
-      }
-      if (source['url'] != null &&
-          catalogMap(source['metadata'] ?? {})['hideURL'] == null) {
-        throw desktopError('sharing_refresh_required');
+      final metadata = catalogMap(source['metadata'] ?? {});
+      final reason =
+          metadata['hideURL'] == true ||
+              catalogList(source['nodes']).any((node) => node['hideURL'] == true)
+          ? 'sharing_disabled'
+          : source['url'] != null && metadata['hideURL'] == null
+          ? 'sharing_refresh_required'
+          : null;
+      if (reason == null) {
+        included.add(source);
+      } else {
+        left.add(source['id']);
+        excluded.add({'name': source['name'], 'reason': reason});
       }
     }
-    return {
+    final kept = [
+      for (final route in routes)
+        if (!left.contains(route['providerSubscriptionId'])) route,
+    ];
+    if (excluded.isNotEmpty && included.isEmpty && kept.isEmpty)
+      throw desktopError(excluded.first['reason']! as String);
+    final keptRoutes = {for (final route in kept) route['id']};
+    final document = {
       'version': 1,
-      if (selected != null) 'selectedNodeId': selected,
+      if (included.any(
+        (source) => catalogList(
+          source['nodes'],
+        ).any((node) => node['id'] == selected),
+      ))
+        'selectedNodeId': selected,
       'subscriptions': [
-        for (final source in sources)
+        for (final source in included)
           {
             for (final key in [
               'id',
@@ -199,7 +226,7 @@ final class DesktopCatalog {
           },
       ],
       'routes': [
-        for (final route in routes)
+        for (final route in kept)
           {
             for (final key in [
               'id',
@@ -213,8 +240,12 @@ final class DesktopCatalog {
               'providerProfile': route['original'],
           },
       ],
-      'assignments': assignments,
+      'assignments': {
+        for (final MapEntry(:key, :value) in assignments.entries)
+          if (!left.contains(key) && keptRoutes.contains(value)) key: value,
+      },
     };
+    return (document: document, excluded: excluded);
   }
 
   // A renamed server carries the provider's name beside the user's.
@@ -937,6 +968,16 @@ final class DesktopCatalog {
     });
   }
 
+  /// Whether the selection moved off [previous] because that server is gone.
+  bool replacedSelection(String? previous) =>
+      previous != null &&
+      selected != null &&
+      selected != previous &&
+      !sources.any(
+        (source) =>
+            catalogList(source['nodes']).any((node) => node['id'] == previous),
+      );
+
   void reconcileSelection() {
     final known = {
       for (final source in sources)
@@ -1144,10 +1185,14 @@ final class DesktopCatalog {
               : []),
     });
     if (feed['warning'] case final Map warning) {
+      // A captive portal or a redirect may be gone in two hours; the scheduled
+      // retry applies nothing over a chain the user did not approve.
       putSource({
         ...current,
         'status': 'needsApproval',
         'riskCodes': warning['riskCodes'],
+        'nextRefreshAt':
+            now + min(7200, refreshHours(current).clamp(1, 168) * 3600),
       });
       return {
         ...catalogMap(warning),
@@ -1437,15 +1482,22 @@ final class DesktopCatalog {
       (hours.clamp(1, 168) * 3600 * jitter).clamp(900, 604800);
 
   num? nextSubscriptionRefresh(CatalogMap source) {
-    if (source['url'] == null || source['status'] == 'needsApproval')
-      return null;
+    if (source['url'] == null) return null;
     final scheduled = source['nextRefreshAt'] as num?;
-    // Failed refreshes retain their backoff or authorization pause.
+    // One waiting for approval is tried again; older versions saved no time
+    // for it and never tried.
+    if (source['status'] == 'needsApproval') return scheduled ?? now;
+    final last = source['lastSuccessfulFetch'] as num?;
+    // Failed refreshes retain their backoff. After a device reply older
+    // versions saved none; it waits an interval, as it does now.
     if (source['refreshError'] != null ||
         (source['failures'] as int? ?? 0) > 0) {
-      return scheduled;
+      if (scheduled != null || !_deviceReplies.contains(source['refreshError']))
+        return scheduled;
+      return last == null
+          ? now
+          : last + refreshHours(source).clamp(1, 168) * 3600;
     }
-    final last = source['lastSuccessfulFetch'] as num?;
     final interval = refreshHours(source) * 3600;
     if (last != null && source['refreshInterval'] != interval)
       return last + interval;
@@ -1466,6 +1518,11 @@ final class DesktopCatalog {
   static int retryDelay(int failures) =>
       const [60, 300, 1800][(failures - 1).clamp(0, 2)];
 
+  // A provider that wants this device registered, or has too many, answers the
+  // same until the user acts on its site: it is asked again at the regular
+  // interval, not after the short retries.
+  static const _deviceReplies = {'hwid_required', 'hwid_limit'};
+
   void refreshFailed(String id, String code) {
     final current = source(id);
     final failures = (current['failures'] as int? ?? 0) + 1;
@@ -1474,8 +1531,8 @@ final class DesktopCatalog {
       'status': 'failed',
       'refreshError': code,
       'failures': failures,
-      'nextRefreshAt': {'hwid_required', 'hwid_limit'}.contains(code)
-          ? null
+      'nextRefreshAt': _deviceReplies.contains(code)
+          ? now + refreshHours(current).clamp(1, 168) * 3600
           : now + retryDelay(failures),
     });
   }
@@ -1660,11 +1717,13 @@ final class DesktopCatalog {
   // the route records the first error and retries on the shared schedule.
   // Only [sourceId], when given; its success says nothing of the other lists,
   // so it leaves the route's error and schedule as they were. Returns the
-  // error this refresh recorded.
+  // error this refresh recorded. [fetch], when given, downloads instead of
+  // [native]: Connect bounds its downloads.
   Future<String?> refreshManaged(
     String id, {
     String? sourceId,
     String? proxy,
+    DesktopRequest? fetch,
   }) async {
     final item = route(id), profile = catalogMap(item['profile']);
     final sources = catalogList(profile['ManagedSources']);
@@ -1680,7 +1739,7 @@ final class DesktopCatalog {
     for (final source in sources) {
       if (sourceId != null && source['id'] != sourceId) continue;
       try {
-        final feed = await native('fetchSubscription', {
+        final feed = await (fetch ?? native)('fetchSubscription', {
           'url': source['url'],
           if (proxy != null) 'proxy': proxy,
         });

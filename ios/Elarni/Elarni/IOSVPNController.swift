@@ -162,7 +162,8 @@ final class IOSVPNController {
     let deadline = Date().addingTimeInterval(20)
     while true {
       updateStatus()
-      if !active { return }
+      // The extension notes every stop of the user's; this one was the app's, not iOS's VPN switch.
+      if !active { IOSConnectionAlerts.forgetUserStop(); return }
       guard Date() < deadline else { throw IOSAppError.operationTimedOut }
       try await Task.sleep(for: .milliseconds(150))
     }

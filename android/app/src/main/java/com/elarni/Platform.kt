@@ -50,6 +50,9 @@ class ElarniApplication : Application() {
     /** Whether the process before this one died while its VPN service existed. */
     var serviceHeld = false
         private set
+    /** While the VPN service runs, this process hears of Wi-Fi changes itself; WiFiWatchService does otherwise. */
+    @Volatile var vpnServiceRuns = false
+        private set
     private val serviceMarker get() = java.io.File(noBackupFilesDir, "service-running")
     val socketController = DialerController { fd ->
         !requiresProtection || fd in 0..Int.MAX_VALUE.toLong() && vpnOwner?.protect(fd.toInt()) == true
@@ -57,6 +60,8 @@ class ElarniApplication : Application() {
     override fun onCreate() {
         super.onCreate()
         instance = this
+        // WiFiWatchService's process holds that service alone: no core, no catalog, and none of what follows.
+        if (getProcessName() != packageName) return
         // Before any component starts: a marker the service did not remove outlived its process, and so did its alarm.
         serviceHeld = serviceMarker.exists()
         watchService(false)
@@ -117,6 +122,7 @@ class ElarniApplication : Application() {
         val alarms = getSystemService(AlarmManager::class.java)
         if (on) { runCatching { serviceMarker.createNewFile() }; alarms.setInexactRepeating(AlarmManager.ELAPSED_REALTIME, SystemClock.elapsedRealtime() + 60_000, 60_000, watchAlarm); watchIdle() }
         else { alarms.cancel(watchAlarm); alarms.cancel(idleAlarm); serviceMarker.delete() }
+        vpnServiceRuns = on; WiFiRule.hold(this)
     }
     /** Doze holds the repeating alarm for hours. While the VPN service runs and is not paused for sleep, an inexact
      *  allow-while-idle alarm (no exact-alarm permission) wakes about every 15 minutes; each alarm sets the next. */
@@ -128,6 +134,11 @@ class ElarniApplication : Application() {
         runCatching { getSystemService(NotificationManager::class.java).notify(3, Notification.Builder(this, REVIEW_CHANNEL).setSmallIcon(R.drawable.ic_elarni)
             .setContentTitle(tr(R.string.approve_download_destination)).setContentText(tr(R.string.open_elarni_to_approve_where_a)).setAutoCancel(true).setContentIntent(openApp()).build()) }
     }
+    /** Whether Android shows an expiry reminder: the app's notifications (on Android 13 and later, its permission) and their channel are on. */
+    fun canShowReminders(): Boolean {
+        val manager = getSystemService(NotificationManager::class.java)
+        return manager.areNotificationsEnabled() && manager.getNotificationChannel(REVIEW_CHANNEL).let { it != null && it.importance != NotificationManager.IMPORTANCE_NONE }
+    }
     fun expiryNotification(sources: List<JSONObject>) {
         val expiring = sources.filter { it.mapObject("metadata").optDouble("expire", 0.0).let { time -> time > 0 && time < now() + 3 * 86400 } }.map { it.string("id") }.sorted()
         val manager = getSystemService(NotificationManager::class.java)
@@ -136,9 +147,11 @@ class ElarniApplication : Application() {
         // Maintenance runs every 30 s; a dismissed reminder returns when the set changes, or the next day.
         val key = "${(now() / 86400).toLong()}:${expiring.joinToString(",")}"
         if (reminders.getString("expiry", null) == key) return
-        runCatching { manager.notify(4, Notification.Builder(this, REVIEW_CHANNEL).setSmallIcon(R.drawable.ic_elarni).setOnlyAlertOnce(true)
-            .setContentTitle(tr(R.string.subscription_expiry)).setContentText(trPlural(R.plurals.expiring_subscriptions, expiring.size)).setContentIntent(openApp()).setAutoCancel(true).build()) }
-        reminders.edit().putString("expiry", key).apply()
+        // Android drops a notification it may not show, without an error; the reminder waits until notifications are allowed.
+        if (!canShowReminders()) return
+        val posted = runCatching { manager.notify(4, Notification.Builder(this, REVIEW_CHANNEL).setSmallIcon(R.drawable.ic_elarni).setOnlyAlertOnce(true)
+            .setContentTitle(tr(R.string.subscription_expiry)).setContentText(trPlural(R.plurals.expiring_subscriptions, expiring.size)).setContentIntent(openApp()).setAutoCancel(true).build()) }.isSuccess
+        if (posted) reminders.edit().putString("expiry", key).apply()
     }
     companion object {
         const val CONNECTION_CHANNEL = "connection"; const val REVIEW_CHANNEL = "updates"; const val REFRESH_JOB = 101

@@ -19,8 +19,8 @@ class EncryptedStore(private val context: Context, name: String = "catalog") {
     private val aad = alias.toByteArray(Charsets.UTF_8)
     private fun exists() = file.baseFile.exists() || File(file.baseFile.path + ".bak").exists()
     private fun key(create: Boolean): SecretKey {
-        val store = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
-        (store.getKey(alias, null) as? SecretKey)?.let { return it }
+        existingKey { KeyStore.getInstance("AndroidKeyStore").apply { load(null) }.getKey(alias, null) as? SecretKey }?.let { return it }
+        // The file outlived its key, which nothing brings back: only a reset gets past it.
         if (!create) throw AppFailure("storage_locked")
         return KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore").apply {
             init(KeyGenParameterSpec.Builder(alias, KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT)
@@ -51,6 +51,11 @@ class EncryptedStore(private val context: Context, name: String = "catalog") {
         } catch (_: Exception) { throw AppFailure("storage_unavailable") }
     }
     companion object {
+        /** The key [find] returns, or null once it is gone for good. Android 11's Keystore reports a key it could not reach as missing
+         *  (later versions only one that is not there), so only a second miss, through a fresh connection, counts. A Keystore that
+         *  fails is unavailable, not a lost key, so it never offers the reset a lost key does. */
+        fun existingKey(find: () -> SecretKey?): SecretKey? =
+            try { find() ?: find() } catch (error: AppFailure) { throw error } catch (_: Exception) { throw AppFailure("storage_unavailable") }
         /** "RVAD1", the cipher's 12-byte IV, then the AES-GCM ciphertext and tag; [aad] binds it to one store. */
         fun seal(plain: ByteArray, aad: ByteArray, key: SecretKey): ByteArray {
             val cipher = Cipher.getInstance("AES/GCM/NoPadding")

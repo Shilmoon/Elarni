@@ -17,10 +17,13 @@ Future<void> pumpApp(
   WidgetTester tester,
   FakeTunnelControl control, {
   bool windows = false,
+  bool linux = false,
 }) async {
   await tester.binding.setSurfaceSize(const Size(1200, 900));
   addTearDown(() => tester.binding.setSurfaceSize(null));
-  await tester.pumpWidget(ElarniApp(tunnelControl: control, windows: windows));
+  await tester.pumpWidget(
+    ElarniApp(tunnelControl: control, windows: windows, linux: linux),
+  );
   await tester.pumpAndSettle();
 }
 
@@ -74,11 +77,7 @@ Future<void> openSettings(WidgetTester tester) async {
 }
 
 Future<void> closeSettings(WidgetTester tester) async {
-  // Narrow windows go back; wide ones use the sidebar.
-  final back = find.byKey(const Key('settings-back'));
-  final button = back.evaluate().isNotEmpty
-      ? back
-      : find.byKey(const Key('nav-home'));
+  final button = find.byKey(const Key('nav-home'));
   if (button.evaluate().isNotEmpty) {
     await tester.tap(button);
     await tester.pumpAndSettle();
@@ -474,6 +473,81 @@ void main() {
         await tester.tap(find.text('Repair'));
         await tester.pumpAndSettle();
         expect(control.repairCalls, 1);
+        expect(tester.takeException(), isNull);
+      },
+    );
+
+    // A backup leaves out what it may not hold instead of failing; the
+    // message names those subscriptions and why.
+    testWidgets(
+      'a saved backup names the subscriptions it left out on ${platform.name}',
+      (tester) async {
+        final control = FakeTunnelControl();
+        await tester.binding.setSurfaceSize(const Size(1200, 900));
+        addTearDown(() => tester.binding.setSurfaceSize(null));
+        await tester.pumpWidget(
+          ElarniApp(
+            tunnelControl: control,
+            windows: platform == TargetPlatform.windows,
+          ),
+        );
+        await tester.pumpAndSettle();
+        await openSettings(tester);
+        await selectCategory(tester, SettingsCategory.backup);
+        await tester.pumpAndSettle();
+        Future<void> save() async {
+          await reveal(tester, find.text('Create encrypted backup'));
+          await tester.tap(find.text('Create encrypted backup'));
+          await tester.pumpAndSettle();
+          final fields = find.descendant(
+            of: find.byType(AlertDialog),
+            matching: find.byType(TextField),
+          );
+          await tester.enterText(fields.first, 'synthetic backup password');
+          await tester.enterText(fields.last, 'synthetic backup password');
+          await tester.tap(find.text('Save backup'));
+          await tester.pumpAndSettle();
+        }
+
+        await save();
+        expect(find.text('Encrypted backup saved.'), findsOneWidget);
+        control.backupExclusions = [
+          (name: 'Provider A', reason: 'sharing_disabled'),
+          (name: 'Provider B', reason: 'sharing_disabled'),
+        ];
+        await save();
+        expect(
+          find.text(
+            'Backup saved without 2 subscriptions: Provider A, Provider B. '
+            'Their providers do not allow backups.',
+          ),
+          findsOneWidget,
+        );
+        control.backupExclusions = [
+          (name: 'Fresh', reason: 'sharing_refresh_required'),
+        ];
+        await save();
+        expect(
+          find.text(
+            'Backup saved without 1 subscription: Fresh. Update it once first.',
+          ),
+          findsOneWidget,
+        );
+        control.backupExclusions = [
+          (name: 'Fresh', reason: 'sharing_refresh_required'),
+          (name: 'Provider A', reason: 'sharing_disabled'),
+        ];
+        await save();
+        expect(
+          find.text(
+            'Backup saved without 1 subscription: Provider A. '
+            'Its provider does not allow backups. '
+            'Also left out 1 subscription that was never updated: Fresh. '
+            'Update it once first.',
+          ),
+          findsOneWidget,
+        );
+        expect(control.exportedPasswords.length, 4);
         expect(tester.takeException(), isNull);
       },
     );
@@ -1306,11 +1380,6 @@ void main() {
         await reveal(tester, find.text('Free provider banner'));
         expect(find.text('Visit provider'), findsOneWidget);
         await openSubscriptions(tester);
-        for (var i = 0; i < 3; i++) {
-          await reveal(tester, find.text('Fixture'));
-          await tester.tap(find.text('Fixture'));
-          await tester.pumpAndSettle();
-        }
         await reveal(tester, find.text('Message from Fixture'));
         await tester.tap(find.text('Message from Fixture'));
         await tester.pumpAndSettle();
@@ -1330,7 +1399,8 @@ void main() {
           ),
         );
         await tester.pumpAndSettle();
-        expect(control.selectedIDs, isEmpty);
+        // A table row selects its server, as on Home.
+        expect(control.selectedIDs, ['b']);
         expect(tester.takeException(), isNull);
       },
       variant: TargetPlatformVariant.only(platform),
@@ -1521,6 +1591,164 @@ void main() {
       expect(control.importListener, isNull);
     },
   );
+
+  // Per-app routing works only in VPN mode. Leaving VPN mode turned it off,
+  // and coming back left it off, so the apps went through the default server.
+  testWidgets(
+    'leaving VPN mode pauses per-app routing and coming back resumes it',
+    (tester) async {
+      var stored = '{}';
+      final messenger = tester.binding.defaultBinaryMessenger;
+      messenger.setMockMethodCallHandler(DesktopIntegration.channel, (
+        call,
+      ) async {
+        if (call.method == 'getPreferences') return stored;
+        if (call.method == 'setPreferences')
+          stored = (call.arguments as Map)['json'] as String;
+        return null;
+      });
+      addTearDown(
+        () => messenger.setMockMethodCallHandler(
+          DesktopIntegration.channel,
+          null,
+        ),
+      );
+      final control = FakeTunnelControl()
+        ..settings = const TunnelSettings(
+          xrayTunEnabled: true,
+          perAppMode: 'proxyOnly',
+          perAppProcesses: ['fixture.exe'],
+          perAppTargets: {'fixture.exe': 'direct'},
+        );
+      Future<void> choose(String current, String mode) async {
+        await openSettings(tester);
+        await selectCategory(tester, SettingsCategory.connection);
+        await tester.tap(find.text(current));
+        await tester.pumpAndSettle();
+        await tester.tap(find.widgetWithText(MenuItemButton, mode));
+        await tester.pumpAndSettle();
+      }
+
+      await pumpApp(tester, control, windows: true);
+      await choose('System-wide VPN', 'Local proxy only');
+      expect(
+        (control.settings.xrayTunEnabled, control.settings.perAppMode),
+        (false, 'off'),
+      );
+      expect(control.settings.perAppProcesses, ['fixture.exe']);
+      expect(control.settings.perAppTargets, {'fixture.exe': 'direct'});
+      expect(jsonDecode(stored)['pausedPerAppMode'], 'proxyOnly');
+      // A switch between the proxy modes keeps the paused mode.
+      await choose('Local proxy only', 'System proxy');
+      expect(control.settings.systemProxyEnabled, isTrue);
+      expect(jsonDecode(stored)['pausedPerAppMode'], 'proxyOnly');
+      // It survives a restart.
+      await tester.pumpWidget(const SizedBox());
+      await pumpApp(tester, control, windows: true);
+      await choose('System proxy', 'System-wide VPN');
+      expect(
+        (control.settings.xrayTunEnabled, control.settings.perAppMode),
+        (true, 'proxyOnly'),
+      );
+      expect(control.settings.perAppTargets, {'fixture.exe': 'direct'});
+      expect(jsonDecode(stored)['pausedPerAppMode'], '');
+      // Per-app routing that was off stays off.
+      control.settings = control.settings.copyWith(perAppMode: 'off');
+      await tester.pumpWidget(const SizedBox());
+      await pumpApp(tester, control, windows: true);
+      await choose('System-wide VPN', 'Local proxy only');
+      expect(jsonDecode(stored)['pausedPerAppMode'], '');
+      await choose('Local proxy only', 'System-wide VPN');
+      expect(
+        (control.settings.xrayTunEnabled, control.settings.perAppMode),
+        (true, 'off'),
+      );
+
+      // macOS turns VPN mode on and off with the Xray TUN switch.
+      control.settings = control.settings.copyWith(perAppMode: 'bypass');
+      await tester.pumpWidget(const SizedBox());
+      await pumpApp(tester, control);
+      await openSettings(tester);
+      await selectCategory(tester, SettingsCategory.connection);
+      final tun = find.widgetWithText(ElarniCheckboxTile, 'Xray TUN');
+      await reveal(tester, tun);
+      await tester.tap(tun);
+      await tester.pumpAndSettle();
+      expect(
+        (control.settings.xrayTunEnabled, control.settings.perAppMode),
+        (false, 'off'),
+      );
+      expect(jsonDecode(stored)['pausedPerAppMode'], 'bypass');
+      await tester.tap(tun);
+      await tester.pumpAndSettle();
+      expect(
+        (control.settings.xrayTunEnabled, control.settings.perAppMode),
+        (true, 'bypass'),
+      );
+      expect(jsonDecode(stored)['pausedPerAppMode'], '');
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
+
+  // macOS polls the connection state only once its native host answered.
+  void answerDesktopHost(WidgetTester tester) {
+    final messenger = tester.binding.defaultBinaryMessenger;
+    messenger.setMockMethodCallHandler(
+      DesktopIntegration.channel,
+      (call) async => call.method == 'getPreferences' ? '{}' : null,
+    );
+    addTearDown(
+      () =>
+          messenger.setMockMethodCallHandler(DesktopIntegration.channel, null),
+    );
+  }
+
+  // The macOS provider keeps its routes when its core stops, so the system reports it as reconnecting.
+  for (final before in ['connected', 'reasserting']) {
+    testWidgets('macOS says a core that stopped while $before has failed', (
+      tester,
+    ) async {
+      answerDesktopHost(tester);
+      final control = FakeTunnelControl()..phase = before;
+      await pumpApp(tester, control);
+      expect(
+        find.text('Connection stopped unexpectedly. Reconnect to retry.'),
+        findsNothing,
+      );
+      control.phase = 'failed';
+      await tester.pump(const Duration(seconds: 1));
+      await tester.pumpAndSettle();
+      expect(find.text('Connection failed'), findsOneWidget);
+      expect(
+        find.text('Connection stopped unexpectedly. Reconnect to retry.'),
+        findsOneWidget,
+      );
+      expect(
+        tester
+            .widget<FilledButton>(find.byKey(const Key('connection-toggle')))
+            .onPressed,
+        isNotNull,
+      );
+      await tester.pumpWidget(const SizedBox());
+    });
+  }
+
+  testWidgets('macOS keeps quiet when a server switch ends connected', (
+    tester,
+  ) async {
+    answerDesktopHost(tester);
+    final control = FakeTunnelControl()..phase = 'reasserting';
+    await pumpApp(tester, control);
+    control.phase = 'connected';
+    await tester.pump(const Duration(seconds: 1));
+    await tester.pumpAndSettle();
+    expect(
+      find.text('Connection stopped unexpectedly. Reconnect to retry.'),
+      findsNothing,
+    );
+    await tester.pumpWidget(const SizedBox());
+  });
 
   testWidgets(
     'local proxy can cancel startup without a late cancellation becoming failure',
@@ -1878,6 +2106,24 @@ void main() {
     expect(find.text('Approve unsafe subscription?'), findsNothing);
   });
 
+  // macOS words the server a refresh replaced in the refresh's result.
+  testWidgets('a refresh result notice is shown once', (tester) async {
+    const notice = 'Node A is gone from Fixture. Connected to Node B.';
+    final control = FakeTunnelControl()
+      ..onAdd = (() async => warning('first'))
+      ..onRefresh = (_) async => const SubscriptionOperationResult(
+        snapshot: fixtureSubscriptions,
+        notice: notice,
+      );
+    await pumpApp(tester, control);
+    await addSubscription(tester);
+    expect(find.text(notice), findsNothing);
+    await tester.tap(find.text('Continue'));
+    await tester.pumpAndSettle();
+    expect(control.challenges, ['first']);
+    expect(find.text(notice), findsOneWidget);
+  });
+
   for (final entry in {
     'node_switch_failed_restored':
         'The replacement failed; the previous configuration was restored. Check access before retrying another server.',
@@ -2039,6 +2285,18 @@ void main() {
     await tester.pumpAndSettle();
     expect(control.settings.trustedWiFiNetworks, ['Home', 'Office 5G']);
     expect(find.text('Home, Office 5G'), findsOneWidget);
+  });
+
+  testWidgets('Linux says when it cannot read the Wi-Fi name', (tester) async {
+    final control = FakeTunnelControl()
+      ..automation = {'wifi': 'nameUnreadable'};
+    await pumpApp(tester, control, linux: true);
+    await openSettings(tester);
+    await reveal(tester, find.text('Connect on untrusted Wi-Fi'));
+    await tester.tap(find.text('Connect on untrusted Wi-Fi'));
+    await tester.pumpAndSettle();
+    expect(find.textContaining("NetworkManager's nmcli or iw"), findsOneWidget);
+    expect(find.textContaining('Let desktop apps'), findsNothing);
   });
 
   testWidgets('macOS offers Connect on untrusted Wi-Fi through On Demand', (
@@ -2323,6 +2581,164 @@ void main() {
       expect(updates.single.socksPort, 21080);
     },
   );
+
+  // The desktop core's four storage failures need different steps: another
+  // copy holds the data, the data cannot be read again, or the disk or
+  // keyring failed. Only data that cannot be read again offers Reset.
+  group('storage failures', () {
+    const busy =
+        'Elarni’s data is in use by another copy of Elarni. Close the other '
+        'copy or stop its background service. Elarni tries again by itself.';
+    const corrupt =
+        'Elarni cannot read its saved data on this computer. Reset Elarni in '
+        'Settings › Backup and repair, then restore a backup or add your '
+        'subscriptions again.';
+    const unavailableWindows =
+        'Elarni could not read or save its data. Restart Elarni and check '
+        'the free disk space.';
+    const unavailableLinux =
+        'Elarni could not read or save its data. Unlock your keyring and '
+        'check that secret-tool is installed, then restart Elarni.';
+    Finder toastReset() => find.widgetWithText(TextButton, 'Reset');
+    Finder resetTile() => find.text('Reset Elarni');
+
+    for (final (code, linux, text) in [
+      ('storage_busy', false, busy),
+      ('storage_corrupt', false, corrupt),
+      ('storage_corrupt', true, corrupt),
+      ('storage_unavailable', false, unavailableWindows),
+      ('storage_unavailable', true, unavailableLinux),
+      ('storage_conflict', true, unavailableLinux),
+    ]) {
+      testWidgets('$code says what it is on ${linux ? 'Linux' : 'Windows'}', (
+        tester,
+      ) async {
+        final control = _UnreadableStore(code);
+        await pumpApp(tester, control, windows: !linux, linux: linux);
+        expect(find.text(text), findsOneWidget);
+        expect(
+          find.textContaining('restore an encrypted backup'),
+          findsNothing,
+        );
+        final resettable = code == 'storage_corrupt';
+        expect(toastReset(), resettable ? findsOneWidget : findsNothing);
+        await openSettings(tester);
+        await selectCategory(tester, SettingsCategory.backup);
+        expect(resetTile(), resettable ? findsOneWidget : findsNothing);
+        if (resettable)
+          expect(
+            find.text(
+              'Saved data cannot be read. Reset sets it aside and starts empty.',
+            ),
+            findsOneWidget,
+          );
+        expect(control.resetStorageCalls, 0);
+      });
+    }
+
+    testWidgets('Reset asks first, then starts empty', (tester) async {
+      final control = _UnreadableStore('storage_corrupt');
+      await pumpApp(tester, control, windows: true);
+      Finder dialogButton(String label) => find.descendant(
+        of: find.byType(AlertDialog),
+        matching: find.ancestor(
+          of: find.text(label),
+          matching: find.byWidgetPredicate(
+            (widget) => widget is ButtonStyleButton,
+          ),
+        ),
+      );
+      await tester.tap(toastReset());
+      await tester.pumpAndSettle();
+      expect(find.text('Reset Elarni?'), findsOneWidget);
+      expect(
+        find.text(
+          'Elarni’s saved data on this computer cannot be read. Reset keeps '
+          'the unreadable file and starts with an empty list: subscriptions, '
+          'servers and settings must be restored from a backup or added '
+          'again. Providers that count devices will see this computer as a '
+          'new device.',
+        ),
+        findsOneWidget,
+      );
+      await tester.tap(dialogButton('Cancel'));
+      await tester.pumpAndSettle();
+      expect(control.resetStorageCalls, 0);
+      expect(find.byType(AlertDialog), findsNothing);
+
+      await openSettings(tester);
+      await selectCategory(tester, SettingsCategory.backup);
+      await tester.tap(find.widgetWithText(OutlinedButton, 'Reset'));
+      await tester.pumpAndSettle();
+      final reads = control.subscriptionReads;
+      await tester.tap(dialogButton('Reset'));
+      await tester.pumpAndSettle();
+      expect(control.resetStorageCalls, 1);
+      expect(control.subscriptionReads, greaterThan(reads));
+      expect(
+        find.text('Elarni was reset. Restore a backup or add a subscription.'),
+        findsOneWidget,
+      );
+      expect(resetTile(), findsNothing);
+      expect(toastReset(), findsNothing);
+      expect(find.text(corrupt), findsNothing);
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('a failed Reset shows its own storage text', (tester) async {
+      final control = _UnreadableStore('storage_corrupt')
+        ..resetStorageError = PlatformException(code: 'storage_unavailable');
+      await pumpApp(tester, control, linux: true);
+      await tester.tap(toastReset());
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.descendant(
+          of: find.byType(AlertDialog),
+          matching: find.widgetWithText(FilledButton, 'Reset'),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(control.resetStorageCalls, 1);
+      expect(find.text(unavailableLinux), findsOneWidget);
+    });
+
+    // A restore needs a catalog that loads: the storage failure is said
+    // first, not after a password that could not have helped.
+    testWidgets('a restore in a storage failure says why it cannot work', (
+      tester,
+    ) async {
+      final control = _UnreadableStore('storage_busy');
+      await pumpApp(tester, control, windows: true);
+      await openSettings(tester);
+      await selectCategory(tester, SettingsCategory.backup);
+      await tester.tap(find.widgetWithText(OutlinedButton, 'Restore'));
+      await tester.pumpAndSettle();
+      expect(find.byType(AlertDialog), findsNothing);
+      expect(find.text(busy), findsOneWidget);
+      expect(control.restoredPasswords, isEmpty);
+
+      // The catalog loaded, but the restore's own save failed.
+      control.code = null;
+      control.restoreError = PlatformException(code: 'storage_unavailable');
+      await tester.tap(find.widgetWithText(OutlinedButton, 'Restore'));
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.descendant(
+          of: find.byType(AlertDialog),
+          matching: find.byType(TextField),
+        ),
+        'synthetic backup password',
+      );
+      await tester.tap(find.text('Choose backup and restore'));
+      await tester.pumpAndSettle();
+      expect(control.restoredPasswords, ['synthetic backup password']);
+      expect(find.text(unavailableWindows), findsOneWidget);
+      expect(
+        find.text('Restore failed. Check the password and backup file.'),
+        findsNothing,
+      );
+    });
+  });
 
   testWidgets('the Import button says Importing only while importing', (
     tester,
@@ -2622,6 +3038,75 @@ void main() {
     expect(find.byKey(const Key('per-app-routing-mode')), findsOneWidget);
   });
 
+  testWidgets('a narrow window has its navigation at the bottom', (
+    tester,
+  ) async {
+    await pumpApp(tester, FakeTunnelControl(), windows: true);
+    const pages = ['home', 'subscriptions', 'routing', 'settings'];
+    Offset center(String page) =>
+        tester.getCenter(find.byKey(Key('nav-$page')));
+
+    await tester.binding.setSurfaceSize(const Size(420, 760));
+    await tester.pumpAndSettle();
+    for (final (index, page) in pages.indexed) {
+      // One row along the bottom edge, a quarter of the width each.
+      expect(center(page).dy, greaterThan(760 - 56), reason: page);
+      expect(center(page).dy, center('home').dy, reason: page);
+      expect(center(page).dx, closeTo(420 / 4 * (index + .5), 1), reason: page);
+    }
+    await openSubscriptions(tester);
+    // The page ends where the bar starts, and nothing sends the reader back.
+    expect(
+      tester.getRect(find.byKey(const ValueKey('subscriptions-list'))).bottom,
+      lessThanOrEqualTo(tester.getRect(find.byKey(const Key('nav-home'))).top),
+    );
+    expect(find.byKey(const Key('settings-back')), findsNothing);
+    await tester.tap(find.byKey(const Key('nav-settings')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('settings-category')), findsOneWidget);
+    expect(find.byKey(const Key('settings-back')), findsNothing);
+    await tester.tap(find.byKey(const Key('nav-home')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('home-list')), findsOneWidget);
+
+    // A wide window keeps the sidebar.
+    await tester.binding.setSurfaceSize(const Size(1200, 900));
+    await tester.pumpAndSettle();
+    for (final page in pages) {
+      expect(center(page).dx, lessThan(176), reason: page);
+    }
+    expect(center('home').dy, lessThan(200));
+    expect(center('settings').dy, greaterThan(800));
+  });
+
+  testWidgets('a narrow window gives the per-app editor the page width', (
+    tester,
+  ) async {
+    const desktop = MethodChannel('com.elarni/desktop');
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    messenger.setMockMethodCallHandler(
+      desktop,
+      (call) async => call.method == 'routingApplications' ? [] : null,
+    );
+    addTearDown(() => messenger.setMockMethodCallHandler(desktop, null));
+    await pumpApp(tester, FakeTunnelControl(), windows: true);
+    for (final (width, editor) in [(400.0, 368.0), (1200.0, 832.0)]) {
+      await tester.binding.setSurfaceSize(Size(width, 900));
+      await tester.pumpAndSettle();
+      await openRouting(tester);
+      // The test font is wider than a real one: the second tab starts off screen.
+      await tester.ensureVisible(find.widgetWithText(Tab, 'Per-app routing'));
+      await tester.tap(find.widgetWithText(Tab, 'Per-app routing'));
+      await tester.pumpAndSettle();
+      expect(
+        tester.getSize(find.byKey(const Key('per-app-routing-mode'))).width,
+        editor,
+        reason: '$width',
+      );
+    }
+  });
+
   // "No matching servers" offered a Clear search that did nothing.
   for (final status in ['pending', 'failed']) {
     testWidgets('Home says an empty $status subscription has no servers yet', (
@@ -2885,7 +3370,7 @@ void main() {
   );
 
   testWidgets(
-    'a test of the active tunnel tests the selected server, whichever row asks, and marks no other row',
+    'a saved "active tunnel" test type is Proxy: Test all tests every server',
     (tester) async {
       final messenger = tester.binding.defaultBinaryMessenger;
       messenger.setMockMethodCallHandler(DesktopIntegration.channel, (
@@ -2901,34 +3386,26 @@ void main() {
           null,
         ),
       );
-      // As the desktop backend does, the reply names the selected server (a),
-      // whichever one the request named.
       final control = FakeTunnelControl()
-        ..onPing = (_) async => PingResult(
-          nodeId: 'a',
+        ..onPing = (id) async => PingResult(
+          nodeId: id,
           status: 'success',
           latencyMs: 41,
           timestamp: DateTime.now().millisecondsSinceEpoch / 1000,
         );
       await pumpApp(tester, control, windows: true);
-      List<String> asked() => [
-        for (final call in control.pingCalls) call.nodeId,
-      ];
       control.pingCalls.clear();
       await reveal(tester, find.byKey(const Key('ping-all')));
       await tester.tap(find.byKey(const Key('ping-all')));
       await tester.pumpAndSettle();
-      expect(asked(), ['a']);
-      expect(find.text('41 ms'), findsWidgets);
-      expect(find.text('Unavailable'), findsNothing);
-      expect(find.textContaining('Tested 1 of 1'), findsOneWidget);
-      // Another server's own button is the same test of the active tunnel.
-      control.pingCalls.clear();
-      await reveal(tester, find.byKey(const ValueKey('ping:b')));
-      await tester.tap(find.byKey(const ValueKey('ping:b')));
-      await tester.pumpAndSettle();
-      expect(asked(), ['a']);
-      expect(find.text('41 ms'), findsWidgets);
+      expect(control.pingCalls.length, greaterThan(1));
+      expect({for (final call in control.pingCalls) call.protocol}, {'proxy'});
+      expect(
+        find.textContaining(
+          'Tested ${control.pingCalls.length} of ${control.pingCalls.length}',
+        ),
+        findsOneWidget,
+      );
       expect(find.text('Unavailable'), findsNothing);
       await tester.pumpWidget(const SizedBox());
     },
@@ -2960,6 +3437,63 @@ void main() {
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox());
   });
+}
+
+// A desktop core whose catalog does not load: every read fails with [code]
+// until a reset, and storageStatus says why.
+final class _UnreadableStore extends FakeTunnelControl {
+  _UnreadableStore(this.code);
+  String? code;
+  Object? restoreError;
+
+  Future<T> _read<T>(Future<T> Function() read) {
+    if (code case final code?) throw PlatformException(code: code);
+    return read();
+  }
+
+  @override
+  Future<String> state() => _read(super.state);
+  @override
+  Future<SubscriptionSnapshot> subscriptions() async {
+    subscriptionReads++;
+    if (code case final code?) throw PlatformException(code: code);
+    return snapshot;
+  }
+
+  @override
+  Future<RoutingSnapshot> routingProfiles() => _read(super.routingProfiles);
+  @override
+  Future<TunnelSettings> tunnelSettings() => _read(super.tunnelSettings);
+  @override
+  Future<Map<String, Object?>> systemInfo() => _read(super.systemInfo);
+
+  @override
+  Future<Map<String, Object?>> storageStatus() async {
+    storageStatusCalls++;
+    return {'code': code, 'resettable': code == 'storage_corrupt'};
+  }
+
+  @override
+  Future<Map<String, Object?>> resetStorage() async {
+    final Map<String, Object?> result;
+    try {
+      result = await super.resetStorage();
+    } on PlatformException catch (error) {
+      // As the desktop core: a failed reset is the latest reason.
+      code = error.code;
+      rethrow;
+    }
+    code = null;
+    snapshot = const SubscriptionSnapshot(subscriptions: []);
+    return result;
+  }
+
+  @override
+  Future<SubscriptionSnapshot> restoreCatalogBackup(String password) async {
+    await super.restoreCatalogBackup(password);
+    if (restoreError case final error?) throw error;
+    return snapshot;
+  }
 }
 
 final class _DeletingControl extends FakeTunnelControl {

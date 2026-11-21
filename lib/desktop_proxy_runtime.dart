@@ -1,7 +1,9 @@
 part of 'desktop_proxy.dart';
 
 extension _ProxyRuntime on DesktopProxy {
-  Future<CatalogMap> _connect() async {
+  // [listsMissing]: the routing profile still lacks a list Connect could not
+  // download, which the window hears once the connection is up.
+  Future<CatalogMap> _connect({bool listsMissing = false}) async {
     if (_operation != null ||
         !{'disconnected', 'prepared', 'failed'}.contains(_state))
       throw desktopError('busy');
@@ -12,7 +14,7 @@ extension _ProxyRuntime on DesktopProxy {
       if (Platform.isWindows || Platform.isLinux) {
         final settings = _catalog!.settings;
         // A crashed Windows helper's kill switch lets the next helper through,
-        // so with Block traffic without VPN it stays until the new tunnel
+        // so with the Kill switch setting it stays until the new tunnel
         // replaces it. A dead Linux supervisor's rejects the next one's traffic.
         if (Platform.isWindows &&
             settings.xrayTunEnabled &&
@@ -42,6 +44,7 @@ extension _ProxyRuntime on DesktopProxy {
       _checkGeneration(generation);
       if (unsaved == null) _catalog = candidate;
       _listener?.call(unsaved);
+      if (listsMissing) _listener?.call('managed_list_missing');
       await _syncSystemProxy();
       return {'state': _state};
     } on Object catch (error) {
@@ -51,6 +54,9 @@ extension _ProxyRuntime on DesktopProxy {
       if (generation == _generation ||
           {'connecting', 'connected'}.contains(_state))
         _state = 'failed';
+      // System proxy mode's kill switch holds from the failure on, not from
+      // the next tick.
+      await _syncSystemProxy();
       _checkGeneration(generation);
       if (error is PlatformException) rethrow;
       throw desktopError('connection_failed');
@@ -64,8 +70,15 @@ extension _ProxyRuntime on DesktopProxy {
   // Another process can empty the geofile cache under the catalog. Prepare the
   // selected route's files again once, as Refresh routing data would.
   Future<CatalogMap> _connectPreparingLostAssets() async {
+    // Only a Connect with a list to download waits for it: without one,
+    // Connect keeps its turn in the hand-off from a refresh that held the
+    // controller.
+    final listsMissing =
+        _catalog != null &&
+        _missingLists(_catalog!) != null &&
+        await _downloadMissingLists();
     try {
-      return await _connect();
+      return await _connect(listsMissing: listsMissing);
     } on PlatformException catch (error) {
       if (error.code != 'assets_missing') rethrow;
     }
@@ -87,7 +100,95 @@ extension _ProxyRuntime on DesktopProxy {
     }
     // A Stop while the old revision was being retired still wins.
     if (stops != _linkStopGeneration) throw desktopError('cancelled');
-    return _connect();
+    return _connect(listsMissing: listsMissing);
+  }
+
+  // The selected server's routing profile, when it is on, and its managed
+  // lists that were never downloaded. Their rules are not in the
+  // configuration until they are.
+  static ({String route, List<String> sources})? _missingLists(
+    DesktopCatalog catalog,
+  ) {
+    final nodeId = catalog.selected;
+    if (nodeId == null) return null;
+    final source = catalog.sources
+        .where(
+          (source) =>
+              catalogList(source['nodes']).any((node) => node['id'] == nodeId),
+        )
+        .firstOrNull;
+    final id = source == null ? null : catalog.assignments[source['id']];
+    if (id == null) return null;
+    final route = catalog.route(id as String);
+    if (route['enabled'] != true) return null;
+    final lists = catalogMap(route['lists'] ?? {});
+    final missing = [
+      for (final item in catalogList(
+        catalogMap(route['profile'])['ManagedSources'],
+      ))
+        if (!lists.containsKey(item['id'])) item['id']! as String,
+    ];
+    return missing.isEmpty ? null : (route: id, sources: missing);
+  }
+
+  // Connect first downloads the lists [_missingLists] names, for at most
+  // [_managedListTimeout] in total. One still missing fails no connection:
+  // its route is due at once, so the scheduled refresh downloads it over the
+  // connection. Returns whether one is still missing.
+  Future<bool> _downloadMissingLists() async {
+    if (_catalog == null ||
+        !{'disconnected', 'prepared', 'failed'}.contains(_state))
+      return false;
+    final missing = _missingLists(_catalog!);
+    if (missing == null) return false;
+    final deadline = awakeNow() + _managedListTimeout;
+    Future<CatalogMap> fetch(String method, CatalogMap payload) async {
+      final left = deadline - awakeNow();
+      if (left <= Duration.zero) throw desktopError('fetch_failed');
+      try {
+        return await _native(method, payload, timeout: left);
+      } on PlatformException catch (error) {
+        // _native reports its own timeout as a failed operation.
+        if (error.code != 'operation_failed' || awakeNow() < deadline) rethrow;
+        throw desktopError('fetch_failed');
+      }
+    }
+
+    final stops = _linkStopGeneration;
+    try {
+      await _mutate((candidate) async {
+        final all = catalogList(
+          catalogMap(
+            candidate.route(missing.route)['profile'],
+          )['ManagedSources'],
+        );
+        // A refresh of the whole route also schedules the next one; a single
+        // list's success leaves the route's schedule as it was.
+        if (missing.sources.length == all.length) {
+          await candidate.refreshManaged(missing.route, fetch: fetch);
+        } else {
+          for (final source in missing.sources)
+            await candidate.refreshManaged(
+              missing.route,
+              sourceId: source,
+              fetch: fetch,
+            );
+        }
+        if (_missingLists(candidate) != null)
+          candidate.putRoute({
+            ...candidate.route(missing.route),
+            'nextManagedRefreshAt': candidate.now,
+          });
+        return {};
+      });
+    } on PlatformException catch (error) {
+      if (error.code == 'cancelled') rethrow;
+      // Connect goes on without the list; a failed download shows on the
+      // routing profile.
+    }
+    // A Stop while the lists downloaded wins over this Connect.
+    if (stops != _linkStopGeneration) throw desktopError('cancelled');
+    return _catalog != null && _missingLists(_catalog!) != null;
   }
 
   // A helper killed during this boot leaves its fail-closed DNS guard (on Linux,
@@ -165,10 +266,14 @@ extension _ProxyRuntime on DesktopProxy {
       } on SocketException catch (error) {
         // Linux EACCES only means a low port, which the elevated VPN core may
         // bind. The local proxy core runs as this user and would fail the same way.
-        if (error.osError?.errorCode != 13 || !catalog.settings.xrayTunEnabled)
+        if (error.osError?.errorCode != 13 ||
+            !catalog.settings.xrayTunEnabled) {
+          _listenerTaken = true;
           throw desktopError('listener_unavailable');
+        }
       }
     }
+    _listenerTaken = false;
     final tunnel = catalog.settings.xrayTunEnabled;
     try {
       await _startCore(catalog, config);
@@ -300,6 +405,7 @@ extension _ProxyRuntime on DesktopProxy {
         storage = {
           'loadCatalog',
           'saveCatalog',
+          'setAsideCatalog',
           'staleVPNGuard',
         }.contains(method);
     final cancellable = !runtime && !session && !lease && !storage;
@@ -620,9 +726,13 @@ extension _ProxyRuntime on DesktopProxy {
     if (session && _catalog?.settings.blockWithoutVPN == true)
       _guardKept = true;
     // Settings edits reconnect, so the catalog matches the running session.
+    final settings = _catalog?.settings;
     _listener?.call(
       !session
-          ? 'connection_stopped'
+          // The OS proxy stays on the closed listener.
+          ? settings != null && settings.systemProxy && settings.blockWithoutVPN
+                ? 'connection_stopped_proxy_blocked'
+                : 'connection_stopped'
           : _catalog?.settings.blockWithoutVPN == true
           ? 'connection_stopped_blocked'
           // A killed helper can leave its DNS guard; Repair VPN setup clears it.
@@ -652,19 +762,31 @@ extension _ProxyRuntime on DesktopProxy {
     }
   }
 
-  // hold: another start follows. With Block traffic without VPN the core then
+  // hold: another start follows. With the Kill switch setting the core then
   // keeps its kill switch between the two tunnels, so nothing leaves outside
   // while a server switch, a settings change or failover restarts the tunnel.
   // The plain stop of a disconnect lifts it.
-  Future<void> _stopProcess({bool hold = false}) => _stopping ??= () async {
+  // release: the user wants no VPN (Disconnect, quitting). The stop then also
+  // lifts the kill switch a lost tunnel kept, which other plain stops (failure
+  // cleanup) leave, and it reaches the helper while the app closes: a helper
+  // whose input just closes takes it for a lost tunnel and keeps the switch.
+  Future<void> _stopProcess({
+    bool hold = false,
+    bool release = false,
+  }) => _stopping ??= () async {
     final launch = _process;
     if (launch != null &&
         launch == _vpnSession &&
         _vpnReply == null &&
-        !_disposed &&
+        (!_disposed || release) &&
         !_storageLost) {
       try {
-        final stopped = await _native('stopVPN', {if (hold) 'hold': true});
+        final stopped = await _native(
+          'stopVPN',
+          {if (hold) 'hold': true else if (release) 'release': true},
+          // Quitting waits for it no longer than for the helper's exit.
+          timeout: _disposed ? _helperExitGrace : null,
+        );
         _guardKept = _guardHeld =
             hold &&
             _catalog?.settings.xrayTunEnabled == true &&
@@ -681,7 +803,7 @@ extension _ProxyRuntime on DesktopProxy {
     } else {
       await _reap(launch);
       if (_vpnSession == launch) _vpnSession = null;
-      if (!hold) await _liftHeldGuard();
+      if (!hold) await _liftHeldGuard(release: release);
     }
     if (_process == launch) _process = null;
     _metricsProcess = null;
@@ -689,32 +811,64 @@ extension _ProxyRuntime on DesktopProxy {
   }().whenComplete(() => _stopping = null);
 
   // Lifts the kill switch a restart's stop kept, when no tunnel follows it: a
-  // disconnect during the restart, or a server name nothing can resolve.
-  Future<void> _liftHeldGuard() async {
-    if (!_guardHeld) return;
-    _guardKept = _guardHeld = false;
+  // disconnect during the restart, or a server name nothing can resolve. A
+  // release also lifts the one a lost tunnel kept; without a helper to take
+  // it, that one stays kept for _disconnect to clear.
+  Future<void> _liftHeldGuard({bool release = false}) async {
+    if (!_guardHeld && !(release && _guardKept)) return;
     final session = _vpnSession;
-    if (session == null || _vpnReply != null || _disposed || _storageLost)
-      return;
+    final reachable =
+        session != null &&
+        _vpnReply == null &&
+        (!_disposed || release) &&
+        !_storageLost;
+    if (!release || reachable) _guardKept = _guardHeld = false;
+    if (!reachable) return;
     try {
-      await _native('stopVPN', {});
+      await _native(
+        'stopVPN',
+        {if (release) 'release': true},
+        timeout: _disposed ? _helperExitGrace : null,
+      );
     } on Object {
       await _reap(session);
       if (_vpnSession == session) _vpnSession = null;
+      // The helper went with the kill switch in place.
+      if (release) _guardKept = true;
     }
   }
 
-  Future<void> _disconnect() async {
+  // release: the user's Disconnect or quitting (see _stopProcess). Other
+  // stops, such as a sleep's, are plain.
+  Future<void> _disconnect({bool release = false}) async {
     _cancelCamera?.call();
     _linkStopGeneration++;
     _generation++;
     _state = 'disconnecting';
+    // A connect clears this mark when it ends, which may be before the stops do.
+    final stale = _guardStale;
     for (final worker in _workers.toList()) {
       worker.kill();
     }
-    await _stopProcess();
+    await _stopProcess(release: release);
     await _operation?.future;
-    await _stopProcess(); // A launch can cross the first cancellation.
+    // A launch can cross the first cancellation.
+    await _stopProcess(release: release);
+    // No helper took the stop: one that crashed or was reaped leaves its kill
+    // switch until a helper clears it. Disconnect still ends when that fails,
+    // and the notice points at Repair VPN setup. Quitting asks for no consent.
+    if (release &&
+        !_disposed &&
+        _vpnSession == null &&
+        (_guardKept || stale)) {
+      try {
+        await _clearStaleGuard();
+        _guardKept = _guardHeld = false;
+      } on Object catch (error) {
+        if (error is! PlatformException || error.code != 'cancelled')
+          _listener?.call('vpn_guard_stale');
+      }
+    }
     _state = 'disconnected';
     await _syncSystemProxy();
   }

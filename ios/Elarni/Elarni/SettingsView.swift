@@ -88,7 +88,7 @@ struct PreferencesEditor: View {
           if model.settings.connectOnUntrustedWiFi == true {
             NavigationLink { TrustedWiFiEditor() } label: {
               LabeledContent("Trusted Wi-Fi networks", value: (model.settings.trustedWiFiNetworks ?? []).isEmpty ? String(localized: "None") : "\(model.settings.trustedWiFiNetworks!.count)")
-            }
+            }.accessibilityIdentifier("trustedWiFiNetworks")
           }
           Toggle("Disconnect on sleep", isOn: setting(\.disconnectOnSleep))
         } header: { Text("Connection") } footer: {
@@ -116,13 +116,13 @@ struct PreferencesEditor: View {
       } else {
         Section {
           Picker("Test type", selection: $value.probeMode) {
-            Text("Proxy").tag("proxy"); Text("Current rules / active tunnel").tag("activeProxy"); Text("Direct TCP").tag("tcp"); Text("Direct ICMP").tag("icmp")
+            Text("Proxy").tag("proxy"); Text("Direct TCP").tag("tcp"); Text("Direct ICMP").tag("icmp")
           }
           Picker("Timeout", selection: $value.probeTimeout) {
             ForEach(Array(Set([5, 7, 9, 12, 15, value.probeTimeout])).sorted(), id: \.self) { Text("\($0) s timeout").tag($0) }
           }.accessibilityIdentifier("probeTimeout")
         } footer: { Text("While connected, proxy tests check the selected VPN path. Disconnect to test other servers, direct TCP, or ICMP. Results expire after five minutes or a configuration change.") }
-        if ["proxy", "activeProxy"].contains(value.probeMode) {
+        if value.probeMode == "proxy" {
           Section("HTTP request") {
             Picker("HTTP method", selection: $value.probeMethod) { Text("Proxy GET").tag("GET"); Text("Proxy HEAD").tag("HEAD") }
             Picker("Test mode", selection: $value.probeVariant) { Text("Default").tag("default"); Text("Double").tag("double"); Text("Keep-alive").tag("keepalive") }
@@ -229,7 +229,7 @@ struct ConnectionEditor: View {
   // Its own builder keeps the body within what the type checker solves in time.
   @ViewBuilder private var routeSections: some View {
     Section {
-      Toggle("Block traffic without VPN", isOn: $value.includeAllNetworks)
+      Toggle("Kill switch", isOn: $value.includeAllNetworks)
     } header: { Text("Protection") } footer: { Text("iOS keeps all traffic inside the tunnel, including while it reconnects.") }
     Section {
       DisclosureGroup("Advanced network routes") {
@@ -241,7 +241,7 @@ struct ConnectionEditor: View {
       }
     } footer: {
       VStack(alignment: .leading, spacing: 6) {
-        Text("Enforce routes is for specific networks and cannot be combined with Block traffic without VPN or a default /0 route.")
+        Text("Enforce routes is for specific networks and cannot be combined with the kill switch or a default /0 route.")
         Text("Hide VPN icon adds the route exclusions of the hide-icon workaround: it changes excluded network routes, not only the icon. Hiding the VPN icon is not verified.")
       }
     }
@@ -359,32 +359,74 @@ struct CredentialsView: View {
   }
 }
 
+/// The trusted Wi-Fi names: the joined network is trusted with one tap, another is typed. Each change is saved at once.
 struct TrustedWiFiEditor: View {
   @Environment(IOSAppModel.self) private var model
-  @Environment(\.dismiss) private var dismiss
-  @State private var text = ""
-  @State private var loaded = false
-  private var saved: [String] { model.settings.trustedWiFiNetworks ?? [] }
-  private var next: IOSTunnelSettings { var next = model.settings; next.trustedWiFiNetworks = lines(text); return next }
-  private var dirty: Bool { loaded && lines(text) != saved }
-  private var valid: Bool { (try? next.validate()) != nil }
+  @Environment(\.scenePhase) private var phase
+  @State private var joined: String?
+  @State private var adding = false
+  @State private var name = ""
+  private var trusted: [String] { model.settings.trustedWiFiNetworks ?? [] }
   var body: some View {
     AppForm {
-      Section {
-        LinesEditor(title: "Trusted Wi-Fi networks", text: $text).accessibilityIdentifier("trustedWiFiNetworks")
-      } footer: {
-        Text(valid ? String(localized: "One network name per line. Joining one of these leaves the VPN as it is.") : String(localized: "Use up to 64 names of at most 32 bytes each, without tabs."))
-          .foregroundStyle(valid ? AppPalette.secondary : Color.red)
+      if let joined {
+        Section("Connected now") {
+          HStack(spacing: 12) {
+            Label {
+              VStack(alignment: .leading, spacing: 2) {
+                Text(joined)
+                Text(trusted.contains(joined) ? "Trusted. The VPN stays as it is here." : "Not trusted. The VPN connects here.")
+                  .font(.footnote).foregroundStyle(AppPalette.secondary)
+              }
+            } icon: { Image(systemName: "wifi") }
+            Spacer()
+            if !trusted.contains(joined) {
+              Button { save(trusted + [joined]) } label: { Text("Trust").foregroundStyle(AppPalette.onAccent) }
+                .buttonStyle(.borderedProminent).disabled(model.busy)
+            }
+          }
+        }
       }
-      if dirty && !valid { InvalidDraftNote() }
+      Section {
+        if trusted.isEmpty { Text("None. Every Wi-Fi network connects.").foregroundStyle(AppPalette.secondary) }
+        ForEach(trusted, id: \.self) { name in
+          HStack {
+            Label(name, systemImage: "wifi")
+            Spacer()
+            Button { save(trusted.filter { $0 != name }) } label: { Image(systemName: "xmark") }
+              .buttonStyle(.borderless).disabled(model.busy).accessibilityLabel("Remove \(name)")
+          }
+        }
+        Button { name = ""; adding = true } label: {
+          Label {
+            VStack(alignment: .leading, spacing: 2) {
+              Text("Add by name")
+              Text("For a network that is not connected now").font(.footnote).foregroundStyle(AppPalette.secondary)
+            }
+          } icon: { Image(systemName: "plus") }
+        }.disabled(model.busy).accessibilityLabel("Add by name")
+      } header: { Text("Trusted") } footer: { Text("Joining a trusted network leaves the VPN as it is.") }
     }
-    // Once: a draft left open under another tab is still there on return.
-    .onAppear { if !loaded { text = saved.joined(separator: "\n"); loaded = true } }
-    .draftPage("Trusted Wi-Fi", dirty: dirty, valid: valid, cancel: { text = saved.joined(separator: "\n"); dismiss() }) { leaving in
-      guard valid else { return }
-      let next = next
-      model.launchShown { try await model.saveSettings(next); if !leaving { dismiss() } }
+    .navigationTitle("Trusted Wi-Fi").navigationBarTitleDisplayMode(.inline)
+    .toolbar { ToolbarItem(placement: .principal) { PageTitle(title: "Trusted Wi-Fi") } }
+    .alert("Add by name", isPresented: $adding) {
+      TextField("Network name", text: $name).textInputAutocapitalization(.never).autocorrectionDisabled()
+      Button("Add") {
+        let typed = name.trimmingCharacters(in: .whitespaces)
+        if !typed.isEmpty && !trusted.contains(typed) { save(trusted + [typed]) }
+      }
+      Button("Cancel", role: .cancel) {}
     }
+    // Asked again on return: the network may have changed while Settings was in front.
+    .task(id: phase) { if phase == .active { joined = await model.joinedWiFi() } }
+  }
+
+  private func save(_ names: [String]) {
+    var next = model.settings; next.trustedWiFiNetworks = names
+    guard (try? next.validate()) != nil else {
+      model.errorMessage = String(localized: "Use up to 64 names of at most 32 bytes each, without tabs."); return
+    }
+    model.launchShown { try await model.saveSettings(next) }
   }
 }
 

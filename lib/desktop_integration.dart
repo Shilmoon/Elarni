@@ -29,7 +29,7 @@ final class DesktopIntegration extends ChangeNotifier {
 
   /// The choices Settings > Server tests offers; a stored value outside them
   /// is replaced by the default.
-  static const pingProtocols = ['proxy', 'activeProxy', 'tcp', 'icmp'],
+  static const pingProtocols = ['proxy', 'tcp', 'icmp'],
       pingMethods = ['GET', 'HEAD'],
       pingModes = ['default', 'double', 'keepalive'],
       pingTimeouts = [5, 7, 9, 12, 15];
@@ -42,10 +42,22 @@ final class DesktopIntegration extends ChangeNotifier {
   String language = 'system';
   String accent = 'evergreen', sort = 'provider';
   Set<String> pinned = {};
-  bool expiryReminders = false, _notifying = false;
+
+  /// The Home groups the user closed; every other group is open. A
+  /// subscription's id, `<id>:<country>` for a country in it and `:<country>`
+  /// for a country in the By country list.
+  Set<String> closedGroups = {};
+  static const maxClosedGroups = 256;
+  static final _closedGroup = RegExp(
+    r'^(?=.)[A-Za-z0-9_-]{0,128}(:[A-Za-z]{2,5})?$',
+  );
+  bool expiryReminders = false, _notifying = false, _hinting = false;
   bool favoritesFirst = true;
   int lastExpiryReminderDay = 0;
   bool loginWarningDismissed = false;
+
+  /// The first close that hid the window to the tray said Elarni keeps running.
+  bool trayHintShown = false;
   // An empty feed keeps the update check off; Not now stores the version it hid.
   String updateFeedURL = '', dismissedUpdate = '';
   // The latency test, as Settings > Server tests last left it.
@@ -60,6 +72,11 @@ final class DesktopIntegration extends ChangeNotifier {
 
   /// Connects once when the app starts after an update that interrupted the VPN.
   bool reconnectAfterUpdate = false;
+
+  /// The per-app routing mode that leaving VPN mode turned off, which the
+  /// return to VPN mode turns on again; '' when there is none. The tunnel
+  /// settings cannot keep it: per-app routing is valid only in VPN mode.
+  String pausedPerAppMode = '';
 
   /// The waiting version a start last installed, so an installer that dies
   /// cannot make every start exit again.
@@ -139,13 +156,14 @@ final class DesktopIntegration extends ChangeNotifier {
 
   Future<void> load() async {
     channel.setMethodCallHandler((call) async {
-      if (!_closed &&
-          call.method == 'action' &&
-          const [
-            'connect',
-            'disconnect',
-            'settings',
-          ].contains(call.arguments)) {
+      if (_closed || call.method != 'action') return;
+      // A close hid the window to the tray (Windows, Linux).
+      if (call.arguments == 'closedToTray') return _hintTray();
+      if (const [
+        'connect',
+        'disconnect',
+        'settings',
+      ].contains(call.arguments)) {
         onAction?.call(call.arguments as String);
       }
     });
@@ -184,10 +202,17 @@ final class DesktopIntegration extends ChangeNotifier {
       language = nextLanguage;
       sort = nextSort;
       pinned = nextPins;
+      // Unreadable entries are dropped: their groups open again.
+      closedGroups = {
+        if (value['closedGroups'] case final List stored)
+          for (final key in stored.take(maxClosedGroups))
+            if (key is String && _closedGroup.hasMatch(key)) key,
+      };
       expiryReminders = value['expiryReminders'] == true;
       favoritesFirst = value['favoritesFirst'] != false;
       lastExpiryReminderDay = value['lastExpiryReminderDay'] as int? ?? 0;
       loginWarningDismissed = value['loginWarningDismissed'] == true;
+      trayHintShown = value['trayHintShown'] == true;
       updateFeedURL = nextFeed;
       dismissedUpdate = nextDismissed;
       // Test settings an older or another version left unreadable keep their
@@ -201,7 +226,11 @@ final class DesktopIntegration extends ChangeNotifier {
         final String stored when stored.length <= maxPingText => stored,
         _ => fallback,
       };
-      pingProtocol = choice('pingProtocol', pingProtocols, 'tcp');
+      // "Current rules / active tunnel" is no longer a choice: it tested the
+      // selected server as Proxy does, and no other server.
+      pingProtocol = value['pingProtocol'] == 'activeProxy'
+          ? 'proxy'
+          : choice('pingProtocol', pingProtocols, 'tcp');
       pingMethod = choice('pingMethod', pingMethods, 'GET');
       pingMode = choice('pingMode', pingModes, 'default');
       pingTimeout = choice('pingTimeout', pingTimeouts, 7);
@@ -211,6 +240,11 @@ final class DesktopIntegration extends ChangeNotifier {
       };
       pingURL = text('pingURL', defaultPingURL);
       pingExpectedBody = text('pingExpectedBody', '');
+      pausedPerAppMode = choice('pausedPerAppMode', const [
+        '',
+        'bypass',
+        'proxyOnly',
+      ], '');
       autoUpdate = value['autoUpdate'] != false;
       // Asked for once: the app connects at this start only.
       _connectPending = value['reconnectAfterUpdate'] == true;
@@ -229,11 +263,25 @@ final class DesktopIntegration extends ChangeNotifier {
     unawaited(checkForUpdate());
   }
 
+  /// Remembers the closed Home groups; waits for a save in progress and never
+  /// throws, as a group opens and closes whether or not that is stored.
+  Future<void> rememberClosedGroups(Set<String> groups) async {
+    while (saving && !_closed) await _saved?.future;
+    if (_closed || !available) return;
+    try {
+      await update(closedGroups: groups.take(maxClosedGroups).toSet());
+    } on Object {
+      /* update() publishes its error. */
+    }
+  }
+
   // Saves for the update logic: they wait for a save in progress and never
   // throw; a failure keeps the error update() published.
   Future<bool> _store({
     bool? reconnectAfterUpdate,
     String? updateAttempted,
+    String? pausedPerAppMode,
+    bool? trayHintShown,
   }) async {
     while (saving && !_closed) await _saved?.future;
     if (_closed || !available) return false;
@@ -241,6 +289,8 @@ final class DesktopIntegration extends ChangeNotifier {
       await update(
         reconnectAfterUpdate: reconnectAfterUpdate,
         updateAttempted: updateAttempted,
+        pausedPerAppMode: pausedPerAppMode,
+        trayHintShown: trayHintShown,
       );
       return true;
     } on Object {
@@ -248,16 +298,23 @@ final class DesktopIntegration extends ChangeNotifier {
     }
   }
 
+  /// Keeps [mode] as [pausedPerAppMode], '' to forget it. Like the update
+  /// logic's saves, it waits for a save in progress and never throws.
+  Future<bool> rememberPerAppMode(String mode) async =>
+      mode == pausedPerAppMode || await _store(pausedPerAppMode: mode);
+
   Future<void> update({
     ThemeMode? theme,
     String? accent,
     String? language,
     String? sort,
     Set<String>? pinned,
+    Set<String>? closedGroups,
     bool? expiryReminders,
     bool? favoritesFirst,
     int? lastExpiryReminderDay,
     bool? loginWarningDismissed,
+    bool? trayHintShown,
     String? updateFeedURL,
     String? dismissedUpdate,
     String? pingProtocol,
@@ -270,6 +327,7 @@ final class DesktopIntegration extends ChangeNotifier {
     bool? autoUpdate,
     bool? reconnectAfterUpdate,
     String? updateAttempted,
+    String? pausedPerAppMode,
   }) async {
     if (_closed || saving || !available)
       throw StateError('Desktop preferences unavailable');
@@ -295,12 +353,14 @@ final class DesktopIntegration extends ChangeNotifier {
         'language': language ?? this.language,
         'sort': sort ?? this.sort,
         'pinned': (pinned ?? this.pinned).toList()..sort(),
+        'closedGroups': (closedGroups ?? this.closedGroups).toList()..sort(),
         'expiryReminders': expiryReminders ?? this.expiryReminders,
         'favoritesFirst': favoritesFirst ?? this.favoritesFirst,
         'lastExpiryReminderDay':
             lastExpiryReminderDay ?? this.lastExpiryReminderDay,
         'loginWarningDismissed':
             loginWarningDismissed ?? this.loginWarningDismissed,
+        'trayHintShown': trayHintShown ?? this.trayHintShown,
         'updateFeedURL': updateFeedURL ?? this.updateFeedURL,
         'dismissedUpdate': dismissedUpdate ?? this.dismissedUpdate,
         'pingProtocol': pingProtocol ?? this.pingProtocol,
@@ -314,6 +374,7 @@ final class DesktopIntegration extends ChangeNotifier {
         'reconnectAfterUpdate':
             reconnectAfterUpdate ?? this.reconnectAfterUpdate,
         'updateAttempted': updateAttempted ?? this.updateAttempted,
+        'pausedPerAppMode': pausedPerAppMode ?? this.pausedPerAppMode,
       };
       await channel.invokeMethod<void>('setPreferences', {
         'json': jsonEncode(next),
@@ -324,12 +385,14 @@ final class DesktopIntegration extends ChangeNotifier {
       this.language = language ?? this.language;
       this.sort = sort ?? this.sort;
       this.pinned = pinned ?? this.pinned;
+      this.closedGroups = closedGroups ?? this.closedGroups;
       this.expiryReminders = expiryReminders ?? this.expiryReminders;
       this.favoritesFirst = favoritesFirst ?? this.favoritesFirst;
       this.lastExpiryReminderDay =
           lastExpiryReminderDay ?? this.lastExpiryReminderDay;
       this.loginWarningDismissed =
           loginWarningDismissed ?? this.loginWarningDismissed;
+      this.trayHintShown = trayHintShown ?? this.trayHintShown;
       this.dismissedUpdate = dismissedUpdate ?? this.dismissedUpdate;
       this.pingProtocol = pingProtocol ?? this.pingProtocol;
       this.pingMethod = pingMethod ?? this.pingMethod;
@@ -343,6 +406,7 @@ final class DesktopIntegration extends ChangeNotifier {
       this.reconnectAfterUpdate =
           reconnectAfterUpdate ?? this.reconnectAfterUpdate;
       this.updateAttempted = updateAttempted ?? this.updateAttempted;
+      this.pausedPerAppMode = pausedPerAppMode ?? this.pausedPerAppMode;
       if (updateFeedURL != null) {
         // Saving the feed, even unchanged, checks it again now.
         this.updateFeedURL = updateFeedURL;
@@ -627,6 +691,24 @@ final class DesktopIntegration extends ChangeNotifier {
       }
     } finally {
       _notifying = false;
+    }
+  }
+
+  // Says once that closing the window left Elarni running in the tray, and
+  // that the tray's Quit stops it.
+  Future<void> _hintTray() async {
+    if (_closed || !available || trayHintShown || _hinting) return;
+    _hinting = true;
+    try {
+      await channel.invokeMethod<void>('showTrayHint');
+      if (_closed) return;
+      // Keep the in-session receipt even if persisting preferences fails.
+      trayHintShown = true;
+      await _store(trayHintShown: true);
+    } on Object {
+      // A hint that could not be shown is tried again at the next close.
+    } finally {
+      _hinting = false;
     }
   }
 

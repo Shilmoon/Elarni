@@ -101,11 +101,11 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get issueInvalidRouteEnforcementRemedy =>
-      'Replace 0.0.0.0/0 and ::/0 with specific routes, or turn enforcement off. For a full tunnel, turn enforcement off and use Block traffic without VPN.';
+      'Replace 0.0.0.0/0 and ::/0 with specific routes, or turn enforcement off. For a full tunnel, turn enforcement off and use the kill switch.';
 
   @override
   String get issueInvalidRouteEnforcement =>
-      'Enforce tunnel routes needs specific included routes and cannot be combined with Block traffic without VPN.';
+      'Enforce tunnel routes needs specific included routes and cannot be combined with the kill switch.';
 
   @override
   String get issueRouteModelTooLargeRemedy =>
@@ -117,11 +117,31 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get issueStorageUnavailableRemedy =>
-      'Restart Elarni. If this continues, restore an encrypted backup.';
+      'Restart Elarni and check the free disk space.';
+
+  @override
+  String get issueStorageUnavailableLinuxRemedy =>
+      'Unlock your keyring and check that secret-tool is installed, then restart Elarni.';
 
   @override
   String get issueStorageUnavailable =>
-      'Elarni could not read or save its catalog.';
+      'Elarni could not read or save its data.';
+
+  @override
+  String get issueStorageBusyRemedy =>
+      'Close the other copy or stop its background service. Elarni tries again by itself.';
+
+  @override
+  String get issueStorageBusy =>
+      'Elarni’s data is in use by another copy of Elarni.';
+
+  @override
+  String get issueStorageCorruptRemedy =>
+      'Reset Elarni in Settings › Backup and repair, then restore a backup or add your subscriptions again.';
+
+  @override
+  String get issueStorageCorrupt =>
+      'Elarni cannot read its saved data on this computer.';
 
   @override
   String get issueBusyRemedy => 'Wait for it to finish, then retry.';
@@ -384,7 +404,7 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get routeEnforcementWithBlock =>
-      'Enforce tunnel routes cannot be combined with Block traffic without VPN. Turn one of them off.';
+      'Enforce tunnel routes cannot be combined with the kill switch. Turn one of them off.';
 
   @override
   String get routeEnforcementDefaultRoutes =>
@@ -464,9 +484,6 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get home => 'Home';
-
-  @override
-  String get backToHome => 'Back to Home';
 
   @override
   String get settingsGroupSupport => 'Support';
@@ -1123,8 +1140,12 @@ class AppLocalizationsEn extends AppLocalizations {
       'Connection stopped unexpectedly. Reconnect to retry; if sites stay unreachable, use Repair VPN setup.';
 
   @override
+  String get connectionStoppedProxyBlocked =>
+      'Connection stopped unexpectedly. The kill switch keeps the system proxy on Elarni, so apps that follow it have no connection until you reconnect. Disconnect to lift the block.';
+
+  @override
   String get connectionStoppedBlocked =>
-      'Connection stopped unexpectedly. Block traffic without VPN keeps traffic blocked until you reconnect, or use Repair VPN setup to lift the block.';
+      'Connection stopped unexpectedly. The kill switch keeps traffic blocked until you reconnect. Disconnecting, quitting Elarni or Repair VPN setup lifts the block.';
 
   @override
   String get windowsDnsNotRestored =>
@@ -1140,8 +1161,32 @@ class AppLocalizationsEn extends AppLocalizations {
   }
 
   @override
+  String get systemProxyChanged =>
+      'Another program changed the system proxy. Elarni set it again.';
+
+  @override
+  String get systemProxyTaken =>
+      'Another program keeps changing the system proxy, so Elarni left it. Apps that follow the system proxy may not use the VPN. Use VPN mode, or stop the other program.';
+
+  @override
   String get scheduledRefreshFailed =>
       'A scheduled subscription or routing refresh failed.';
+
+  @override
+  String get scheduledRefreshNeedsReview =>
+      'A subscription was not updated because the network answered unexpectedly. Elarni tries again in two hours; open Subscriptions to review it now.';
+
+  @override
+  String get perAppTargetGoneKept =>
+      'A server that an app is routed through is gone from its subscription. The connection keeps the old settings; choose another server for that app in Per-app routing.';
+
+  @override
+  String get selectedServerReplaced =>
+      'The server you had selected is gone from its subscription. Elarni selected another server.';
+
+  @override
+  String get managedListMissing =>
+      'A domain list of the routing profile is not downloaded yet, so its rules do not apply. Elarni downloads it now that the connection is up.';
 
   @override
   String get groupSelectionFailed =>
@@ -1396,9 +1441,6 @@ class AppLocalizationsEn extends AppLocalizations {
   String get httpMethod => 'HTTP method';
 
   @override
-  String get currentRulesActiveTunnel => 'Current rules / active tunnel';
-
-  @override
   String get testType => 'Test type';
 
   @override
@@ -1637,15 +1679,15 @@ class AppLocalizationsEn extends AppLocalizations {
   String get serverAddressing => 'Server addressing';
 
   @override
-  String get blockTrafficMacHelp =>
+  String get killSwitchMacHelp =>
       'macOS keeps all traffic inside the tunnel, including while it reconnects. Route exclusions do not apply.';
 
   @override
-  String get blockTrafficDesktopHelp =>
-      'If the VPN stops unexpectedly, nothing leaves this device outside it until you reconnect or use Repair VPN setup. Disconnecting lifts the block. Needs System-wide VPN; cannot be combined with Enforce tunnel routes.';
+  String get killSwitchDesktopHelp =>
+      'If the VPN stops unexpectedly, nothing leaves this device outside it until you reconnect or use Repair VPN setup. Disconnecting lifts the block. In System proxy mode the system proxy stays on Elarni instead: apps that follow it get no connection until you reconnect or disconnect, and apps that ignore it are not covered. Not available with Local proxy only; cannot be combined with Enforce tunnel routes.';
 
   @override
-  String get blockTrafficWithoutVpn => 'Block traffic without VPN';
+  String get killSwitch => 'Kill switch';
 
   @override
   String get connectWithoutAdminApprovalHelp =>
@@ -1788,7 +1830,11 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get windowsWifiLocationHelp =>
-      'Windows keeps the Wi-Fi name from Elarni. Turn on Location services and Let desktop apps access your location in Settings › Privacy & security › Location.';
+      'Windows keeps the Wi-Fi name from Elarni. Turn on Location services and Let desktop apps access your location in Settings › Privacy & security › Location. Until then every Wi-Fi network counts as untrusted.';
+
+  @override
+  String get linuxWifiNameHelp =>
+      'Elarni cannot read the Wi-Fi name on this system: it needs NetworkManager\'s nmcli or iw. Until then every Wi-Fi network counts as untrusted.';
 
   @override
   String get noTrustedWifi => 'None. Every Wi-Fi network connects.';
@@ -1851,7 +1897,7 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get enforceRoutesMacHelp =>
-      'Enforcement requires specific included routes; default routes such as 0.0.0.0/0 and ::/0 are unsupported. For a full tunnel, turn enforcement off and use Block traffic without VPN in Connection settings.';
+      'Enforcement requires specific included routes; default routes such as 0.0.0.0/0 and ::/0 are unsupported. For a full tunnel, turn enforcement off and use the kill switch in Connection settings.';
 
   @override
   String get enforceRoutesDesktopHelp =>
@@ -1959,7 +2005,7 @@ class AppLocalizationsEn extends AppLocalizations {
   String get searchServers => 'Search servers';
 
   @override
-  String get filterRecent => 'Recent';
+  String get filterByCountry => 'By country';
 
   @override
   String get filterFavorites => 'Favorites';
@@ -1980,6 +2026,35 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get noMatchingServers => 'No matching servers';
+
+  @override
+  String get searchSettings => 'Search settings';
+
+  @override
+  String get noMatchingSettings => 'No settings match';
+
+  @override
+  String get selectServers => 'Select servers';
+
+  @override
+  String get testAll => 'Test all';
+
+  @override
+  String get serverColumn => 'Server';
+
+  @override
+  String get latencyColumn => 'Latency';
+
+  @override
+  String subscriptionCount(int count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: '$count subscriptions',
+      one: '1 subscription',
+    );
+    return '$_temp0';
+  }
 
   @override
   String get noServersInSubscription => 'No servers in this subscription';
@@ -2075,9 +2150,6 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get showAllServers => 'Show all servers';
-
-  @override
-  String get noSuccessfulConnections => 'No successful connections yet';
 
   @override
   String get noFavoriteServers => 'No favorite servers';
@@ -2925,8 +2997,64 @@ class AppLocalizationsEn extends AppLocalizations {
   String get encryptedBackupSaved => 'Encrypted backup saved.';
 
   @override
+  String backupSavedWithoutForbidden(int count, String names) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other:
+          'Backup saved without $count subscriptions: $names. Their providers do not allow backups.',
+      one:
+          'Backup saved without 1 subscription: $names. Its provider does not allow backups.',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String backupSavedWithoutUnrefreshed(int count, String names) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other:
+          'Backup saved without $count subscriptions: $names. Update them once first.',
+      one: 'Backup saved without 1 subscription: $names. Update it once first.',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String backupAlsoWithoutUnrefreshed(int count, String names) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other:
+          'Also left out $count subscriptions that were never updated: $names. Update them once first.',
+      one:
+          'Also left out 1 subscription that was never updated: $names. Update it once first.',
+    );
+    return '$_temp0';
+  }
+
+  @override
   String get backupRestored =>
       'Backup restored. Refresh subscription and routing data before connecting.';
+
+  @override
+  String get resetElarni => 'Reset Elarni';
+
+  @override
+  String get resetElarniHelp =>
+      'Saved data cannot be read. Reset sets it aside and starts empty.';
+
+  @override
+  String get resetElarniQuestion => 'Reset Elarni?';
+
+  @override
+  String get resetElarniBody =>
+      'Elarni’s saved data on this computer cannot be read. Reset keeps the unreadable file and starts with an empty list: subscriptions, servers and settings must be restored from a backup or added again. Providers that count devices will see this computer as a new device.';
+
+  @override
+  String get elarniWasReset =>
+      'Elarni was reset. Restore a backup or add a subscription.';
 
   @override
   String get chooseBackupAndRestore => 'Choose backup and restore';
@@ -2949,7 +3077,7 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get createBackupHelp =>
-      'Saves subscriptions, servers, group choices and routing in a password-protected file. Refresh subscriptions first; providers that disable sharing also disable backup. Keep the password: it cannot be recovered.';
+      'Saves subscriptions, servers, group choices and routing in a password-protected file. It leaves out subscriptions whose provider disables sharing and ones never updated. Keep the password: it cannot be recovered.';
 
   @override
   String get restoreBackupReplacesHelp =>

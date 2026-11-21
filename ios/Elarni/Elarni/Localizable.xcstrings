@@ -443,12 +443,32 @@
         }
       }
     },
+    "Add" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Добавить"
+          }
+        }
+      }
+    },
     "Add DNS host" : {
       "localizations" : {
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Добавить DNS-хост"
+          }
+        }
+      }
+    },
+    "Add by name" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Добавить по имени"
           }
         }
       }
@@ -523,16 +543,6 @@
         }
       }
     },
-    "All locations" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Все местоположения"
-          }
-        }
-      }
-    },
     "All servers" : {
       "localizations" : {
         "ru" : {
@@ -589,6 +599,58 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "По алфавиту"
+          }
+        }
+      }
+    },
+    "Also left out %lld subscriptions that were never updated: %@. Update them once first." : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Also left out %lld subscription that was never updated: %@. Update it once first."
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Also left out %lld subscriptions that were never updated: %@. Update them once first."
+                }
+              }
+            }
+          }
+        },
+        "ru" : {
+          "variations" : {
+            "plural" : {
+              "few" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Также не сохранены %lld подписки, которые ещё не обновлялись: %@. Обновите их хотя бы раз перед копированием."
+                }
+              },
+              "many" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Также не сохранено %lld подписок, которые ещё не обновлялись: %@. Обновите их хотя бы раз перед копированием."
+                }
+              },
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Также не сохранена %lld подписка, которая ещё не обновлялась: %@. Обновите хотя бы раз перед копированием."
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Также не сохранено %lld подписки, которые ещё не обновлялись: %@. Обновите их хотя бы раз перед копированием."
+                }
+              }
+            }
           }
         }
       }
@@ -755,6 +817,110 @@
         }
       }
     },
+    "Backup saved without %lld subscriptions: %@. Their providers do not allow backups." : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Backup saved without %lld subscription: %@. Its provider does not allow backups."
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Backup saved without %lld subscriptions: %@. Their providers do not allow backups."
+                }
+              }
+            }
+          }
+        },
+        "ru" : {
+          "variations" : {
+            "plural" : {
+              "few" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Копия сохранена без %lld подписок, провайдеры которых запрещают резервное копирование: %@."
+                }
+              },
+              "many" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Копия сохранена без %lld подписок, провайдеры которых запрещают резервное копирование: %@."
+                }
+              },
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Копия сохранена без %lld подписки, провайдер которой запрещает резервное копирование: %@."
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Копия сохранена без %lld подписки, провайдеры которых запрещают резервное копирование: %@."
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "Backup saved without %lld subscriptions: %@. Update them once first." : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Backup saved without %lld subscription: %@. Update it once first."
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Backup saved without %lld subscriptions: %@. Update them once first."
+                }
+              }
+            }
+          }
+        },
+        "ru" : {
+          "variations" : {
+            "plural" : {
+              "few" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Копия сохранена без %lld подписок, которые ещё не обновлялись: %@. Обновите их хотя бы раз перед копированием."
+                }
+              },
+              "many" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Копия сохранена без %lld подписок, которые ещё не обновлялись: %@. Обновите их хотя бы раз перед копированием."
+                }
+              },
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Копия сохранена без %lld подписки, которая ещё не обновлялась: %@. Обновите хотя бы раз перед копированием."
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Копия сохранена без %lld подписки, которые ещё не обновлялись: %@. Обновите их хотя бы раз перед копированием."
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "Backup selected" : {
       "localizations" : {
         "ru" : {
@@ -785,22 +951,22 @@
         }
       }
     },
-    "Block traffic without VPN" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Блокировать трафик без VPN"
-          }
-        }
-      }
-    },
     "Blue" : {
       "localizations" : {
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Синий"
+          }
+        }
+      }
+    },
+    "By country" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "По странам"
           }
         }
       }
@@ -941,16 +1107,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Выберите основной и разрешённые серверы из одной подписки. Для автовыбора нужны как минимум два сервера и цели проверки с разными именами хостов."
-          }
-        }
-      }
-    },
-    "Clear search" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Очистить поиск"
           }
         }
       }
@@ -1101,6 +1257,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Подключено"
+          }
+        }
+      }
+    },
+    "Connected now" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Подключена сейчас"
           }
         }
       }
@@ -1306,16 +1472,6 @@
         }
       }
     },
-    "Country" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Страна"
-          }
-        }
-      }
-    },
     "Create encrypted backup" : {
       "localizations" : {
         "ru" : {
@@ -1342,16 +1498,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Текущий сетевой путь"
-          }
-        }
-      }
-    },
-    "Current rules / active tunnel" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Текущие правила / активный туннель"
           }
         }
       }
@@ -2095,12 +2241,12 @@
         }
       }
     },
-    "Enforce routes is for specific networks and cannot be combined with Block traffic without VPN or a default /0 route." : {
+    "Enforce routes is for specific networks and cannot be combined with the kill switch or a default /0 route." : {
       "localizations" : {
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "«Принудительные маршруты» предназначены для отдельных сетей и не совмещаются с «Блокировать трафик без VPN» или маршрутом по умолчанию /0."
+            "value" : "«Принудительные маршруты» предназначены для отдельных сетей и не совмещаются с «Kill switch» или маршрутом по умолчанию /0."
           }
         }
       }
@@ -2419,6 +2565,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Как в системе"
+          }
+        }
+      }
+    },
+    "For a network that is not connected now" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Для сети, к которой вы сейчас не подключены"
           }
         }
       }
@@ -3018,6 +3174,16 @@
         }
       }
     },
+    "Joining a trusted network leaves the VPN as it is." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "При входе в доверенную сеть VPN остаётся как есть."
+          }
+        }
+      }
+    },
     "Keep domain identity with Fake DNS" : {
       "localizations" : {
         "ru" : {
@@ -3061,6 +3227,16 @@
         }
       }
     },
+    "Kill switch" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Kill switch"
+          }
+        }
+      }
+    },
     "Last check" : {
       "localizations" : {
         "ru" : {
@@ -3097,16 +3273,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Последнее обновление не удалось"
-          }
-        }
-      }
-    },
-    "Latency" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Задержка"
           }
         }
       }
@@ -3483,6 +3649,16 @@
         }
       }
     },
+    "Network name" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Имя сети"
+          }
+        }
+      }
+    },
     "Never" : {
       "localizations" : {
         "ru" : {
@@ -3563,22 +3739,22 @@
         }
       }
     },
+    "No favorites" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Нет избранных серверов"
+          }
+        }
+      }
+    },
     "No log lines yet. The core records them while it runs." : {
       "localizations" : {
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Записей пока нет. Ядро пишет их во время работы."
-          }
-        }
-      }
-    },
-    "No matching servers" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Нет подходящих серверов"
           }
         }
       }
@@ -3623,6 +3799,16 @@
         }
       }
     },
+    "None. Every Wi-Fi network connects." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Нет. Подключение в любой сети Wi-Fi."
+          }
+        }
+      }
+    },
     "Not configured" : {
       "localizations" : {
         "ru" : {
@@ -3659,6 +3845,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Не указано"
+          }
+        }
+      }
+    },
+    "Not trusted. The VPN connects here." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Не доверенная. VPN здесь подключается."
           }
         }
       }
@@ -3749,16 +3945,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "По одному имени хоста на строку, не больше 8. Токен вашей подписки тоже будет отправляться на эти хосты. Добавляйте только хосты, которым доверяете."
-          }
-        }
-      }
-    },
-    "One network name per line. Joining one of these leaves the VPN as it is." : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "По одному имени сети на строку. При подключении к одной из них VPN остаётся как есть."
           }
         }
       }
@@ -3970,6 +4156,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Физическая память"
+          }
+        }
+      }
+    },
+    "Pin" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Закрепить"
           }
         }
       }
@@ -4314,32 +4510,12 @@
         }
       }
     },
-    "Recent" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Недавние"
-          }
-        }
-      }
-    },
     "Recent issues" : {
       "localizations" : {
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Недавние проблемы"
-          }
-        }
-      }
-    },
-    "Recent servers" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Недавние серверы"
           }
         }
       }
@@ -4394,12 +4570,12 @@
         }
       }
     },
-    "Recovery requires Block traffic without VPN and no bypass or provider routing rules." : {
+    "Recovery requires the kill switch and no bypass or provider routing rules." : {
       "localizations" : {
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Для восстановления нужны «Блокировать трафик без VPN» и отсутствие правил обхода и маршрутизации провайдера."
+            "value" : "Для восстановления нужны «Kill switch» и отсутствие правил обхода и маршрутизации провайдера."
           }
         }
       }
@@ -4580,6 +4756,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Убрать"
+          }
+        }
+      }
+    },
+    "Remove %@" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Удалить %@"
           }
         }
       }
@@ -5064,16 +5250,6 @@
         }
       }
     },
-    "Search results" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Результаты поиска"
-          }
-        }
-      }
-    },
     "Search servers" : {
       "localizations" : {
         "ru" : {
@@ -5180,16 +5356,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Адресация серверов"
-          }
-        }
-      }
-    },
-    "Server options" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Параметры серверов"
           }
         }
       }
@@ -5439,16 +5605,6 @@
         }
       }
     },
-    "Sort" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Сортировка"
-          }
-        }
-      }
-    },
     "Static DNS hosts" : {
       "localizations" : {
         "ru" : {
@@ -5635,6 +5791,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Отпечаток TLS — на какой браузер похоже подключение к серверу. «Как у сервера» берёт отпечаток из ссылки сервера, а если его там нет — Chrome. Выберите другой, если сеть блокирует этот. Действует для серверов с TLS и Reality поверх TCP; у Hysteria2, TUIC, ShadowQUIC и WireGuard такого отпечатка нет."
+          }
+        }
+      }
+    },
+    "Tabs" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Вкладки"
           }
         }
       }
@@ -6329,6 +6495,16 @@
         }
       }
     },
+    "Touch and hold a server to add it to Favorites." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Нажмите и удерживайте сервер, чтобы добавить его в избранное."
+          }
+        }
+      }
+    },
     "Traffic" : {
       "localizations" : {
         "ru" : {
@@ -6379,6 +6555,26 @@
         }
       }
     },
+    "Trust" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Доверять"
+          }
+        }
+      }
+    },
+    "Trusted" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Доверенные"
+          }
+        }
+      }
+    },
     "Trusted Wi-Fi" : {
       "localizations" : {
         "ru" : {
@@ -6399,12 +6595,12 @@
         }
       }
     },
-    "Try another search or change the server filters." : {
+    "Trusted. The VPN stays as it is here." : {
       "localizations" : {
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Попробуйте другой запрос или измените фильтры серверов."
+            "value" : "Доверенная. VPN здесь остаётся как есть."
           }
         }
       }
@@ -6498,6 +6694,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Безлимит"
+          }
+        }
+      }
+    },
+    "Unpin" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Открепить"
           }
         }
       }

@@ -68,6 +68,10 @@
             <meta-data android:name="android.appwidget.provider" android:resource="@xml/connection_widget" />
         </receiver>
         <receiver android:name=".WidgetToggle" android:exported="false" />
+        <!-- Runs while Connect on untrusted Wi-Fi is on and the VPN service is not, in a small process of its own. -->
+        <service android:name=".WiFiWatchService" android:exported="false" android:process=":watch" android:foregroundServiceType="specialUse">
+            <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" android:value="Watches for Wi-Fi networks the user does not trust, to start their VPN on them at once" />
+        </service>
         <!-- While Connect on untrusted Wi-Fi is on, Android reports Wi-Fi changes here; an app update arms it again. -->
         <receiver android:name=".WiFiWatch" android:exported="false">
             <intent-filter><action android:name="android.intent.action.MY_PACKAGE_REPLACED" /></intent-filter>

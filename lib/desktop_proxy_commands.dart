@@ -1,16 +1,10 @@
 part of 'desktop_proxy.dart';
 
 extension _ProxyCommands on DesktopProxy {
-  Future<CatalogMap> _invoke(
-    String method,
-    CatalogMap? arguments, {
-    bool automatic = false,
-  }) async {
-    if (_disposed) throw desktopError('cancelled');
-    if (method == 'disconnect') {
-      return _disconnecting ??= () async {
+  Future<CatalogMap> _stop({required bool release}) => _disconnecting ??=
+      () async {
         _automation.manualStop();
-        await _disconnect();
+        await _disconnect(release: release);
         // Stop must clear persisted intent even as the first command. Loading
         // replaces the automation object, so stop the restored episode too.
         await _initialize();
@@ -19,7 +13,16 @@ extension _ProxyCommands on DesktopProxy {
         if (!_storageLost) await _persistAutomation();
         return <String, Object?>{'state': _state};
       }().whenComplete(() => _disconnecting = null);
-    }
+
+  Future<CatalogMap> _invoke(
+    String method,
+    CatalogMap? arguments, {
+    bool automatic = false,
+  }) async {
+    if (_disposed) throw desktopError('cancelled');
+    // The user's stop (the window, the tray, links, the CLI) lifts Block
+    // traffic without VPN, also the kill switch a lost tunnel kept.
+    if (method == 'disconnect') return _stop(release: true);
     if (method == 'openUpdateLink') {
       // The page an update feed named needs no catalog.
       final url = arguments?['url'];
@@ -28,6 +31,13 @@ extension _ProxyCommands on DesktopProxy {
     }
     // Updates replace the app, not the catalog. The core checks each file.
     if (method == 'updateStatus') return _native('updateStatus', {});
+    // Why the catalog cannot be read: asking never starts a load, it only
+    // waits for the one in flight.
+    if (method == 'storageStatus') {
+      await _initializing?.then<void>((_) {}, onError: (Object _) {});
+      return _storageStatus();
+    }
+    if (method == 'resetStorage') return _resetStorage();
     if (method == 'downloadUpdate') {
       final assets = arguments?['assets'];
       if (assets is! List || assets.any((asset) => asset is! Map))
@@ -300,12 +310,13 @@ extension _ProxyCommands on DesktopProxy {
           });
         }
         return {};
+      // Subscriptions a backup may not hold are left out; the result names them.
       case 'exportCatalogBackup':
-        final backup = _catalog!.backup();
+        final (:document, :excluded) = _catalog!.backup();
         final CatalogMap sealed;
         try {
           sealed = await _native('sealCatalogBackup', {
-            'catalog': backup,
+            'catalog': document,
             'password': args['password'],
           });
         } on PlatformException catch (error) {
@@ -314,9 +325,10 @@ extension _ProxyCommands on DesktopProxy {
             throw desktopError('backup_unsupported');
           rethrow;
         }
-        if (args['headless'] == true) return {'text': sealed['text']};
+        if (args['headless'] == true)
+          return {'text': sealed['text'], 'excluded': excluded};
         await _platformRequest('saveBackup', {'content': sealed['text']});
-        return {};
+        return {'excluded': excluded};
       case 'restoreCatalogBackup':
         if (_operation != null ||
             !{'disconnected', 'prepared', 'failed'}.contains(_state)) {
@@ -344,7 +356,9 @@ extension _ProxyCommands on DesktopProxy {
         _challenges.clear();
         return restored;
       case 'repairTunnel':
-        await _invoke('disconnect', {});
+        // Repair lifts the kill switch itself, elevated if it must, so its
+        // stop asks for nothing.
+        await _stop(release: false);
         if (_operation != null || _state != 'disconnected')
           throw desktopError('busy');
         final done = _operation = Completer<void>();
@@ -534,6 +548,7 @@ extension _ProxyCommands on DesktopProxy {
       if (_automation.intent) _automation.healthAt = _now;
     }
     PlatformException? refreshError;
+    String? selectedBeforeRefresh;
     final result = await _mutate((candidate) async {
       CatalogMap? warning;
       String addSource(CatalogMap input) {
@@ -566,6 +581,7 @@ extension _ProxyCommands on DesktopProxy {
           format = challenge.format;
         }
         final beforeRefresh = copyCatalog(candidate.data);
+        selectedBeforeRefresh = candidate.selected;
         try {
           warning = await candidate.refresh(
             id,
@@ -781,8 +797,14 @@ extension _ProxyCommands on DesktopProxy {
         case 'resetSubscriptionDeviceID':
           final source = candidate.source(args['id']! as String);
           if (source['url'] == null) throw desktopError('invalid_profile');
-          // A random key of the subscription's own; every refresh sends the ID it makes.
-          candidate.putSource({...source, 'deviceSalt': desktopID()});
+          // A random key of the subscription's own; every refresh sends the ID
+          // it makes. The next scheduled refresh sends the new one at once:
+          // after a device reply the provider may take it.
+          candidate.putSource({
+            ...source,
+            'deviceSalt': desktopID(),
+            'nextRefreshAt': candidate.now,
+          });
         case 'renameSubscription':
           final source = candidate.source(args['id']! as String);
           final text = (args['name'] as String?)?.trim();
@@ -954,11 +976,18 @@ extension _ProxyCommands on DesktopProxy {
         'updateInboundCredentials' => candidate.settingsSnapshot(),
         _ => candidate.routingSnapshot(),
       };
-    });
+    }, subscriptionRefresh: method == 'refreshSubscription');
     if (refreshError != null) throw refreshError!;
+    // The refresh removed the selected server and selected another; manual
+    // and scheduled refreshes both say so, once.
+    if (_catalog!.replacedSelection(selectedBeforeRefresh))
+      _listener?.call('selected_server_replaced');
     // A refresh that succeeded, scheduled or not, restarts the scheduled one's backoff.
-    if (method == 'refreshSubscription')
+    if (method == 'refreshSubscription') {
       _refreshBackoff.remove('source:${args['id']}');
+      // One that needed no review lets the next one that does say so again.
+      if (result['warning'] == null) _reviewNoticed.remove(args['id']);
+    }
     if (method == 'refreshRoutingGeofiles')
       _refreshBackoff.remove('geo:${args['id']}');
     if (method == 'refreshManagedLists')

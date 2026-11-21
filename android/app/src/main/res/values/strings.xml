@@ -33,13 +33,15 @@
     <string name="check_the_automation_s_group_selected">Check the automation\'s group, selected servers, and distinct HTTP health targets.</string>
     <string name="select_installed_android_apps_and_a">Select installed Android apps and a valid routing mode. Profiles from other operating systems cannot be used here.</string>
     <string name="an_app_in_per_app_routing">An app in Per-app routing uses a server that no longer exists. Choose another target for it in Per-app routing.</string>
+    <string name="none_of_the_apps_chosen_for_the_vpn">None of the apps chosen for the VPN is installed. Choose apps in Per-app routing or turn it off.</string>
     <string name="use_up_to_64_wi_fi">Use up to 64 Wi-Fi names of at most 32 bytes each, without tabs.</string>
     <string name="use_an_https_address_for_the">Use an https:// address for the update feed, or leave it empty.</string>
     <string name="some_settings_are_invalid_check_port">Some settings are invalid. Check port numbers, ranges, DNS addresses, and required login details.</string>
     <string name="the_connection_could_not_start_check">The connection could not start. Check the server, network, proxy ports, and routing assets, then retry.</string>
     <string name="this_profile_could_not_be_imported">This profile could not be imported. Check the complete link or configuration and try again.</string>
     <string name="this_server_has_no_encryption">This server has no encryption: no TLS, REALITY or VLESS encryption. Elarni accepts such a server only on a private network.</string>
-    <string name="your_encrypted_catalog_could_not_be">Your encrypted catalog could not be opened or saved. Existing data has been preserved. Unlock the device and restart the app. If this does not go away, the only way to start over is to clear Elarni\'s storage in Android Settings › Apps, which removes its servers and settings.</string>
+    <string name="elarni_cannot_read_its_saved_data">Elarni cannot read its saved data on this device. Reset Elarni, then restore a backup or add your subscriptions again.</string>
+    <string name="elarni_could_not_open_or_save_its">Elarni could not open or save its encrypted data. Existing data has been preserved. Restart Elarni. If this does not go away, the only way to start over is to clear Elarni\'s storage in Android Settings › Apps, which removes its servers and settings.</string>
     <string name="android_could_not_start_the_service">Android could not start the service from the background. Open Elarni and tap Connect.</string>
     <string name="android_has_not_made_the_vpn">Android has not made the VPN network ready. Reconnect or check Android VPN settings.</string>
     <string name="android_revoked_vpn_access_open_elarni">Android revoked VPN access. Open Elarni and connect to allow access again.</string>
@@ -78,7 +80,6 @@
     <string name="network">Network</string>
     <string name="available">Available</string>
     <string name="unavailable">Unavailable</string>
-    <string name="block_without_vpn">Block without VPN</string>
     <string name="on">On</string>
     <string name="always_on_vpn">Always-on VPN</string>
     <string name="vpn_permission">VPN permission</string>
@@ -212,6 +213,8 @@
     <string name="delete_subscription">Delete subscription</string>
     <string name="rename">Rename</string>
     <string name="pin_subscription">Pin subscription</string>
+    <string name="pin">Pin</string>
+    <string name="unpin">Unpin</string>
     <string name="download_options">Download options</string>
     <string name="download_format">Download format</string>
     <string name="original">Original</string>
@@ -265,8 +268,8 @@
     <string name="checking_exit">Checking exit…</string>
     <string name="search_results">Search results</string>
     <string name="favorites">Favorites</string>
-    <string name="recent_servers">Recent servers</string>
     <string name="all_servers">All servers</string>
+    <string name="by_country">By country</string>
     <string name="no_servers_match_this_filter">No servers match this filter.</string>
     <string name="test_server">Test server</string>
     <string name="remove_favorite">Remove favorite</string>
@@ -287,7 +290,6 @@
     <string name="country">Country</string>
     <string name="server_options">Server options</string>
     <string name="all">All</string>
-    <string name="recent">Recent</string>
     <string name="press_connect_only_apps_set_to">Press Connect. Only apps set to use the local proxy go through it; turn on System VPN in Settings &gt; Connection to connect all apps.</string>
     <string name="press_connect_android_asks_once_to">Press Connect. Android asks once to allow the VPN connection.</string>
     <string name="open_file">Open file</string>
@@ -370,7 +372,6 @@
     <string name="timeout_in_seconds_1_15">Timeout in seconds · 1–15</string>
     <string name="test_method">Test method</string>
     <string name="proxy">Proxy</string>
-    <string name="active_proxy_2">Active proxy</string>
     <string name="direct_tcp_2">Direct TCP</string>
     <string name="direct_icmp_2">Direct ICMP</string>
     <string name="test_all_servers">Test all servers</string>
@@ -512,17 +513,26 @@
     <string name="open_server_list">Open server list</string>
     <string name="open">Open</string>
     <string name="android_manages_this_turn_on_always">Android manages this: turn on Always-on VPN and Block connections without VPN.</string>
-    <string name="block_traffic_without_vpn">Block traffic without VPN</string>
+    <string name="kill_switch">Kill switch</string>
     <string name="show">Show</string>
     <string name="allow">Allow</string>
     <string name="allow_location_all_the_time">Allow location all the time</string>
-    <string name="android_shows_wi_fi_names_only">Android shows Wi-Fi names only to apps that may use location all the time, with location on.</string>
+    <string name="android_shows_wi_fi_names_only">Android shows Wi-Fi names only to apps that may use location all the time, with location on. Until then Elarni treats every Wi-Fi network as untrusted and connects.</string>
+    <string name="allow_notifications">Allow notifications</string>
+    <string name="reminders_need_elarni_s_notifications">Reminders need Elarni\'s notifications. They are off in Android settings.</string>
     <string name="none_every_wi_fi_network_connects">None. Every Wi-Fi network connects.</string>
-    <string name="one_network_name_per_line">One network name per line.</string>
+    <string name="connected_now">Connected now</string>
+    <string name="trust">Trust</string>
+    <string name="trusted">Trusted</string>
+    <string name="not_trusted_the_vpn_connects_here">Not trusted. The VPN connects here.</string>
+    <string name="trusted_the_vpn_stays_as_it">Trusted. The VPN stays as it is here.</string>
+    <string name="add_by_name">Add by name</string>
+    <string name="for_a_network_that_is_not">For a network that is not connected now</string>
+    <string name="remove_name">Remove %1$s</string>
+    <string name="joining_a_trusted_network_leaves">Joining a trusted network leaves the VPN as it is.</string>
     <string name="trusted_wi_fi_networks">Trusted Wi-Fi networks</string>
     <string name="connection_2">Connection</string>
     <string name="provider_profile">Provider profile</string>
-    <string name="current_rules_active_tunnel">Current rules / active tunnel</string>
     <string name="use_profile">Use profile</string>
     <string name="evergreen">Evergreen</string>
     <string name="blue">Blue</string>
@@ -563,7 +573,6 @@
     <string name="bootstrap_dns_server">Bootstrap DNS server</string>
     <string name="numeric_ipv4_or_ipv6_address_used">Numeric IPv4 or IPv6 address used outside the tunnel to resolve upstream servers.</string>
     <string name="dns_override">DNS override</string>
-    <string name="use_profile_dns">Use profile DNS</string>
     <string name="let_other_apps_control_the_connection">Let other apps control the connection</string>
     <string name="automation_apps_such_as_tasker_can">Automation apps such as Tasker can connect and disconnect with the control key. Shortcuts lists what they send.</string>
     <string name="control_key">Control key</string>
@@ -582,8 +591,9 @@
     <string name="profile_ip_override">Profile IP override</string>
     <string name="preferred_ip">Preferred IP</string>
     <string name="resolve_server_before_connecting">Resolve server before connecting</string>
-    <string name="joining_a_wi_fi_network_that">Joining a Wi-Fi network that is not on your trusted list connects. Trusted networks, mobile data and a connection you stopped stay as they are until the next network.</string>
+    <string name="joining_a_wi_fi_network_that">Joining a Wi-Fi network that is not on your trusted list connects. Trusted networks, mobile data and a connection you stopped stay as they are until the next network. While the VPN is off, Elarni keeps running to watch Wi-Fi and shows a notification.</string>
     <string name="connect_on_untrusted_wi_fi">Connect on untrusted Wi-Fi</string>
+    <string name="watching_for_untrusted_wi_fi">Watching for untrusted Wi-Fi</string>
     <string name="pause_when_screen_turns_off">Pause when screen turns off</string>
     <string name="connect_after_device_restart">Connect after device restart</string>
     <string name="requires_prior_vpn_consent_unlock_the">Requires prior VPN consent. Unlock the device after restarting.</string>
@@ -611,6 +621,7 @@
     <string name="share_qr_code">Share QR code</string>
     <string name="the_clipboard_is_empty_copy_a">The clipboard is empty. Copy a link or configuration first.</string>
     <string name="destination_approved_tap_connect">Destination approved. Tap Connect.</string>
+    <string name="selected_server_replaced">The server you had selected is gone from its subscription. Elarni selected another server.</string>
     <string name="file_saved">File saved.</string>
     <string name="section_general">General</string>
     <string name="section_appearance">Appearance</string>
@@ -677,6 +688,18 @@
         <item quantity="one">Assigned to %d subscription</item>
         <item quantity="other">Assigned to %d subscriptions</item>
     </plurals>
+    <plurals name="backup_saved_without_forbidden">
+        <item quantity="one">Backup saved without %1$d subscription: %2$s. Its provider does not allow backups.</item>
+        <item quantity="other">Backup saved without %1$d subscriptions: %2$s. Their providers do not allow backups.</item>
+    </plurals>
+    <plurals name="backup_saved_without_unrefreshed">
+        <item quantity="one">Backup saved without %1$d subscription: %2$s. Update it once first.</item>
+        <item quantity="other">Backup saved without %1$d subscriptions: %2$s. Update them once first.</item>
+    </plurals>
+    <plurals name="backup_also_without_unrefreshed">
+        <item quantity="one">Also left out %1$d subscription that was never updated: %2$s. Update it once first.</item>
+        <item quantity="other">Also left out %1$d subscriptions that were never updated: %2$s. Update them once first.</item>
+    </plurals>
     <plurals name="every_hours">
         <item quantity="one">Every %d h</item>
         <item quantity="other">Every %d h</item>
@@ -717,6 +740,10 @@
     <plurals name="updated_hours_ago">
         <item quantity="one">Updated %d h ago</item>
         <item quantity="other">Updated %d h ago</item>
+    </plurals>
+    <plurals name="subscriptions_not_updated">
+        <item quantity="one">%d not updated</item>
+        <item quantity="other">%d not updated</item>
     </plurals>
     <plurals name="updated_days_ago">
         <item quantity="one">Updated %d day ago</item>

@@ -145,6 +145,45 @@ class AutomationTest {
         assertTrue(Automation(running.episode()).exhausted)
     }
 
+    @Test fun aCoreThatStopsByItselfRestartsTwiceInTenMinutesAtMost() {
+        val restarts = CrashRestarts()
+        assertTrue(restarts.allow(0.0))
+        assertTrue(restarts.allow(30.0))
+        assertFalse("A third within ten minutes of the first", restarts.allow(599.0))
+        assertTrue("Ten minutes after the first, the refused one counted for nothing", restarts.allow(600.0))
+        assertFalse("Two in the last ten minutes again", restarts.allow(629.0))
+        assertTrue(restarts.allow(630.0))
+        val quiet = CrashRestarts()
+        assertTrue(quiet.allow(0.0))
+        assertTrue("One stop an hour always restarts", quiet.allow(3600.0) && quiet.allow(7200.0) && quiet.allow(10800.0))
+    }
+
+    @Test fun aServerThatPassedTrafficRestartsItsCoreAfterTwoFailedChecksInARow() {
+        val server = "a:1"
+        fun checks(vararg results: Boolean) = DeadCore().let { core -> results.map { core.checked(server, it) } }
+        assertEquals("Two failures after a pass", listOf(false, false, true), checks(true, false, false))
+        assertEquals("A server that never passed is only reported", listOf(false, false, false, false), checks(false, false, false, false))
+        assertEquals("One failure", listOf(false, false), checks(true, false))
+        assertEquals("A pass between failures", listOf(false, false, false), checks(false, true, false))
+        assertEquals("The failures must follow each other", listOf(false, false, false, false), checks(true, false, true, false))
+
+        val core = DeadCore()
+        core.checked(server, true); core.checked(server, false)
+        assertTrue(core.checked(server, false))
+        // The restart starts a new core, which clears the pass.
+        core.reset()
+        assertFalse(core.checked(server, false))
+        assertFalse("No second restart until a pass", core.checked(server, false))
+        assertFalse(core.checked(server, false))
+        assertFalse(core.checked(server, true))
+        assertFalse(core.checked(server, false))
+        assertTrue("A new pass allows the next restart", core.checked(server, false))
+
+        val changed = DeadCore()
+        changed.checked(server, true); changed.checked("a:2", false)
+        assertFalse("A pass counts only for the server and revision that passed", changed.checked("a:2", false))
+    }
+
     @Test fun recoveryPrefersRussianEntriesInWhitelistModeThenTcp443() {
         val automation = ready()
         val order = listOf("a", "b", "c", "d")

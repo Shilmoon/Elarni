@@ -4,6 +4,10 @@ import 'strings.dart';
 
 export 'connection_diagnostics.dart';
 
+/// Whether storage failures are worded for Linux, whose catalog key lives in
+/// the keyring, rather than Windows. The window sets it for its platform.
+bool linuxStorageText = false;
+
 /// Public support copy is selected by code, never by a native error's text.
 final class ConnectionIssue {
   const ConnectionIssue(this.code, this.message, this.remedy);
@@ -101,10 +105,22 @@ final class ConnectionIssue {
         l10n.issueVpnGuardStaleRemedy,
       ),
       'busy' => (l10n.issueBusy, l10n.issueBusyRemedy),
-      'storage_unavailable' => (
-        l10n.issueStorageUnavailable,
-        l10n.issueStorageUnavailableRemedy,
-      ),
+      // One support code for diagnostics, but each failure needs its own
+      // step: another copy holds the data, it cannot be read again (Reset),
+      // or the disk or keyring failed.
+      'storage_unavailable' => switch (code) {
+        'storage_busy' => (l10n.issueStorageBusy, l10n.issueStorageBusyRemedy),
+        'storage_corrupt' => (
+          l10n.issueStorageCorrupt,
+          l10n.issueStorageCorruptRemedy,
+        ),
+        _ => (
+          l10n.issueStorageUnavailable,
+          linuxStorageText
+              ? l10n.issueStorageUnavailableLinuxRemedy
+              : l10n.issueStorageUnavailableRemedy,
+        ),
+      },
       'per_app_target_missing' => (
         l10n.issuePerAppTargetMissing,
         l10n.issuePerAppTargetMissingRemedy,
@@ -158,11 +174,18 @@ String listenerNotice(String value) {
     'link_failed' => l10n.clientLinkNotImported,
     'no_selected_subscription' => l10n.selectServerFirstRoutingLink,
     'scheduled_refresh_failed' => l10n.scheduledRefreshFailed,
+    'scheduled_refresh_needs_review' => l10n.scheduledRefreshNeedsReview,
+    'per_app_target_missing' => l10n.perAppTargetGoneKept,
+    'selected_server_replaced' => l10n.selectedServerReplaced,
+    'managed_list_missing' => l10n.managedListMissing,
     'connection_stopped' => l10n.connectionStoppedUnexpectedly,
     'connection_stopped_blocked' => l10n.connectionStoppedBlocked,
+    'connection_stopped_proxy_blocked' => l10n.connectionStoppedProxyBlocked,
     'connection_stopped_repair' => l10n.connectionStoppedRepair,
     'vpn_dns_release_failed' => l10n.windowsDnsNotRestored,
     'system_proxy_restore_failed' => l10n.systemProxyNotRestored,
+    'system_proxy_changed' => l10n.systemProxyChanged,
+    'system_proxy_taken' => l10n.systemProxyTaken,
     _ => failureText(value) ?? value,
   };
 }
