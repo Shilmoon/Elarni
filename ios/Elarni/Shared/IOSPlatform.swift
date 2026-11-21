@@ -28,6 +28,8 @@ enum IOSConnectionAlerts {
   // The pending alert must outlive several refreshes; a missed one is not a disconnect.
   static let refreshSeconds: TimeInterval = 60
   private static let armSeconds: TimeInterval = 180
+  // Settable so unit tests can use their own folder; a build without the App Group has none.
+  static var directory: URL? = IOSPlatform.containerURL
 
   static func arm() {
     schedule(String(localized: "Elarni disconnected"), String(localized: "The VPN stopped unexpectedly. Open Elarni to reconnect."), after: armSeconds)
@@ -39,6 +41,7 @@ enum IOSConnectionAlerts {
 
   /// A new tunnel retires shown alerts; arming replaces any pending one.
   static func connected() {
+    forgetUserStop()
     UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: [identifier])
     arm()
   }
@@ -46,8 +49,27 @@ enum IOSConnectionAlerts {
   /// For the app, before it starts a tunnel the user asked for.
   static func clear() {
     disarm()
+    forgetUserStop()
     UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: [identifier])
     IOSOnDemandRestart.forget()
+  }
+
+  /// For the extension, when the user stops the tunnel. A stop with iOS's own VPN switch
+  /// (Settings, Control Center) is the user's, as Stop in the app is: the app reports no lost connection.
+  static func userStopped() {
+    guard let file = directory?.appendingPathComponent("user-stop") else { return }
+    try? Data().write(to: file, options: .atomic)
+  }
+
+  /// Whether the user stopped the last tunnel outside the app.
+  static func stoppedByUser() -> Bool {
+    guard let directory else { return false }
+    return FileManager.default.fileExists(atPath: directory.appendingPathComponent("user-stop").path)
+  }
+
+  /// With a new tunnel and after the app's own stop: neither is a stop with iOS's switch.
+  static func forgetUserStop() {
+    if let file = directory?.appendingPathComponent("user-stop") { try? FileManager.default.removeItem(at: file) }
   }
 
   /// Short delay so an On Demand restart can clear the alert before it shows.

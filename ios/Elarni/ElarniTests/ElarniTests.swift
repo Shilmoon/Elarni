@@ -953,6 +953,71 @@ final class ElarniTests: XCTestCase {
     XCTAssertFalse(IOSOnDemandRestart.restarted(now: stop + 2, in: nil))
   }
 
+  // A stop with iOS's own VPN switch is the user's: the extension notes it until the app's own
+  // stop or the next tunnel, so an earlier stop cannot hide a later lost connection.
+  func testAStopFromTheSystemSwitchIsNotedUntilTheNextTunnel() throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    let shared = IOSConnectionAlerts.directory
+    IOSConnectionAlerts.directory = directory
+    defer { IOSConnectionAlerts.directory = shared; try? FileManager.default.removeItem(at: directory) }
+    XCTAssertFalse(IOSConnectionAlerts.stoppedByUser(), "a stop was noted before any")
+    IOSConnectionAlerts.userStopped()
+    XCTAssertTrue(IOSConnectionAlerts.stoppedByUser(), "the stop was not noted")
+    XCTAssertTrue(IOSConnectionAlerts.stoppedByUser(), "reading the stop forgot it")
+    IOSConnectionAlerts.connected()
+    IOSConnectionAlerts.disarm()
+    XCTAssertFalse(IOSConnectionAlerts.stoppedByUser(), "a new tunnel kept the stop of the one before")
+    IOSConnectionAlerts.userStopped()
+    IOSConnectionAlerts.clear()
+    XCTAssertFalse(IOSConnectionAlerts.stoppedByUser(), "the app's Connect kept an earlier stop")
+    // A build without the App Group has no folder to note it in.
+    IOSConnectionAlerts.directory = nil
+    IOSConnectionAlerts.userStopped()
+    XCTAssertFalse(IOSConnectionAlerts.stoppedByUser())
+  }
+
+  // The app reports a VPN that went down without a Stop, but not one the user stopped with iOS's switch.
+  func testAStopFromTheSystemSwitchIsNotReportedAsALostConnection() async throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    let shared = IOSConnectionAlerts.directory
+    IOSConnectionAlerts.directory = directory
+    defer { IOSConnectionAlerts.directory = shared; try? FileManager.default.removeItem(at: directory) }
+    let model = IOSAppModel()
+    await model.start()
+    let group = try await importLocal(model, "socks://127.0.0.1:1080#Switch%20Server")
+    try await model.select(try XCTUnwrap(group.nodes.first))
+    let tunnel = FixtureTunnel(plan: Data())
+    tunnel.session.fixtureStatus = .disconnected
+    model.vpn.manager = tunnel
+    try await model.vpn.refreshProvider()
+    // The simulator cannot start a tunnel, but Connect still records the intent.
+    await model.connect()
+    func runThenStop(bySwitch: Bool) async throws {
+      model.notice = nil
+      tunnel.session.fixtureStatus = .connected
+      try await model.vpn.refreshProvider()
+      model.noteUnexpectedDisconnect()
+      if bySwitch { IOSConnectionAlerts.userStopped() }
+      tunnel.session.fixtureStatus = .disconnected
+      try await model.vpn.refreshProvider()
+      model.noteUnexpectedDisconnect()
+    }
+    try await runThenStop(bySwitch: true)
+    XCTAssertNil(model.notice, "a stop with iOS's VPN switch was reported as a lost connection")
+    // The app's own stop is not the switch's: a tunnel lost after it is reported.
+    tunnel.session.fixtureStatus = .connected
+    try await model.vpn.refreshProvider()
+    try await model.vpn.disconnect()
+    XCTAssertFalse(IOSConnectionAlerts.stoppedByUser(), "the app's own stop was kept as a stop with iOS's switch")
+    try await runThenStop(bySwitch: false)
+    XCTAssertTrue(model.notice?.contains("without a Stop") == true, "a lost connection was not reported: \(model.notice ?? "nil")")
+    await model.disconnect()
+    model.vpn.manager = nil
+    try await model.delete(group)
+  }
+
   // The extension cannot read the VPN configuration, so the app notes for it whether On Demand is armed.
   func testAppNotesWhetherOnDemandIsArmed() async throws {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
