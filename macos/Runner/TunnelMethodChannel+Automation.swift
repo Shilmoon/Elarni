@@ -120,6 +120,7 @@ extension TunnelMethodChannel {
   @MainActor
   func automationCommandReceived(_ method: String) {
     if ["disconnect", "restoreCatalogBackup", "repairTunnel"].contains(method) {
+      connectListDownload?.cancel()
       invalidateAutomation()
       automation.stop()
       automationStatus = "stopped"

@@ -1177,6 +1177,10 @@ class AppLocalizationsRu extends AppLocalizations {
       'Выбранного сервера больше нет в его подписке. Elarni выбрал другой сервер.';
 
   @override
+  String get managedListMissing =>
+      'Список доменов профиля маршрутизации ещё не загружен, поэтому его правила не действуют. Elarni загрузит его теперь, когда подключение установлено.';
+
+  @override
   String get groupSelectionFailed =>
       'Не удалось выбрать сервер в группе. Восстановлен сохранённый выбор.';
 

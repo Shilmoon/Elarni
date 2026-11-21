@@ -70,6 +70,13 @@ class Catalog(val data: JSONObject, private val snapshot: Boolean = false) {
         data.put("settings", value).put("sessionLimitsMigrated", true)
         return true
     }
+    /** Resolves a DNS pair saved while "Use profile DNS" was its own switch; see [DnsChoice.migrate]. Before [validate]. */
+    fun migrateDNS(): Boolean {
+        val value = settings
+        if (!DnsChoice.migrate(value)) return false
+        data.put("settings", value)
+        return true
+    }
     /** Allowing other apps makes the key their broadcasts carry, once: turning it off and on keeps the apps working. */
     fun ensureControlKey(): Boolean {
         if (!settings.optBoolean("allowExternalControl") || data.string("externalControlKey").isNotEmpty()) return false

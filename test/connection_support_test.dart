@@ -20,6 +20,8 @@ void main() {
     // A refresh took a per-app server; the running tunnel kept its settings.
     'per_app_target_missing':
         'A server that an app is routed through is gone from its subscription. The connection keeps the old settings; choose another server for that app in Per-app routing.',
+    'managed_list_missing':
+        'A domain list of the routing profile is not downloaded yet, so its rules do not apply. Elarni downloads it now that the connection is up.',
     'connection_stopped':
         'Connection stopped unexpectedly. Reconnect to retry.',
     'connection_stopped_blocked':

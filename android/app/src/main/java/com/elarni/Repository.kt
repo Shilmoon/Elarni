@@ -96,9 +96,11 @@ class Repository(private val app: ElarniApplication) {
                         if (saved.optInt("journalVersion") != 1) throw AppFailure("storage_corrupt")
                         // Recovery publishes only the last committed configuration, never an interrupted candidate.
                         catalog = Catalog(saved.getJSONObject("committed"))
+                        // Before validation, which derives the DNS flag from the mode and so hides the old pair.
+                        val dnsMigrated = catalog.migrateDNS()
                         catalog.validate()
                         // A catalog that allowed external control before keys existed gets one, which Settings shows.
-                        if (catalog.migrateSessionLimits() or catalog.ensureControlKey() or saved.has("pending")) persist(catalog)
+                        if (dnsMigrated or catalog.migrateSessionLimits() or catalog.ensureControlKey() or saved.has("pending")) persist(catalog)
                     }
                     automation = Automation(catalog.data.mapObject("automationEpisode"))
                     automation.intent = catalog.data.optBoolean("connectionIntent")

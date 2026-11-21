@@ -38,6 +38,7 @@ final class DesktopProxy {
     Future<bool> Function(String prompt)? confirmLink,
     Duration? replyTimeout,
     Duration? helperExitGrace,
+    Duration? managedListTimeout,
     int? automationProbeSeconds,
     int? automationRetrySeconds,
     List<CatalogMap>? livenessTargets,
@@ -58,6 +59,7 @@ final class DesktopProxy {
        // Tests shorten these waits; the defaults bound real helpers and networks.
        _replyTimeout = replyTimeout ?? const Duration(seconds: 20),
        _helperExitGrace = helperExitGrace ?? const Duration(seconds: 10),
+       _managedListTimeout = managedListTimeout ?? const Duration(seconds: 10),
        _automationProbeSeconds = automationProbeSeconds ?? 5,
        _automationRetrySeconds = automationRetrySeconds,
        _livenessTargets = livenessTargets ?? DesktopProxy.defaultHealthTargets,
@@ -89,6 +91,8 @@ final class DesktopProxy {
   _cameraScan;
   final void Function()? _cancelCamera;
   final Duration _replyTimeout, _helperExitGrace, _refreshInterval;
+  // How long Connect waits, in total, for routing lists never downloaded.
+  final Duration _managedListTimeout;
   final Future<WiFiReading> Function() _wifiNetwork;
   final Duration _wifiInterval;
   // Null where System proxy mode does not apply: tests and the headless daemon.

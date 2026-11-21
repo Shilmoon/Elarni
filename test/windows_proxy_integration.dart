@@ -408,6 +408,7 @@ void main() {
   DesktopProxy createBackend({
     Duration? replyTimeout,
     Duration? helperExitGrace,
+    Duration? managedListTimeout,
     int? automationProbeSeconds,
     int? automationRetrySeconds,
     List<CatalogMap>? livenessTargets,
@@ -422,6 +423,7 @@ void main() {
       catalogIO: storage,
       replyTimeout: replyTimeout,
       helperExitGrace: helperExitGrace,
+      managedListTimeout: managedListTimeout,
       automationProbeSeconds: automationProbeSeconds,
       automationRetrySeconds: automationRetrySeconds,
       livenessTargets: livenessTargets,
@@ -8282,6 +8284,184 @@ else:
       expect(fetched().skip(before + 2), ['https://broken.example/list']);
     },
   );
+
+  // A core that answers list downloads itself and logs, in order, the URL of
+  // each download and each proxy start, with "listed" when the started
+  // configuration has the site of the list named "listed". A URL with "broken"
+  // fails, one with "hang" never answers, any other serves its host name.
+  Future<File> useManagedListCore(String name) async {
+    final log = File.fromUri(temporary.uri.resolve(name));
+    await useStub('''
+import json, subprocess, sys, threading, time
+line = sys.stdin.readline()
+request = json.loads(line)
+method = request['method']
+with open(${jsonEncode(log.path)}, 'a') as out:
+    if method == 'fetchSubscription':
+        out.write('fetch ' + request['payload']['url'] + '\\n')
+    elif method == 'runXrayFromJson':
+        out.write('run' + (' listed' if 'listed.example' in request['payload']['configJSON'] else '') + '\\n')
+if method == 'fetchSubscription':
+    url = request['payload']['url']
+    if 'hang' in url:
+        time.sleep(60)
+    if 'broken' in url:
+        print(json.dumps({'success': False, 'error': 'fetch_failed'}), flush=True)
+    else:
+        print(json.dumps({'success': True, 'data': {'body': url.split('/')[2] + '\\n'}}), flush=True)
+    sys.exit()
+child = subprocess.Popen([${jsonEncode(corePath)}], stdin=subprocess.PIPE, stderr=subprocess.DEVNULL)
+child.stdin.write(line.encode())
+child.stdin.flush()
+# The core answers on this stdout; a runtime lasts until the controller closes this pipe.
+def forward_eof():
+    sys.stdin.read()
+    child.stdin.close()
+threading.Thread(target=forward_eof, daemon=True).start()
+sys.exit(child.wait())
+''');
+    return log;
+  }
+
+  // The selected server's routing profile, with these lists, none downloaded.
+  Future<String> importManagedRoute(List<String> lists) async {
+    final routeId = (await backend.control.importRouting(
+      jsonEncode({
+        'Name': 'Managed route',
+        'RemoteDNSType': 'DoU',
+        'RemoteDNSIP': '1.1.1.1',
+        'DomesticDNSType': 'DoU',
+        'DomesticDNSIP': '8.8.8.8',
+        'ManagedSources': [
+          for (final id in lists)
+            {
+              'id': id,
+              'url': 'https://$id.example/list',
+              'destination': 'direct',
+              'matchMode': 'exact',
+            },
+        ],
+      }),
+    )).profiles.single.id;
+    final source = (await backend.control.subscriptions()).subscriptions.single;
+    await backend.control.assignRoutingProfile(source.id, routeId);
+    return routeId;
+  }
+
+  CatalogMap storedRoute(String id) => catalogList(
+    catalogMap(storedCatalog!['committed'])['profiles'],
+  ).singleWhere((route) => route['id'] == id);
+
+  double nowSeconds() => DateTime.now().millisecondsSinceEpoch / 1000;
+
+  // Without its download a list's rules are not in the configuration; Connect
+  // downloads it before the core starts, so the first connection follows them.
+  test('connect first downloads a routing list never downloaded', () async {
+    await backend.dispose();
+    // No scheduled refresh may download the list first.
+    backend = createBackend(refreshInterval: const Duration(hours: 1));
+    final log = await useManagedListCore('managed-connect');
+    await prepare();
+    final routeId = await importManagedRoute(['listed']);
+    expect(
+      log.existsSync() ? log.readAsLinesSync() : const <String>[],
+      isEmpty,
+      reason: 'nothing downloaded yet',
+    );
+    final reports = <String?>[];
+    backend.control.setImportListener(reports.add);
+    expect(await backend.control.connect(), 'connected');
+    expect(log.readAsLinesSync(), [
+      'fetch https://listed.example/list',
+      'run listed',
+    ]);
+    expect(reports, isNot(contains('managed_list_missing')));
+    final route = storedRoute(routeId);
+    expect(catalogMap(route['lists']).keys, ['listed']);
+    // The whole profile downloaded, so its next refresh is the daily one.
+    expect(
+      route['nextManagedRefreshAt']! as num,
+      greaterThan(nowSeconds() + 3600),
+    );
+    await checkSocks(
+      (await backend.control.tunnelSettings()).socksPort,
+      target.port,
+    );
+  });
+
+  // Connect waits for the lists at most its bound in total. One it could not
+  // download fails no connection: the window hears once that its rules wait,
+  // and the scheduled refresh takes the route at once, over the connection.
+  test(
+    'connect goes on without a routing list it cannot download in time',
+    () async {
+      await backend.dispose();
+      backend = createBackend(
+        refreshInterval: const Duration(hours: 1),
+        managedListTimeout: const Duration(milliseconds: 500),
+      );
+      final log = await useManagedListCore('managed-connect-failed');
+      await prepare();
+      final routeId = await importManagedRoute(['broken', 'hang', 'later']);
+      final reports = <String?>[];
+      backend.control.setImportListener(reports.add);
+      final watch = Stopwatch()..start();
+      expect(await backend.control.connect(), 'connected');
+      expect(watch.elapsed, lessThan(const Duration(seconds: 30)));
+      // The failed download returned at once and the hanging one took the
+      // rest of the bound, which left none for the last list.
+      expect(log.readAsLinesSync(), [
+        'fetch https://broken.example/list',
+        'fetch https://hang.example/list',
+        'run',
+      ]);
+      expect(reports.where((code) => code == 'managed_list_missing'), [
+        'managed_list_missing',
+      ]);
+      final route = storedRoute(routeId);
+      expect(catalogMap(route['lists'] ?? {}), isEmpty);
+      expect(route['managedError'], 'fetch_failed');
+      expect(
+        route['nextManagedRefreshAt']! as num,
+        lessThanOrEqualTo(nowSeconds()),
+      );
+      await checkSocks(
+        (await backend.control.tunnelSettings()).socksPort,
+        target.port,
+      );
+    },
+  );
+
+  test('Stop during the list download before a connect cancels it', () async {
+    await backend.dispose();
+    backend = createBackend(
+      refreshInterval: const Duration(hours: 1),
+      managedListTimeout: const Duration(seconds: 30),
+    );
+    final log = await useManagedListCore('managed-connect-stop');
+    await prepare();
+    await importManagedRoute(['hang']);
+    final cancelled = expectLater(
+      backend.control.connect(),
+      throwsA(
+        isA<PlatformException>().having(
+          (error) => error.code,
+          'code',
+          'cancelled',
+        ),
+      ),
+    );
+    for (var i = 0; !log.existsSync() || log.readAsLinesSync().isEmpty; i++) {
+      expect(i, lessThan(100), reason: 'the list download did not start');
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+    }
+    final watch = Stopwatch()..start();
+    expect(await backend.control.disconnect(), 'disconnected');
+    await cancelled;
+    expect(watch.elapsed, lessThan(const Duration(seconds: 10)));
+    expect(await backend.control.state(), 'disconnected');
+    expect(log.readAsLinesSync(), ['fetch https://hang.example/list']);
+  });
 
   test(
     'a failed scheduled refresh retries on the subscription schedule',

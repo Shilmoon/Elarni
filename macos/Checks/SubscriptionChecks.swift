@@ -500,6 +500,34 @@ struct SubscriptionChecks {
       try expect(routes.dueManagedSources().isEmpty && routes.nextManagedDate() == clockNow.addingTimeInterval(7200),
         "a list that needed approval was not retried in two hours")
     }
+    try check("Connect downloads the lists the selected profile never downloaded, unless they wait for approval") {
+      let routes = try RoutingStore(directory: directory.appendingPathComponent("managed-missing"))
+      try routes.importProvider(#"{"Name":"Managed fixture","RemoteDNSType":"DoU","RemoteDNSIP":"1.1.1.1","DomesticDNSType":"DoU","DomesticDNSIP":"8.8.8.8","DirectSites":["full:example.com"]}"#,
+        subscriptionID: "managed")
+      routes.now = { clockNow }
+      var checkpoint = try JSONSerialization.jsonObject(with: routes.checkpoint()) as! [String: Any]
+      var profiles = checkpoint["profiles"] as! [[String: Any]]
+      let profileID = profiles[0]["id"] as! String
+      let failed = try persisted(clockNow) { $0.failed(now: clockNow, interval: 86400, category: "refresh", authorization: false) }
+      let waiting = try persisted(clockNow) { $0.failed(now: clockNow, interval: 86400, category: "authorization", authorization: true) }
+      let due = try persisted(clockNow) { _ in }
+      let lists: [(String, [String: Any], Bool)] = [("fetched", due, true), ("never", due, false),
+        ("waiting", waiting, false), ("failed", failed, false)]
+      profiles[0]["managedSources"] = lists.map { id, schedule, fetched -> [String: Any] in
+        var state: [String: Any] = ["source": ["id": id, "url": "https://fixture.invalid/\(id).txt", "destination": "direct", "matchMode": "exact"],
+          "domains": fetched ? ["\(id).example"] : [String](), "schedule": schedule]
+        if fetched { state["lastSuccessfulFetch"] = clockNow.timeIntervalSinceReferenceDate }
+        return state
+      }
+      checkpoint["profiles"] = profiles
+      try routes.restore(JSONSerialization.data(withJSONObject: checkpoint))
+      try expect(routes.missingManagedSources(subscriptionID: "managed").map { "\($0.profileID) \($0.sourceID)" } ==
+        ["\(profileID) never", "\(profileID) failed"], "the lists without a download were not the ones Connect tries")
+      try expect(routes.missingManagedSources(subscriptionID: "other").isEmpty && routes.missingManagedSources(subscriptionID: nil).isEmpty,
+        "a subscription without the profile has missing lists")
+      _ = try routes.setEnabled(id: profileID, enabled: false)
+      try expect(routes.missingManagedSources(subscriptionID: "managed").isEmpty, "a profile that is off has missing lists")
+    }
     try check("duplicate node matching retains the selected node first") {
       try expect(prioritizingSelection(["first", "selected"], selected: "selected") == ["selected", "first"], "selected duplicate priority")
       let key = SubscriptionNodeMatchKey(name: "Test", protocolName: "VLESS", transport: "tcp", security: "tls")

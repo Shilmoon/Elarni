@@ -531,6 +531,7 @@
   "scheduledRefreshNeedsReview": "A subscription was not updated because the network answered unexpectedly. Elarni tries again in two hours; open Subscriptions to review it now.",
   "perAppTargetGoneKept": "A server that an app is routed through is gone from its subscription. The connection keeps the old settings; choose another server for that app in Per-app routing.",
   "selectedServerReplaced": "The server you had selected is gone from its subscription. Elarni selected another server.",
+  "managedListMissing": "A domain list of the routing profile is not downloaded yet, so its rules do not apply. Elarni downloads it now that the connection is up.",
   "groupSelectionFailed": "Group selection failed. The saved selection was restored.",
   "serverIpPreferenceNotApplied": "Could not apply the server IP preference.",
   "telegramNotOpened": "Telegram could not be opened. Check that it is installed.",

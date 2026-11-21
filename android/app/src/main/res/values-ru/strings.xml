@@ -564,7 +564,6 @@
     <string name="bootstrap_dns_server">Начальный DNS-сервер</string>
     <string name="numeric_ipv4_or_ipv6_address_used">Числовой адрес IPv4 или IPv6, через который вне туннеля определяются адреса серверов.</string>
     <string name="dns_override">Свой DNS</string>
-    <string name="use_profile_dns">DNS из профиля</string>
     <string name="let_other_apps_control_the_connection">Разрешить другим приложениям управлять подключением</string>
     <string name="automation_apps_such_as_tasker_can">Приложения автоматизации вроде Tasker смогут подключать и отключать VPN с ключом управления. Что они отправляют, описано в «Ярлыках».</string>
     <string name="control_key">Ключ управления</string>

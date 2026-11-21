@@ -599,6 +599,10 @@ final class IOSAppModel {
           id = try await chooseBeforeConnecting(current: id)
           try Task.checkCancellation()
         }
+        // The plan holds no rules of a routing list that was never downloaded. The store bounds this download,
+        // whose failure fails no connection; Stop cancels it.
+        await store.routing.downloadMissingManaged(subscriptionID: try? store.subscriptionID(nodeID: id))
+        try Task.checkCancellation()
         let plan = try await makePlan(nodeID: id)
         if id != original { try store.beginSelectionPublication() }
         do {

@@ -2030,6 +2030,12 @@ abstract class AppLocalizations {
   /// **'The server you had selected is gone from its subscription. Elarni selected another server.'**
   String get selectedServerReplaced;
 
+  /// No description provided for @managedListMissing.
+  ///
+  /// In en, this message translates to:
+  /// **'A domain list of the routing profile is not downloaded yet, so its rules do not apply. Elarni downloads it now that the connection is up.'**
+  String get managedListMissing;
+
   /// No description provided for @groupSelectionFailed.
   ///
   /// In en, this message translates to:

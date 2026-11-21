@@ -564,7 +564,6 @@
     <string name="bootstrap_dns_server">Bootstrap DNS server</string>
     <string name="numeric_ipv4_or_ipv6_address_used">Numeric IPv4 or IPv6 address used outside the tunnel to resolve upstream servers.</string>
     <string name="dns_override">DNS override</string>
-    <string name="use_profile_dns">Use profile DNS</string>
     <string name="let_other_apps_control_the_connection">Let other apps control the connection</string>
     <string name="automation_apps_such_as_tasker_can">Automation apps such as Tasker can connect and disconnect with the control key. Shortcuts lists what they send.</string>
     <string name="control_key">Control key</string>
