@@ -680,6 +680,19 @@ class Catalog(val data: JSONObject, private val snapshot: Boolean = false) {
         /** As on the iPhone: the server that last worked with its current configuration, offered unless it is [selected] already. */
         fun lastSuccessful(nodes: List<JSONObject>, selected: String) = nodes.filter { it.string("format") == "xrayProfile" && successCurrent(it) }
             .maxByOrNull { it.optDouble("lastSuccessAt", 0.0) }?.takeIf { it.string("id") != selected }
+        /** Home's update line for the subscriptions with a link: when those whose last update worked were fetched, the oldest
+         *  deciding (null while one still waits for its first download), and how many the last update left as they were. */
+        fun freshness(remote: List<JSONObject>): Pair<Double?, Int> {
+            val (stale, current) = remote.partition { it.string("status") in listOf("failed", "needsApproval") }
+            // With nothing updated, the line says how old the lists in use are.
+            val counted = current.ifEmpty { stale }
+            return (if (counted.all { it.has("lastSuccessfulFetch") }) counted.minOfOrNull { it.optDouble("lastSuccessfulFetch") } else null) to stale.size
+        }
+        /** The closed server groups after [group] is opened or closed; what a removed subscription left is dropped. */
+        fun toggledGroup(group: String, closed: Set<String>, sources: Collection<String>): Set<String> {
+            val kept = closed.filter { it.startsWith(":") || it.substringBefore(":") in sources }.toSet()
+            return (if (group in kept) kept - group else kept + group).sorted().take(256).toSet()
+        }
         fun isRoutingLink(text: String) = listOf("happ://routing/", "elarni://routing/", "incy://routing/").any { text.startsWith(it) }
         // Panels such as 3x-ui send their Happ routing to every client (3x-ui #5999), so links addressed to Elarni win when a feed has any.
         fun addressedRouting(links: List<String>) = links.filter { it.startsWith("elarni://routing/") }.ifEmpty { links }

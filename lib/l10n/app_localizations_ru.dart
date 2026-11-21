@@ -1981,7 +1981,7 @@ class AppLocalizationsRu extends AppLocalizations {
   String get searchServers => 'Поиск серверов';
 
   @override
-  String get filterRecent => 'Недавние';
+  String get filterByCountry => 'По странам';
 
   @override
   String get filterFavorites => 'Избранные';
@@ -2101,9 +2101,6 @@ class AppLocalizationsRu extends AppLocalizations {
 
   @override
   String get showAllServers => 'Показать все серверы';
-
-  @override
-  String get noSuccessfulConnections => 'Успешных подключений пока нет';
 
   @override
   String get noFavoriteServers => 'Нет избранных серверов';

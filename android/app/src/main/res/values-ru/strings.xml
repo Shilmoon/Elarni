@@ -212,6 +212,8 @@
     <string name="delete_subscription">Удалить подписку</string>
     <string name="rename">Переименовать</string>
     <string name="pin_subscription">Закрепить подписку</string>
+    <string name="pin">Закрепить</string>
+    <string name="unpin">Открепить</string>
     <string name="download_options">Параметры загрузки</string>
     <string name="download_format">Формат загрузки</string>
     <string name="original">Оригинал</string>
@@ -265,8 +267,8 @@
     <string name="checking_exit">Проверка выхода…</string>
     <string name="search_results">Результаты поиска</string>
     <string name="favorites">Избранные</string>
-    <string name="recent_servers">Недавние серверы</string>
     <string name="all_servers">Все серверы</string>
+    <string name="by_country">По странам</string>
     <string name="no_servers_match_this_filter">Нет серверов под этот фильтр.</string>
     <string name="test_server">Проверить сервер</string>
     <string name="remove_favorite">Убрать из избранного</string>
@@ -287,7 +289,6 @@
     <string name="country">Страна</string>
     <string name="server_options">Параметры серверов</string>
     <string name="all">Все</string>
-    <string name="recent">Недавние</string>
     <string name="press_connect_only_apps_set_to">Нажмите «Подключить». Через локальный прокси идут только настроенные на него приложения; чтобы подключить все приложения, включите «Системный VPN» в «Настройки › Подключение».</string>
     <string name="press_connect_android_asks_once_to">Нажмите «Подключить». Android один раз попросит разрешить VPN-подключение.</string>
     <string name="open_file">Открыть файл</string>
@@ -741,6 +742,12 @@
         <item quantity="few">Обновлено %d ч назад</item>
         <item quantity="many">Обновлено %d ч назад</item>
         <item quantity="other">Обновлено %d ч назад</item>
+    </plurals>
+    <plurals name="subscriptions_not_updated">
+        <item quantity="one">%d не обновлена</item>
+        <item quantity="few">%d не обновлены</item>
+        <item quantity="many">%d не обновлено</item>
+        <item quantity="other">%d не обновлены</item>
     </plurals>
     <plurals name="updated_days_ago">
         <item quantity="one">Обновлено %d день назад</item>

@@ -148,6 +148,27 @@ class CatalogTest {
         assertNull("Nothing worked yet", Catalog.lastSuccessful(listOf(node("never", null), node("unrecorded", 400.0, success = null)), ""))
     }
 
+    @Test fun closedServerGroupsToggleAndForgetRemovedSubscriptions() {
+        assertEquals(setOf("s:NL"), Catalog.toggledGroup("s:NL", emptySet(), listOf("s")))
+        assertEquals(setOf("s", "s:NL"), Catalog.toggledGroup("s", setOf("s:NL"), listOf("s")))
+        assertEquals("Opening removes the group; a removed subscription's groups go with it, the list by country's stay",
+            setOf(":DE"), Catalog.toggledGroup("s:NL", setOf("s:NL", ":DE", "gone", "gone:NL"), listOf("s")))
+    }
+
+    // Home's update line. Failure modes: one provider that stays unreachable pins the line at its old fetch although the
+    // rest just updated; a subscription whose update failed goes uncounted; a subscription never fetched reads as updated.
+    @Test fun homeFreshnessCountsTheSubscriptionsThatUpdated() {
+        fun source(status: String, fetched: Double?) = obj("url" to "https://provider.example/s", "status" to status).apply { if (fetched != null) put("lastSuccessfulFetch", fetched) }
+        assertEquals("The oldest updated list decides", 100.0 to 0, Catalog.freshness(listOf(source("ready", 500.0), source("ready", 100.0))))
+        assertEquals("A failed update does not hold the time back; it is counted", 500.0 to 1, Catalog.freshness(listOf(source("ready", 500.0), source("failed", 100.0))))
+        assertEquals("Nor does one that stopped at a review", 500.0 to 1, Catalog.freshness(listOf(source("ready", 500.0), source("needsApproval", 100.0))))
+        assertEquals("A first download that failed is counted as well", 500.0 to 1, Catalog.freshness(listOf(source("ready", 500.0), source("failed", null))))
+        assertEquals("With no list updated, the oldest of them all decides", 100.0 to 2, Catalog.freshness(listOf(source("failed", 500.0), source("failed", 100.0))))
+        assertEquals("A subscription still waiting for its first download is not updated yet", null to 0, Catalog.freshness(listOf(source("ready", 500.0), source("pending", null))))
+        assertEquals(null to 1, Catalog.freshness(listOf(source("failed", null))))
+        assertEquals(null to 0, Catalog.freshness(emptyList()))
+    }
+
     @Test fun retryDelayAndCanonicalForm() {
         assertEquals(listOf(60, 60, 300, 1800, 1800), listOf(0, 1, 2, 3, 9).map(Catalog::retryDelay))
         assertEquals(Catalog.canonical(JSONObject("""{"b":[1,{"y":2,"x":"s"}],"a":null}""")), Catalog.canonical(JSONObject("""{"a":null,"b":[1,{"x":"s","y":2}]}""")))
