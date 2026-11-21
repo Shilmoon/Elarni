@@ -17,8 +17,17 @@ class AppDelegate: FlutterAppDelegate {
     }
   }
 
+  // Closing the window keeps Elarni running in the Dock and menu bar, so recovery, subscription
+  // refresh and reminders go on; Quit (Cmd+Q) ends it.
   override func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
-    return ProcessInfo.processInfo.environment["ELARNI_HEADLESS"] != "1"
+    return false
+  }
+
+  // A Dock click brings the closed window back.
+  override func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+    guard ProcessInfo.processInfo.environment["ELARNI_HEADLESS"] != "1" else { return false }
+    if !flag { mainFlutterWindow?.makeKeyAndOrderFront(nil) }
+    return true
   }
 
   override func applicationSupportsSecureRestorableState(_ app: NSApplication) -> Bool {

@@ -766,15 +766,27 @@ extension _ProxyRuntime on DesktopProxy {
   // keeps its kill switch between the two tunnels, so nothing leaves outside
   // while a server switch, a settings change or failover restarts the tunnel.
   // The plain stop of a disconnect lifts it.
-  Future<void> _stopProcess({bool hold = false}) => _stopping ??= () async {
+  // release: the user wants no VPN (Disconnect, quitting). The stop then also
+  // lifts the kill switch a lost tunnel kept, which other plain stops (failure
+  // cleanup) leave, and it reaches the helper while the app closes: a helper
+  // whose input just closes takes it for a lost tunnel and keeps the switch.
+  Future<void> _stopProcess({
+    bool hold = false,
+    bool release = false,
+  }) => _stopping ??= () async {
     final launch = _process;
     if (launch != null &&
         launch == _vpnSession &&
         _vpnReply == null &&
-        !_disposed &&
+        (!_disposed || release) &&
         !_storageLost) {
       try {
-        final stopped = await _native('stopVPN', {if (hold) 'hold': true});
+        final stopped = await _native(
+          'stopVPN',
+          {if (hold) 'hold': true else if (release) 'release': true},
+          // Quitting waits for it no longer than for the helper's exit.
+          timeout: _disposed ? _helperExitGrace : null,
+        );
         _guardKept = _guardHeld =
             hold &&
             _catalog?.settings.xrayTunEnabled == true &&
@@ -791,7 +803,7 @@ extension _ProxyRuntime on DesktopProxy {
     } else {
       await _reap(launch);
       if (_vpnSession == launch) _vpnSession = null;
-      if (!hold) await _liftHeldGuard();
+      if (!hold) await _liftHeldGuard(release: release);
     }
     if (_process == launch) _process = null;
     _metricsProcess = null;
@@ -799,32 +811,64 @@ extension _ProxyRuntime on DesktopProxy {
   }().whenComplete(() => _stopping = null);
 
   // Lifts the kill switch a restart's stop kept, when no tunnel follows it: a
-  // disconnect during the restart, or a server name nothing can resolve.
-  Future<void> _liftHeldGuard() async {
-    if (!_guardHeld) return;
-    _guardKept = _guardHeld = false;
+  // disconnect during the restart, or a server name nothing can resolve. A
+  // release also lifts the one a lost tunnel kept; without a helper to take
+  // it, that one stays kept for _disconnect to clear.
+  Future<void> _liftHeldGuard({bool release = false}) async {
+    if (!_guardHeld && !(release && _guardKept)) return;
     final session = _vpnSession;
-    if (session == null || _vpnReply != null || _disposed || _storageLost)
-      return;
+    final reachable =
+        session != null &&
+        _vpnReply == null &&
+        (!_disposed || release) &&
+        !_storageLost;
+    if (!release || reachable) _guardKept = _guardHeld = false;
+    if (!reachable) return;
     try {
-      await _native('stopVPN', {});
+      await _native(
+        'stopVPN',
+        {if (release) 'release': true},
+        timeout: _disposed ? _helperExitGrace : null,
+      );
     } on Object {
       await _reap(session);
       if (_vpnSession == session) _vpnSession = null;
+      // The helper went with the kill switch in place.
+      if (release) _guardKept = true;
     }
   }
 
-  Future<void> _disconnect() async {
+  // release: the user's Disconnect or quitting (see _stopProcess). Other
+  // stops, such as a sleep's, are plain.
+  Future<void> _disconnect({bool release = false}) async {
     _cancelCamera?.call();
     _linkStopGeneration++;
     _generation++;
     _state = 'disconnecting';
+    // A connect clears this mark when it ends, which may be before the stops do.
+    final stale = _guardStale;
     for (final worker in _workers.toList()) {
       worker.kill();
     }
-    await _stopProcess();
+    await _stopProcess(release: release);
     await _operation?.future;
-    await _stopProcess(); // A launch can cross the first cancellation.
+    // A launch can cross the first cancellation.
+    await _stopProcess(release: release);
+    // No helper took the stop: one that crashed or was reaped leaves its kill
+    // switch until a helper clears it. Disconnect still ends when that fails,
+    // and the notice points at Repair VPN setup. Quitting asks for no consent.
+    if (release &&
+        !_disposed &&
+        _vpnSession == null &&
+        (_guardKept || stale)) {
+      try {
+        await _clearStaleGuard();
+        _guardKept = _guardHeld = false;
+      } on Object catch (error) {
+        if (error is! PlatformException || error.code != 'cancelled')
+          _listener?.call('vpn_guard_stale');
+      }
+    }
     _state = 'disconnected';
     await _syncSystemProxy();
   }

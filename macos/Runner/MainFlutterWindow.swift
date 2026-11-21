@@ -42,6 +42,8 @@ class MainFlutterWindow: NSWindow, UNUserNotificationCenterDelegate {
     let windowFrame = self.frame
     self.contentViewController = flutterViewController
     self.setFrame(windowFrame, display: true)
+    // A close only hides the window; the Dock and the menu bar item show it again.
+    isReleasedWhenClosed = false
 
     RegisterGeneratedPlugins(registry: flutterViewController)
     tunnelChannel = TunnelMethodChannel(messenger: flutterViewController.engine.binaryMessenger)

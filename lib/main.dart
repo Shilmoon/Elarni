@@ -137,23 +137,20 @@ Future<void> main(List<String> arguments) async {
     }
     exit(exitCode);
   }
-  // Closing the window ends the process without waiting for dispose.
-  if (desktop != null)
-    AppLifecycleListener(
-      onExitRequested: () async {
-        await desktop.releaseSystemProxy();
-        return AppExitResponse.exit;
-      },
-    );
-  // Once: a quit for an update closes first, then the window's dispose follows.
+  // Once: a quit, of the window or for an update, closes first, then the
+  // window's dispose follows.
   Future<void>? closing;
-  Future<void> close() => closing ??= () async {
+  Future<void> close({bool keepBlock = false}) => closing ??= () async {
     try {
       await (await control)?.close();
     } finally {
-      await desktop?.dispose();
+      await desktop?.dispose(keepBlock: keepBlock);
     }
   }();
+  if (desktop != null)
+    AppLifecycleListener(
+      onExitRequested: () => quitDesktop(desktop.releaseSystemProxy, close),
+    );
   runApp(
     ElarniApp(
       tunnelControl: desktop?.control,
@@ -165,7 +162,9 @@ Future<void> main(List<String> arguments) async {
           ? null
           : ({required bool restart}) async {
               try {
-                await close();
+                // Block traffic without VPN covers the gap until the new
+                // build connects.
+                await close(keepBlock: true);
               } on Object {
                 // The update needs this process gone, closed cleanly or not.
               }
@@ -190,6 +189,24 @@ Future<void> main(List<String> arguments) async {
     ),
   );
   if (desktop != null) unawaited(desktop.handleLinks(arguments));
+}
+
+/// Answers a quit of the window on Windows and Linux: puts the user's proxy
+/// setting back, then disconnects, which stops the VPN helper normally and lifts
+/// Block traffic without VPN. A disconnect that fails or takes longer than
+/// [timeout] does not keep the app from quitting.
+Future<AppExitResponse> quitDesktop(
+  Future<void> Function() releaseSystemProxy,
+  Future<void> Function() close, {
+  Duration timeout = const Duration(seconds: 8),
+}) async {
+  await releaseSystemProxy();
+  try {
+    await close().timeout(timeout);
+  } on Object {
+    // A core that does not answer must not keep the app from quitting.
+  }
+  return AppExitResponse.exit;
 }
 
 /// What starts this build again after an update: the AppImage it runs from,

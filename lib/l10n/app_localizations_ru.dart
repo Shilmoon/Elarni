@@ -1156,7 +1156,7 @@ class AppLocalizationsRu extends AppLocalizations {
 
   @override
   String get connectionStoppedBlocked =>
-      'Подключение неожиданно прервалось. «Kill switch» не пропускает трафик, пока вы не переподключитесь; чтобы снять блокировку, используйте «Исправить настройку VPN».';
+      'Подключение неожиданно прервалось. «Kill switch» не пропускает трафик, пока вы не переподключитесь. Блокировку снимает отключение, выход из Elarni или «Исправить настройку VPN».';
 
   @override
   String get windowsDnsNotRestored =>

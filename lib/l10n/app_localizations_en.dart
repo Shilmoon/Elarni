@@ -1145,7 +1145,7 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get connectionStoppedBlocked =>
-      'Connection stopped unexpectedly. The kill switch keeps traffic blocked until you reconnect, or use Repair VPN setup to lift the block.';
+      'Connection stopped unexpectedly. The kill switch keeps traffic blocked until you reconnect. Disconnecting, quitting Elarni or Repair VPN setup lifts the block.';
 
   @override
   String get windowsDnsNotRestored =>

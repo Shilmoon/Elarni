@@ -80,6 +80,47 @@ func TestVPNHandshakeCarriesTheRecordingSwitch(t *testing.T) {
 	}
 }
 
+// A stop reaches the child with what it asks of the guard: a restart's keeps it, the
+// user's Disconnect releases it.
+func TestStopVPNCarriesItsGuardFlags(t *testing.T) {
+	read, write, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	replies := make(chan vpnReply, 1)
+	vpnBroker.Lock()
+	vpnBroker.pipe, vpnBroker.replies = write, replies
+	vpnBroker.Unlock()
+	t.Cleanup(func() {
+		vpnBroker.Lock()
+		vpnBroker.pipe, vpnBroker.replies = nil, nil
+		vpnBroker.Unlock()
+		write.Close()
+		read.Close()
+	})
+	for _, test := range []struct {
+		payload       string
+		hold, release bool
+	}{
+		{`{}`, false, false},
+		{`{"hold":true}`, true, false},
+		{`{"release":true}`, false, true},
+	} {
+		received := make(chan vpnCommand, 1)
+		go func() {
+			command, _ := readVPNCommand(read)
+			received <- command
+			replies <- vpnReply{Ready: true}
+		}()
+		if _, err := stopVPN(json.RawMessage(test.payload)); err != nil {
+			t.Fatalf("stop %s: %v", test.payload, err)
+		}
+		if command := <-received; command.Action != "stop" || command.Hold != test.hold || command.Release != test.release {
+			t.Fatalf("stop %s reached the child as %+v", test.payload, command.vpnHandshake)
+		}
+	}
+}
+
 // vpnTestChild stands in for the elevated child behind startVPN: it handles each start as
 // vpnChild does and reports the geodata bytes that crossed the pipe for it.
 type vpnTestChild struct {
@@ -331,20 +372,32 @@ func TestChildGuardStaysForARestart(t *testing.T) {
 	// A disconnect during a restart lifts what the restart kept; another restart stop does not.
 	guard := childGuard{installed: true, hold: true}
 	guard.ended(0, true)
-	guard.idleStop(true)
+	guard.idleStop(true, false)
 	if !guard.keep {
 		t.Fatal("a repeated restart stop lifted the guard")
 	}
-	guard.idleStop(false)
+	guard.idleStop(false, false)
 	if guard.keep {
 		t.Fatal("a disconnect during a restart kept traffic blocked")
 	}
-	// The stop that follows a lost tunnel keeps it: only the next tunnel or Repair lifts it.
+	// The plain stop that follows a lost tunnel (the app's failure cleanup) keeps it: only the
+	// next tunnel, a releasing stop or Repair lifts it.
 	guard = childGuard{installed: true}
 	guard.ended(1, true)
-	guard.idleStop(false)
+	guard.idleStop(false, false)
 	if !guard.keep {
 		t.Fatal("a stop lifted a lost tunnel's guard")
+	}
+	// A restart stop keeps it whatever else it says.
+	guard.idleStop(true, true)
+	if !guard.keep {
+		t.Fatal("a restart stop lifted a lost tunnel's guard")
+	}
+	// Regression: the user's Disconnect left it too, and the device offline with Elarni
+	// disconnected. A stop that releases lifts it: the user wants no VPN.
+	guard.idleStop(false, true)
+	if guard.keep || guard.held {
+		t.Fatal("a releasing stop kept a lost tunnel's guard")
 	}
 	// A start that fails after a restart stop is a lost tunnel under the new request's setting.
 	guard = childGuard{installed: true, hold: true}

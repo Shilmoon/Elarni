@@ -168,7 +168,7 @@ func TestLinuxSupervisorOutlivesFailedAndLostTunnels(t *testing.T) {
 				calls = nil
 				return taken
 			}
-			modes := []string{"fail", "run", "run"}
+			modes := []string{"fail", "run", "run", "run"}
 			workers := make(chan *linuxChild, len(modes))
 			reserved := 0
 			host := linuxTunnelHost{
@@ -216,7 +216,7 @@ func TestLinuxSupervisorOutlivesFailedAndLostTunnels(t *testing.T) {
 				request.RoutePolicy = &share.WindowsRoutePolicy{IncludedRoutes: []string{"0.0.0.0/0"}, BlockWithoutVPN: true}
 			}
 			start := linuxCommand{Action: "start", Request: request}
-			stop := linuxCommand{Action: "stop"}
+			stop, release := linuxCommand{Action: "stop"}, linuxCommand{Action: "stop", Release: true}
 			want := func(stage string, expected ...string) {
 				t.Helper()
 				if got := took(); fmt.Sprint(got) != fmt.Sprint(expected) {
@@ -293,6 +293,37 @@ func TestLinuxSupervisorOutlivesFailedAndLostTunnels(t *testing.T) {
 			want("stop", "cleanup rv000000000003", "cleanup rv000000000003", "forget rv000000000003")
 			if locked() {
 				t.Fatal("a stopped tunnel kept the lock")
+			}
+
+			// Regression: the user's Disconnect after a loss kept the kill switch too, and the
+			// device offline with Elarni disconnected. A stop that releases lifts it.
+			<-workers // the reconnect's
+			order(start)
+			if got := reply(); !got.Ready || got.Adapter != "rv000000000004" {
+				t.Fatalf("the last start answered %+v", got)
+			}
+			want("last start", "reserve rv000000000004")
+			worker = <-workers
+			_ = worker.command.Process.Kill()
+			if got := reply(); !got.Lost {
+				t.Fatalf("a lost tunnel was reported as %+v", got)
+			}
+			if block {
+				want("second lost tunnel")
+			} else {
+				want("second lost tunnel", "cleanup rv000000000004", "cleanup rv000000000004", "forget rv000000000004")
+			}
+			order(release)
+			if got := reply(); !got.Ready {
+				t.Fatalf("releasing stop answered %+v", got)
+			}
+			if block {
+				want("releasing stop", "cleanup rv000000000004", "forget rv000000000004")
+			} else {
+				want("releasing stop")
+			}
+			if locked() {
+				t.Fatal("a releasing stop kept the lock")
 			}
 			close(closed)
 			select {

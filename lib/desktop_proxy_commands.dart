@@ -1,16 +1,10 @@
 part of 'desktop_proxy.dart';
 
 extension _ProxyCommands on DesktopProxy {
-  Future<CatalogMap> _invoke(
-    String method,
-    CatalogMap? arguments, {
-    bool automatic = false,
-  }) async {
-    if (_disposed) throw desktopError('cancelled');
-    if (method == 'disconnect') {
-      return _disconnecting ??= () async {
+  Future<CatalogMap> _stop({required bool release}) => _disconnecting ??=
+      () async {
         _automation.manualStop();
-        await _disconnect();
+        await _disconnect(release: release);
         // Stop must clear persisted intent even as the first command. Loading
         // replaces the automation object, so stop the restored episode too.
         await _initialize();
@@ -19,7 +13,16 @@ extension _ProxyCommands on DesktopProxy {
         if (!_storageLost) await _persistAutomation();
         return <String, Object?>{'state': _state};
       }().whenComplete(() => _disconnecting = null);
-    }
+
+  Future<CatalogMap> _invoke(
+    String method,
+    CatalogMap? arguments, {
+    bool automatic = false,
+  }) async {
+    if (_disposed) throw desktopError('cancelled');
+    // The user's stop (the window, the tray, links, the CLI) lifts Block
+    // traffic without VPN, also the kill switch a lost tunnel kept.
+    if (method == 'disconnect') return _stop(release: true);
     if (method == 'openUpdateLink') {
       // The page an update feed named needs no catalog.
       final url = arguments?['url'];
@@ -353,7 +356,9 @@ extension _ProxyCommands on DesktopProxy {
         _challenges.clear();
         return restored;
       case 'repairTunnel':
-        await _invoke('disconnect', {});
+        // Repair lifts the kill switch itself, elevated if it must, so its
+        // stop asks for nothing.
+        await _stop(release: false);
         if (_operation != null || _state != 'disconnected')
           throw desktopError('busy');
         final done = _operation = Completer<void>();

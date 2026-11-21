@@ -207,6 +207,13 @@ Future<void> exercise() async {
     ).readAsStringSync().contains('2 subscriptions expire soon'),
     'Native notification',
   );
+  // The one-time hint after a close first hid the window to the tray.
+  await desktop.invokeMethod<void>('showTrayHint');
+  await until(
+    () => file(
+      'notification',
+    ).readAsStringSync().contains('Elarni keeps running in the tray.'),
+  );
   await desktop.invokeMethod<void>('setStatus', {
     'state': 'disconnected',
     'canConnect': true,

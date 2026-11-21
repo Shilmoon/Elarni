@@ -67,8 +67,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
           return EXIT_FAILURE;
         }
       }
-      ShowWindow(existing, SW_RESTORE);
-      SetForegroundWindow(existing);
+      ShowAppWindow(existing);
       winrt::uninit_apartment();
       return EXIT_SUCCESS;
     }

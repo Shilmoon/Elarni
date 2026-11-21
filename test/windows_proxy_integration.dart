@@ -3531,6 +3531,171 @@ for line in sys.stdin:
     ]);
   });
 
+  // A VPN helper under Block traffic without VPN that logs each tunnel command
+  // with its stop's flag, each guard clear and the end of its input. Its tunnel
+  // ends by itself each time the returned lose file appears, and it declines a
+  // guard clear while the decline file exists.
+  Future<({File events, File lose, File decline, List<String> messages})>
+  useBlockingHelper() async {
+    await prepare();
+    final messages = <String>[];
+    backend.control.setImportListener((message) {
+      if (message != null) messages.add(message);
+    });
+    await backend.control.updateTunnelSettings(
+      (await backend.control.tunnelSettings()).copyWith(
+        xrayTunEnabled: true,
+        blockWithoutVPN: true,
+        enforceRoutes: false,
+      ),
+    );
+    final events = File.fromUri(temporary.uri.resolve('vpn-block-events'));
+    final lose = File.fromUri(temporary.uri.resolve('vpn-block-lose'));
+    final decline = File.fromUri(temporary.uri.resolve('vpn-block-decline'));
+    // The files outlive the test that wrote them.
+    for (final file in [events, lose, decline]) {
+      if (await file.exists()) await file.delete();
+    }
+    await useStub('''
+import json, os, socket, sys, threading, time
+listeners = []
+tunnel = False
+output = threading.Lock()
+def note(entry):
+    with open(${jsonEncode(events.path)}, 'a') as events: print(entry, file=events)
+def send(value):
+    with output: print(json.dumps(value), flush=True)
+def lose():
+    while True:
+        while not os.path.exists(${jsonEncode(lose.path)}): time.sleep(0.01)
+        for listener in listeners: listener.close()
+        listeners.clear()
+        # Windows refuses the removal while the test still has the file open.
+        while True:
+            try:
+                os.unlink(${jsonEncode(lose.path)})
+                break
+            except PermissionError: time.sleep(0.01)
+        send({'event': 'stopped'})
+threading.Thread(target=lose, daemon=True).start()
+for line in sys.stdin:
+    request = json.loads(line)
+    method, payload = request['method'], request['payload']
+    if method == 'clearVPNGuard':
+        note(method)
+        if os.path.exists(${jsonEncode(decline.path)}):
+            send({'success': False, 'error': 'elevation_denied'})
+        else:
+            send({'success': True, 'data': {}})
+        sys.exit(0)
+    # Other commands, such as the retiring of routing files at start, are not the tunnel's.
+    if method in ('runVPN', 'stopVPN'):
+        note(' '.join([method] + [flag for flag in ('hold', 'release') if payload.get(flag)]))
+    if method == 'runVPN':
+        tunnel = True
+        for inbound in json.loads(payload['configJSON'])['inbounds']:
+            if inbound['protocol'] in ('socks', 'http'):
+                listener = socket.socket()
+                listener.bind(('127.0.0.1', inbound['port']))
+                listener.listen(32)
+                listeners.append(listener)
+    elif method == 'stopVPN':
+        for listener in listeners: listener.close()
+        listeners.clear()
+    send({'success': True, 'data': {}})
+if tunnel: note('closed')
+''');
+    return (events: events, lose: lose, decline: decline, messages: messages);
+  }
+
+  Future<void> untilFailed() async {
+    for (var i = 0; i < 200; i++) {
+      if (await backend.control.state() == 'failed') break;
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+    }
+    expect(await backend.control.state(), 'failed');
+  }
+
+  // Regression: with Block traffic without VPN, Disconnect after a tunnel that
+  // ended by itself showed Disconnected while the helper kept the block, so the
+  // device stayed offline until Connect, Repair VPN setup or a restart.
+  test('Disconnect lifts the block a lost tunnel kept', () async {
+    final (:events, :lose, decline: _, :messages) = await useBlockingHelper();
+    expect(await backend.control.connect(), 'connected');
+    await lose.writeAsString('end the tunnel');
+    await untilFailed();
+    expect(messages, ['connection_stopped_blocked']);
+    expect(await backend.control.disconnect(), 'disconnected');
+    // Nothing is left to lift, so another Disconnect sends nothing.
+    expect(await backend.control.disconnect(), 'disconnected');
+    expect(await events.readAsLines(), ['runVPN', 'stopVPN release']);
+    // The user's stop of a running tunnel says so too.
+    expect(await backend.control.connect(), 'connected');
+    expect(await backend.control.disconnect(), 'disconnected');
+    expect((await events.readAsLines()).skip(2), [
+      'runVPN',
+      'stopVPN release',
+    ]);
+    expect(messages, ['connection_stopped_blocked']);
+  });
+
+  // A helper that crashed takes no stop; its block stays until one clears it.
+  test('Disconnect clears the block a crashed helper left', () async {
+    final (:events, lose: _, :decline, :messages) = await useBlockingHelper();
+    Future<void> crash() async {
+      staleGuard = false;
+      expect(await backend.control.connect(), 'connected');
+      lastProcess!.kill();
+      await lastProcess!.exitCode;
+      await untilFailed();
+      staleGuard = true;
+    }
+
+    await crash();
+    expect(await backend.control.disconnect(), 'disconnected');
+    expect(await events.readAsLines(), ['runVPN', 'clearVPNGuard']);
+    expect(messages, ['connection_stopped_blocked']);
+    // Declined, Disconnect still ends and points at Repair VPN setup.
+    await crash();
+    await decline.writeAsString('decline the consent prompt');
+    expect(await backend.control.disconnect(), 'disconnected');
+    expect(await backend.control.state(), 'disconnected');
+    expect((await events.readAsLines()).skip(2), ['runVPN', 'clearVPNGuard']);
+    expect(messages.skip(1), [
+      'connection_stopped_blocked',
+      'vpn_guard_stale',
+    ]);
+  });
+
+  // The helper takes a closed input for a lost tunnel and keeps its block, so
+  // quitting stops it first. An update's quit keeps the block until the new
+  // build is back.
+  test('quitting lifts the block, and an update quit keeps it', () async {
+    final (:events, :lose, decline: _, messages: _) = await useBlockingHelper();
+    for (final (lost, keepBlock) in [
+      (false, false),
+      (false, true),
+      (true, false),
+      (true, true),
+    ]) {
+      await events.writeAsString('');
+      expect(await backend.control.connect(), 'connected');
+      final helper = lastProcess!;
+      if (lost) {
+        await lose.writeAsString('end the tunnel');
+        await untilFailed();
+      }
+      await backend.dispose(keepBlock: keepBlock);
+      expect(await helper.exitCode.timeout(const Duration(seconds: 10)), 0);
+      expect(
+        await events.readAsLines(),
+        ['runVPN', if (!keepBlock) 'stopVPN release', 'closed'],
+        reason: 'lost tunnel $lost, keepBlock $keepBlock',
+      );
+      backend = createBackend();
+    }
+  });
+
   test(
     'sleep during connect leaves a state that accepts a new connect',
     () async {

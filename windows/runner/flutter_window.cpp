@@ -224,6 +224,18 @@ bool FlutterWindow::OnCreate() {
         result->Success(EncodableValue(winrt::to_string(json))); return;
       }
       if (call.method_name() == "requestNotifications") { result->Success(EncodableValue(true)); return; }
+      // Shown once, when a close first hid the window to the tray.
+      if (call.method_name() == "showTrayHint") {
+        if (!tray_added_) { result->Error("notifications_failed", "Notification unavailable."); return; }
+        auto notification = tray_;
+        notification.uFlags = NIF_INFO;
+        notification.dwInfoFlags = NIIF_INFO;
+        wcscpy_s(notification.szInfoTitle, L"Elarni");
+        wcsncpy_s(notification.szInfo, Localized(L"Elarni keeps running in the tray. Use Quit in the tray menu to stop it.",
+            L"Elarni продолжает работать в трее. Чтобы закрыть приложение, выберите «Выйти» в меню трея."), _TRUNCATE);
+        if (!Shell_NotifyIconW(NIM_MODIFY, &notification)) { result->Error("notifications_failed", "Notification unavailable."); return; }
+        result->Success(); return;
+      }
       const auto* args = call.arguments() ? std::get_if<EncodableMap>(call.arguments()) : nullptr;
       if (!args) { result->Error("invalid_request", "Invalid desktop operation."); return; }
       if (call.method_name() == "setPreferences") {
@@ -461,6 +473,13 @@ void FlutterWindow::OnDestroy() {
   Win32Window::OnDestroy();
 }
 
+void ShowAppWindow(HWND window) {
+  // SW_SHOW keeps a maximized window maximized; only a minimized one is restored.
+  ShowWindow(window, SW_SHOW);
+  if (IsIconic(window)) ShowWindow(window, SW_RESTORE);
+  SetForegroundWindow(window);
+}
+
 LRESULT
 FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
                               WPARAM const wparam,
@@ -468,7 +487,16 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
   if (message == kTaskbarCreated && desktop_channel_) { tray_added_ = false; AddTray(); return 0; }
   if (message == kTrayMessage) {
     const auto event = LOWORD(lparam);
-    if (event == WM_CONTEXTMENU || event == NIN_SELECT || event == NIN_KEYSELECT) TrayMenu();
+    if (event == NIN_SELECT || event == NIN_KEYSELECT) ShowAppWindow(hwnd);
+    if (event == WM_CONTEXTMENU) TrayMenu();
+    return 0;
+  }
+  // The user's close (title bar, Alt+F4, taskbar) hides the window while the tray icon can
+  // bring it back, so the VPN and the app's automation keep running. The tray's Quit and
+  // Flutter's own quit send WM_CLOSE, which reaches Dart's exit request as before.
+  if (message == WM_SYSCOMMAND && (wparam & 0xFFF0) == SC_CLOSE && tray_added_ && !headless_) {
+    ShowWindow(hwnd, SW_HIDE);
+    if (desktop_channel_) desktop_channel_->InvokeMethod("action", std::make_unique<flutter::EncodableValue>("closedToTray"));
     return 0;
   }
   // Give Flutter, including plugins, an opportunity to handle window messages.
@@ -494,8 +522,7 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
       if (text[data->cbData - 1] != '\0' || memchr(text, '\0', data->cbData - 1)) return FALSE;
       pending_links_.emplace_back(text, data->cbData - 1);
       if (platform_channel_) platform_channel_->InvokeMethod("linksAvailable", nullptr);
-      ShowWindow(hwnd, SW_RESTORE);
-      SetForegroundWindow(hwnd);
+      ShowAppWindow(hwnd);
       return TRUE;
     }
     case WM_FONTCHANGE:
@@ -525,7 +552,7 @@ void FlutterWindow::TrayMenu() {
   POINT point{}; GetCursorPos(&point); SetForegroundWindow(GetHandle());
   const auto action = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, point.x, point.y, 0, GetHandle(), nullptr);
   DestroyMenu(menu); PostMessageW(GetHandle(), WM_NULL, 0, 0);
-  if (action == 1) { ShowWindow(GetHandle(), SW_RESTORE); SetForegroundWindow(GetHandle()); }
+  if (action == 1) ShowAppWindow(GetHandle());
   if ((action == 2 || action == 3) && desktop_channel_) {
     desktop_channel_->InvokeMethod("action", std::make_unique<flutter::EncodableValue>(action == 2 ? "connect" : "disconnect"));
   }

@@ -841,8 +841,8 @@ final class DesktopProxy {
     }
   }
 
-  /// Puts the user's proxy setting back. Quitting the window does not wait
-  /// for [dispose], and the OS proxy must not outlive its listener.
+  /// Puts the user's proxy setting back. A quit waits for [dispose] only so
+  /// long, and the OS proxy must not outlive its listener.
   Future<void> releaseSystemProxy() async {
     _proxyReleased = true;
     await _syncSystemProxy();
@@ -881,8 +881,12 @@ final class DesktopProxy {
     if (code != null) _listener?.call(code);
   }
 
-  Future<void> dispose() async {
+  /// Ends the connection and the helpers. With Block traffic without VPN the
+  /// helper lifts its kill switch first; [keepBlock] (a quit for an update)
+  /// leaves it in place until the new build connects.
+  Future<void> dispose({bool keepBlock = false}) async {
     if (_disposed) return;
+    // Commands are refused from here on; only this stop still reaches the helper.
     _disposed = true;
     await _syncSystemProxy();
     _timer?.cancel();
@@ -890,7 +894,7 @@ final class DesktopProxy {
     _automationTimer?.cancel();
     _wifiTimer?.cancel();
     _listener = null;
-    await _disconnect();
+    await _disconnect(release: !keepBlock);
     try {
       await _initializing;
     } on Object {

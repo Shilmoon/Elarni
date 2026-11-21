@@ -51,7 +51,10 @@ type linuxCommand struct {
 	Action string `json:"action"`
 	// Hold marks a stop the app follows with another start: with Block traffic without
 	// VPN the kill switch stays in place between the two tunnels.
-	Hold       bool           `json:"hold,omitempty"`
+	Hold bool `json:"hold,omitempty"`
+	// Release marks a stop after which the user wants no VPN (Disconnect, quitting): it
+	// also lifts the kill switch a lost tunnel kept. Hold wins; the app sends one at most.
+	Release    bool           `json:"release,omitempty"`
 	Request    vpnRequest     `json:"request"`
 	Network    linuxNetwork   `json:"network"`
 	Owner      int            `json:"owner"` // Set by the supervisor: the user the worker records for.
@@ -432,7 +435,8 @@ func reloadVPN(payload json.RawMessage) (any, error) {
 
 func stopVPN(payload json.RawMessage) (any, error) {
 	var request struct {
-		Hold bool `json:"hold"`
+		Hold    bool `json:"hold"`
+		Release bool `json:"release"`
 	}
 	_ = json.Unmarshal(payload, &request)
 	linuxBroker.Lock()
@@ -442,7 +446,7 @@ func stopVPN(payload json.RawMessage) (any, error) {
 	if child == nil {
 		return map[string]any{}, nil
 	}
-	_, err := child.request(linuxCommand{Action: "stop", Hold: request.Hold}, 10*time.Second)
+	_, err := child.request(linuxCommand{Action: "stop", Hold: request.Hold, Release: request.Release}, 10*time.Second)
 	if err != nil {
 		_ = platformStop()
 	}
@@ -736,13 +740,14 @@ func superviseLinuxTunnels(ctx context.Context, commands <-chan linuxCommand, cl
 		case command := <-commands:
 			if command.Action == "stop" {
 				// An idle stop keeps a lost tunnel's kill switch, like the Windows helper:
-				// only the next tunnel, Repair or a reboot lifts it.
+				// only the next tunnel, a stop that releases it (the user's Disconnect or
+				// quit), Repair or a reboot lifts it.
 				switch {
 				case worker != nil && command.Hold && block && network.Name != "":
 					// The app starts another tunnel next: the kill switch covers the gap.
 					_ = worker.stop()
 					worker, held = nil, true
-				case worker != nil || held && !command.Hold:
+				case worker != nil || (held || command.Release) && !command.Hold:
 					block, held = false, false
 					if release() != nil {
 						return 1

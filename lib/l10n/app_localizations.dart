@@ -2003,7 +2003,7 @@ abstract class AppLocalizations {
   /// No description provided for @connectionStoppedBlocked.
   ///
   /// In en, this message translates to:
-  /// **'Connection stopped unexpectedly. The kill switch keeps traffic blocked until you reconnect, or use Repair VPN setup to lift the block.'**
+  /// **'Connection stopped unexpectedly. The kill switch keeps traffic blocked until you reconnect. Disconnecting, quitting Elarni or Repair VPN setup lifts the block.'**
   String get connectionStoppedBlocked;
 
   /// No description provided for @windowsDnsNotRestored.

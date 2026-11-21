@@ -519,7 +519,7 @@
   "connectionStoppedUnexpectedly": "Connection stopped unexpectedly. Reconnect to retry.",
   "connectionStoppedRepair": "Connection stopped unexpectedly. Reconnect to retry; if sites stay unreachable, use Repair VPN setup.",
   "connectionStoppedProxyBlocked": "Connection stopped unexpectedly. The kill switch keeps the system proxy on Elarni, so apps that follow it have no connection until you reconnect. Disconnect to lift the block.",
-  "connectionStoppedBlocked": "Connection stopped unexpectedly. The kill switch keeps traffic blocked until you reconnect, or use Repair VPN setup to lift the block.",
+  "connectionStoppedBlocked": "Connection stopped unexpectedly. The kill switch keeps traffic blocked until you reconnect. Disconnecting, quitting Elarni or Repair VPN setup lifts the block.",
   "windowsDnsNotRestored": "Disconnected, but Windows DNS could not be restored yet. If sites stay unreachable, use Repair VPN setup.",
   "systemProxyNotRestored": "The system proxy setting could not be restored. Check it in your system network settings.",
   "systemProxyNotSet": "The system proxy could not be set. Apps can still use the HTTP proxy at 127.0.0.1:{port}.",
