@@ -1878,6 +1878,24 @@ void main() {
     expect(find.text('Approve unsafe subscription?'), findsNothing);
   });
 
+  // macOS words the server a refresh replaced in the refresh's result.
+  testWidgets('a refresh result notice is shown once', (tester) async {
+    const notice = 'Node A is gone from Fixture. Connected to Node B.';
+    final control = FakeTunnelControl()
+      ..onAdd = (() async => warning('first'))
+      ..onRefresh = (_) async => const SubscriptionOperationResult(
+        snapshot: fixtureSubscriptions,
+        notice: notice,
+      );
+    await pumpApp(tester, control);
+    await addSubscription(tester);
+    expect(find.text(notice), findsNothing);
+    await tester.tap(find.text('Continue'));
+    await tester.pumpAndSettle();
+    expect(control.challenges, ['first']);
+    expect(find.text(notice), findsOneWidget);
+  });
+
   for (final entry in {
     'node_switch_failed_restored':
         'The replacement failed; the previous configuration was restored. Check access before retrying another server.',

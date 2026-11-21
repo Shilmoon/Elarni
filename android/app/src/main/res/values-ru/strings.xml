@@ -611,6 +611,7 @@
     <string name="share_qr_code">Поделиться QR-кодом</string>
     <string name="the_clipboard_is_empty_copy_a">Буфер обмена пуст. Сначала скопируйте ссылку или конфигурацию.</string>
     <string name="destination_approved_tap_connect">Адрес подтверждён. Нажмите «Подключить».</string>
+    <string name="selected_server_replaced">Выбранного сервера больше нет в его подписке. Elarni выбрал другой сервер.</string>
     <string name="file_saved">Файл сохранён.</string>
     <string name="section_general">Общие</string>
     <string name="section_appearance">Внешний вид</string>

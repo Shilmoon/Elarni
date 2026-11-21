@@ -995,6 +995,31 @@ final class SubscriptionStore {
     return id
   }
 
+  /// The names the window shows for a server and its subscription.
+  func names(nodeID: String) -> (server: String, subscription: String)? {
+    for record in catalog.subscriptions {
+      if let node = record.nodes.first(where: { $0.id == nodeID }) {
+        return (node.displayName, record.manualName ?? record.providerName)
+      }
+    }
+    return nil
+  }
+
+  /// The server that replaces one a refresh removed from `subscriptionID`, read from the published catalog.
+  func refreshFallback(allowed: [String], automationEnabled: Bool, removedFrom subscriptionID: String) -> String? {
+    Self.refreshFallback(allowed: allowed, automationEnabled: automationEnabled, removedFrom: subscriptionID,
+      nodes: catalog.subscriptions.flatMap { record in record.nodes.map { (id: $0.id, subscriptionID: record.id, format: $0.format) } })
+  }
+
+  /// The iPhone's rule: recovery's first allowed server that is still there, else the first
+  /// server of the removed one's subscription. A Telegram proxy cannot carry the tunnel.
+  nonisolated static func refreshFallback(allowed: [String], automationEnabled: Bool, removedFrom subscriptionID: String,
+                                          nodes: [(id: String, subscriptionID: String, format: String?)]) -> String? {
+    let usable = nodes.filter { $0.format != "telegram" }
+    let listed = automationEnabled ? allowed.first { id in usable.contains { $0.id == id } } : nil
+    return listed ?? usable.first { $0.subscriptionID == subscriptionID }?.id
+  }
+
   func removesSelection(subscriptionID: String) -> Bool {
     guard let selected = catalog.selectedNodeID,
           let subscription = catalog.subscriptions.first(where: { $0.id == subscriptionID })
@@ -2020,6 +2045,8 @@ struct RefreshCandidate {
   fileprivate let generation: UUID
   fileprivate let routingContent: String?
   fileprivate let approvedChain: [String]
+  /// The subscription this candidate publishes.
+  var subscriptionID: String { record.id }
 }
 
 private struct RefreshTransaction: Codable {

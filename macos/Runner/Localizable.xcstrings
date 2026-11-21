@@ -1,6 +1,26 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "%@ is gone from %@. %@ is selected now." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ удалён из %2$@. Теперь выбран %3$@."
+          }
+        }
+      }
+    },
+    "%@ is gone from %@. Connected to %@." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ удалён из %2$@. Подключено к %3$@."
+          }
+        }
+      }
+    },
     "%lld subscription(s) expire within three days. Open Elarni for details." : {
       "localizations" : {
         "ru" : {

@@ -8055,6 +8055,74 @@ else:
     }
   });
 
+  test(
+    'a refresh that drops the selected server says so once, manual or scheduled',
+    () async {
+      var now = DateTime.now();
+      await backend.dispose();
+      backend = createBackend(
+        clock: () => now,
+        refreshInterval: const Duration(milliseconds: 50),
+      );
+      String server(int n) => profile
+          .replaceFirst(userID, '00000000-0000-4000-8000-00000000000$n')
+          .replaceFirst('#Fixture', '#Server$n');
+      var servers = [server(1), server(2), server(3)];
+      final feed = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      feed.listen((request) async {
+        request.response.write(servers.join('\n'));
+        await request.response.close();
+      });
+      final notices = <String>[];
+      final replaced = StreamController<void>.broadcast();
+      backend.control.setImportListener((message) {
+        if (message == null) return;
+        notices.add(message);
+        if (message == 'selected_server_replaced') replaced.add(null);
+      });
+      try {
+        final added = await backend.control.addSubscription(
+          'http://127.0.0.1:${feed.port}/feed',
+        );
+        final id = added.snapshot.subscriptions.single.id;
+        final first = (await backend.control.refreshSubscription(
+          id,
+          challenge: added.warning!.challenge,
+        )).snapshot.subscriptions.single.nodes;
+        expect(first.map((node) => node.name), [
+          'Server1',
+          'Server2',
+          'Server3',
+        ]);
+        await backend.control.selectNode(first[0].id);
+        // A refresh that keeps the selected server says nothing.
+        await backend.control.refreshSubscription(id);
+        expect(notices, isEmpty);
+        servers = [server(2), server(3)];
+        final refreshed = await backend.control.refreshSubscription(id);
+        expect(refreshed.snapshot.selectedNodeId, first[1].id);
+        expect(notices, ['selected_server_replaced']);
+        // The scheduled refresh goes the same way.
+        servers = [server(3)];
+        final scheduled = replaced.stream.first;
+        now = now.add(const Duration(seconds: 5 * 3600));
+        await scheduled.timeout(
+          const Duration(seconds: 10),
+          onTimeout: () => fail('No scheduled refresh replaced the server'),
+        );
+        expect(
+          (await backend.control.subscriptions()).selectedNodeId,
+          first[2].id,
+        );
+        expect(notices, List.filled(2, 'selected_server_replaced'));
+      } finally {
+        backend.control.setImportListener(null);
+        await replaced.close();
+        await feed.close(force: true);
+      }
+    },
+  );
+
   test('a save waits for a scheduled refresh instead of failing busy', () async {
     var now = DateTime.now();
     await backend.dispose();

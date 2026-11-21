@@ -96,6 +96,24 @@ struct SubscriptionChecks {
       try expect(candidate.register(urlText: "https://example.org/added") == added, "a readable duplicate was added again")
     }
 
+    // A refresh that drops the selected server hands over instead of disconnecting, as on the iPhone.
+    try check("a refresh that removed the selected server picks an allowed server, then its subscription's") {
+      let nodes: [(id: String, subscriptionID: String, format: String?)] = [
+        ("other-1", "other", nil), ("proxy", "feed", "telegram"), ("feed-1", "feed", "xrayProfile"), ("feed-2", "feed", nil),
+      ]
+      func pick(_ allowed: [String], enabled: Bool, from subscription: String = "feed") -> String? {
+        SubscriptionStore.refreshFallback(allowed: allowed, automationEnabled: enabled, removedFrom: subscription, nodes: nodes)
+      }
+      try expect(pick(["gone", "other-1", "feed-2"], enabled: true) == "other-1",
+        "recovery's first allowed server that is still there did not come first")
+      try expect(pick(["other-1"], enabled: false) == "feed-1",
+        "allowed servers counted while recovery is off")
+      try expect(pick(["gone", "proxy"], enabled: true) == "feed-1",
+        "a removed allowed server or a Telegram proxy was picked")
+      try expect(pick([], enabled: false, from: "other") == "other-1", "the removed server's subscription was not used")
+      try expect(pick([], enabled: false, from: "empty") == nil, "a server of another subscription replaced the removed one")
+    }
+
     try check("bulk tests run at most two probes per SNI, keyed by the name the handshake sends") {
       func key(_ outbound: [String: Any]) throws -> String? { probeKey(outbound: try JSONSerialization.data(withJSONObject: outbound)) }
       try expect(key(["protocol": "vless", "settings": ["address": "192.0.2.1"],
@@ -553,6 +571,12 @@ struct SubscriptionChecks {
       let shared = try localStore.sharingText(id: vpnID, subscription: false)
       try expect(try localStore.parseImport(Data(shared.utf8)).nodes.first?.name == "Test", "shared server cannot be imported")
       try expect(localStore.selectedNodeID() == vpnID, "Telegram action changed VPN selection")
+      // What a refresh that removed the selected server reads from the catalog.
+      try expect(localStore.refreshFallback(allowed: [telegramID], automationEnabled: true, removedFrom: localID) == vpnID,
+        "the catalog's fallback was not its first VPN server")
+      let names = localStore.names(nodeID: vpnID)
+      try expect(names?.server == "Test" && names?.subscription == group["name"] as? String && localStore.names(nodeID: "gone") == nil,
+        "a server's name or its subscription's was not the one the window shows")
       let reopened = try SubscriptionStore(directory: localDirectory,
         routing: RoutingStore(directory: localDirectory.appendingPathComponent("routing")), secretAccess: localSecrets.access())
       try expect(reopened.selectedNodeID() == vpnID && reopened.dueSubscriptions().isEmpty, "local profiles did not survive relaunch")

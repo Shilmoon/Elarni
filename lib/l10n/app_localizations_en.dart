@@ -1144,6 +1144,10 @@ class AppLocalizationsEn extends AppLocalizations {
       'A scheduled subscription or routing refresh failed.';
 
   @override
+  String get selectedServerReplaced =>
+      'The server you had selected is gone from its subscription. Elarni selected another server.';
+
+  @override
   String get groupSelectionFailed =>
       'Group selection failed. The saved selection was restored.';
 

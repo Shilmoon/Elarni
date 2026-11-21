@@ -2000,6 +2000,12 @@ abstract class AppLocalizations {
   /// **'A scheduled subscription or routing refresh failed.'**
   String get scheduledRefreshFailed;
 
+  /// No description provided for @selectedServerReplaced.
+  ///
+  /// In en, this message translates to:
+  /// **'The server you had selected is gone from its subscription. Elarni selected another server.'**
+  String get selectedServerReplaced;
+
   /// No description provided for @groupSelectionFailed.
   ///
   /// In en, this message translates to:
