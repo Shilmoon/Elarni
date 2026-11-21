@@ -8,18 +8,21 @@ import 'package:flutter_test/flutter_test.dart';
 final class _FakeOS implements SystemProxy {
   ProxySettings current = {'user': 'pac'};
   final writes = <ProxySettings>[];
+  var reads = 0, points = 0;
   Object? pointFailure;
   Object? readFailure;
   Object? writeFailure;
 
   @override
   Future<ProxySettings> read() async {
+    reads++;
     if (readFailure case final failure?) throw failure;
     return {...current};
   }
 
   @override
   Future<void> point(int port) async {
+    points++;
     // A half-applied change, as when one gsettings call of several fails.
     current = {'port': port};
     if (pointFailure case final failure?) throw failure;
@@ -34,6 +37,10 @@ final class _FakeOS implements SystemProxy {
 
   @override
   bool pointsAt(ProxySettings settings, int port) => settings['port'] == port;
+
+  @override
+  bool matchesPoint(ProxySettings settings, int port) =>
+      settings['port'] == port;
 }
 
 void main() {
@@ -153,6 +160,145 @@ void main() {
     },
   );
 
+  group('with a clock', () {
+    var now = Duration.zero;
+    setUp(() {
+      now = Duration.zero;
+      session = SystemProxySession(os, backup, clock: () => now);
+    });
+
+    test('a failed set is tried again after 30 seconds, quietly', () async {
+      os.pointFailure = const OSError('gsettings failed');
+      expect(await session.sync(10891), 'system_proxy_not_set:10891');
+      expect(os.points, 1);
+
+      // A failure that passed: the session need not wait for a reconnect.
+      os.pointFailure = null;
+      now = const Duration(seconds: 29);
+      expect(await session.sync(10891), isNull);
+      expect(os.points, 1, reason: 'not before 30 seconds');
+      expect(os.current, {'user': 'pac'});
+      now = const Duration(seconds: 30);
+      expect(await session.sync(10891), isNull);
+      expect(os.current, {'port': 10891});
+      expect(jsonDecode(await backup.readAsString()), {
+        'port': 10891,
+        'previous': {'user': 'pac'},
+      });
+      now = const Duration(seconds: 31);
+      expect(await session.sync(10891), isNull);
+      expect(os.points, 2, reason: 'a set port is left alone');
+
+      // A failure that lasts is reported once, and tried every 30 seconds.
+      expect(await session.sync(null), isNull);
+      os.pointFailure = const OSError('gsettings failed');
+      expect(await session.sync(20891), 'system_proxy_not_set:20891');
+      now = const Duration(seconds: 61);
+      expect(await session.sync(20891), isNull, reason: 'reported once');
+      expect(os.points, 4);
+      now = const Duration(seconds: 90);
+      expect(await session.sync(20891), isNull);
+      expect(os.points, 4);
+      expect(await session.sync(null), isNull);
+      expect(os.current, {'user': 'pac'});
+      expect(await backup.exists(), isFalse);
+    });
+
+    test('a failed restore is tried again after 30 seconds', () async {
+      await session.sync(10891);
+      os.readFailure = const OSError('gsettings failed');
+      expect(await session.sync(null), 'system_proxy_restore_failed');
+      os.readFailure = null;
+      now = const Duration(seconds: 29);
+      expect(await session.sync(null), isNull);
+      expect(os.current, {'port': 10891});
+      now = const Duration(seconds: 30);
+      expect(await session.sync(null), isNull, reason: 'reported once');
+      expect(os.current, {'user': 'pac'});
+      expect(await backup.exists(), isFalse);
+    });
+
+    test(
+      'a setting another program changed is read back every 30 seconds, set again and reported once',
+      () async {
+        await session.sync(10891);
+        final reads = os.reads;
+        os.current = {'other': 'vpn'};
+        now = const Duration(seconds: 29);
+        expect(await session.sync(10891), isNull);
+        expect(os.reads, reads, reason: 'the 1 Hz sync does not read it');
+        expect(os.current, {'other': 'vpn'});
+
+        now = const Duration(seconds: 30);
+        expect(await session.sync(10891), 'system_proxy_changed');
+        expect(os.current, {'port': 10891});
+        now = const Duration(seconds: 31);
+        expect(await session.sync(10891), isNull);
+        now = const Duration(seconds: 60);
+        expect(await session.sync(10891), isNull, reason: 'it held');
+        expect(os.reads, reads + 2);
+
+        // The backup still holds the user's own setting, not the other one.
+        expect(jsonDecode(await backup.readAsString()), {
+          'port': 10891,
+          'previous': {'user': 'pac'},
+        });
+        expect(await session.sync(null), isNull);
+        expect(os.current, {'user': 'pac'});
+        expect(await backup.exists(), isFalse);
+      },
+    );
+
+    test(
+      'a setting changed a third time is left to the other program',
+      () async {
+        await session.sync(10891);
+        for (var change = 1; change <= 2; change++) {
+          os.current = {'other': 'vpn'};
+          now += const Duration(seconds: 30);
+          expect(await session.sync(10891), 'system_proxy_changed');
+          expect(os.current, {'port': 10891});
+        }
+        os.current = {'other': 'vpn'};
+        now += const Duration(seconds: 30);
+        expect(await session.sync(10891), 'system_proxy_taken');
+        expect(os.current, {'other': 'vpn'});
+        final reads = os.reads, points = os.points;
+        now += const Duration(seconds: 60);
+        expect(await session.sync(10891), isNull, reason: 'reported once');
+        expect(os.current, {'other': 'vpn'});
+        expect((os.reads, os.points), (reads, points));
+
+        // A disconnect leaves it too, and the next session starts afresh.
+        expect(await session.sync(null), isNull);
+        expect(os.current, {'other': 'vpn'});
+        expect(await backup.exists(), isFalse);
+        expect(await session.sync(10891), isNull);
+        expect(os.current, {'port': 10891});
+        os.current = {'user': 'manual'};
+        now += const Duration(seconds: 30);
+        expect(await session.sync(10891), 'system_proxy_changed');
+        expect(os.current, {'port': 10891});
+      },
+    );
+
+    test(
+      'a setting that cannot be read back is read at the next check',
+      () async {
+        await session.sync(10891);
+        os.readFailure = const OSError('gsettings failed');
+        now = const Duration(seconds: 30);
+        expect(await session.sync(10891), isNull);
+        os.readFailure = null;
+        os.current = {'other': 'vpn'};
+        now = const Duration(seconds: 59);
+        expect(await session.sync(10891), isNull);
+        now = const Duration(seconds: 60);
+        expect(await session.sync(10891), 'system_proxy_changed');
+      },
+    );
+  });
+
   test('an unreadable setting keeps its backup for the next restore', () async {
     await session.sync(10891);
     os.readFailure = const OSError('gsettings failed');
@@ -206,7 +352,7 @@ void main() {
 
   group('Linux', () {
     late List<String> calls;
-    late Map<String, String> gsettings;
+    late Map<String, String> gsettings, kioslaverc;
 
     Future<ProcessResult> run(String command, List<String> args) async {
       calls.add([command, ...args].join(' '));
@@ -218,13 +364,20 @@ void main() {
           '',
         );
       if (command == 'gsettings') gsettings['${args[1]} ${args[2]}'] = args[3];
+      if (command.startsWith('kwriteconfig')) kioslaverc[args[5]] = args[6];
       if (command.startsWith('kreadconfig'))
-        return ProcessResult(0, 0, args.last == 'ProxyType' ? '0\n' : '\n', '');
+        return ProcessResult(
+          0,
+          0,
+          '${kioslaverc[args.last] ?? (args.last == 'ProxyType' ? '0' : '')}\n',
+          '',
+        );
       return ProcessResult(0, 0, '', '');
     }
 
     setUp(() {
       calls = [];
+      kioslaverc = {};
       gsettings = {
         'org.gnome.system.proxy mode': "'auto'",
         'org.gnome.system.proxy ignore-hosts': "['localhost']",
@@ -288,6 +441,29 @@ void main() {
       );
     });
 
+    // Only a field Elarni sets counts as another program's change.
+    test('a change is a field Elarni set that differs', () async {
+      final linux = LinuxSystemProxy({
+        'XDG_CURRENT_DESKTOP': 'KDE',
+        'KDE_SESSION_VERSION': '6',
+      }, run: run);
+      expect(linux.matchesPoint(await linux.read(), 10891), isFalse);
+      await linux.point(10891);
+      expect(linux.matchesPoint(await linux.read(), 10891), isTrue);
+      expect(linux.matchesPoint(await linux.read(), 20891), isFalse);
+
+      // HTTP still goes here, so a restore gives the user's setting back,
+      // but HTTPS no longer does.
+      gsettings['org.gnome.system.proxy.https port'] = '7890';
+      final https = await linux.read();
+      expect(linux.pointsAt(https, 10891), isTrue);
+      expect(linux.matchesPoint(https, 10891), isFalse);
+      await linux.point(10891);
+
+      kioslaverc['ProxyType'] = '0';
+      expect(linux.matchesPoint(await linux.read(), 10891), isFalse);
+    });
+
     test('a failing command is an error, not a silent success', () async {
       final linux = LinuxSystemProxy(
         const {},
@@ -295,5 +471,35 @@ void main() {
       );
       await expectLater(linux.point(10891), throwsA(isA<OSError>()));
     });
+  });
+
+  test('Windows: a change is a field Elarni set that differs', () {
+    final windows = WindowsSystemProxy();
+    final pointed = {
+      'flags': 3, // Direct and proxy, as the Windows settings write it.
+      'server': '127.0.0.1:10891',
+      'bypass':
+          'localhost;127.*;10.*;${[for (var i = 16; i < 32; i++) '172.$i.*'].join(';')};192.168.*;<local>',
+      // Elarni leaves the script address; its flag is off.
+      'autoConfigURL': 'http://wpad.example/proxy.pac',
+    };
+    expect(windows.matchesPoint(pointed, 10891), isTrue);
+    expect(windows.matchesPoint({...pointed, 'flags': 2}, 10891), isTrue);
+    expect(windows.matchesPoint(pointed, 20891), isFalse);
+    for (final (name, change) in <(String, ProxySettings)>[
+      ('automatic detection', {'flags': 3 | 8}),
+      ('a setup script', {'flags': 3 | 4}),
+      ('no proxy', {'flags': 1}),
+      ('another server', {'server': '127.0.0.1:7890'}),
+      ('another bypass list', {'bypass': '<local>'}),
+    ]) {
+      expect(
+        windows.matchesPoint({...pointed, ...change}, 10891),
+        isFalse,
+        reason: name,
+      );
+    }
+    // A restore still gives the user's setting back over a changed list.
+    expect(windows.pointsAt({...pointed, 'bypass': '<local>'}, 10891), isTrue);
   });
 }

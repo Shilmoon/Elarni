@@ -49,6 +49,18 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
   beside it and the target menu across the width under it; the "Selected apps" heading has its
   own line above "Add apps" and "Recent connections". The Subscriptions and Routing pages use
   16 px side margins below 700 px instead of 24, and the per-app editor loses its extra 20.
+- **System proxy mode** keeps the computer's proxy setting on Elarni while a running
+  connection restarts for a server switch, a settings change or failover, with or without the
+  kill switch. Before, the setting went back to your own for those seconds, so browsers went
+  direct while the window said Reconnecting. A first connect still sets it once Elarni is
+  listening, and a connection that stopped by itself gives your setting back unless the kill
+  switch holds it. A failed attempt to set the proxy is tried again every 30 seconds instead of
+  only at the next connect. Elarni also reads the setting back every 30 seconds: when another
+  program (a second VPN client, a company agent, or you in the system settings) changed it,
+  Elarni sets it again and says so; after the third change in one connection it leaves the
+  setting to that program and says that apps may not use the VPN. Disconnecting gives back the
+  setting you had before connecting, as before, or leaves the one another program was left.
+  Windows, Linux.
 
 ## 0.6.2 - 2026-11-18
 

@@ -155,18 +155,32 @@ Future<void> checkHTTPRejected(int proxyPort, int targetPort) async {
 // The OS proxy setting, kept in memory: the user's own, or Elarni's port.
 final class FakeSystemProxy implements SystemProxy {
   ProxySettings current = {'user': 'pac'};
+  // Each setting written back, and the next read while a test waits for one.
+  final writes = <ProxySettings>[];
+  Completer<void>? reading;
 
   @override
-  Future<ProxySettings> read() async => {...current};
+  Future<ProxySettings> read() async {
+    reading?.complete();
+    reading = null;
+    return {...current};
+  }
 
   @override
   Future<void> point(int port) async => current = {'port': port};
 
   @override
-  Future<void> write(ProxySettings settings) async => current = {...settings};
+  Future<void> write(ProxySettings settings) async {
+    writes.add(settings);
+    current = {...settings};
+  }
 
   @override
   bool pointsAt(ProxySettings settings, int port) => settings['port'] == port;
+
+  @override
+  bool matchesPoint(ProxySettings settings, int port) =>
+      settings['port'] == port;
 }
 
 // A core that hands each request line to [record], so a test can count what
@@ -3073,6 +3087,103 @@ rules:
       } finally {
         await occupied.close();
       }
+      expect(await backend.control.disconnect(), 'disconnected');
+    },
+  );
+
+  // Without the kill switch, too, the setting stays on Elarni while a running
+  // connection restarts: apps would go direct for those seconds. A first start
+  // still waits for its listener, and a stopped connection gives it back.
+  test(
+    'System proxy mode keeps the OS proxy on its listener through a restart',
+    () async {
+      final os = FakeSystemProxy();
+      final backup = File.fromUri(temporary.uri.resolve('system-proxy.json'));
+      // Moved on, it has the next sync read the setting back, which shows
+      // that a tick ran.
+      var now = Duration.zero;
+      await backend.dispose();
+      backend = createBackend(
+        systemProxy: SystemProxySession(os, backup, clock: () => now),
+      );
+      await prepare();
+      final messages = <String>[];
+      backend.control.setImportListener((message) {
+        if (message != null) messages.add(message);
+      });
+      final settings = (await backend.control.tunnelSettings()).copyWith(
+        systemProxyEnabled: true,
+      );
+      expect(settings.blockWithoutVPN, isFalse);
+      await backend.control.updateTunnelSettings(settings);
+
+      // Runs [start] with its runtime launch held, in connecting, until
+      // [whileHeld] returns. Configuration checks launch cores before it.
+      Future<T> held<T>(
+        Future<T> Function() start,
+        Future<void> Function() whileHeld,
+      ) async {
+        launchGate = Completer<void>();
+        launchEntered = Completer<void>();
+        final started = start();
+        try {
+          for (;;) {
+            await launchEntered!.future.timeout(const Duration(seconds: 10));
+            if (await backend.control.state() == 'connecting') break;
+            final gate = launchGate!;
+            launchEntered = Completer<void>();
+            launchGate = Completer<void>();
+            gate.complete();
+          }
+          await whileHeld();
+        } finally {
+          final gate = launchGate!;
+          launchGate = launchEntered = null;
+          gate.complete();
+        }
+        return started;
+      }
+
+      // A first start points the setting once its listener is up; the 1 Hz
+      // sync leaves it alone meanwhile.
+      expect(
+        await held(backend.control.connect, () async {
+          await Future<void>.delayed(const Duration(milliseconds: 1500));
+          expect(os.current, {'user': 'pac'});
+        }),
+        'connected',
+      );
+      expect(os.current, {'port': settings.httpPort});
+
+      // A settings change restarts the core.
+      await held(
+        () => backend.control.updateTunnelSettings(
+          settings.copyWith(httpInboundEnabled: !settings.httpInboundEnabled),
+        ),
+        () async {
+          // Restoring the user's setting would read it as well.
+          final reading = os.reading = Completer<void>();
+          now += const Duration(seconds: 30);
+          await reading.future.timeout(const Duration(seconds: 5));
+          await Future<void>.delayed(Duration.zero);
+          expect(os.current, {'port': settings.httpPort});
+        },
+      );
+      expect(await backend.control.state(), 'connected');
+      expect(os.current, {'port': settings.httpPort});
+      expect(os.writes, isEmpty, reason: 'the user setting never came back');
+      expect(messages, isEmpty);
+
+      // A connection that stopped by itself gives the user's setting back.
+      lastProcess!.kill();
+      await lastProcess!.exitCode;
+      await Future<void>.delayed(Duration.zero);
+      expect(messages, contains('connection_stopped'));
+      final id = (await backend.control.subscriptions()).selectedNodeId!;
+      await backend.control.setNodeFavorite(id, true);
+      expect(await backend.control.state(), 'failed');
+      expect(os.current, {'user': 'pac'});
+      expect(await backup.exists(), isFalse);
       expect(await backend.control.disconnect(), 'disconnected');
     },
   );

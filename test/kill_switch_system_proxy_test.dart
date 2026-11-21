@@ -28,6 +28,10 @@ final class _FakeOS implements SystemProxy {
 
   @override
   bool pointsAt(ProxySettings settings, int port) => settings['port'] == port;
+
+  @override
+  bool matchesPoint(ProxySettings settings, int port) =>
+      settings['port'] == port;
 }
 
 // A selected server whose core never starts, so every Connect ends failed:

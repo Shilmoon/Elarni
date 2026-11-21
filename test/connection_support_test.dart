@@ -29,6 +29,10 @@ void main() {
         'The system proxy setting could not be restored. Check it in your system network settings.',
     'system_proxy_not_set:10891':
         'The system proxy could not be set. Apps can still use the HTTP proxy at 127.0.0.1:10891.',
+    'system_proxy_changed':
+        'Another program changed the system proxy. Elarni set it again.',
+    'system_proxy_taken':
+        'Another program keeps changing the system proxy, so Elarni left it. Apps that follow the system proxy may not use the VPN. Use VPN mode, or stop the other program.',
     'storage_unavailable':
         'Elarni could not read or save its catalog. Restart Elarni. If this continues, restore an encrypted backup.',
   };
