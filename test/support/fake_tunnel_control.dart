@@ -127,6 +127,7 @@ class FakeTunnelControl implements TunnelControl {
   final sharedSubscription = <bool>[];
   final savedFetchOptions = <Map<String, Object?>>[];
   final exportedPasswords = <String>[];
+  var backupExclusions = <BackupExclusion>[];
   final restoredPasswords = <String>[];
   int repairCalls = 0;
   Map<String, Object?> automation = {
@@ -176,8 +177,9 @@ class FakeTunnelControl implements TunnelControl {
   }
 
   @override
-  Future<void> exportCatalogBackup(String password) async {
+  Future<List<BackupExclusion>> exportCatalogBackup(String password) async {
     exportedPasswords.add(password);
+    return backupExclusions;
   }
 
   @override

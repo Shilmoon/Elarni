@@ -477,6 +477,81 @@ void main() {
       },
     );
 
+    // A backup leaves out what it may not hold instead of failing; the
+    // message names those subscriptions and why.
+    testWidgets(
+      'a saved backup names the subscriptions it left out on ${platform.name}',
+      (tester) async {
+        final control = FakeTunnelControl();
+        await tester.binding.setSurfaceSize(const Size(1200, 900));
+        addTearDown(() => tester.binding.setSurfaceSize(null));
+        await tester.pumpWidget(
+          ElarniApp(
+            tunnelControl: control,
+            windows: platform == TargetPlatform.windows,
+          ),
+        );
+        await tester.pumpAndSettle();
+        await openSettings(tester);
+        await selectCategory(tester, SettingsCategory.backup);
+        await tester.pumpAndSettle();
+        Future<void> save() async {
+          await reveal(tester, find.text('Create encrypted backup'));
+          await tester.tap(find.text('Create encrypted backup'));
+          await tester.pumpAndSettle();
+          final fields = find.descendant(
+            of: find.byType(AlertDialog),
+            matching: find.byType(TextField),
+          );
+          await tester.enterText(fields.first, 'synthetic backup password');
+          await tester.enterText(fields.last, 'synthetic backup password');
+          await tester.tap(find.text('Save backup'));
+          await tester.pumpAndSettle();
+        }
+
+        await save();
+        expect(find.text('Encrypted backup saved.'), findsOneWidget);
+        control.backupExclusions = [
+          (name: 'Provider A', reason: 'sharing_disabled'),
+          (name: 'Provider B', reason: 'sharing_disabled'),
+        ];
+        await save();
+        expect(
+          find.text(
+            'Backup saved without 2 subscriptions: Provider A, Provider B. '
+            'Their providers do not allow backups.',
+          ),
+          findsOneWidget,
+        );
+        control.backupExclusions = [
+          (name: 'Fresh', reason: 'sharing_refresh_required'),
+        ];
+        await save();
+        expect(
+          find.text(
+            'Backup saved without 1 subscription: Fresh. Update it once first.',
+          ),
+          findsOneWidget,
+        );
+        control.backupExclusions = [
+          (name: 'Fresh', reason: 'sharing_refresh_required'),
+          (name: 'Provider A', reason: 'sharing_disabled'),
+        ];
+        await save();
+        expect(
+          find.text(
+            'Backup saved without 1 subscription: Provider A. '
+            'Its provider does not allow backups. '
+            'Also left out 1 subscription that was never updated: Fresh. '
+            'Update it once first.',
+          ),
+          findsOneWidget,
+        );
+        expect(control.exportedPasswords.length, 4);
+        expect(tester.takeException(), isNull);
+      },
+    );
+
     testWidgets(
       'home import and settings remain usable in a narrow window on ${platform.name}',
       (tester) async {

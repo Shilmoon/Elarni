@@ -73,8 +73,10 @@ class Repository(private val app: ElarniApplication) {
     private var storageFailure: String? = null
     /** The stored data failed to load, so the catalog in memory is a placeholder that must never replace it. */
     private var loadFailed = false
-    /** The saved catalog cannot be read, which only a reset gets past. A refused change reports the same code and needs none. */
-    val catalogUnreadable get() = loadFailed && storageFailure == "storage_corrupt"
+    /** The saved catalog cannot be read, which only a reset gets past: it is damaged, or its key is gone for good.
+     *  A refused change reports the same code and needs none. */
+    val catalogUnreadable get() = loadFailed && storageFailure in unreadable
+    companion object { /** The codes a saved catalog that cannot be read fails with. */ val unreadable = setOf("storage_corrupt", "storage_locked") }
     private var automation = Automation(JSONObject())
     private var approval: Approval? = null
     /** Routes whose background refresh raised an approval, until when the other routes go first. */
@@ -469,7 +471,9 @@ class Repository(private val app: ElarniApplication) {
             "exportRouting" -> return obj("text" to catalog.route(id).getJSONObject("profile").toString(2))
             "decodeRouting" -> return Native.domain("decodeRouting", obj("content" to args.getString("text"))).getJSONObject("import")
             "exportPerApp" -> return obj("text" to Settings.perAppExport(catalog.settings.getString("perAppMode"), catalog.settings.strings("perAppProcesses"), catalog.settings.mapObject("perAppTargets")))
-            "backup" -> return try { Native.call("sealCatalogBackup", obj("catalog" to catalog.backup(), "password" to args.getString("password"))) }
+            // Subscriptions a backup may not hold are left out; the result names them.
+            "backup" -> return try { val (document, excluded) = catalog.backup()
+                Native.call("sealCatalogBackup", obj("catalog" to document, "password" to args.getString("password"))).put("excluded", JSONArray(excluded)) }
                 // Sealing validates the catalog as a restore would; a refusal names the limits, not a bad password.
                 catch (error: AppFailure) { throw if (error.code == "invalid_backup") AppFailure("backup_unsupported") else error }
             "diagnostics" -> return obj("text" to diagnostics().toString(2))

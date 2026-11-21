@@ -114,6 +114,218 @@ void main() {
     );
   });
 
+  group('a backup', () {
+    CatalogMap node(String id, String address, {bool hideURL = false}) => {
+      'id': id,
+      'name': id,
+      'format': 'xrayProfile',
+      'config': {
+        'outbounds': [
+          {
+            'protocol': 'vless',
+            'settings': {'address': address, 'port': 443},
+          },
+        ],
+      },
+      if (hideURL) 'hideURL': true,
+    };
+    CatalogMap source(
+      String id,
+      String name,
+      List<CatalogMap> nodes, {
+      String? url,
+      Object? hideURL,
+    }) => {
+      'id': id,
+      'name': name,
+      'url': ?url,
+      'metadata': {'hideURL': ?hideURL},
+      'nodes': nodes,
+    };
+    CatalogMap route(String id, {String? provider}) => {
+      'id': id,
+      'name': id,
+      'profile': {'Name': id},
+      'original': {'Name': id},
+      'routeModel': <String, Object?>{},
+      'enabled': true,
+      'edited': false,
+      'providerSubscriptionId': ?provider,
+    };
+    DesktopCatalog catalogOf(CatalogMap data) => DesktopCatalog(
+      {...DesktopCatalog.empty(), ...data},
+      (method, payload) async => throw StateError(method),
+      (operation, payload) => switch (operation) {
+        'catalogIdentity' => {'identity': jsonEncode(payload)},
+        'decodeRouting' => {
+          'import': {'profile': jsonDecode(payload['content']! as String)},
+        },
+        'mergeManagedRouting' => {'routeModel': <String, Object?>{}},
+        _ => throw StateError(operation),
+      },
+    );
+    Matcher refused(String code) => throwsA(
+      isA<PlatformException>().having((error) => error.code, 'code', code),
+    );
+
+    // One subscription whose provider forbids backups, or that was never
+    // updated, used to refuse the backup of everything else.
+    test('leaves out and names the subscriptions it may not contain', () {
+      final catalog = catalogOf({
+        'selectedNodeId': 'forbidden-1',
+        'subscriptions': [
+          source('local', 'My servers', [
+            node('local-1', 'local.example'),
+          ], hideURL: false),
+          source(
+            'provider',
+            'Allowed provider',
+            [node('provider-1', 'allowed.example')],
+            url: 'https://allowed.example/sub',
+            hideURL: false,
+          ),
+          source(
+            'forbidden',
+            'No backups',
+            [node('forbidden-1', 'forbidden.example')],
+            url: 'https://forbidden.example/sub',
+            hideURL: true,
+          ),
+          // A hidden import keeps its own local group, flagged per server.
+          source('hidden', 'Hidden import', [
+            node('hidden-1', 'hidden.example', hideURL: true),
+          ]),
+          // Never updated: whether its provider allows backups is unknown.
+          source('fresh', 'Never updated', [
+            node('fresh-1', 'fresh.example'),
+          ], url: 'https://fresh.example/sub'),
+        ],
+        'profiles': [
+          route('route-local'),
+          route('route-provider', provider: 'provider'),
+          route('route-forbidden', provider: 'forbidden'),
+          route('route-fresh', provider: 'fresh'),
+        ],
+        'assignments': {
+          'local': 'route-forbidden',
+          'provider': 'route-provider',
+          'forbidden': 'route-forbidden',
+          'fresh': 'route-local',
+        },
+      })..validate();
+      final (:document, :excluded) = catalog.backup();
+      expect(excluded, [
+        {'name': 'No backups', 'reason': 'sharing_disabled'},
+        {'name': 'Hidden import', 'reason': 'sharing_disabled'},
+        {'name': 'Never updated', 'reason': 'sharing_refresh_required'},
+      ]);
+      final subscriptions = catalogList(document['subscriptions']);
+      expect(subscriptions.map((source) => source['id']), [
+        'local',
+        'provider',
+      ]);
+      // Nothing of a left-out subscription is in the file: no server, no
+      // link, no routing profile of its provider.
+      final text = jsonEncode(document);
+      for (final private in [
+        'forbidden.example',
+        'hidden.example',
+        'fresh.example',
+        'route-forbidden',
+        'route-fresh',
+      ])
+        expect(text, isNot(contains(private)), reason: private);
+      // The selection was a left-out server, so the backup selects none.
+      expect(document.containsKey('selectedNodeId'), isFalse);
+      expect(catalogList(document['routes']).map((route) => route['id']), [
+        'route-local',
+        'route-provider',
+      ]);
+      expect(document['assignments'], {'provider': 'route-provider'});
+      // The catalog itself is unchanged.
+      expect(catalog.sources.length, 5);
+      expect(catalog.selected, 'forbidden-1');
+
+      final restored = catalogOf({})..restoreBackup(document);
+      restored.validate();
+      expect(restored.sources.map((source) => source['name']), [
+        'My servers',
+        'Allowed provider',
+      ]);
+      expect(restored.routes.length, 2);
+      final provider = restored.sources.last['id'];
+      expect(
+        restored.routes
+            .singleWhere((route) => route['name'] == 'route-provider')['id'],
+        restored.assignments[provider],
+      );
+      expect(restored.assignments.length, 1);
+    });
+
+    test('keeps a selection the backup contains', () {
+      final (:document, :excluded) = catalogOf({
+        'selectedNodeId': 'local-1',
+        'subscriptions': [
+          source('local', 'My servers', [node('local-1', 'local.example')]),
+          source('forbidden', 'No backups', [
+            node('forbidden-1', 'forbidden.example'),
+          ], hideURL: true),
+        ],
+      }).backup();
+      expect(document['selectedNodeId'], 'local-1');
+      expect(excluded.single['name'], 'No backups');
+    });
+
+    test('with nothing left to save still fails with the first refusal', () {
+      expect(
+        () => catalogOf({
+          'subscriptions': [
+            source(
+              'forbidden',
+              'No backups',
+              [node('forbidden-1', 'forbidden.example')],
+              url: 'https://forbidden.example/sub',
+              hideURL: true,
+            ),
+            source('fresh', 'Never updated', [
+              node('fresh-1', 'fresh.example'),
+            ], url: 'https://fresh.example/sub'),
+          ],
+          // A left-out provider's routing profile is not left to save.
+          'profiles': [route('route-forbidden', provider: 'forbidden')],
+          'assignments': {'forbidden': 'route-forbidden'},
+        }).backup(),
+        refused('sharing_disabled'),
+      );
+      expect(
+        () => catalogOf({
+          'subscriptions': [
+            source('fresh', 'Never updated', [
+              node('fresh-1', 'fresh.example'),
+            ], url: 'https://fresh.example/sub'),
+          ],
+        }).backup(),
+        refused('sharing_refresh_required'),
+      );
+      // A routing profile of the user's own is worth saving alone.
+      final (:document, :excluded) = catalogOf({
+        'subscriptions': [
+          source('fresh', 'Never updated', [
+            node('fresh-1', 'fresh.example'),
+          ], url: 'https://fresh.example/sub'),
+        ],
+        'profiles': [route('route-local')],
+        'assignments': {'fresh': 'route-local'},
+      }).backup();
+      expect(document['subscriptions'], isEmpty);
+      expect(catalogList(document['routes']).single['id'], 'route-local');
+      expect(document['assignments'], isEmpty);
+      expect(excluded.single['reason'], 'sharing_refresh_required');
+      // An empty catalog has nothing left out and saves as before.
+      expect(catalogOf({}).backup().excluded, isEmpty);
+    });
+  });
+
   test(
     'per-app server targets resolve to their server and survive a restore',
     () {
@@ -193,8 +405,7 @@ void main() {
       );
       // A restore gives servers new IDs; the targets follow them.
       data['settings'] = settings.toMap();
-      final backup = catalog.backup();
-      catalog.restoreBackup(backup);
+      catalog.restoreBackup(catalog.backup().document);
       final restored = catalog.sources.single;
       final id = catalogList(restored['nodes']).single['id']! as String;
       expect(id, isNot('nl-4'));

@@ -42,6 +42,8 @@ class InteractionModel : ViewModel() {
     var restore by mutableStateOf<String?>(null)
     var fileAction = "import"
     var export: ByteArray? = null
+    /** What to say once [export] is saved, instead of "File saved." */
+    var exportNotice: String? = null
     var camera: Uri? = null
     var share by mutableStateOf<JSONObject?>(null)
     var dismissEditor by mutableStateOf(false)
@@ -100,10 +102,11 @@ class MainActivity : ComponentActivity() {
     private val openFile = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> if (uri != null) read(uri, interaction.fileAction) }
     private val createFile = registerForActivityResult(ActivityResultContracts.CreateDocument("application/octet-stream")) { uri ->
         val bytes = interaction.export; interaction.export = null
+        val notice = interaction.exportNotice; interaction.exportNotice = null
         if (uri != null && bytes != null) repository.scope.launch {
             try {
                 contentResolver.openOutputStream(uri, "wt")?.use { it.write(bytes) } ?: throw AppFailure("file_unavailable")
-                withContext(Dispatchers.Main) { interaction.notice = tr(R.string.file_saved) }
+                withContext(Dispatchers.Main) { interaction.notice = notice ?: tr(R.string.file_saved) }
             }
             catch (_: Exception) { repository.report(AppFailure("file_unavailable")) }
         }
@@ -290,7 +293,7 @@ class MainActivity : ComponentActivity() {
             } catch (error: Exception) { repository.report(if (error is AppFailure) error else AppFailure("file_unavailable")) }
         }
     }
-    fun save(text: String, name: String) { interaction.export = text.toByteArray(Charsets.UTF_8); createFile.launch(name) }
+    fun save(text: String, name: String, notice: String? = null) { interaction.export = text.toByteArray(Charsets.UTF_8); interaction.exportNotice = notice; createFile.launch(name) }
     // Outside the repository lock, so a mark lands while a connect is stuck.
     fun markRecording() {
         repository.scope.launch {
@@ -305,7 +308,7 @@ class MainActivity : ComponentActivity() {
         repository.scope.launch {
             try {
                 val bytes = repository.engine.exportRecording()
-                withContext(Dispatchers.Main) { interaction.export = bytes; createFile.launch("elarni-recording.zip") }
+                withContext(Dispatchers.Main) { interaction.export = bytes; interaction.exportNotice = null; createFile.launch("elarni-recording.zip") }
             } catch (error: Exception) { repository.report(if (error is AppFailure) error else AppFailure("recording_failed")) }
         }
     }

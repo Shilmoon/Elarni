@@ -101,6 +101,11 @@ enum TunnelState {
   failed,
 }
 
+/// A subscription a backup left out, by name: its provider forbids backups
+/// (`sharing_disabled`), or it was never updated, so whether its provider
+/// allows them is unknown (`sharing_refresh_required`).
+typedef BackupExclusion = ({String name, String reason});
+
 abstract interface class TunnelControl {
   void setImportListener(void Function(String? error)? listener);
   Future<SubscriptionSnapshot> setNodeFavorite(String nodeId, bool favorite);
@@ -200,7 +205,8 @@ abstract interface class TunnelControl {
     String id,
     Map<String, Object?> options,
   );
-  Future<void> exportCatalogBackup(String password);
+  /// Saves an encrypted backup and returns the subscriptions it left out.
+  Future<List<BackupExclusion>> exportCatalogBackup(String password);
   Future<SubscriptionSnapshot> restoreCatalogBackup(String password);
   Future<void> repairTunnel();
   Future<SubscriptionSnapshot> deleteSubscription(String id);
@@ -388,9 +394,16 @@ final class NativeTunnelControl implements TunnelControl {
   };
 
   @override
-  Future<void> exportCatalogBackup(String password) async {
-    await _mapResult('exportCatalogBackup', {'password': password});
-  }
+  Future<List<BackupExclusion>> exportCatalogBackup(String password) async => [
+    for (final item
+        in (await _mapResult('exportCatalogBackup', {
+              'password': password,
+            }))['excluded']
+            as List? ??
+        const [])
+      if (item case {'name': final String name, 'reason': final String reason})
+        (name: name, reason: reason),
+  ];
 
   @override
   Future<SubscriptionSnapshot> restoreCatalogBackup(String password) async =>

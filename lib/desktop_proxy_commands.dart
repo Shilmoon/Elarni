@@ -300,12 +300,13 @@ extension _ProxyCommands on DesktopProxy {
           });
         }
         return {};
+      // Subscriptions a backup may not hold are left out; the result names them.
       case 'exportCatalogBackup':
-        final backup = _catalog!.backup();
+        final (:document, :excluded) = _catalog!.backup();
         final CatalogMap sealed;
         try {
           sealed = await _native('sealCatalogBackup', {
-            'catalog': backup,
+            'catalog': document,
             'password': args['password'],
           });
         } on PlatformException catch (error) {
@@ -314,9 +315,10 @@ extension _ProxyCommands on DesktopProxy {
             throw desktopError('backup_unsupported');
           rethrow;
         }
-        if (args['headless'] == true) return {'text': sealed['text']};
+        if (args['headless'] == true)
+          return {'text': sealed['text'], 'excluded': excluded};
         await _platformRequest('saveBackup', {'content': sealed['text']});
-        return {};
+        return {'excluded': excluded};
       case 'restoreCatalogBackup':
         if (_operation != null ||
             !{'disconnected', 'prepared', 'failed'}.contains(_state)) {

@@ -11,6 +11,8 @@ struct BackupView: View {
   @State private var confirmingRestore = false
   @State private var repairing = false
   @State private var document = TextFile("")
+  /// The subscriptions the backup being saved left out, said once it is saved.
+  @State private var leftOut: String?
   var body: some View {
     AppForm {
       Section {
@@ -21,7 +23,8 @@ struct BackupView: View {
         Button("Create encrypted backup", systemImage: "square.and.arrow.up") {
           model.launch {
             guard password == confirmation else { throw IOSAppError.invalidSettings }
-            document = TextFile(try await model.exportBackup(password: password)); exporting = true
+            let backup = try await model.exportBackup(password: password)
+            document = TextFile(backup.text); leftOut = backup.leftOut; exporting = true
             password = ""; confirmation = ""
           }
         }.disabled(model.busy || password.utf8.count < 12 || password.utf8.count > 1024 || password != confirmation)
@@ -42,8 +45,11 @@ struct BackupView: View {
       do { restoreText = try IOSImport.readText(result.get(), limit: 12 * 1024 * 1024) } catch { model.show(error) }
     }
     .fileExporter(isPresented: $exporting, document: document, contentType: .json, defaultFilename: "Elarni-backup") { result in
-      if case .failure(let error) = result { model.show(error) }
-      document = TextFile("")
+      switch result {
+      case .success: if let leftOut { model.notice = leftOut }
+      case .failure(let error): model.show(error)
+      }
+      document = TextFile(""); leftOut = nil
     }
     .confirmationDialog("Replace your current subscriptions and routing?", isPresented: $confirmingRestore, titleVisibility: .visible) {
       Button("Replace with backup", role: .destructive) { model.launch {

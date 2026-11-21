@@ -40,7 +40,8 @@
     <string name="the_connection_could_not_start_check">The connection could not start. Check the server, network, proxy ports, and routing assets, then retry.</string>
     <string name="this_profile_could_not_be_imported">This profile could not be imported. Check the complete link or configuration and try again.</string>
     <string name="this_server_has_no_encryption">This server has no encryption: no TLS, REALITY or VLESS encryption. Elarni accepts such a server only on a private network.</string>
-    <string name="your_encrypted_catalog_could_not_be">Your encrypted catalog could not be opened or saved. Existing data has been preserved. Unlock the device and restart the app. If this does not go away, the only way to start over is to clear Elarni\'s storage in Android Settings › Apps, which removes its servers and settings.</string>
+    <string name="elarni_cannot_read_its_saved_data">Elarni cannot read its saved data on this device. Reset Elarni, then restore a backup or add your subscriptions again.</string>
+    <string name="elarni_could_not_open_or_save_its">Elarni could not open or save its encrypted data. Existing data has been preserved. Restart Elarni. If this does not go away, the only way to start over is to clear Elarni\'s storage in Android Settings › Apps, which removes its servers and settings.</string>
     <string name="android_could_not_start_the_service">Android could not start the service from the background. Open Elarni and tap Connect.</string>
     <string name="android_has_not_made_the_vpn">Android has not made the VPN network ready. Reconnect or check Android VPN settings.</string>
     <string name="android_revoked_vpn_access_open_elarni">Android revoked VPN access. Open Elarni and connect to allow access again.</string>
@@ -678,6 +679,18 @@
     <plurals name="assigned_subscriptions">
         <item quantity="one">Assigned to %d subscription</item>
         <item quantity="other">Assigned to %d subscriptions</item>
+    </plurals>
+    <plurals name="backup_saved_without_forbidden">
+        <item quantity="one">Backup saved without %1$d subscription: %2$s. Its provider does not allow backups.</item>
+        <item quantity="other">Backup saved without %1$d subscriptions: %2$s. Their providers do not allow backups.</item>
+    </plurals>
+    <plurals name="backup_saved_without_unrefreshed">
+        <item quantity="one">Backup saved without %1$d subscription: %2$s. Update it once first.</item>
+        <item quantity="other">Backup saved without %1$d subscriptions: %2$s. Update them once first.</item>
+    </plurals>
+    <plurals name="backup_also_without_unrefreshed">
+        <item quantity="one">Also left out %1$d subscription that was never updated: %2$s. Update it once first.</item>
+        <item quantity="other">Also left out %1$d subscriptions that were never updated: %2$s. Update them once first.</item>
     </plurals>
     <plurals name="every_hours">
         <item quantity="one">Every %d h</item>

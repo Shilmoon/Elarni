@@ -905,10 +905,30 @@ final class IOSAppModel {
     } catch { notice = String(localized: "Expiry reminders could not be updated. Check notification access in iPhone Settings.") }
   }
 
-  func exportBackup(password: String) async throws -> String {
-    let result = try await NativeAPI.perform("sealCatalogBackup", ["catalog": try catalog().backupCatalog(), "password": password])
+  /// The sealed backup, and what to say once it is saved: the subscriptions it left out, or nil.
+  func exportBackup(password: String) async throws -> (text: String, leftOut: String?) {
+    let backup = try catalog().backupCatalog()
+    let result = try await NativeAPI.perform("sealCatalogBackup", ["catalog": backup.document, "password": password])
     guard let text = result["text"] as? String else { throw IOSAppError.nativeFailure }
-    return text
+    return (text, Self.backupLeftOut(backup.excluded))
+  }
+
+  /// What a saved backup left out and why, in one message, as on the desktop; nil when it left out nothing.
+  static func backupLeftOut(_ excluded: [[String: String]]) -> String? {
+    let forbidden = excluded.filter { $0["reason"] == "sharing_disabled" }.compactMap { $0["name"] }
+    let unrefreshed = excluded.filter { $0["reason"] != "sharing_disabled" }.compactMap { $0["name"] }
+    var parts: [String] = []
+    if !forbidden.isEmpty {
+      let names = forbidden.joined(separator: ", ")
+      parts.append(String(localized: "Backup saved without \(forbidden.count) subscriptions: \(names). Their providers do not allow backups."))
+    }
+    if !unrefreshed.isEmpty {
+      let names = unrefreshed.joined(separator: ", ")
+      parts.append(forbidden.isEmpty
+        ? String(localized: "Backup saved without \(unrefreshed.count) subscriptions: \(names). Update them once first.")
+        : String(localized: "Also left out \(unrefreshed.count) subscriptions that were never updated: \(names). Update them once first."))
+    }
+    return parts.isEmpty ? nil : parts.joined(separator: " ")
   }
 
   func restoreBackup(text: String, password: String) async throws {

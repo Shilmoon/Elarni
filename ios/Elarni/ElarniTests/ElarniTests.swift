@@ -171,6 +171,18 @@ final class ElarniTests: XCTestCase {
     XCTAssertEqual((groups.first?["nodes"] as? [[String: Any]])?.first?["name"] as? String, "QR Fixture")
   }
 
+  // A backup leaves out what it may not hold instead of failing; the notice names those subscriptions and why.
+  func testASavedBackupNamesTheSubscriptionsItLeftOut() {
+    XCTAssertNil(IOSAppModel.backupLeftOut([]))
+    XCTAssertEqual(IOSAppModel.backupLeftOut([["name": "Provider A", "reason": "sharing_disabled"], ["name": "Provider B", "reason": "sharing_disabled"]]),
+      "Backup saved without 2 subscriptions: Provider A, Provider B. Their providers do not allow backups.")
+    XCTAssertEqual(IOSAppModel.backupLeftOut([["name": "Fresh", "reason": "sharing_refresh_required"]]),
+      "Backup saved without 1 subscription: Fresh. Update it once first.")
+    XCTAssertEqual(IOSAppModel.backupLeftOut([["name": "Fresh", "reason": "sharing_refresh_required"], ["name": "Provider A", "reason": "sharing_disabled"]]),
+      "Backup saved without 1 subscription: Provider A. Its provider does not allow backups. "
+        + "Also left out 1 subscription that was never updated: Fresh. Update it once first.")
+  }
+
   func testEncryptedBackupRestoresSelectionRoutingAndCredentials() async throws {
     let fixture = try CatalogFixture(); defer { fixture.remove() }
     let store = try fixture.store()
@@ -182,7 +194,9 @@ final class ElarniTests: XCTestCase {
     _ = try store.routing.importContent("{\"Name\":\"Backup rules\",\"GlobalProxy\":true,\"BlockSites\":[\"example.invalid\"],\"RemoteDNSType\":\"DoU\",\"DomesticDNSType\":\"DoU\",\"RemoteDNSIP\":\"1.1.1.1\",\"DomesticDNSIP\":\"1.1.1.1\"}", selectedSubscriptionID: source)
     let routes = try XCTUnwrap(store.routing.snapshot()["profiles"] as? [[String: Any]])
     _ = try store.routing.assign(subscriptionID: source, profileID: XCTUnwrap(routes.first?["id"] as? String))
-    let payload = try store.backupCatalog()
+    let backup = try store.backupCatalog()
+    XCTAssertTrue(backup.excluded.isEmpty)
+    let payload = backup.document
     let password = "synthetic-backup-password"
     let encrypted = try await NativeAPI.perform("sealCatalogBackup", ["catalog": payload, "password": password])
     let text = try XCTUnwrap(encrypted["text"] as? String)

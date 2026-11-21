@@ -875,6 +875,17 @@ fun withSites(text: String, sites: List<String>): String {
     }
 }
 
+/** What a saved backup left out and why, in one message, as on the desktop; null when it left out nothing. */
+fun backupLeftOut(excluded: List<JSONObject>): String? {
+    val (forbidden, unrefreshed) = excluded.partition { it.string("reason") == "sharing_disabled" }.let { (a, b) -> a.map { it.string("name") } to b.map { it.string("name") } }
+    return listOfNotNull(
+        forbidden.takeIf { it.isNotEmpty() }?.let { trPlural(R.plurals.backup_saved_without_forbidden, it.size, it.size, it.joinToString(", ")) },
+        unrefreshed.takeIf { it.isNotEmpty() }?.let {
+            trPlural(if (forbidden.isEmpty()) R.plurals.backup_saved_without_unrefreshed else R.plurals.backup_also_without_unrefreshed, it.size, it.size, it.joinToString(", "))
+        },
+    ).joinToString(" ").ifEmpty { null }
+}
+
 @Composable fun BackupEditor(restore: Boolean, busy: Boolean, activity: MainActivity, done: () -> Unit) {
     var password by rememberDraft(activity, "backup-password") { "" }; var repeat by rememberDraft(activity, "backup-repeat") { "" }; var error by remember { mutableStateOf<String?>(null) }
     FormColumn {
@@ -886,7 +897,7 @@ fun withSites(text: String, sites: List<String>): String {
         EditorActions(busy, done, {
             if (!restore && password != repeat) error = tr(R.string.the_passwords_do_not_match)
             else if (restore) activity.saveReviewed("restore", obj("text" to (activity.interaction.restore ?: ""), "password" to password))
-            else activity.run("backup", obj("password" to password)) { password = ""; repeat = ""; activity.save(it.getString("text"), "elarni-backup.rvbackup"); done() }
+            else activity.run("backup", obj("password" to password)) { password = ""; repeat = ""; activity.save(it.getString("text"), "elarni-backup.rvbackup", backupLeftOut(it.objects("excluded"))); done() }
         }, if (restore) tr(R.string.restore) else tr(R.string.export_backup))
     }
 }

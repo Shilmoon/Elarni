@@ -1146,13 +1146,31 @@ final class SubscriptionStore {
     return links
   }
 
-  func backupCatalog() throws -> [String: Any] {
+  /// The backup `document`, without the subscriptions a backup may not hold, which `excluded` names with the reason: their
+  /// provider forbids sharing (`sharing_disabled`), or they were downloaded and never refreshed, so whether it allows it is
+  /// unknown (`sharing_refresh_required`). Nothing of such a subscription is saved: not its servers, its provider's routing
+  /// profiles, or the assignments and selection that point at them. When that leaves nothing to save, the first refusal stands.
+  func backupCatalog() throws -> (document: [String: Any], excluded: [[String: String]]) {
     guard transaction == nil, !publicationRecoveryRequired else { throw SubscriptionError.invalidState }
-    let sources: [[String: Any]] = try catalog.subscriptions.map { record in
-      guard record.metadata?.hideURL != true else { throw SubscriptionError.incompatibleProfile("This provider has disabled sharing and backups.") }
-      guard record.isLocal == true || record.metadata?.hideURL != nil else {
-        throw SubscriptionError.incompatibleProfile("Refresh every subscription before creating a backup.")
-      }
+    var excluded: [[String: String]] = [], left: Set<String> = []
+    let included = catalog.subscriptions.filter { record in
+      let reason: String? = record.metadata?.hideURL == true ? "sharing_disabled"
+        : record.isLocal != true && record.metadata?.hideURL == nil ? "sharing_refresh_required" : nil
+      guard let reason else { return true }
+      left.insert(record.id)
+      excluded.append(["name": record.manualName ?? record.providerName, "reason": reason])
+      return false
+    }
+    var backup = try routing.backupCatalog()
+    let routes = (backup["routes"] as? [[String: Any]] ?? []).filter { !left.contains($0["providerSubscriptionId"] as? String ?? "") }
+    if included.isEmpty, routes.isEmpty, let first = excluded.first {
+      throw SubscriptionError.incompatibleProfile(first["reason"] == "sharing_disabled"
+        ? "This provider has disabled sharing and backups." : "Refresh every subscription before creating a backup.")
+    }
+    let kept = Set(routes.compactMap { $0["id"] as? String })
+    backup["routes"] = routes
+    backup["assignments"] = (backup["assignments"] as? [String: String] ?? [:]).filter { !left.contains($0.key) && kept.contains($0.value) }
+    let sources: [[String: Any]] = try included.map { record in
       var source: [String: Any] = ["id": record.id, "name": record.manualName ?? record.providerName,
         "fallbackHosts": record.fallbackHosts ?? [], "fetchOptions": record.fetchOptions ?? [:]]
       if record.isLocal != true {
@@ -1166,11 +1184,12 @@ final class SubscriptionStore {
       if let hidden = record.hiddenNodes, !hidden.isEmpty { source["hiddenNodes"] = try hidden.map(backupNode) }
       return source
     }
-    var backup = try routing.backupCatalog()
     backup["version"] = 1
     backup["subscriptions"] = sources
-    if let selected = catalog.selectedNodeID { backup["selectedNodeId"] = selected }
-    return backup
+    if let selected = catalog.selectedNodeID, included.contains(where: { $0.nodes.contains { $0.id == selected } }) {
+      backup["selectedNodeId"] = selected
+    }
+    return (backup, excluded)
   }
 
   private func backupNode(_ node: SubscriptionNode) throws -> [String: Any] {

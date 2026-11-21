@@ -9,6 +9,9 @@ import java.net.URI
 
 class ResourceReview(val catalog: Catalog, val routeID: String, val url: String, val warning: JSONObject) : Exception()
 
+/** A backup to seal, and the subscriptions it left out: each a name and a reason, sharing_disabled or sharing_refresh_required. */
+data class Backup(val document: JSONObject, val excluded: List<JSONObject>)
+
 /** Value catalog: every editor works on a copy; only Repository publishes it.
  *  A [snapshot] is a published copy that nothing edits, such as the one the screens read many times in a frame:
  *  it reads its lists and settings once. */
@@ -556,18 +559,36 @@ class Catalog(val data: JSONObject, private val snapshot: Boolean = false) {
         }
         return Native.call("clientQR", obj("text" to text)).put("text", text)
     }
-    fun backup(): JSONObject {
-        sources.forEach { if (it.mapObject("metadata").optBoolean("hideURL") || it.objects("nodes").any { node -> node.optBoolean("hideURL") }) throw AppFailure("sharing_disabled")
-            if (it.has("url") && !it.mapObject("metadata").has("hideURL")) throw AppFailure("sharing_refresh_required") }
+    /** The backup [Backup.document], without the subscriptions a backup may not hold, which [Backup.excluded] names with the reason: their
+     *  provider forbids sharing (sharing_disabled), or they were downloaded and never refreshed, so whether it allows it is unknown
+     *  (sharing_refresh_required). Nothing of such a subscription is saved: not its servers, its provider's routing profiles, or the
+     *  assignments and selection that point at them. As on the desktop, when that leaves nothing to save the first refusal stands. */
+    fun backup(): Backup {
+        val excluded = mutableListOf<JSONObject>(); val left = mutableSetOf<String>()
+        val included = sources.filter { source ->
+            val reason = when {
+                source.mapObject("metadata").optBoolean("hideURL") || source.objects("nodes").any { it.optBoolean("hideURL") } -> "sharing_disabled"
+                source.has("url") && !source.mapObject("metadata").has("hideURL") -> "sharing_refresh_required"
+                else -> null
+            }
+            if (reason != null) { left.add(source.string("id")); excluded.add(obj("name" to source.string("name"), "reason" to reason)) }
+            reason == null
+        }
+        val kept = routes.filter { it.string("providerSubscriptionId") !in left }
+        if (included.isEmpty() && kept.isEmpty()) excluded.firstOrNull()?.let { throw AppFailure(it.getString("reason")) }
+        val keptRoutes = kept.map { it.string("id") }.toSet()
         fun pick(source: JSONObject, keys: List<String>) = JSONObject().apply { keys.forEach { if (source.has(it) && !source.isNull(it)) put(it, source.get(it)) } }
         val nodeKeys = listOf("id", "name", "providerName", "format", "config", "groupOverrides", "ipPreference", "favorite")
-        return obj("version" to 1, "selectedNodeId" to data.opt("selectedNodeId"), "assignments" to assignments,
-            "subscriptions" to JSONArray(sources.map { source -> pick(source, listOf("id", "name", "url", "shareLink", "fallbackHosts", "fetchOptions", "manualRouting"))
+        val selection = data.opt("selectedNodeId").takeIf { included.any { source -> source.objects("nodes").any { it.string("id") == selected } } }
+        val document = obj("version" to 1, "selectedNodeId" to selection,
+            "assignments" to JSONObject().apply { assignments.let { all -> all.keys().forEach { if (it !in left && all.getString(it) in keptRoutes) put(it, all.getString(it)) } } },
+            "subscriptions" to JSONArray(included.map { source -> pick(source, listOf("id", "name", "url", "shareLink", "fallbackHosts", "fetchOptions", "manualRouting"))
                 .put("nodes", JSONArray(source.objects("nodes").map { pick(it, nodeKeys) }))
                 .apply { if (source.objects("hiddenNodes").isNotEmpty()) put("hiddenNodes", JSONArray(source.objects("hiddenNodes").map { pick(it, nodeKeys) })) } }),
-            "routes" to JSONArray(routes.map { route -> pick(route, listOf("id", "profile", "providerSubscriptionId", "enabled", "edited")).apply {
+            "routes" to JSONArray(kept.map { route -> pick(route, listOf("id", "profile", "providerSubscriptionId", "enabled", "edited")).apply {
                 if (route.string("providerSubscriptionId").isNotEmpty()) put("providerProfile", route.getJSONObject("original"))
             } }))
+        return Backup(document, excluded)
     }
     fun restoreBackup(backup: JSONObject) {
         val sourceIDs = mutableMapOf<String, String>(); val nodeIDs = mutableMapOf<String, String>(); val routeIDs = mutableMapOf<String, String>()

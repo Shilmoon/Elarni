@@ -583,6 +583,58 @@
         }
       }
     },
+    "Also left out %lld subscriptions that were never updated: %@. Update them once first." : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Also left out %lld subscription that was never updated: %@. Update it once first."
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Also left out %lld subscriptions that were never updated: %@. Update them once first."
+                }
+              }
+            }
+          }
+        },
+        "ru" : {
+          "variations" : {
+            "plural" : {
+              "few" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Также не сохранены %lld подписки, которые ещё не обновлялись: %@. Обновите их хотя бы раз перед копированием."
+                }
+              },
+              "many" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Также не сохранено %lld подписок, которые ещё не обновлялись: %@. Обновите их хотя бы раз перед копированием."
+                }
+              },
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Также не сохранена %lld подписка, которая ещё не обновлялась: %@. Обновите хотя бы раз перед копированием."
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Также не сохранено %lld подписки, которые ещё не обновлялись: %@. Обновите их хотя бы раз перед копированием."
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "Any" : {
       "localizations" : {
         "ru" : {
@@ -741,6 +793,110 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Резервная копия восстановлена. Перед подключением проверьте выбранный сервер и маршрутизацию."
+          }
+        }
+      }
+    },
+    "Backup saved without %lld subscriptions: %@. Their providers do not allow backups." : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Backup saved without %lld subscription: %@. Its provider does not allow backups."
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Backup saved without %lld subscriptions: %@. Their providers do not allow backups."
+                }
+              }
+            }
+          }
+        },
+        "ru" : {
+          "variations" : {
+            "plural" : {
+              "few" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Копия сохранена без %lld подписок, провайдеры которых запрещают резервное копирование: %@."
+                }
+              },
+              "many" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Копия сохранена без %lld подписок, провайдеры которых запрещают резервное копирование: %@."
+                }
+              },
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Копия сохранена без %lld подписки, провайдер которой запрещает резервное копирование: %@."
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Копия сохранена без %lld подписки, провайдеры которых запрещают резервное копирование: %@."
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "Backup saved without %lld subscriptions: %@. Update them once first." : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Backup saved without %lld subscription: %@. Update it once first."
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Backup saved without %lld subscriptions: %@. Update them once first."
+                }
+              }
+            }
+          }
+        },
+        "ru" : {
+          "variations" : {
+            "plural" : {
+              "few" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Копия сохранена без %lld подписок, которые ещё не обновлялись: %@. Обновите их хотя бы раз перед копированием."
+                }
+              },
+              "many" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Копия сохранена без %lld подписок, которые ещё не обновлялись: %@. Обновите их хотя бы раз перед копированием."
+                }
+              },
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Копия сохранена без %lld подписки, которая ещё не обновлялась: %@. Обновите хотя бы раз перед копированием."
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Копия сохранена без %lld подписки, которые ещё не обновлялись: %@. Обновите их хотя бы раз перед копированием."
+                }
+              }
+            }
           }
         }
       }

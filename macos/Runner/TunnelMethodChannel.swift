@@ -386,14 +386,15 @@ final class TunnelMethodChannel {
               result(try self.subscriptionStore().updateFetchOptions(id: id, options: options))
             case "exportCatalogBackup":
               guard let password = try Self.arguments(call)["password"] as? String else { throw SubscriptionError.invalidFeed }
-              let sealed = try Self.invokeLibXray(method: "sealCatalogBackup",
-                payload: ["catalog": try self.subscriptionStore().backupCatalog(), "password": password])
+              // Subscriptions a backup may not hold are left out; the result names them.
+              let backup = try self.subscriptionStore().backupCatalog()
+              let sealed = try Self.invokeLibXray(method: "sealCatalogBackup", payload: ["catalog": backup.document, "password": password])
               guard let text = sealed["text"] as? String else { throw SubscriptionError.invalidFeed }
               if (call.arguments as? [String: Any])?["headless"] as? Bool == true {
-                result(["text": text])
+                result(["text": text, "excluded": backup.excluded])
               } else {
                 try CatalogBackupFile.save(text)
-                result([:])
+                result(["excluded": backup.excluded])
               }
             case "restoreCatalogBackup":
               try await self.stopForCatalogChange()

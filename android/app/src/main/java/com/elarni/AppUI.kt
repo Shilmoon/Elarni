@@ -319,9 +319,10 @@ private val LocalReselect = compositionLocalOf { 0 }
                 // A failed refresh names its provider and offers its support link.
                 val source = state.errorSource?.let { id -> catalog.sources.firstOrNull { it.string("id") == id } }
                 if (source == null) {
-                    // Only a reset gets past a saved catalog that cannot be read; locked or unavailable storage can come back by itself.
-                    val reset = tr(R.string.reset_elarni).takeIf { error == "storage_corrupt" && activity.repository.catalogUnreadable }
-                    if (snackbar.showSnackbar(errorMessage(error), reset, withDismissAction = true) == SnackbarResult.ActionPerformed) confirmReset()
+                    // Only a reset gets past a saved catalog that cannot be read, damaged or with its key gone; unavailable storage can come back by itself.
+                    val unreadable = error in Repository.unreadable && activity.repository.catalogUnreadable
+                    val reset = tr(R.string.reset_elarni).takeIf { unreadable }
+                    if (snackbar.showSnackbar(errorMessage(error, unreadable), reset, withDismissAction = true) == SnackbarResult.ActionPerformed) confirmReset()
                 } else {
                     val support = source.mapObject("links").string("support").takeIf { error in providerFaults && it.isNotEmpty() }
                     val result = snackbar.showSnackbar(tr(R.string.the_last_working_servers_were_kept, refreshFailure(error, source.string("name"))), support?.let { tr(R.string.contact_provider) }, withDismissAction = true)
@@ -1403,9 +1404,10 @@ fun pingScope(result: JSONObject) = when (result.string("protocol")) { "tcp" -> 
                 SettingsTile(tr(R.string.connection_2), state.connection)
                 SettingsTile(tr(R.string.connection_recovery), state.automationStatus)
                 if (state.whitelistMode) SettingsTile(tr(R.string.whitelist_mode_russian_entry_servers_first))
-                state.error?.let { SettingsTile(errorMessage(it), titleColor = MaterialTheme.colorScheme.error) }
                 // As on the error's snackbar: only an unreadable catalog needs it.
-                if (state.error == "storage_corrupt" && activity.repository.catalogUnreadable) SettingsTile(tr(R.string.reset_elarni), enabled = !state.busy, titleColor = MaterialTheme.colorScheme.error, onClick = reset)
+                val unreadable = state.error in Repository.unreadable && activity.repository.catalogUnreadable
+                state.error?.let { SettingsTile(errorMessage(it, unreadable), titleColor = MaterialTheme.colorScheme.error) }
+                if (unreadable) SettingsTile(tr(R.string.reset_elarni), enabled = !state.busy, titleColor = MaterialTheme.colorScheme.error, onClick = reset)
             }
             SettingsGroup {
                 SettingsTile(tr(R.string.retry_selected_server), enabled = !state.busy) { activity.connect() }
@@ -1531,14 +1533,18 @@ private fun refreshFailure(code: String, provider: String) = when (code) {
     else -> errorMessage(code)
 }
 
-fun errorMessage(code: String): String = when (code) {
+/** [unreadable]: the code is the saved catalog's own, which cannot be read, rather than a refused change's. */
+fun errorMessage(code: String, unreadable: Boolean = false): String = when (code) {
     "cancelled", "fetch_cancelled", "probe_cancelled" -> tr(R.string.operation_cancelled_your_saved_configuration_is)
     "no_selection" -> tr(R.string.select_a_server_before_connecting)
     "vpn_consent_required" -> tr(R.string.allow_elarni_to_create_a_vpn)
     "vpn_revoked" -> tr(R.string.android_revoked_vpn_access_open_elarni)
     "vpn_network_unavailable" -> tr(R.string.android_has_not_made_the_vpn)
     "foreground_start_denied" -> tr(R.string.android_could_not_start_the_service)
-    "storage_locked", "storage_corrupt", "storage_unavailable" -> tr(R.string.your_encrypted_catalog_could_not_be)
+    // A key gone for good comes only from loading the saved catalog; a damaged catalog may also be an edit that was refused.
+    "storage_locked" -> tr(R.string.elarni_cannot_read_its_saved_data)
+    "storage_corrupt" -> tr(if (unreadable) R.string.elarni_cannot_read_its_saved_data else R.string.elarni_could_not_open_or_save_its)
+    "storage_unavailable" -> tr(R.string.elarni_could_not_open_or_save_its)
     "unsupported_profile", "invalid_input" -> tr(R.string.this_profile_could_not_be_imported)
     "no_share_link" -> tr(R.string.a_chosen_server_has_no_share)
     "unencrypted_server" -> tr(R.string.this_server_has_no_encryption)
