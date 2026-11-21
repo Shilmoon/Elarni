@@ -38,6 +38,12 @@ final class TunnelMethodChannel {
   var automationTimerDue: (at: Double, epoch: UInt64)?
   private var maintenanceTimerDue: Date?
   var automationWork: Task<Void, Never>?
+  // Ends an exhausted episode's unattended wait (AutomationPolicy.rearmUnattended).
+  var automationRearmTimer: Task<Void, Never>?
+  var automationRearmDue: Double?
+  // Restarts of a core that stopped by itself while recovery is off (restartStoppedCore).
+  var coreRestarts = CoreRestartBudget()
+  var coreRestartWork: Task<Void, Never>?
   private var maintenanceTimer: Task<Void, Never>?
   private var maintenanceWork: Task<Void, Never>?
   private var maintenanceNow: () -> Date = Date.init
@@ -571,15 +577,26 @@ final class TunnelMethodChannel {
               result(["state": self.stateName(self.manager?.connection.status ?? .disconnected)])
 #endif
             case "state":
-              let state: String
-              do { state = self.stateName(try await self.loadManager().connection.status) }
+              var state: String
+              var metrics: [String: Any]?
+              do {
+                let selected = try await self.loadManager()
+                state = self.stateName(selected.connection.status)
+                if ["connected", "reasserting"].contains(state) { metrics = try? await self.runtimeMetrics() }
+                // The provider keeps its routes when its core stops by itself, and the system then
+                // says reasserting, as during a server switch; the provider tells the two apart.
+                if state == "reasserting", let metrics, CoreRestartBudget.coreFailed(metrics) {
+                  state = "failed"
+                  self.restartStoppedCore(selected)
+                }
+              }
               // A successful preferences read with no Elarni profile is a
               // known disconnected state. Actual query errors still propagate.
               catch RunnerTunnelError.notPrepared { state = "disconnected" }
-              let metrics = state == "connected" ? try? await self.runtimeMetrics() : nil
+              let liveness = state == "connected" ? metrics?["liveness"] as? String : nil
               result(["state": state,
                       "connectionIntent": self.commands.intent?.rawValue ?? "unknown",
-                      "liveness": (metrics?["liveness"] as? String).map { $0 as Any } ?? NSNull()])
+                      "liveness": liveness.map { $0 as Any } ?? NSNull()])
             case "runtimeMetrics":
               result(try await self.runtimeMetrics())
             case "readLogs":

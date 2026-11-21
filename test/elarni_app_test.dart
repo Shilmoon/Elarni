@@ -1522,6 +1522,65 @@ void main() {
     },
   );
 
+  // macOS polls the connection state only once its native host answered.
+  void answerDesktopHost(WidgetTester tester) {
+    final messenger = tester.binding.defaultBinaryMessenger;
+    messenger.setMockMethodCallHandler(
+      DesktopIntegration.channel,
+      (call) async => call.method == 'getPreferences' ? '{}' : null,
+    );
+    addTearDown(
+      () =>
+          messenger.setMockMethodCallHandler(DesktopIntegration.channel, null),
+    );
+  }
+
+  // The macOS provider keeps its routes when its core stops, so the system reports it as reconnecting.
+  for (final before in ['connected', 'reasserting']) {
+    testWidgets('macOS says a core that stopped while $before has failed', (
+      tester,
+    ) async {
+      answerDesktopHost(tester);
+      final control = FakeTunnelControl()..phase = before;
+      await pumpApp(tester, control);
+      expect(
+        find.text('Connection stopped unexpectedly. Reconnect to retry.'),
+        findsNothing,
+      );
+      control.phase = 'failed';
+      await tester.pump(const Duration(seconds: 1));
+      await tester.pumpAndSettle();
+      expect(find.text('Connection failed'), findsOneWidget);
+      expect(
+        find.text('Connection stopped unexpectedly. Reconnect to retry.'),
+        findsOneWidget,
+      );
+      expect(
+        tester
+            .widget<FilledButton>(find.byKey(const Key('connection-toggle')))
+            .onPressed,
+        isNotNull,
+      );
+      await tester.pumpWidget(const SizedBox());
+    });
+  }
+
+  testWidgets('macOS keeps quiet when a server switch ends connected', (
+    tester,
+  ) async {
+    answerDesktopHost(tester);
+    final control = FakeTunnelControl()..phase = 'reasserting';
+    await pumpApp(tester, control);
+    control.phase = 'connected';
+    await tester.pump(const Duration(seconds: 1));
+    await tester.pumpAndSettle();
+    expect(
+      find.text('Connection stopped unexpectedly. Reconnect to retry.'),
+      findsNothing,
+    );
+    await tester.pumpWidget(const SizedBox());
+  });
+
   testWidgets(
     'local proxy can cancel startup without a late cancellation becoming failure',
     (tester) async {

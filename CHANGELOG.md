@@ -4,6 +4,18 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
 
 ## Unreleased
 
+### Fixed
+
+- A VPN core that stops by itself now shows as **Connection failed** ("Connection stopped
+  unexpectedly") instead of **Reconnecting…** without end, and the app starts it again, twice
+  in ten minutes at most. The tunnel keeps its routes, so nothing leaks until the core runs
+  again. Connect restarts a failed core too, and Disconnect stops it. With Recovery on, its own
+  retries restart the core; with **Xray TUN** on, only Connect does. macOS.
+- Recovery that gave up no longer waits for Connect: it starts over by itself after 2.5, then 5,
+  then 10 minutes, the waits Android and the headless Windows and Linux client use, and when
+  the network comes back after it was gone. A connection that passes its check starts the waits
+  over. On iPhone this runs while the app is open. macOS and iPhone.
+
 ## 0.6.2 - 2026-11-18
 
 ### Added

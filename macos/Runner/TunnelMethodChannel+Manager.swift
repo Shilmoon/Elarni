@@ -38,6 +38,13 @@ extension TunnelMethodChannel {
 #if DEBUG
     if options != nil, selected.connection.status != .disconnected { throw RunnerTunnelError.invalidState }
 #endif
+    // A core that stopped by itself leaves the provider reasserting behind its routes; Connect
+    // starts it again, live where it can, else by stopping and starting the provider.
+    if selected.connection.status == .reasserting,
+       CoreRestartBudget.coreFailed((try? await runtimeMetrics()) ?? [:]),
+       try await !restartFailedCore(selected) {
+      try await stopForRestart(selected)
+    }
     if [.connected, .connecting, .reasserting].contains(selected.connection.status) {
       try await setOnDemand(selected,
         enabled: settingsStore.current.onDemandEnabled && !automationConfiguration.enabled,
@@ -425,6 +432,28 @@ extension TunnelMethodChannel {
     default: throw RunnerTunnelError.nodeSwitchRestoreFailed
     }
   }
+  /// The plan a provider runs, when a new core can start behind its routes; Xray's own TUN cannot.
+  static func liveRestartPlan(_ selected: NETunnelProviderManager) -> Data? {
+    guard let plan = (selected.protocolConfiguration as? NETunnelProviderProtocol)?.providerConfiguration?["planPayload"] as? Data,
+          let object = try? JSONSerialization.jsonObject(with: plan) as? [String: Any],
+          object["backend"] as? String != "xrayTun" else { return nil }
+    return plan
+  }
+
+  /// Starts a new core behind the routes a provider kept when its core stopped by itself: a live
+  /// switch to the plan it runs, as recovery restarts a dead session. Returns whether a core runs.
+  @MainActor
+  func restartFailedCore(_ selected: NETunnelProviderManager) async throws -> Bool {
+    guard let plan = Self.liveRestartPlan(selected) else { return false }
+    do { try await switchProvider(plan: plan, selected: selected) }
+    catch is CancellationError { throw CancellationError() }
+    catch {
+      // "restored" means the retained core, of the same plan, started again; the provider says which.
+    }
+    try Task.checkCancellation()
+    return (try? await runtimeMetrics())?["state"] as? String == "connected"
+  }
+
   /// As on iOS, the provider switches live only between plans with the same backend and runtime;
   /// a key the saved plan lacks is left to the provider to judge.
   static func canSwitchLive(from saved: Data?, to candidate: [String: Any]?) -> Bool {

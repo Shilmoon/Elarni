@@ -195,6 +195,10 @@ struct AutomationPolicy {
   private(set) var invalid: Set<String> = []
   private(set) var lastSwitch: Double?
   private(set) var lastOptimization: Double?
+  // A spent episode starts over by itself after 150, 300, then 600 s, as on the other platforms.
+  // Like there, the step and its deadline live in memory: a relaunch starts at the first wait.
+  private(set) var exhaustions = 0
+  private(set) var unattendedRearmAt: Double?
   private var rotation = 0
   // Mobile whitelists pass Russian addresses only: set when a Russian-entry
   // server passes after two foreign-entry ones failed, cleared by a foreign pass.
@@ -229,17 +233,37 @@ struct AutomationPolicy {
     episodeStarted = nil
     retryAt = nil
     healthAt = now
+    exhaustions = 0
+    unattendedRearmAt = nil
+  }
+
+  /// Starts a spent episode over once the wait for this step passed. The waits outlast the
+  /// roughly 120 s an SNI stays blocked after a burst of handshakes; a connection that passes
+  /// a check starts them over.
+  mutating func rearmUnattended(now: Double, intent: Bool) -> Bool {
+    guard intent, episode.exhausted, online, !sleeping else {
+      unattendedRearmAt = nil
+      return false
+    }
+    if unattendedRearmAt == nil { unattendedRearmAt = now + [150, 300, 600][min(exhaustions, 2)] }
+    guard now >= unattendedRearmAt! else { return false }
+    let count = exhaustions + 1
+    invalidate()
+    rearm(now: now)
+    exhaustions = count
+    return true
   }
 
   @discardableResult
   mutating func pathChanged(_ signature: String, available: Bool, now: Double) -> Bool {
     guard path != signature || online != available else { return false }
-    let initial = path == nil
+    let initial = path == nil, returned = available && !online
     path = signature
     online = available
     invalidate()
-    // The first monitor callback after relaunch is reconciliation, not a re-arm.
-    if available && !initial && !episode.interrupted && !episode.exhausted { rearm(now: now) }
+    // The first monitor callback after relaunch is reconciliation, not a re-arm. A network
+    // that comes back starts a new episode; another address on a working one keeps the budget.
+    if available && !initial && (returned || !episode.interrupted && !episode.exhausted) { rearm(now: now) }
     else if available && !episode.exhausted { healthAt = now }
     return true
   }
@@ -258,6 +282,8 @@ struct AutomationPolicy {
     retryAt = nil
     episode = Episode()
     episodeStarted = nil
+    exhaustions = 0
+    unattendedRearmAt = nil
   }
 
   mutating func scheduleHealth(now: Double, jitter: Double) {
@@ -270,6 +296,8 @@ struct AutomationPolicy {
     episode = Episode()
     episodeStarted = nil
     retryAt = nil
+    exhaustions = 0
+    unattendedRearmAt = nil
     scheduleHealth(now: now, jitter: jitter)
   }
 
@@ -430,5 +458,31 @@ struct AutomationPolicy {
     lastSwitch = now
     // Nested candidate measurements depend on the active node too.
     invalidate()
+  }
+}
+
+/// Restarts of a core that stopped by itself, which the app makes while recovery is off:
+/// at most two in ten minutes, then the connection stays failed until the user acts.
+struct CoreRestartBudget: Equatable {
+  static let limit = 2
+  static let window = 600.0
+  private(set) var restarts: [Double] = []
+
+  func allows(now: Double) -> Bool {
+    restarts.filter { now - $0 < Self.window }.count < Self.limit
+  }
+
+  mutating func take(now: Double) -> Bool {
+    restarts.removeAll { now - $0 >= Self.window }
+    guard restarts.count < Self.limit else { return false }
+    restarts.append(now)
+    return true
+  }
+
+  /// The provider's answer to "state" says its core is gone: it keeps the routes, so nothing
+  /// leaks, but carries no traffic until a restart. The iPhone app reads it the same way.
+  static func coreFailed(_ provider: [String: Any]) -> Bool {
+    ["protectedFailure", "quarantinedFailClosed"].contains(provider["state"] as? String ?? "")
+      || provider["resourceRecoveryRequired"] as? Bool == true
   }
 }
