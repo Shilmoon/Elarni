@@ -526,6 +526,7 @@
     }
   },
   "scheduledRefreshFailed": "A scheduled subscription or routing refresh failed.",
+  "managedListMissing": "A domain list of the routing profile is not downloaded yet, so its rules do not apply. Elarni downloads it now that the connection is up.",
   "groupSelectionFailed": "Group selection failed. The saved selection was restored.",
   "serverIpPreferenceNotApplied": "Could not apply the server IP preference.",
   "telegramNotOpened": "Telegram could not be opened. Check that it is installed.",

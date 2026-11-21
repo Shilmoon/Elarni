@@ -158,6 +158,7 @@ String listenerNotice(String value) {
     'link_failed' => l10n.clientLinkNotImported,
     'no_selected_subscription' => l10n.selectServerFirstRoutingLink,
     'scheduled_refresh_failed' => l10n.scheduledRefreshFailed,
+    'managed_list_missing' => l10n.managedListMissing,
     'connection_stopped' => l10n.connectionStoppedUnexpectedly,
     'connection_stopped_blocked' => l10n.connectionStoppedBlocked,
     'connection_stopped_repair' => l10n.connectionStoppedRepair,

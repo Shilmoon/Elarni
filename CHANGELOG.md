@@ -4,6 +4,21 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
 
 ## Unreleased
 
+### Fixed
+
+- Android: DNS is one choice, as on the other platforms. Settings › DNS no longer has a separate
+  **Use profile DNS** switch, which could be off while **DNS override** named the provider
+  profile or the routing profile; the connection then used 1.1.1.1 whatever the override said.
+  A saved pair is read once: the switch off with **Provider profile** becomes **1.1.1.1**, which
+  is what the connection used; the switch off with **Routing profile** keeps the routing
+  profile's DNS, which the connection now uses.
+- Windows, Linux, macOS, iPhone: a routing profile's managed domain list that was never
+  downloaded is downloaded when connecting, for up to 10 seconds, so the first connection already
+  follows its rules. Before, a list that had not been downloaded yet, for example right after an
+  import, left its rules out until a later refresh. A download that fails does not stop the
+  connection: the list is downloaded again over the connection, and on Windows and Linux Elarni
+  says that its rules do not apply yet.
+
 ## 0.6.2 - 2026-11-18
 
 ### Added

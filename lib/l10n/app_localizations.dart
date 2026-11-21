@@ -2000,6 +2000,12 @@ abstract class AppLocalizations {
   /// **'A scheduled subscription or routing refresh failed.'**
   String get scheduledRefreshFailed;
 
+  /// No description provided for @managedListMissing.
+  ///
+  /// In en, this message translates to:
+  /// **'A domain list of the routing profile is not downloaded yet, so its rules do not apply. Elarni downloads it now that the connection is up.'**
+  String get managedListMissing;
+
   /// No description provided for @groupSelectionFailed.
   ///
   /// In en, this message translates to:

@@ -41,6 +41,8 @@ final class TunnelMethodChannel {
   private var maintenanceTimer: Task<Void, Never>?
   private var maintenanceWork: Task<Void, Never>?
   private var maintenanceNow: () -> Date = Date.init
+  /// Connect's download of routing lists never downloaded; Stop ends it.
+  var connectListDownload: Task<Bool, Never>?
   var automationObservers: [NSObjectProtocol] = []
   let pathMonitors = [NWPathMonitor(requiredInterfaceType: .wifi),
                               NWPathMonitor(requiredInterfaceType: .wiredEthernet)]
@@ -189,6 +191,7 @@ final class TunnelMethodChannel {
             }
             return
           }
+          if call.method == "connect" { try await self.downloadMissingLists() }
           let intent: TunnelCommandCoordinator.Intent? = ["disconnect", "restoreCatalogBackup", "repairTunnel"].contains(call.method)
             ? .disconnected : (call.method == "connect" ? .connected : nil)
           let concurrentProbe = call.method == "pingNode" &&
@@ -775,6 +778,7 @@ final class TunnelMethodChannel {
     if method == "status" { return }
     automationCommandReceived(method)
     defer { scheduleAutomation(); scheduleMaintenance() }
+    if !stopping { try await downloadMissingLists() }
     try await commands.perform(intent: stopping ? .disconnected : .connected) {
       if stopping {
         try await self.disconnect()
@@ -1311,6 +1315,22 @@ final class TunnelMethodChannel {
     catch is CancellationError { throw CancellationError() }
     catch { throw RunnerTunnelError.invalidSettings }
     try Task.checkCancellation()
+  }
+
+  /// Connect first downloads the lists the selected server's routing profile never downloaded, within the
+  /// store's bound; without them their rules are not in the plan. It runs before the command owner, which each
+  /// list's publication takes. A failure fails no connection; a Stop meanwhile wins over this Connect.
+  @MainActor
+  func downloadMissingLists() async throws {
+    let store = try subscriptionStore()
+    let subscriptionID = store.selectedNodeID().flatMap { try? store.subscriptionID(nodeID: $0) }
+    guard !store.routing.missingManagedSources(subscriptionID: subscriptionID).isEmpty else { return }
+    let revision = commands.revision
+    let download = Task { @MainActor in await store.routing.downloadMissingManaged(subscriptionID: subscriptionID) }
+    connectListDownload = download
+    _ = await download.value
+    if connectListDownload == download { connectListDownload = nil }
+    if commands.revision != revision, commands.intent == .disconnected { throw CancellationError() }
   }
 
   @MainActor

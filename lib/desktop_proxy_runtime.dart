@@ -1,7 +1,9 @@
 part of 'desktop_proxy.dart';
 
 extension _ProxyRuntime on DesktopProxy {
-  Future<CatalogMap> _connect() async {
+  // [listsMissing]: the routing profile still lacks a list Connect could not
+  // download, which the window hears once the connection is up.
+  Future<CatalogMap> _connect({bool listsMissing = false}) async {
     if (_operation != null ||
         !{'disconnected', 'prepared', 'failed'}.contains(_state))
       throw desktopError('busy');
@@ -42,6 +44,7 @@ extension _ProxyRuntime on DesktopProxy {
       _checkGeneration(generation);
       if (unsaved == null) _catalog = candidate;
       _listener?.call(unsaved);
+      if (listsMissing) _listener?.call('managed_list_missing');
       await _syncSystemProxy();
       return {'state': _state};
     } on Object catch (error) {
@@ -64,8 +67,15 @@ extension _ProxyRuntime on DesktopProxy {
   // Another process can empty the geofile cache under the catalog. Prepare the
   // selected route's files again once, as Refresh routing data would.
   Future<CatalogMap> _connectPreparingLostAssets() async {
+    // Only a Connect with a list to download waits for it: without one,
+    // Connect keeps its turn in the hand-off from a refresh that held the
+    // controller.
+    final listsMissing =
+        _catalog != null &&
+        _missingLists(_catalog!) != null &&
+        await _downloadMissingLists();
     try {
-      return await _connect();
+      return await _connect(listsMissing: listsMissing);
     } on PlatformException catch (error) {
       if (error.code != 'assets_missing') rethrow;
     }
@@ -87,7 +97,95 @@ extension _ProxyRuntime on DesktopProxy {
     }
     // A Stop while the old revision was being retired still wins.
     if (stops != _linkStopGeneration) throw desktopError('cancelled');
-    return _connect();
+    return _connect(listsMissing: listsMissing);
+  }
+
+  // The selected server's routing profile, when it is on, and its managed
+  // lists that were never downloaded. Their rules are not in the
+  // configuration until they are.
+  static ({String route, List<String> sources})? _missingLists(
+    DesktopCatalog catalog,
+  ) {
+    final nodeId = catalog.selected;
+    if (nodeId == null) return null;
+    final source = catalog.sources
+        .where(
+          (source) =>
+              catalogList(source['nodes']).any((node) => node['id'] == nodeId),
+        )
+        .firstOrNull;
+    final id = source == null ? null : catalog.assignments[source['id']];
+    if (id == null) return null;
+    final route = catalog.route(id as String);
+    if (route['enabled'] != true) return null;
+    final lists = catalogMap(route['lists'] ?? {});
+    final missing = [
+      for (final item in catalogList(
+        catalogMap(route['profile'])['ManagedSources'],
+      ))
+        if (!lists.containsKey(item['id'])) item['id']! as String,
+    ];
+    return missing.isEmpty ? null : (route: id, sources: missing);
+  }
+
+  // Connect first downloads the lists [_missingLists] names, for at most
+  // [_managedListTimeout] in total. One still missing fails no connection:
+  // its route is due at once, so the scheduled refresh downloads it over the
+  // connection. Returns whether one is still missing.
+  Future<bool> _downloadMissingLists() async {
+    if (_catalog == null ||
+        !{'disconnected', 'prepared', 'failed'}.contains(_state))
+      return false;
+    final missing = _missingLists(_catalog!);
+    if (missing == null) return false;
+    final deadline = awakeNow() + _managedListTimeout;
+    Future<CatalogMap> fetch(String method, CatalogMap payload) async {
+      final left = deadline - awakeNow();
+      if (left <= Duration.zero) throw desktopError('fetch_failed');
+      try {
+        return await _native(method, payload, timeout: left);
+      } on PlatformException catch (error) {
+        // _native reports its own timeout as a failed operation.
+        if (error.code != 'operation_failed' || awakeNow() < deadline) rethrow;
+        throw desktopError('fetch_failed');
+      }
+    }
+
+    final stops = _linkStopGeneration;
+    try {
+      await _mutate((candidate) async {
+        final all = catalogList(
+          catalogMap(
+            candidate.route(missing.route)['profile'],
+          )['ManagedSources'],
+        );
+        // A refresh of the whole route also schedules the next one; a single
+        // list's success leaves the route's schedule as it was.
+        if (missing.sources.length == all.length) {
+          await candidate.refreshManaged(missing.route, fetch: fetch);
+        } else {
+          for (final source in missing.sources)
+            await candidate.refreshManaged(
+              missing.route,
+              sourceId: source,
+              fetch: fetch,
+            );
+        }
+        if (_missingLists(candidate) != null)
+          candidate.putRoute({
+            ...candidate.route(missing.route),
+            'nextManagedRefreshAt': candidate.now,
+          });
+        return {};
+      });
+    } on PlatformException catch (error) {
+      if (error.code == 'cancelled') rethrow;
+      // Connect goes on without the list; a failed download shows on the
+      // routing profile.
+    }
+    // A Stop while the lists downloaded wins over this Connect.
+    if (stops != _linkStopGeneration) throw desktopError('cancelled');
+    return _catalog != null && _missingLists(_catalog!) != null;
   }
 
   // A helper killed during this boot leaves its fail-closed DNS guard (on Linux,

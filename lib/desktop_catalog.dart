@@ -1660,11 +1660,13 @@ final class DesktopCatalog {
   // the route records the first error and retries on the shared schedule.
   // Only [sourceId], when given; its success says nothing of the other lists,
   // so it leaves the route's error and schedule as they were. Returns the
-  // error this refresh recorded.
+  // error this refresh recorded. [fetch], when given, downloads instead of
+  // [native]: Connect bounds its downloads.
   Future<String?> refreshManaged(
     String id, {
     String? sourceId,
     String? proxy,
+    DesktopRequest? fetch,
   }) async {
     final item = route(id), profile = catalogMap(item['profile']);
     final sources = catalogList(profile['ManagedSources']);
@@ -1680,7 +1682,7 @@ final class DesktopCatalog {
     for (final source in sources) {
       if (sourceId != null && source['id'] != sourceId) continue;
       try {
-        final feed = await native('fetchSubscription', {
+        final feed = await (fetch ?? native)('fetchSubscription', {
           'url': source['url'],
           if (proxy != null) 'proxy': proxy,
         });

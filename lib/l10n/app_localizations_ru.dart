@@ -1156,6 +1156,10 @@ class AppLocalizationsRu extends AppLocalizations {
       'Не удалось выполнить плановое обновление подписки или маршрутизации.';
 
   @override
+  String get managedListMissing =>
+      'Список доменов профиля маршрутизации ещё не загружен, поэтому его правила не действуют. Elarni загрузит его теперь, когда подключение установлено.';
+
+  @override
   String get groupSelectionFailed =>
       'Не удалось выбрать сервер в группе. Восстановлен сохранённый выбор.';
 

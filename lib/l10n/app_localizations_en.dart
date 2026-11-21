@@ -1144,6 +1144,10 @@ class AppLocalizationsEn extends AppLocalizations {
       'A scheduled subscription or routing refresh failed.';
 
   @override
+  String get managedListMissing =>
+      'A domain list of the routing profile is not downloaded yet, so its rules do not apply. Elarni downloads it now that the connection is up.';
+
+  @override
   String get groupSelectionFailed =>
       'Group selection failed. The saved selection was restored.';
 

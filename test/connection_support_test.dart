@@ -15,6 +15,8 @@ void main() {
         'Select a server first. This routing link turns its profile on for the selected server’s subscription.',
     'scheduled_refresh_failed':
         'A scheduled subscription or routing refresh failed.',
+    'managed_list_missing':
+        'A domain list of the routing profile is not downloaded yet, so its rules do not apply. Elarni downloads it now that the connection is up.',
     'connection_stopped':
         'Connection stopped unexpectedly. Reconnect to retry.',
     'connection_stopped_blocked':
