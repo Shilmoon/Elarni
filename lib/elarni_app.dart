@@ -805,6 +805,8 @@ class _ElarniHomeState extends State<ElarniHome> {
           ),
           if (_automation['wifi'] == 'locationDenied')
             ListTile(subtitle: Text(l10n.windowsWifiLocationHelp)),
+          if (_automation['wifi'] == 'nameUnreadable')
+            ListTile(subtitle: Text(l10n.linuxWifiNameHelp)),
         ],
         ElarniCheckboxTile(
           title: Text(l10n.launchAtLogin),

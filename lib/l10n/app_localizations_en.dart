@@ -1794,7 +1794,11 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get windowsWifiLocationHelp =>
-      'Windows keeps the Wi-Fi name from Elarni. Turn on Location services and Let desktop apps access your location in Settings › Privacy & security › Location.';
+      'Windows keeps the Wi-Fi name from Elarni. Turn on Location services and Let desktop apps access your location in Settings › Privacy & security › Location. Until then every Wi-Fi network counts as untrusted.';
+
+  @override
+  String get linuxWifiNameHelp =>
+      'Elarni cannot read the Wi-Fi name on this system: it needs NetworkManager\'s nmcli or iw. Until then every Wi-Fi network counts as untrusted.';
 
   @override
   String get noTrustedWifi => 'None. Every Wi-Fi network connects.';

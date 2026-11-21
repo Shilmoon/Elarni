@@ -515,7 +515,7 @@
     <string name="show">Show</string>
     <string name="allow">Allow</string>
     <string name="allow_location_all_the_time">Allow location all the time</string>
-    <string name="android_shows_wi_fi_names_only">Android shows Wi-Fi names only to apps that may use location all the time, with location on.</string>
+    <string name="android_shows_wi_fi_names_only">Android shows Wi-Fi names only to apps that may use location all the time, with location on. Until then Elarni treats every Wi-Fi network as untrusted and connects.</string>
     <string name="none_every_wi_fi_network_connects">None. Every Wi-Fi network connects.</string>
     <string name="one_network_name_per_line">One network name per line.</string>
     <string name="trusted_wi_fi_networks">Trusted Wi-Fi networks</string>

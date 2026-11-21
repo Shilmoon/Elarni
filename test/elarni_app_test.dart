@@ -17,10 +17,13 @@ Future<void> pumpApp(
   WidgetTester tester,
   FakeTunnelControl control, {
   bool windows = false,
+  bool linux = false,
 }) async {
   await tester.binding.setSurfaceSize(const Size(1200, 900));
   addTearDown(() => tester.binding.setSurfaceSize(null));
-  await tester.pumpWidget(ElarniApp(tunnelControl: control, windows: windows));
+  await tester.pumpWidget(
+    ElarniApp(tunnelControl: control, windows: windows, linux: linux),
+  );
   await tester.pumpAndSettle();
 }
 
@@ -2031,6 +2034,18 @@ void main() {
     await tester.pumpAndSettle();
     expect(control.settings.trustedWiFiNetworks, ['Home', 'Office 5G']);
     expect(find.text('Home, Office 5G'), findsOneWidget);
+  });
+
+  testWidgets('Linux says when it cannot read the Wi-Fi name', (tester) async {
+    final control = FakeTunnelControl()
+      ..automation = {'wifi': 'nameUnreadable'};
+    await pumpApp(tester, control, linux: true);
+    await openSettings(tester);
+    await reveal(tester, find.text('Connect on untrusted Wi-Fi'));
+    await tester.tap(find.text('Connect on untrusted Wi-Fi'));
+    await tester.pumpAndSettle();
+    expect(find.textContaining("NetworkManager's nmcli or iw"), findsOneWidget);
+    expect(find.textContaining('Let desktop apps'), findsNothing);
   });
 
   testWidgets('macOS offers Connect on untrusted Wi-Fi through On Demand', (
