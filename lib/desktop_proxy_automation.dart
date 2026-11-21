@@ -49,9 +49,14 @@ extension _ProxyAutomation on DesktopProxy {
     _automationBusy = true;
     try {
       if (due != null) {
-        await _invoke('refreshSubscription', {
-          'id': due['id'],
+        final id = due['id']! as String;
+        final result = await _invoke('refreshSubscription', {
+          'id': id,
         }, automatic: true);
+        // A network that answered unexpectedly (a captive portal, a redirect)
+        // leaves the subscription as it was until a retry in two hours.
+        if (result['warning'] != null && _reviewNoticed.add(id))
+          _listener?.call('scheduled_refresh_needs_review');
       } else if (route != null) {
         await _mutate((candidate) async {
           await candidate.refreshManaged(

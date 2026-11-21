@@ -280,12 +280,20 @@ class Catalog(val data: JSONObject, private val snapshot: Boolean = false) {
     fun refreshFailed(id: String, code: String) {
         val item = source(id)
         val failures = item.optInt("failures") + 1
+        // A provider that wants this device registered, or has too many, is asked again at the regular interval:
+        // the user may free a slot on its site or reset the device ID meanwhile.
         item.put("status", "failed").put("refreshError", code).put("failures", failures)
-            .put("nextRefreshAt", if (code in listOf("hwid_required", "hwid_limit")) JSONObject.NULL else now() + retryDelay(failures))
+            .put("nextRefreshAt", if (code in deviceReplies) now() + refreshHours(item).coerceIn(1, 168) * 3600 else now() + retryDelay(failures))
     }
     fun nextRefresh(item: JSONObject): Double? {
         if (!item.has("url") || item.string("status") == "needsApproval") return null
-        if (item.optInt("failures") > 0) return if (item.isNull("nextRefreshAt")) null else item.optDouble("nextRefreshAt")
+        if (item.optInt("failures") > 0) return when {
+            !item.isNull("nextRefreshAt") -> item.optDouble("nextRefreshAt")
+            // Older versions saved no time after a device reply and never asked again.
+            item.string("refreshError") in deviceReplies ->
+                if (item.has("lastSuccessfulFetch")) item.getDouble("lastSuccessfulFetch") + refreshHours(item).coerceIn(1, 168) * 3600 else now()
+            else -> null
+        }
         val hours = refreshHours(item)
         if (item.has("lastSuccessfulFetch") && item.optInt("refreshInterval") != hours * 3600) return item.getDouble("lastSuccessfulFetch") + hours * 3600
         return if (item.isNull("nextRefreshAt")) null else item.optDouble("nextRefreshAt")
@@ -660,6 +668,7 @@ class Catalog(val data: JSONObject, private val snapshot: Boolean = false) {
             if (settings.string("perAppMode") == "off") null else settings.strings("perAppProcesses").associateWith(uid)
         // Subscriptions, managed lists and geodata retry a failed refresh after 60, 300, then 1800 s.
         fun retryDelay(failures: Int) = listOf(60, 300, 1800)[(failures - 1).coerceIn(0, 2)]
+        private val deviceReplies = setOf("hwid_required", "hwid_limit")
         /** Whether a refresh stored for [at] is due at [time]. [longest] is the furthest ahead its schedule writes a time; one further
          *  away than that, and an hour for a clock corrected by minutes, was written under a clock since set back and would take years. */
         fun refreshDue(at: Double, time: Double, longest: Double) = at <= time || at > time + longest + 3600

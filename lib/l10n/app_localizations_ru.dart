@@ -1165,6 +1165,10 @@ class AppLocalizationsRu extends AppLocalizations {
       'Не удалось выполнить плановое обновление подписки или маршрутизации.';
 
   @override
+  String get scheduledRefreshNeedsReview =>
+      'Подписка не обновилась: сеть ответила не так, как ожидалось. Elarni попробует снова через два часа; чтобы проверить её сейчас, откройте «Подписки».';
+
+  @override
   String get groupSelectionFailed =>
       'Не удалось выбрать сервер в группе. Восстановлен сохранённый выбор.';
 

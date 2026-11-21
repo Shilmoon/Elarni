@@ -781,8 +781,14 @@ extension _ProxyCommands on DesktopProxy {
         case 'resetSubscriptionDeviceID':
           final source = candidate.source(args['id']! as String);
           if (source['url'] == null) throw desktopError('invalid_profile');
-          // A random key of the subscription's own; every refresh sends the ID it makes.
-          candidate.putSource({...source, 'deviceSalt': desktopID()});
+          // A random key of the subscription's own; every refresh sends the ID
+          // it makes. The next scheduled refresh sends the new one at once:
+          // after a device reply the provider may take it.
+          candidate.putSource({
+            ...source,
+            'deviceSalt': desktopID(),
+            'nextRefreshAt': candidate.now,
+          });
         case 'renameSubscription':
           final source = candidate.source(args['id']! as String);
           final text = (args['name'] as String?)?.trim();
@@ -957,8 +963,11 @@ extension _ProxyCommands on DesktopProxy {
     });
     if (refreshError != null) throw refreshError!;
     // A refresh that succeeded, scheduled or not, restarts the scheduled one's backoff.
-    if (method == 'refreshSubscription')
+    if (method == 'refreshSubscription') {
       _refreshBackoff.remove('source:${args['id']}');
+      // One that needed no review lets the next one that does say so again.
+      if (result['warning'] == null) _reviewNoticed.remove(args['id']);
+    }
     if (method == 'refreshRoutingGeofiles')
       _refreshBackoff.remove('geo:${args['id']}');
     if (method == 'refreshManagedLists')

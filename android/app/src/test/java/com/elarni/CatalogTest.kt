@@ -169,6 +169,44 @@ class CatalogTest {
         assertEquals(null to 0, Catalog.freshness(emptyList()))
     }
 
+    // A provider that wants this device registered, or has too many, is asked again at the regular interval: the
+    // user may free a slot on its site or reset the device ID. Ordinary failures keep their short retries.
+    @Test fun deviceReplyIsAskedAgainOneIntervalLater() {
+        val catalog = Catalog(obj("subscriptions" to JSONArray()))
+        for (code in listOf("hwid_required", "hwid_limit")) {
+            catalog.putSource(obj("id" to "s", "url" to "https://provider.example/feed", "status" to "ready",
+                "fetchOptions" to obj("refreshHours" to "6"), "nextRefreshAt" to 1.0))
+            for (attempt in 1..3) {
+                val before = now()
+                catalog.refreshFailed("s", code)
+                val after = now()
+                val source = catalog.source("s")
+                assertEquals(code, source.getString("refreshError"))
+                assertEquals(attempt, source.getInt("failures"))
+                val at = source.getDouble("nextRefreshAt")
+                assertTrue("$code, attempt $attempt", at >= before + 6 * 3600 && at <= after + 6 * 3600)
+                assertEquals(at, catalog.nextRefresh(source)!!, 0.0)
+            }
+        }
+        val before = now()
+        catalog.refreshFailed("s", "fetch_failed")
+        assertTrue("Other failures keep the short retries", catalog.source("s").getDouble("nextRefreshAt") in before + 1800..now() + 1800)
+    }
+
+    @Test fun deviceReplySavedWithNoTimeByAnOlderVersionIsDue() {
+        val catalog = Catalog(JSONObject())
+        fun parked(code: String) = obj("id" to "s", "url" to "https://provider.example/feed", "status" to "failed", "refreshError" to code,
+            "failures" to 1, "fetchOptions" to obj("refreshHours" to "6"), "nextRefreshAt" to JSONObject.NULL)
+        for (code in listOf("hwid_required", "hwid_limit")) {
+            val time = now()
+            assertTrue("$code, never refreshed", catalog.nextRefresh(parked(code))!! <= now())
+            assertTrue(catalog.nextRefresh(parked(code))!! >= time)
+            assertEquals("An interval after the last success", time - 3600 + 6 * 3600,
+                catalog.nextRefresh(parked(code).put("lastSuccessfulFetch", time - 3600))!!, 0.0)
+        }
+        assertNull("Only the device replies were saved with no time", catalog.nextRefresh(parked("fetch_failed")))
+    }
+
     @Test fun retryDelayAndCanonicalForm() {
         assertEquals(listOf(60, 60, 300, 1800, 1800), listOf(0, 1, 2, 3, 9).map(Catalog::retryDelay))
         assertEquals(Catalog.canonical(JSONObject("""{"b":[1,{"y":2,"x":"s"}],"a":null}""")), Catalog.canonical(JSONObject("""{"a":null,"b":[1,{"x":"s","y":2}]}""")))

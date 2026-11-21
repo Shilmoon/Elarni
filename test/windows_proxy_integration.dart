@@ -8185,6 +8185,165 @@ else:
     },
   );
 
+  // A captive portal or a redirect to a private address once must not stop a
+  // subscription's refreshes for good, nor fill the window with notices.
+  test(
+    'a scheduled refresh that meets a risky answer retries in two hours and says so once',
+    () async {
+      var now = DateTime.now();
+      await backend.dispose();
+      backend = createBackend(
+        clock: () => now,
+        refreshInterval: const Duration(milliseconds: 50),
+      );
+      var requests = 0;
+      final feed = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      feed.listen((request) async {
+        requests++;
+        request.response.write(profile);
+        await request.response.close();
+      });
+      final notices = <String?>[];
+      final changes = StreamController<String?>.broadcast();
+      backend.control.setImportListener((message) {
+        notices.add(message);
+        changes.add(message);
+      });
+      CatalogMap source() => catalogList(
+        catalogMap(storedCatalog!['committed'])['subscriptions'],
+      ).single;
+      double at() => now.millisecondsSinceEpoch / 1000;
+      int reviews() =>
+          notices.where((n) => n == 'scheduled_refresh_needs_review').length;
+      try {
+        // A loopback feed over plain HTTP needs the user's approval.
+        final added = await backend.control.addSubscription(
+          'http://127.0.0.1:${feed.port}/feed',
+        );
+        final id = added.snapshot.subscriptions.single.id;
+        expect(added.warning, isNotNull);
+        expect(source()['status'], 'needsApproval');
+        expect(source()['nextRefreshAt'], at() + 7200);
+        for (var retry = 1; retry <= 3; retry++) {
+          final retried = changes.stream
+              .firstWhere((_) => source()['nextRefreshAt'] == at() + 7200)
+              .timeout(
+                const Duration(seconds: 10),
+                onTimeout: () => fail('No scheduled retry $retry'),
+              );
+          now = now.add(const Duration(seconds: 7200));
+          await retried;
+          expect(source()['status'], 'needsApproval');
+          expect(source()['nodes'], isEmpty);
+          // The approval check comes before the download; nothing was fetched.
+          expect(requests, 0);
+          // The notice follows the change; it may have come already.
+          if (retry == 1 && reviews() == 0) {
+            await changes.stream
+                .firstWhere((n) => n == 'scheduled_refresh_needs_review')
+                .timeout(
+                  const Duration(seconds: 10),
+                  onTimeout: () => fail('The first retry said nothing'),
+                );
+          }
+        }
+        expect(
+          reviews(),
+          1,
+          reason: 'One notice until the subscription updates',
+        );
+        // The user's review still approves and applies it.
+        final review = await backend.control.refreshSubscription(id);
+        final approved = await backend.control.refreshSubscription(
+          id,
+          challenge: review.warning!.challenge,
+        );
+        expect(approved.warning, isNull);
+        expect(source()['status'], 'ready');
+        expect(requests, greaterThan(0));
+      } finally {
+        backend.control.setImportListener(null);
+        await changes.close();
+        await feed.close(force: true);
+      }
+    },
+  );
+
+  // Reset device ID is what the user does about a device limit: the next
+  // scheduled refresh sends the new ID instead of waiting for an interval.
+  test(
+    'a device limit waits one interval, and a device ID reset refreshes at the next tick',
+    () async {
+      var now = DateTime.now();
+      await backend.dispose();
+      backend = createBackend(
+        clock: () => now,
+        refreshInterval: const Duration(milliseconds: 50),
+      );
+      String? limited;
+      final sent = <String?>[];
+      final feed = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      feed.listen((request) async {
+        final device = request.headers.value('x-hwid');
+        sent.add(device);
+        if (device == limited) {
+          request.response
+            ..statusCode = HttpStatus.forbidden
+            ..headers.set('X-Hwid-Limit', 'true');
+        } else {
+          request.response.write(profile);
+        }
+        await request.response.close();
+      });
+      final changes = StreamController<void>.broadcast();
+      backend.control.setImportListener((_) => changes.add(null));
+      CatalogMap source() => catalogList(
+        catalogMap(storedCatalog!['committed'])['subscriptions'],
+      ).single;
+      double at() => now.millisecondsSinceEpoch / 1000;
+      try {
+        final added = await backend.control.addSubscription(
+          'http://127.0.0.1:${feed.port}/feed',
+        );
+        final id = added.snapshot.subscriptions.single.id;
+        await backend.control.refreshSubscription(
+          id,
+          challenge: added.warning!.challenge,
+        );
+        limited = await backend.control.subscriptionDeviceID(id);
+        await expectLater(
+          backend.control.refreshSubscription(id),
+          throwsA(
+            isA<PlatformException>().having(
+              (error) => error.code,
+              'code',
+              'hwid_limit',
+            ),
+          ),
+        );
+        expect(source()['refreshError'], 'hwid_limit');
+        expect(source()['nextRefreshAt'], at() + 4 * 3600);
+        final before = sent.length;
+        final refreshed = changes.stream
+            .firstWhere((_) => source()['status'] == 'ready')
+            .timeout(
+              const Duration(seconds: 10),
+              onTimeout: () => fail('No scheduled refresh after the reset'),
+            );
+        await backend.control.resetSubscriptionDeviceID(id);
+        await refreshed;
+        final reset = await backend.control.subscriptionDeviceID(id);
+        expect(reset, isNot(limited));
+        expect(sent.skip(before), allOf(isNotEmpty, everyElement(reset)));
+        expect(source()['refreshError'], isNull);
+      } finally {
+        backend.control.setImportListener(null);
+        await changes.close();
+        await feed.close(force: true);
+      }
+    },
+  );
+
   test('a refresh the user runs ends the scheduled refresh backoff', () async {
     var now = DateTime.now();
     await backend.dispose();

@@ -587,8 +587,10 @@ class Repository(private val app: ElarniApplication) {
                 } else source.put("manualName", name(requested)).put("name", name(requested))
             }
             "pinSource" -> candidate.source(id).put("pinned", args.getBoolean("value"))
-            // A new random key changes this subscription's device ID only.
+            // A new random key changes this subscription's device ID only. The next background refresh sends it at once:
+            // after a device reply the provider may take it.
             "resetDeviceID" -> candidate.source(id).also { if (!it.has("url")) throw AppFailure("invalid_input") }.put("deviceSalt", newId())
+                .put("nextRefreshAt", now())
             "deleteNode", "deleteNodes" -> {
                 val ids = if (command == "deleteNode") listOf(id) else {
                     val requested = args.optJSONArray("ids") ?: throw AppFailure("invalid_input")

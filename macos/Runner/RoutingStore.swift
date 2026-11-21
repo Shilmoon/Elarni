@@ -926,7 +926,7 @@ final class RoutingStore {
         let prior = catalog
         let authorization = error is SubscriptionApprovalRequirement
         catalog.profiles[index].managedSources![sourceIndex].schedule.failed(now: now(), interval: Self.managedInterval,
-          category: authorization ? "authorization" : "refresh", authorization: authorization)
+          category: authorization ? "authorization" : "refresh", failure: authorization ? .approval : .other)
         do { try save() } catch { catalog = prior; throw error }
       }
       throw error
