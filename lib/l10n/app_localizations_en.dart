@@ -1161,6 +1161,10 @@ class AppLocalizationsEn extends AppLocalizations {
       'A server that an app is routed through is gone from its subscription. The connection keeps the old settings; choose another server for that app in Per-app routing.';
 
   @override
+  String get selectedServerReplaced =>
+      'The server you had selected is gone from its subscription. Elarni selected another server.';
+
+  @override
   String get groupSelectionFailed =>
       'Group selection failed. The saved selection was restored.';
 

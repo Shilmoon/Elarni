@@ -534,6 +534,7 @@ extension _ProxyCommands on DesktopProxy {
       if (_automation.intent) _automation.healthAt = _now;
     }
     PlatformException? refreshError;
+    String? selectedBeforeRefresh;
     final result = await _mutate((candidate) async {
       CatalogMap? warning;
       String addSource(CatalogMap input) {
@@ -566,6 +567,7 @@ extension _ProxyCommands on DesktopProxy {
           format = challenge.format;
         }
         final beforeRefresh = copyCatalog(candidate.data);
+        selectedBeforeRefresh = candidate.selected;
         try {
           warning = await candidate.refresh(
             id,
@@ -962,6 +964,10 @@ extension _ProxyCommands on DesktopProxy {
       };
     }, subscriptionRefresh: method == 'refreshSubscription');
     if (refreshError != null) throw refreshError!;
+    // The refresh removed the selected server and selected another; manual
+    // and scheduled refreshes both say so, once.
+    if (_catalog!.replacedSelection(selectedBeforeRefresh))
+      _listener?.call('selected_server_replaced');
     // A refresh that succeeded, scheduled or not, restarts the scheduled one's backoff.
     if (method == 'refreshSubscription') {
       _refreshBackoff.remove('source:${args['id']}');

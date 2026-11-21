@@ -937,6 +937,16 @@ final class DesktopCatalog {
     });
   }
 
+  /// Whether the selection moved off [previous] because that server is gone.
+  bool replacedSelection(String? previous) =>
+      previous != null &&
+      selected != null &&
+      selected != previous &&
+      !sources.any(
+        (source) =>
+            catalogList(source['nodes']).any((node) => node['id'] == previous),
+      );
+
   void reconcileSelection() {
     final known = {
       for (final source in sources)

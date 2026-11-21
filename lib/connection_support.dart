@@ -160,6 +160,7 @@ String listenerNotice(String value) {
     'scheduled_refresh_failed' => l10n.scheduledRefreshFailed,
     'scheduled_refresh_needs_review' => l10n.scheduledRefreshNeedsReview,
     'per_app_target_missing' => l10n.perAppTargetGoneKept,
+    'selected_server_replaced' => l10n.selectedServerReplaced,
     'connection_stopped' => l10n.connectionStoppedUnexpectedly,
     'connection_stopped_blocked' => l10n.connectionStoppedBlocked,
     'connection_stopped_proxy_blocked' => l10n.connectionStoppedProxyBlocked,

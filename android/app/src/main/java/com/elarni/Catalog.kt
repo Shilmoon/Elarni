@@ -305,6 +305,9 @@ class Catalog(val data: JSONObject, private val snapshot: Boolean = false) {
     fun reconcileSelection() {
         if (selected.isNotEmpty() && nodes.none { it.string("id") == selected }) data.put("selectedNodeId", JSONObject.NULL)
     }
+    /** Whether the selection moved off [previous] because that server is gone. */
+    fun replacedSelection(previous: String) =
+        previous.isNotEmpty() && selected.isNotEmpty() && selected != previous && nodeOrNull(previous) == null
     fun selectGroup(nodeId: String, groupName: String, choice: String) {
         val node = node(nodeId)
         val group = node.mapObject("config").objects("elarniGroups").firstOrNull { it.string("name") == groupName } ?: throw AppFailure("invalid_input")

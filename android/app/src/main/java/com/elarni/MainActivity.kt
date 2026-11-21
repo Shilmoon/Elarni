@@ -227,6 +227,7 @@ class MainActivity : ComponentActivity() {
                         if (move != null) interaction.leave = move else interaction.dismissEditor = true
                     }
                     if (result.optBoolean("reconnectAfterReview")) interaction.notice = tr(R.string.destination_approved_tap_connect)
+                    if (result.optBoolean("selectedServerReplaced")) interaction.notice = tr(R.string.selected_server_replaced)
                     done(result)
                 }
             }
@@ -244,7 +245,10 @@ class MainActivity : ComponentActivity() {
         repository.scope.launch {
             for (id in ids) {
                 if (repository.state.value.approval != null) break
-                try { repository.execute("refresh", obj("id" to id)) } catch (_: AppFailure) { }
+                try {
+                    if (repository.execute("refresh", obj("id" to id)).optBoolean("selectedServerReplaced"))
+                        withContext(Dispatchers.Main) { interaction.notice = tr(R.string.selected_server_replaced) }
+                } catch (_: AppFailure) { }
             }
         }
     /** Saves an editor's draft and closes the editor, or with [move] makes that move, once the draft is stored. */

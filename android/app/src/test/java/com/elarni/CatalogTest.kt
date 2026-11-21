@@ -82,6 +82,17 @@ class CatalogTest {
         assertNull(published.nodeOrNull("b"))
     }
 
+    // The app says the server changed only when a refresh replaced the one that is gone.
+    @Test fun aReplacedSelectionIsOneThatIsGone() {
+        fun catalog(selected: String?, vararg ids: String) = Catalog(obj("selectedNodeId" to (selected ?: JSONObject.NULL),
+            "subscriptions" to JSONArray(listOf(obj("id" to "s", "nodes" to JSONArray(ids.map { obj("id" to it) }))))))
+        assertTrue(catalog("b", "b", "c").replacedSelection("a"))
+        assertFalse("The server is still there", catalog("b", "a", "b").replacedSelection("a"))
+        assertFalse("The selection did not move", catalog("a", "a", "b").replacedSelection("a"))
+        assertFalse("No server took over", catalog(null, "b").replacedSelection("a"))
+        assertFalse("Nothing was selected before", catalog("b", "b").replacedSelection(""))
+    }
+
     @Test fun probeKeyNamesTheHandshakeSNI() {
         fun node(security: String, serverName: String? = null, address: String = "1.2.3.4") = obj("config" to obj("outbounds" to JSONArray(listOf(obj(
             "protocol" to "vless", "settings" to obj("vnext" to JSONArray(listOf(obj("address" to address, "port" to 443)))),

@@ -2024,6 +2024,12 @@ abstract class AppLocalizations {
   /// **'A server that an app is routed through is gone from its subscription. The connection keeps the old settings; choose another server for that app in Per-app routing.'**
   String get perAppTargetGoneKept;
 
+  /// No description provided for @selectedServerReplaced.
+  ///
+  /// In en, this message translates to:
+  /// **'The server you had selected is gone from its subscription. Elarni selected another server.'**
+  String get selectedServerReplaced;
+
   /// No description provided for @groupSelectionFailed.
   ///
   /// In en, this message translates to:

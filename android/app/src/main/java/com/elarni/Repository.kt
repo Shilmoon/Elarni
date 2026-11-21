@@ -397,6 +397,9 @@ class Repository(private val app: ElarniApplication) {
             throw error
         }
     }
+    /** The result of a refresh that applied, which says when it replaced the selected server [before], one now gone. */
+    private fun replacing(before: String, refresh: () -> JSONObject) =
+        refresh().also { if (catalog.replacedSelection(before)) it.put("selectedServerReplaced", true) }
     private fun canonicalRouting(value: Catalog) = Catalog.canonical(obj("settings" to Settings.runtime(value.settings), "routes" to JSONArray(value.routes.map { obj("id" to it.string("id"), "enabled" to it.optBoolean("enabled", true), "model" to it.mapObject("routeModel"), "assets" to it.string("assetRevision")) }), "assignments" to value.assignments))
     suspend fun execute(command: String, args: JSONObject = JSONObject()): JSONObject = withContext(Dispatchers.IO) {
         ready.await(); mutex.withLock {
@@ -552,7 +555,7 @@ class Repository(private val app: ElarniApplication) {
                 try {
                     warning = candidate.refresh(id, format = args.string("format").takeIf(String::isNotEmpty))
                     // A failure to apply counts as a failed refresh too, so the retry delays apply.
-                    if (warning == null) { check(generation); return apply(candidate, generation, refresh = true) }
+                    if (warning == null) { check(generation); return replacing(catalog.selected) { apply(candidate, generation, refresh = true) } }
                 } catch (error: Exception) {
                     if (error is ResourceReview) throw error
                     // The candidate may hold half the update; record the failure on the applied catalog.
@@ -568,7 +571,7 @@ class Repository(private val app: ElarniApplication) {
                 val approved = value.candidate.copy()
                 val next = approved.refresh(value.warning.getString("subscriptionId"), value.warning.getJSONArray("chain"), value.warning.string("format"))
                 if (next != null) return challenge(approved, next)
-                return apply(approved, generation)
+                return replacing(catalog.selected) { apply(approved, generation) }
             }
             "select" -> {
                 if (candidate.node(id).string("format") != "xrayProfile") throw AppFailure("unsupported_profile")
