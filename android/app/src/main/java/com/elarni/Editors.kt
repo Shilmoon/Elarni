@@ -120,11 +120,11 @@ fun segmentShape(index: Int, count: Int): Shape {
         } } })
 }
 // Like Android's text preferences: the value is the summary and the dialog edits it.
-@Composable fun SettingsText(title: String, value: String, summary: String = value, detail: String = "", number: Boolean = false, lines: Int = 1, enabled: Boolean = true, change: (String) -> Unit) {
+@Composable fun SettingsText(title: String, value: String, summary: String = value, detail: String = "", number: Boolean = false, lines: Int = 1, enabled: Boolean = true, icon: String = "", change: (String) -> Unit) {
     var open by rememberSaveable { mutableStateOf(false) }
     var draft by rememberSaveable(stateSaver = TextFieldValue.Saver) { mutableStateOf(TextFieldValue()) }
     // The cursor starts after the value, as in Android's EditTextPreference.
-    SettingsTile(title, summary.ifEmpty { tr(R.string.not_set) }, enabled = enabled) { draft = TextFieldValue(value, TextRange(value.length)); open = true }
+    SettingsTile(title, summary.ifEmpty { tr(R.string.not_set) }, icon, enabled) { draft = TextFieldValue(value, TextRange(value.length)); open = true }
     if (open) {
         val focus = remember { FocusRequester() }
         AlertDialog(onDismissRequest = { open = false }, title = { Text(title) },
@@ -137,6 +137,32 @@ fun segmentShape(index: Int, count: Int): Shape {
             } },
             confirmButton = { TextButton({ change(draft.text); open = false }) { Text(tr(R.string.ok)) } },
             dismissButton = { TextButton({ open = false }) { Text(tr(R.string.cancel)) } })
+    }
+}
+/** The trusted Wi-Fi names: the joined network is trusted with one tap, another is typed. Each change is saved at once. */
+@Composable fun TrustedWiFiEditor(catalog: Catalog, busy: Boolean, activity: MainActivity) {
+    val trusted = catalog.settings.strings("trustedWiFiNetworks")
+    var joined by remember { mutableStateOf<String?>(null) }
+    // Asked again on return: the answer to a location request changes what Android shows.
+    LifecycleResumeEffect(activity.wifiAnswers) { val stop = WiFiRule.watchName(activity) { joined = it }; onPauseOrDispose { stop(); joined = null } }
+    fun save(names: List<String>) = activity.runShown("settings", obj("settings" to obj("trustedWiFiNetworks" to JSONArray(names))))
+    SettingsColumn {
+        joined?.let { name ->
+            SettingsGroup(tr(R.string.connected_now)) {
+                SettingsTile(name, tr(if (name in trusted) R.string.trusted_the_vpn_stays_as_it else R.string.not_trusted_the_vpn_connects_here), icon = "wifi",
+                    trailing = if (name in trusted) null else {{ Button({ save(trusted + name) }, enabled = !busy) { Text(tr(R.string.trust)) } }})
+            }
+        }
+        SettingsGroup(tr(R.string.trusted), footer = tr(R.string.joining_a_trusted_network_leaves)) {
+            if (trusted.isEmpty()) SettingsTile(tr(R.string.none_every_wi_fi_network_connects))
+            trusted.forEach { name ->
+                SettingsTile(name, icon = "wifi", trailing = { IconButton({ save(trusted - name) }, enabled = !busy) { RouteIcon("clear", tr(R.string.remove_name, name)) } })
+            }
+            SettingsText(tr(R.string.add_by_name), "", tr(R.string.for_a_network_that_is_not), icon = "add") { typed ->
+                val name = typed.trim()
+                if (name.isNotEmpty() && name !in trusted) save(trusted + name)
+            }
+        }
     }
 }
 @Composable private fun EditorActions(busy: Boolean, cancel: () -> Unit, save: () -> Unit, label: String = tr(R.string.save_changes)) {
@@ -187,7 +213,7 @@ private fun canonical(json: String) = JSONObject(json).let { value -> value.keys
     val fields = remember(section, LocalConfiguration.current) { Settings.fields.filter { it.section == section } }
     val current = buildMap {
         fields.forEach { put(it.key, saved.get(it.key).toString()) }
-        listOf("includedRoutes", "excludedRoutes", "trustedWiFiNetworks").forEach { put(it, saved.strings(it).joinToString("\n")) }
+        listOf("includedRoutes", "excludedRoutes").forEach { put(it, saved.strings(it).joinToString("\n")) }
     }
     val values = remember(section, activity.interaction) { activity.interaction.fields("settings-$section") { current } }
     // What the draft started from: a save sends only the edits made here, so a setting changed elsewhere since, such as Home's sort, stays.
@@ -205,7 +231,7 @@ private fun canonical(json: String) = JSONObject(json).let { value -> value.keys
     /** Saves the edits: only the flipped switches after their pause, or the whole draft for Save changes and for leaving ([move]). */
     fun apply(switchesOnly: Boolean, move: String? = null) {
         val edits = fields.filter { it.key !in immediate && edited(it.key) && (!switchesOnly || it.initial is Boolean) }
-        val lists = if (switchesOnly) emptyList() else when (section) { "Apps & routes" -> listOf("includedRoutes", "excludedRoutes"); "General" -> listOf("trustedWiFiNetworks"); else -> emptyList() }.filter(::edited)
+        val lists = if (switchesOnly) emptyList() else when (section) { "Apps & routes" -> listOf("includedRoutes", "excludedRoutes"); else -> emptyList() }.filter(::edited)
         if (edits.isEmpty() && lists.isEmpty()) {
             // Flipped back within the pause: nothing to save.
             if (switchesOnly && activity.interaction.saveStatus == "saving") activity.interaction.saveStatus = ""
@@ -288,8 +314,8 @@ private fun canonical(json: String) = JSONObject(json).let { value -> value.keys
                 trailing = if (batteryExempt) null else {{ TextButton({ activity.allowBackground() }) { Text(tr(R.string.allow)) } }})
             fields.filter { it.key in immediate && it.key != "allowExternalControl" && it.key != "autoUpdate" }.forEach { toggle(it) }
             if (saved.optBoolean("connectOnUntrustedWiFi")) {
-                SettingsText(tr(R.string.trusted_wi_fi_networks), values["trustedWiFiNetworks"] ?: "", lines(values["trustedWiFiNetworks"] ?: "").joinToString(", ")
-                    .ifEmpty { tr(R.string.none_every_wi_fi_network_connects) }, tr(R.string.one_network_name_per_line), lines = 3) { values["trustedWiFiNetworks"] = it }
+                SettingsTile(tr(R.string.trusted_wi_fi_networks), saved.strings("trustedWiFiNetworks").joinToString(", ")
+                    .ifEmpty { tr(R.string.none_every_wi_fi_network_connects) }) { navigate("trustedWiFi", "") }
                 if (!namesAllowed) SettingsTile(tr(R.string.allow_location_all_the_time), tr(R.string.android_shows_wi_fi_names_only),
                     trailing = { TextButton({ activity.allowWiFiNames() }) { Text(tr(R.string.allow)) } })
             }

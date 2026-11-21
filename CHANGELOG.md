@@ -4,6 +4,14 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
 
 ## Unreleased
 
+### Changed
+
+- **Trusted Wi-Fi networks are picked, not typed, on Android.** The list has a page of its own:
+  it shows the Wi-Fi network the phone is on with a **Trust** button, each trusted network with a
+  button that removes it, and **Add by name** for a network that is out of range. Each change is
+  saved at once. Android shows an app neither the phone's saved networks nor, without location
+  access, the name of the one it is on.
+
 ## 0.6.2 - 2026-11-18
 
 ### Added

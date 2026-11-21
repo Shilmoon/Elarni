@@ -1543,14 +1543,34 @@ class AndroidUIE2E {
             ui.waitUntil(5000) { snapshot().settings.getBoolean("connectOnUntrustedWiFi") }
             assertFalse("The running core does not read it", Settings.runtime(snapshot().settings).has("connectOnUntrustedWiFi"))
             ui.onNodeWithText("Allow location all the time").assertDoesNotExist()
-            editSetting("Trusted Wi-Fi networks", "Home\n Office 5G \n\nHome")
-            click("Save changes")
-            ui.waitUntil(5000) { snapshot().settings.strings("trustedWiFiNetworks") == listOf("Home", "Office 5G") }
-            editSetting("Trusted Wi-Fi networks", "x".repeat(33))
-            click("Save changes")
+            fun trusted() = snapshot().settings.strings("trustedWiFiNetworks")
+            // The emulator's access point: its page offers the joined network, so its name is not typed.
+            fun joined() = Regex("connected to \"(.+?)\"").find(shell("cmd wifi status"))?.groupValues?.get(1)
+            ui.waitUntil(30_000) { joined() != null }
+            val ssid = joined()!!
+            click("Trusted Wi-Fi networks")
+            ui.waitUntil(10_000) { ui.onAllNodesWithText(ssid).fetchSemanticsNodes().isNotEmpty() }
+            ui.onNodeWithText("Not trusted. The VPN connects here.").assertExists()
+            ui.onNodeWithText("None. Every Wi-Fi network connects.").assertExists()
+            click("Trust")
+            ui.waitUntil(5000) { trusted() == listOf(ssid) }
+            ui.waitUntil(5000) { ui.onAllNodesWithText("Trust").fetchSemanticsNodes().isEmpty() }
+            ui.onNodeWithText("Trusted. The VPN stays as it is here.").assertExists()
+            ui.onNodeWithContentDescription("Remove $ssid").performClick()
+            ui.waitUntil(5000) { trusted().isEmpty() }
+            ui.waitUntil(5000) { ui.onAllNodesWithText("Trust").fetchSemanticsNodes().isNotEmpty() }
+            // A name typed for a network that is out of range is trimmed, and one already listed is not added again.
+            editSetting("Add by name", " Office 5G ")
+            ui.waitUntil(5000) { trusted() == listOf("Office 5G") }
+            editSetting("Add by name", "Office 5G")
+            editSetting("Add by name", "Home")
+            ui.waitUntil(5000) { trusted() == listOf("Office 5G", "Home") }
+            editSetting("Add by name", "x".repeat(33))
             ui.waitUntil(5000) { ui.onAllNodesWithText("Use up to 64 Wi-Fi names of at most 32 bytes each, without tabs.").fetchSemanticsNodes().isNotEmpty() }
-            assertEquals(listOf("Home", "Office 5G"), snapshot().settings.strings("trustedWiFiNetworks"))
+            assertEquals(listOf("Office 5G", "Home"), trusted())
             ui.onNodeWithContentDescription("Dismiss").performClick()
+            ui.onNodeWithContentDescription("Back").performClick()
+            ui.waitUntil(5000) { ui.onAllNodesWithText("Office 5G, Home").fetchSemanticsNodes().isNotEmpty() }
             // With location off, Settings says what to allow and the button opens Android's location settings.
             shell("cmd location set-location-enabled false")
             // On a fresh Google APIs image Play services covers the app with its own location-off warning; close it.

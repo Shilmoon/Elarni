@@ -126,8 +126,32 @@ object WiFiRule {
             try { withTimeoutOrNull(5000) { result.await() } } finally { connectivity.unregisterNetworkCallback(callback) }
         } else @Suppress("DEPRECATION") app.getSystemService(WifiManager::class.java).connectionInfo
             ?.takeIf { app.getSystemService(ConnectivityManager::class.java).getNetworkCapabilities(network)?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true }?.ssid
-        // UTF-8 names come quoted; other bytes come as hex, which the trusted list can hold too.
-        return ssid?.takeIf { it.isNotEmpty() && it != WifiManager.UNKNOWN_SSID }?.removeSurrounding("\"")
+        return clean(ssid)
+    }
+    // UTF-8 names come quoted; other bytes come as hex, which the trusted list can hold too.
+    private fun clean(ssid: String?) = ssid?.takeIf { it.isNotEmpty() && it != WifiManager.UNKNOWN_SSID }?.removeSurrounding("\"")
+
+    /** Tells [changed] the joined Wi-Fi network's name, or null without one or without leave to read it, at once and on
+     *  every change, until the returned function is called. */
+    fun watchName(context: Context, changed: (String?) -> Unit): () -> Unit {
+        val connectivity = context.getSystemService(ConnectivityManager::class.java)
+        var shown: Network? = null
+        fun read(network: Network, capabilities: NetworkCapabilities) {
+            shown = network
+            changed(clean(if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) (capabilities.transportInfo as? WifiInfo)?.ssid
+                else @Suppress("DEPRECATION") context.getSystemService(WifiManager::class.java).connectionInfo?.ssid))
+        }
+        fun lost(network: Network) { if (network == shown) { shown = null; changed(null) } }
+        // Only a callback that asks for location information sees the name; before Android 12 there is none, and none is needed.
+        val callback = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) object : ConnectivityManager.NetworkCallback(FLAG_INCLUDE_LOCATION_INFO) {
+            override fun onCapabilitiesChanged(network: Network, capabilities: NetworkCapabilities) = read(network, capabilities)
+            override fun onLost(network: Network) = lost(network)
+        } else object : ConnectivityManager.NetworkCallback() {
+            override fun onCapabilitiesChanged(network: Network, capabilities: NetworkCapabilities) = read(network, capabilities)
+            override fun onLost(network: Network) = lost(network)
+        }
+        if (runCatching { connectivity.registerNetworkCallback(wifi, callback) }.isFailure) return {}
+        return { runCatching { connectivity.unregisterNetworkCallback(callback) } }
     }
 }
 
