@@ -669,10 +669,13 @@ class _ElarniHomeState extends State<ElarniHome> {
       bool value,
       TunnelSettings Function(bool) update, {
       String? help,
+      Future<void> Function(TunnelSettings)? save,
     }) => ElarniCheckboxTile(
       title: help == null ? Text(title) : ElarniHelpLabel(title, help: help),
       value: value,
-      onChanged: _busy ? null : (enabled) => _saveSettings(update(enabled)),
+      onChanged: _busy
+          ? null
+          : (enabled) => (save ?? _saveSettings)(update(enabled)),
     );
     Widget numberSetting(
       String title,
@@ -1074,12 +1077,10 @@ class _ElarniHomeState extends State<ElarniHome> {
                   ? null
                   : (value) {
                       if (value == null) return;
-                      final tun = value == 'tun';
-                      _saveSettings(
+                      _saveVpnMode(
                         _settings.copyWith(
-                          xrayTunEnabled: tun,
+                          xrayTunEnabled: value == 'tun',
                           systemProxyEnabled: value == 'systemProxy',
-                          perAppMode: tun ? _settings.perAppMode : 'off',
                         ),
                       );
                     },
@@ -1089,10 +1090,8 @@ class _ElarniHomeState extends State<ElarniHome> {
           toggle(
             'Xray TUN',
             _settings.xrayTunEnabled,
-            (value) => _settings.copyWith(
-              xrayTunEnabled: value,
-              perAppMode: value ? _settings.perAppMode : 'off',
-            ),
+            (value) => _settings.copyWith(xrayTunEnabled: value),
+            save: _saveVpnMode,
           ),
         if (widget.windows) ...[
           ElarniCheckboxTile(

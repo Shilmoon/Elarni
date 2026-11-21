@@ -70,6 +70,11 @@ final class DesktopIntegration extends ChangeNotifier {
   /// Connects once when the app starts after an update that interrupted the VPN.
   bool reconnectAfterUpdate = false;
 
+  /// The per-app routing mode that leaving VPN mode turned off, which the
+  /// return to VPN mode turns on again; '' when there is none. The tunnel
+  /// settings cannot keep it: per-app routing is valid only in VPN mode.
+  String pausedPerAppMode = '';
+
   /// The waiting version a start last installed, so an installer that dies
   /// cannot make every start exit again.
   String updateAttempted = '';
@@ -230,6 +235,11 @@ final class DesktopIntegration extends ChangeNotifier {
       };
       pingURL = text('pingURL', defaultPingURL);
       pingExpectedBody = text('pingExpectedBody', '');
+      pausedPerAppMode = choice('pausedPerAppMode', const [
+        '',
+        'bypass',
+        'proxyOnly',
+      ], '');
       autoUpdate = value['autoUpdate'] != false;
       // Asked for once: the app connects at this start only.
       _connectPending = value['reconnectAfterUpdate'] == true;
@@ -265,6 +275,7 @@ final class DesktopIntegration extends ChangeNotifier {
   Future<bool> _store({
     bool? reconnectAfterUpdate,
     String? updateAttempted,
+    String? pausedPerAppMode,
   }) async {
     while (saving && !_closed) await _saved?.future;
     if (_closed || !available) return false;
@@ -272,12 +283,18 @@ final class DesktopIntegration extends ChangeNotifier {
       await update(
         reconnectAfterUpdate: reconnectAfterUpdate,
         updateAttempted: updateAttempted,
+        pausedPerAppMode: pausedPerAppMode,
       );
       return true;
     } on Object {
       return false;
     }
   }
+
+  /// Keeps [mode] as [pausedPerAppMode], '' to forget it. Like the update
+  /// logic's saves, it waits for a save in progress and never throws.
+  Future<bool> rememberPerAppMode(String mode) async =>
+      mode == pausedPerAppMode || await _store(pausedPerAppMode: mode);
 
   Future<void> update({
     ThemeMode? theme,
@@ -302,6 +319,7 @@ final class DesktopIntegration extends ChangeNotifier {
     bool? autoUpdate,
     bool? reconnectAfterUpdate,
     String? updateAttempted,
+    String? pausedPerAppMode,
   }) async {
     if (_closed || saving || !available)
       throw StateError('Desktop preferences unavailable');
@@ -347,6 +365,7 @@ final class DesktopIntegration extends ChangeNotifier {
         'reconnectAfterUpdate':
             reconnectAfterUpdate ?? this.reconnectAfterUpdate,
         'updateAttempted': updateAttempted ?? this.updateAttempted,
+        'pausedPerAppMode': pausedPerAppMode ?? this.pausedPerAppMode,
       };
       await channel.invokeMethod<void>('setPreferences', {
         'json': jsonEncode(next),
@@ -377,6 +396,7 @@ final class DesktopIntegration extends ChangeNotifier {
       this.reconnectAfterUpdate =
           reconnectAfterUpdate ?? this.reconnectAfterUpdate;
       this.updateAttempted = updateAttempted ?? this.updateAttempted;
+      this.pausedPerAppMode = pausedPerAppMode ?? this.pausedPerAppMode;
       if (updateFeedURL != null) {
         // Saving the feed, even unchanged, checks it again now.
         this.updateFeedURL = updateFeedURL;

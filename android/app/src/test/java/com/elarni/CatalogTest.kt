@@ -111,6 +111,19 @@ class CatalogTest {
             apps("bypass", listOf("com.shared.one", "com.shared.two"), obj("com.shared.one" to "direct", "com.shared.two" to "routing")))
     }
 
+    // Only listed apps with none of them installed took every app into the tunnel, all going direct, and showed Connected.
+    @Test fun onlyListedAppsWithNoneInstalledIsRefused() {
+        val uids = mapOf("com.a" to 10001, "com.elarni" to 10000)
+        fun refused(mode: String, listed: List<String>) =
+            Catalog.noListedAppInstalled(obj("perAppMode" to mode, "perAppProcesses" to JSONArray(listed)), "com.elarni") { uids[it] }
+        assertTrue("No listed app installed", refused("proxyOnly", listOf("com.gone", "com.also.gone")))
+        assertTrue("This app never enters its own tunnel", refused("proxyOnly", listOf("com.gone", "com.elarni")))
+        assertFalse("One listed app installed", refused("proxyOnly", listOf("com.gone", "com.a")))
+        assertFalse("An empty list keeps every app in the tunnel", refused("proxyOnly", emptyList()))
+        assertFalse("Bypass with no listed app installed keeps every app in the tunnel", refused("bypass", listOf("com.gone")))
+        assertFalse("Off", refused("off", listOf("com.gone")))
+    }
+
     @Test fun listedAppUidsChangeOnlyWhenAListedAppIsInstalledRemovedOrReinstalled() {
         val settings = obj("perAppMode" to "bypass", "perAppProcesses" to JSONArray(listOf("com.a", "com.later")))
         val started = mutableMapOf("com.a" to 10001, "com.other" to 10002)

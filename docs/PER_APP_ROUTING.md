@@ -1,7 +1,9 @@
 # Per-app routing
 
 Desktop: Routing › Per-app routing. Android: Settings › Apps & routes. It needs
-system VPN mode.
+system VPN mode. On desktop, leaving VPN mode (for System proxy or Local proxy only, or
+turning Xray TUN off on macOS) turns it off and keeps the app list and targets; returning to
+VPN mode turns it on again with the mode it had.
 
 - **Bypass:** listed apps connect directly; everything else uses normal routing.
 - **Only listed:** listed apps use normal routing; everything else connects directly.
@@ -100,6 +102,14 @@ leaves without any rule: it is closed, and with it the connections that shared o
 it (WireGuard, TUIC, ShadowQUIC, XHTTP or a multiplexed transport). A change of anything
 else (the server, the routing profile, routes, DNS, listeners) restarts the tunnel.
 
+## A server that leaves its subscription
+
+On Windows, Linux and Android, when a subscription refresh removes the server an app is
+routed through, the refresh still applies, and a running connection keeps its old settings
+until it ends; on Windows and Linux a notice says to choose another server for that app. A
+change that would restart the tunnel without that server fails before the connection stops,
+and so does the next Connect, which names the app's rule.
+
 ## Apps that were running before you connected
 
 A connection an app opened before Elarni connected can keep its old route: Windows keeps
@@ -150,7 +160,11 @@ with the same matcher routing uses, and warns when it may match nothing:
 Where a better rule exists, **Use suggested rule** replaces it, keeping its target.
 On Windows only rules on local fixed drives are checked, so a network path in an
 imported profile is never opened. On Android, a listed app that is not installed is
-shown as such.
+shown as such. With **Only listed** and none of the listed apps installed, Connect fails
+and says so: the VPN would otherwise take every app and send each one direct. A settings
+change that would restart a running tunnel that way fails the same way, before the tunnel
+stops. A subscription refresh, and the rebuild when a listed app is removed while connected
+(see Apps installed while connected), start the tunnel as before.
 
 ## Recent connections
 

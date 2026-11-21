@@ -33,6 +33,7 @@
     <string name="check_the_automation_s_group_selected">Проверьте группу автоматизации, выбранные серверы и разные HTTP-цели проверки.</string>
     <string name="select_installed_android_apps_and_a">Выберите установленные приложения Android и допустимый режим маршрутизации. Профили из других операционных систем здесь не подходят.</string>
     <string name="an_app_in_per_app_routing">Приложение в «Маршрутизации приложений» использует сервер, которого больше нет. Выберите для него другую цель в «Маршрутизации приложений».</string>
+    <string name="none_of_the_apps_chosen_for_the_vpn">Ни одно из приложений, выбранных для VPN, не установлено. Выберите приложения в «Маршрутизации приложений» или выключите её.</string>
     <string name="use_up_to_64_wi_fi">Не больше 64 имён Wi-Fi, каждое до 32 байт, без табуляций.</string>
     <string name="use_an_https_address_for_the">Укажите для источника обновлений адрес https:// или оставьте поле пустым.</string>
     <string name="some_settings_are_invalid_check_port">Некоторые настройки недопустимы. Проверьте номера портов, диапазоны, адреса DNS и обязательные данные для входа.</string>

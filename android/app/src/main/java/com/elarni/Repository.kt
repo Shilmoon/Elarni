@@ -278,7 +278,7 @@ class Repository(private val app: ElarniApplication) {
                 if (restart && catalog.settings.optBoolean("disconnectOnSleep") && !app.getSystemService(android.os.PowerManager::class.java).isInteractive) {
                     automation.sleeping = true; state("paused"); return
                 }
-                start(catalog, generation)
+                start(catalog, generation, requireListedApp = true)
                 catalog.node(catalog.selected).put("lastSuccessAt", now()).put("lastSuccessRevision", catalog.node(catalog.selected).string("configurationRevision"))
                 // Start wrote intent, assets and the success time; an approval built before them would undo them.
                 // A save that fails must not undo a start that worked.
@@ -309,8 +309,13 @@ class Repository(private val app: ElarniApplication) {
             state("disconnected")
         }
     }
-    private fun start(value: Catalog, generation: Long, keepTunnel: Boolean = wantsRecovery()) {
+    /** [requireListedApp] refuses a tunnel none of the listed apps can enter, which would take every app, each going
+     *  direct, and show Connected. Connect, its retry and a settings change ask for it; a refresh must not fail for a
+     *  per-app setting, and a running tunnel's own restart (a listed app removed, another network) starts as before. */
+    private fun start(value: Catalog, generation: Long, keepTunnel: Boolean = wantsRecovery(), requireListedApp: Boolean = false) {
         check(generation)
+        // Before the running tunnel stops.
+        if (requireListedApp && engine.noListedAppInstalled(value.settings)) throw AppFailure("per_app_none_installed")
         val route = value.routeFor(value.selected)
         if (route != null) {
             if (route.mapObject("profile").objects("ManagedSources").any { !route.mapObject("lists").has(it.string("id")) }) { value.refreshManaged(route.getString("id")); edits++ }
@@ -348,7 +353,7 @@ class Repository(private val app: ElarniApplication) {
                 persist(before, candidate); journal = true
                 state("connecting")
                 if (candidate.selected.isEmpty()) { engine.stop(); candidate.data.put("connectionIntent", false); automation.stop() }
-                else { start(candidate, generation); started = true }
+                else { start(candidate, generation, requireListedApp = !refresh); started = true }
             }
             check(generation)
             persist(candidate)
@@ -869,7 +874,7 @@ class Repository(private val app: ElarniApplication) {
                 if (automation.begin(time)) {
                     // A failed save must not hold the retry back.
                     catalog.data.put("automationEpisode", automation.episode()); runCatching { persist(catalog) }.onFailure { if (it is Exception) report(it) }
-                    try { state("connecting"); start(catalog, generation); automation.healthy(Automation.clock()); state("connected") }
+                    try { state("connecting"); start(catalog, generation, requireListedApp = true); automation.healthy(Automation.clock()); state("connected") }
                     catch (error: Exception) { check(generation); state("failed"); automation.schedule(Automation.clock()) }
                 }
             }

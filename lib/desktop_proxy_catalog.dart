@@ -256,6 +256,8 @@ extension _ProxyCatalog on DesktopProxy {
     Future<CatalogMap> Function(DesktopCatalog) edit, {
     bool forceRestart = false,
     bool refreshAssets = true,
+    // A subscription refresh, which may take a server per-app routing names.
+    bool subscriptionRefresh = false,
     Future<void> Function(DesktopCatalog)? verifyRuntime,
     // Failover: the server to start instead of one that failed to start or
     // verify, or null to roll back.
@@ -346,6 +348,24 @@ extension _ProxyCatalog on DesktopProxy {
                 candidate,
                 candidateSemantics[candidate.selected!]!,
               ));
+      // A server an app is routed through can leave with a refresh. That fails
+      // the next Connect, which names the app's rule; it must not fail the
+      // refresh, so the running tunnel then stays as it is, as on Android.
+      // Another change that would restart the tunnel without that server fails
+      // before the tunnel stops.
+      var targetGone = false;
+      if (restart && candidate.selected != null) {
+        try {
+          candidate.perAppTargets(candidate.settings);
+        } on PlatformException catch (error) {
+          if (error.code != 'per_app_target_missing' ||
+              !subscriptionRefresh ||
+              !wasConnected)
+            rethrow;
+          restart = false;
+          targetGone = true;
+        }
+      }
       // A change of routing rules alone, as per-app routing makes, goes to the
       // running tunnel, which keeps its connections; a restart cuts them all.
       if (restart &&
@@ -442,7 +462,7 @@ extension _ProxyCatalog on DesktopProxy {
         _state = candidate.selected == null ? 'disconnected' : 'prepared';
       // A changed mode or kill switch moves the OS proxy now, not a tick later.
       await _syncSystemProxy();
-      _listener?.call(null);
+      _listener?.call(targetGone ? 'per_app_target_missing' : null);
       return _currentResult(result, candidate);
     } on Object catch (error) {
       if (checkpoint) {

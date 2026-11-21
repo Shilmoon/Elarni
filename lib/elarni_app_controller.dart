@@ -734,6 +734,36 @@ extension _HomeController on _ElarniHomeState {
     }
   }
 
+  /// Saves a switch into or out of VPN mode. Per-app routing works only in VPN
+  /// mode, so leaving it turns per-app routing off and remembers its mode, which
+  /// the switch back turns on again if nothing set another meanwhile. The app
+  /// list and targets stay saved either way.
+  Future<void> _saveVpnMode(TunnelSettings next) async {
+    final before = _settings, paused = widget.desktop.pausedPerAppMode;
+    final leaving = before.xrayTunEnabled && !next.xrayTunEnabled;
+    final returning = !before.xrayTunEnabled && next.xrayTunEnabled;
+    final saved = await _saveSettings(
+      next.copyWith(
+        perAppMode: !next.xrayTunEnabled
+            ? 'off'
+            : returning &&
+                  next.perAppMode == 'off' &&
+                  paused.isNotEmpty &&
+                  next.perAppProcesses.isNotEmpty
+            ? paused
+            : next.perAppMode,
+      ),
+    );
+    if (!saved) return;
+    if (leaving) {
+      await widget.desktop.rememberPerAppMode(
+        before.perAppMode == 'off' ? '' : before.perAppMode,
+      );
+    } else if (returning) {
+      await widget.desktop.rememberPerAppMode('');
+    }
+  }
+
   Future<bool> _saveSettings(TunnelSettings value) async {
     if (!_settingsLoaded) {
       // The change was made on defaults; show the stored settings instead.

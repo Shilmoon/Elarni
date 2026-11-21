@@ -17,6 +17,9 @@ void main() {
         'A scheduled subscription or routing refresh failed.',
     'scheduled_refresh_needs_review':
         'A subscription was not updated because the network answered unexpectedly. Elarni tries again in two hours; open Subscriptions to review it now.',
+    // A refresh took a per-app server; the running tunnel kept its settings.
+    'per_app_target_missing':
+        'A server that an app is routed through is gone from its subscription. The connection keeps the old settings; choose another server for that app in Per-app routing.',
     'connection_stopped':
         'Connection stopped unexpectedly. Reconnect to retry.',
     'connection_stopped_blocked':

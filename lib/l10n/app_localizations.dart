@@ -2018,6 +2018,12 @@ abstract class AppLocalizations {
   /// **'A subscription was not updated because the network answered unexpectedly. Elarni tries again in two hours; open Subscriptions to review it now.'**
   String get scheduledRefreshNeedsReview;
 
+  /// No description provided for @perAppTargetGoneKept.
+  ///
+  /// In en, this message translates to:
+  /// **'A server that an app is routed through is gone from its subscription. The connection keeps the old settings; choose another server for that app in Per-app routing.'**
+  String get perAppTargetGoneKept;
+
   /// No description provided for @groupSelectionFailed.
   ///
   /// In en, this message translates to:
