@@ -49,7 +49,7 @@ adb = sdk / 'platform-tools/adb'
 RUNNER = 'com.elarni.debug.test/androidx.test.runner.AndroidJUnitRunner'
 # Tests per class (the catalog's without its large-geofile test, with the one that runs apart before the restart tests);
 # shards of one AVD must add up to them.
-EXPECTED = {'com.elarni.AndroidE2E': 74, 'com.elarni.AndroidUIE2E': 48, 'com.elarni.AndroidVpnE2E': 24}
+EXPECTED = {'com.elarni.AndroidE2E': 74, 'com.elarni.AndroidUIE2E': 48, 'com.elarni.AndroidVpnE2E': 25}
 out = ROOT / '.build/android-development'
 native_env = env.copy()
 host = 'darwin-x86_64' if sys.platform == 'darwin' else 'linux-x86_64'
