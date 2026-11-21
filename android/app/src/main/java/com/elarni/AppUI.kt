@@ -91,7 +91,7 @@ import kotlinx.coroutines.withContext
                 "routing" -> { drawCircle(color, 2.4f, Offset(5f, 5f), style = stroke); drawCircle(color, 2.4f, Offset(19f, 5f), style = stroke); drawCircle(color, 2.4f, Offset(12f, 19f), style = stroke); line(5f, 8f, 5f, 12f); line(19f, 8f, 19f, 12f); line(5f, 12f, 19f, 12f); line(12f, 12f, 12f, 16f) }
                 "settings" -> { line(3f, 6f, 21f, 6f); line(3f, 12f, 21f, 12f); line(3f, 18f, 21f, 18f); drawCircle(color, 2.5f, Offset(8f, 6f)); drawCircle(color, 2.5f, Offset(16f, 12f)); drawCircle(color, 2.5f, Offset(10f, 18f)) }
                 "add" -> { line(12f, 4f, 12f, 20f); line(4f, 12f, 20f, 12f) }
-                "wifi" -> { drawArc(color, -135f, 90f, false, Offset(2f, 6f), Size(20f, 20f), style = stroke); drawArc(color, -135f, 90f, false, Offset(7f, 11f), Size(10f, 10f), style = stroke); drawCircle(color, 1.4f, Offset(12f, 18.5f)) }
+                "wifi" -> { listOf(15f, 10f, 5f).forEach { drawArc(color, -135f, 90f, false, Offset(12f - it, 19.5f - it), Size(it * 2, it * 2), style = stroke) }; drawCircle(color, 1.5f, Offset(12f, 19.5f)) }
                 "expand" -> { line(6f, 9f, 12f, 15f); line(12f, 15f, 18f, 9f) }
                 "unfold" -> { line(8f, 9.5f, 12f, 5.5f); line(12f, 5.5f, 16f, 9.5f); line(8f, 14.5f, 12f, 18.5f); line(12f, 18.5f, 16f, 14.5f) }
                 "collapse" -> { line(6f, 15f, 12f, 9f); line(12f, 9f, 18f, 15f) }
