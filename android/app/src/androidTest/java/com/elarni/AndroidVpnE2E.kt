@@ -827,6 +827,8 @@ class AndroidVpnE2E {
                 throw AssertionError("The leave watch was not set (watching=${WiFiRule.watching}); mobile data is asked for by:\n$asking", error)
             }
             fun rule(on: Boolean, trusted: List<String>) = call("settings", obj("settings" to obj("connectOnUntrustedWiFi" to on, "trustedWiFiNetworks" to JSONArray(trusted))))
+            // This test is about the reports that reach a killed process; a callback hears of every change before them.
+            WiFiRule.reports = emptySet()
             try {
                 // Turning it on counts the network already joined; a trusted one stays as it is.
                 rule(true, listOf(ssid))
@@ -878,10 +880,74 @@ class AndroidVpnE2E {
                 runCatching { wifiOn() }
                 shell("pm enable --user 0 $google")
                 rule(false, emptyList())
+                WiFiRule.reports = setOf("process", "service")
                 // ActivityScenario tracks lifecycle by its MAIN/LAUNCHER launch Intent.
                 shell("am start -W -a android.intent.action.MAIN -c android.intent.category.LAUNCHER -n ${context.packageName}/com.elarni.MainActivity")
                 ui.runOnUiThread { ui.activity.intent = launchIntent }
                 ui.waitUntil(5000) { ui.activityRule.scenario.state == Lifecycle.State.RESUMED }
+            }
+        }
+    }
+
+    /** Without mobile data Android reports neither leaving Wi-Fi nor the next join to a process that is not running:
+     *  a callback hears of both, in the watch service's process whenever the VPN service is not running. */
+    @Test fun untrustedWiFiConnectsAtOnceWithoutMobileData() {
+        SocksFixture().use { upstream ->
+            call("import", obj("text" to "socks://127.0.0.1:${upstream.port}#Wi-Fi%20fixture"))
+            call("select", obj("id" to snapshot().nodes.single().getString("id")))
+            val context = ui.activity.applicationContext
+            shell("appops set ${context.packageName} ACTIVATE_VPN allow")
+            listOf("ACCESS_FINE_LOCATION", "ACCESS_COARSE_LOCATION", "ACCESS_BACKGROUND_LOCATION").forEach { shell("pm grant ${context.packageName} android.permission.$it") }
+            shell("cmd location set-location-enabled true")
+            assertTrue(WiFiRule.namesAllowed(context))
+            fun network() = Regex("connected to \"(.+?)\"").find(shell("cmd wifi status"))?.groupValues?.get(1)
+            ui.waitUntil(30_000) { network() != null }
+            val ssid = network()!!
+            val seen = context.getSharedPreferences("wifi-rule", android.content.Context.MODE_PRIVATE)
+            seen.edit().clear().commit()
+            fun join() = seen.getString("join", null)
+            fun wifiOn() {
+                ui.waitUntil(30_000) { shell("cmd wifi set-wifi-enabled enabled"); shell("cmd wifi status").contains("Wifi is enabled") }
+                shell("cmd wifi connect-network $ssid open"); ui.waitUntil(30_000) { network() != null }
+            }
+            val connectivity = context.getSystemService(android.net.ConnectivityManager::class.java)
+            @Suppress("DEPRECATION") fun mobileData() = connectivity.allNetworks.any { connectivity.getNetworkCapabilities(it)?.hasTransport(android.net.NetworkCapabilities.TRANSPORT_CELLULAR) == true }
+            @Suppress("DEPRECATION") fun held() = context.getSystemService(android.app.ActivityManager::class.java).getRunningServices(Int.MAX_VALUE)
+                .any { it.service.className == WiFiWatchService::class.java.name && it.foreground }
+            fun rule(on: Boolean, trusted: List<String>) = call("settings", obj("settings" to obj("connectOnUntrustedWiFi" to on, "trustedWiFiNetworks" to JSONArray(trusted))))
+            try {
+                shell("svc data disable"); ui.waitUntil(30_000) { !mobileData() }
+                rule(true, listOf(ssid))
+                ui.waitUntil(15_000) { join() != null }
+                assertEquals("disconnected", repo.state.value.connection)
+                rule(true, emptyList())
+                val before = join()
+                shell("cmd wifi set-wifi-enabled disabled"); ui.waitUntil(15_000) { network() == null }
+                wifiOn()
+                ui.waitUntil(15_000) { join() != before }
+                ui.waitUntil(15_000) { repo.state.value.connection == "connected" }
+                // Connected, the VPN service keeps the app's process and shows the one notification.
+                ui.waitUntil(10_000) { !held() }
+                repo.requestStop(); ui.waitUntil(10_000) { repo.state.value.connection == "disconnected" }
+                ui.waitUntil(10_000) { held() }
+                // The watch service's report alone connects: it is all a stopped app has.
+                WiFiRule.reports = setOf("service")
+                runBlocking { WiFiRule.arm(context as ElarniApplication) }
+                assertEquals("disconnected", repo.state.value.connection)
+                val second = join()
+                shell("cmd wifi set-wifi-enabled disabled"); ui.waitUntil(15_000) { network() == null }
+                wifiOn()
+                ui.waitUntil(15_000) { join() != second }
+                ui.waitUntil(15_000) { repo.state.value.connection == "connected" }
+                repo.requestStop(); ui.waitUntil(10_000) { repo.state.value.connection == "disconnected" }
+                rule(false, emptyList())
+                ui.waitUntil(10_000) { !held() }
+            } finally {
+                WiFiRule.reports = setOf("process", "service")
+                shell("svc data enable")
+                // Later tests need Wi-Fi joined; the test's own failure, if any, stays the one reported.
+                runCatching { wifiOn() }
+                rule(false, emptyList())
             }
         }
     }

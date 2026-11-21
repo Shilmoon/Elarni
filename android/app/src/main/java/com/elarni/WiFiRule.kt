@@ -2,11 +2,16 @@ package com.elarni
 
 import android.Manifest
 import android.app.AlarmManager
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
 import android.app.PendingIntent
+import android.app.Service
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.content.pm.ServiceInfo
 import android.location.LocationManager
 import android.net.ConnectivityManager
 import android.net.Network
@@ -27,17 +32,23 @@ import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * Connect on untrusted Wi-Fi: joining a Wi-Fi network that is not on the trusted list connects, once per join.
+ * Android reports every Wi-Fi change at once only to a callback in a running process. While the VPN service runs, this
+ * process has one; otherwise WiFiWatchService has it, in a small process of its own that starts this one when Wi-Fi
+ * changes. Should Android stop that service all the same, a PendingIntent starts this process.
  * Android sends a network callback's PendingIntent once, for the first matching network, then drops the request,
- * so Elarni asks for one change at a time: the next Wi-Fi join while off Wi-Fi, leaving Wi-Fi while on it.
+ * so Elarni asks for one change at a time: the next Wi-Fi join while off Wi-Fi, leaving Wi-Fi while on it. It reports
+ * leaving as mobile data turning foreground: with mobile data off, or from one Wi-Fi network straight to another,
+ * a killed process hears nothing until the 15-minute check.
  */
 object WiFiRule {
     private const val JOIN = "com.elarni.wifi.JOIN"
     private const val LEAVE = "com.elarni.wifi.LEAVE"
-    private const val CHECK = "com.elarni.wifi.CHECK"
+    const val CHECK = "com.elarni.wifi.CHECK"
+    const val CHANGE = "com.elarni.wifi.CHANGE"
     private fun request(transport: Int, vararg capabilities: Int) = NetworkRequest.Builder().addTransportType(transport)
         .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET).addCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)
         .apply { capabilities.forEach { addCapability(it) } }.build()
-    private val wifi get() = request(NetworkCapabilities.TRANSPORT_WIFI)
+    val wifi get() = request(NetworkCapabilities.TRANSPORT_WIFI)
     // Mobile data runs in the background while Wi-Fi is up and turns foreground when Wi-Fi goes.
     private val leave get() = request(NetworkCapabilities.TRANSPORT_CELLULAR, NetworkCapabilities.NET_CAPABILITY_FOREGROUND)
     // Android fills in the network, so these stay mutable; each names its receiver.
@@ -45,6 +56,11 @@ object WiFiRule {
         PendingIntent.FLAG_MUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
     private val lock = Mutex()
     private var retry: Job? = null
+    private var live: ConnectivityManager.NetworkCallback? = null
+    private var held: Boolean? = null
+    /** Who reports a change at once: this process's callback, and the watch service. Tests leave one out, or both to
+     *  reach the reports a killed process gets. */
+    @Volatile internal var reports = setOf("process", "service")
     @Volatile private var synced: Boolean? = null
     /** The change Android reports next: "join", "leave", or null while neither can be asked for. */
     @Volatile var watching: String? = null
@@ -65,7 +81,7 @@ object WiFiRule {
     }
 
     /** Handles the Wi-Fi network joined now, if any, and asks Android for the next change. */
-    suspend fun arm(app: ElarniApplication, attempt: Int = 0): Unit = lock.withLock {
+    suspend fun arm(app: ElarniApplication, attempt: Int = 0, check: Boolean = false): Unit = lock.withLock {
         app.repository.awaitReady()
         // A retry runs this itself; any other call takes its place.
         val self = currentCoroutineContext()[Job]
@@ -74,7 +90,17 @@ object WiFiRule {
         val alarms = app.getSystemService(AlarmManager::class.java)
         fun drop(action: String) = runCatching { connectivity.unregisterNetworkCallback(wake(app, action)) }
         fun ask(action: String, request: NetworkRequest) = runCatching { connectivity.registerNetworkCallback(request, wake(app, action)) }.isSuccess
-        if (!Catalog(app.repository.state.value.catalog).settings.optBoolean("connectOnUntrustedWiFi")) {
+        // A broadcast may start this process and run this before the setting is published.
+        val on = Catalog(app.repository.state.value.catalog).settings.optBoolean("connectOnUntrustedWiFi")
+        synced = on
+        if (!on || "process" !in reports) { live?.let { runCatching { connectivity.unregisterNetworkCallback(it) } }; live = null }
+        else if (live == null) live = object : ConnectivityManager.NetworkCallback() {
+            // Registering reports the network joined now, which the code below handles anyway; that second look is harmless.
+            override fun onAvailable(network: Network) { app.repository.scope.launch { arm(app) } }
+            override fun onLost(network: Network) { app.repository.scope.launch { arm(app) } }
+        }.takeIf { runCatching { connectivity.registerNetworkCallback(wifi, it) }.isSuccess }
+        hold(app, check)
+        if (!on) {
             drop(JOIN); drop(LEAVE); alarms.cancel(wake(app, CHECK)); watching = null
             return@withLock
         }
@@ -95,6 +121,25 @@ object WiFiRule {
             // Mobile data stays foreground for about 30 s after Wi-Fi comes back; asking now would report at once.
             drop(LEAVE); watching = null
             if (attempt < 24) retry = app.repository.scope.launch { delay(5000); arm(app, attempt + 1) }
+        }
+    }
+
+    /** Starts or stops the watch service. The VPN service keeps this process and its callback while it runs, and
+     *  without the networks' names the rule does nothing. The 15-minute check asks again for a service that should
+     *  run: Android may have stopped it without a word to this process. */
+    @Synchronized fun hold(app: ElarniApplication, again: Boolean = false) {
+        // Not read yet: arm() calls again once it is.
+        val on = synced ?: return
+        val wanted = on && "service" in reports && !app.vpnServiceRuns && namesAllowed(app)
+        if (wanted == held && !(wanted && again)) return
+        val service = Intent(app, WiFiWatchService::class.java)
+        // Android may refuse a start from the background; the PendingIntent reports and the 15-minute check remain.
+        if (wanted) held = true.takeIf { runCatching { app.startForegroundService(service) }.isSuccess }
+        else {
+            // Stopping a service whose start is still on its way crashes its process, so a start this process asked
+            // for is undone by the service itself.
+            if (held != true || runCatching { app.startForegroundService(service.setAction(WiFiWatchService.STOP)) }.isFailure) app.stopService(service)
+            held = false
         }
     }
 
@@ -131,10 +176,46 @@ object WiFiRule {
     }
 }
 
-/** Android sends this for a watched network change, at the backup check, and after an app update. */
+/** Runs while Connect on untrusted Wi-Fi is on and the VPN service is not, in a process of its own that loads nothing
+ *  else of the app: Android reports every Wi-Fi change to it at once, and it passes each on to WiFiWatch, which starts
+ *  the app's process if need be. Android shows its notification for as long as it runs. */
+class WiFiWatchService : Service() {
+    private val changes = object : ConnectivityManager.NetworkCallback() {
+        // Registering reports the network joined now: a look the app's process takes anyway.
+        override fun onAvailable(network: Network) = report()
+        override fun onLost(network: Network) = report()
+    }
+    private var watching = false
+    private fun report() = sendBroadcast(Intent(this, WiFiWatch::class.java).setAction(WiFiRule.CHANGE))
+    override fun onBind(intent: Intent?) = null
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        val manager = getSystemService(NotificationManager::class.java)
+        // Its own channel, so that hiding it keeps the connection's notification.
+        manager.createNotificationChannel(NotificationChannel(CHANNEL, getString(R.string.connect_on_untrusted_wi_fi), NotificationManager.IMPORTANCE_LOW))
+        val notification = Notification.Builder(this, CHANNEL).setSmallIcon(R.drawable.ic_elarni).setContentTitle("Elarni")
+            .setContentText(getString(R.string.watching_for_untrusted_wi_fi)).setOngoing(true).setOnlyAlertOnce(true).setCategory(Notification.CATEGORY_SERVICE)
+            .setContentIntent(PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)).build()
+        // Every start asked for the foreground, so every start takes it, the one that stops too. Android restarts this
+        // service after it killed the process, and may refuse it the foreground then.
+        try { if (Build.VERSION.SDK_INT >= 34) startForeground(5, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE) else startForeground(5, notification) }
+        catch (_: Exception) { stopSelf(startId); return START_NOT_STICKY }
+        // Only the latest start may stop the service: stopping it under a later start would crash the process too.
+        if (intent?.action == STOP) { stopForeground(STOP_FOREGROUND_REMOVE); stopSelf(startId); return START_NOT_STICKY }
+        if (!watching) watching = runCatching { getSystemService(ConnectivityManager::class.java).registerNetworkCallback(WiFiRule.wifi, changes) }.isSuccess
+        return START_STICKY
+    }
+    override fun onDestroy() {
+        if (watching) runCatching { getSystemService(ConnectivityManager::class.java).unregisterNetworkCallback(changes) }
+        super.onDestroy()
+    }
+    companion object { const val STOP = "com.elarni.wifi.STOP"; const val CHANNEL = "wifi-watch" }
+}
+
+/** Android sends this for a watched network change, at the backup check, and after an app update; the watch service
+ *  sends it for every Wi-Fi change. */
 class WiFiWatch : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         val result = goAsync(); val app = context.applicationContext as ElarniApplication
-        app.repository.scope.launch { try { WiFiRule.arm(app) } finally { result.finish() } }
+        app.repository.scope.launch { try { WiFiRule.arm(app, check = intent.action == WiFiRule.CHECK) } finally { result.finish() } }
     }
 }

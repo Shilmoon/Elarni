@@ -582,8 +582,9 @@
     <string name="profile_ip_override">IP для профилей</string>
     <string name="preferred_ip">Предпочтительный IP</string>
     <string name="resolve_server_before_connecting">Разрешать адрес сервера перед подключением</string>
-    <string name="joining_a_wi_fi_network_that">Подключение к сети Wi-Fi не из списка доверенных включает VPN. Доверенные сети, мобильный интернет и остановленное вами подключение остаются как есть до следующей сети.</string>
+    <string name="joining_a_wi_fi_network_that">Подключение к сети Wi-Fi не из списка доверенных включает VPN. Доверенные сети, мобильный интернет и остановленное вами подключение остаются как есть до следующей сети. Пока VPN выключен, Elarni продолжает работать, чтобы следить за Wi-Fi, и показывает уведомление.</string>
     <string name="connect_on_untrusted_wi_fi">Подключаться в недоверенных сетях Wi-Fi</string>
+    <string name="watching_for_untrusted_wi_fi">Следит за недоверенными сетями Wi-Fi</string>
     <string name="pause_when_screen_turns_off">Пауза при выключении экрана</string>
     <string name="connect_after_device_restart">Подключаться после перезагрузки</string>
     <string name="requires_prior_vpn_consent_unlock_the">Нужно заранее выданное разрешение на VPN. После перезагрузки разблокируйте устройство.</string>

@@ -582,8 +582,9 @@
     <string name="profile_ip_override">Profile IP override</string>
     <string name="preferred_ip">Preferred IP</string>
     <string name="resolve_server_before_connecting">Resolve server before connecting</string>
-    <string name="joining_a_wi_fi_network_that">Joining a Wi-Fi network that is not on your trusted list connects. Trusted networks, mobile data and a connection you stopped stay as they are until the next network.</string>
+    <string name="joining_a_wi_fi_network_that">Joining a Wi-Fi network that is not on your trusted list connects. Trusted networks, mobile data and a connection you stopped stay as they are until the next network. While the VPN is off, Elarni keeps running to watch Wi-Fi and shows a notification.</string>
     <string name="connect_on_untrusted_wi_fi">Connect on untrusted Wi-Fi</string>
+    <string name="watching_for_untrusted_wi_fi">Watching for untrusted Wi-Fi</string>
     <string name="pause_when_screen_turns_off">Pause when screen turns off</string>
     <string name="connect_after_device_restart">Connect after device restart</string>
     <string name="requires_prior_vpn_consent_unlock_the">Requires prior VPN consent. Unlock the device after restarting.</string>
