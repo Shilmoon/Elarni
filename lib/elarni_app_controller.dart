@@ -366,13 +366,8 @@ extension _HomeController on _ElarniHomeState {
     }
   }
 
-  /// "Current rules / active tunnel" measures the selected server's tunnel and
-  /// no other: a request for another server would come back as that one's.
-  bool get _pingsActiveTunnel => _pingProtocol == 'activeProxy';
-
   Future<void> _pingNode(String nodeId) async {
     if (_pingControlsDisabled) return;
-    if (_pingsActiveTunnel) nodeId = _subscriptions.selectedNodeId ?? nodeId;
     if (_pingProtocol == 'icmp' && !await _confirmICMP()) return;
     if (!mounted || _pingControlsDisabled) return;
     final exclusive = _pingProtocol == 'icmp';
@@ -549,10 +544,7 @@ extension _HomeController on _ElarniHomeState {
       for (final group in _subscriptions.subscriptions)
         if (subscriptionId == null || group.id == subscriptionId)
           for (final node in group.nodes.where((node) => node.isVPN))
-            if (wanted == null || wanted.contains(node.id))
-              if (!_pingsActiveTunnel ||
-                  node.id == _subscriptions.selectedNodeId)
-                node.id,
+            if (wanted == null || wanted.contains(node.id)) node.id,
     ];
     if (nodeIds.isEmpty) return;
     final run = ++_pingRun;

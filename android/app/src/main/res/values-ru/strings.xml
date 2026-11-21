@@ -371,7 +371,6 @@
     <string name="timeout_in_seconds_1_15">Тайм-аут в секундах · 1–15</string>
     <string name="test_method">Способ проверки</string>
     <string name="proxy">Прокси</string>
-    <string name="active_proxy_2">Активный прокси</string>
     <string name="direct_tcp_2">Прямой TCP</string>
     <string name="direct_icmp_2">Прямой ICMP</string>
     <string name="test_all_servers">Проверить все серверы</string>
@@ -523,7 +522,6 @@
     <string name="trusted_wi_fi_networks">Доверенные сети Wi-Fi</string>
     <string name="connection_2">Подключение</string>
     <string name="provider_profile">Профиль провайдера</string>
-    <string name="current_rules_active_tunnel">Текущие правила / активный туннель</string>
     <string name="use_profile">Как в профиле</string>
     <string name="evergreen">Вечнозелёный</string>
     <string name="blue">Синий</string>

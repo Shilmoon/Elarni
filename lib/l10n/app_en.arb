@@ -658,7 +658,6 @@
   "timeout": "Timeout",
   "testMode": "Test mode",
   "httpMethod": "HTTP method",
-  "currentRulesActiveTunnel": "Current rules / active tunnel",
   "testType": "Test type",
   "refreshingEllipsis": "Refreshing…",
   "refresh": "Refresh",

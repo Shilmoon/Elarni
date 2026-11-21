@@ -29,7 +29,7 @@ final class DesktopIntegration extends ChangeNotifier {
 
   /// The choices Settings > Server tests offers; a stored value outside them
   /// is replaced by the default.
-  static const pingProtocols = ['proxy', 'activeProxy', 'tcp', 'icmp'],
+  static const pingProtocols = ['proxy', 'tcp', 'icmp'],
       pingMethods = ['GET', 'HEAD'],
       pingModes = ['default', 'double', 'keepalive'],
       pingTimeouts = [5, 7, 9, 12, 15];
@@ -216,7 +216,11 @@ final class DesktopIntegration extends ChangeNotifier {
         final String stored when stored.length <= maxPingText => stored,
         _ => fallback,
       };
-      pingProtocol = choice('pingProtocol', pingProtocols, 'tcp');
+      // "Current rules / active tunnel" is no longer a choice: it tested the
+      // selected server as Proxy does, and no other server.
+      pingProtocol = value['pingProtocol'] == 'activeProxy'
+          ? 'proxy'
+          : choice('pingProtocol', pingProtocols, 'tcp');
       pingMethod = choice('pingMethod', pingMethods, 'GET');
       pingMode = choice('pingMode', pingModes, 'default');
       pingTimeout = choice('pingTimeout', pingTimeouts, 7);

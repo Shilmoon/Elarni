@@ -1326,16 +1326,6 @@
         }
       }
     },
-    "Current rules / active tunnel" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Текущие правила / активный туннель"
-          }
-        }
-      }
-    },
     "DNS" : {
       "shouldTranslate" : false
     },

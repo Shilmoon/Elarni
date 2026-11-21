@@ -1548,10 +1548,6 @@ class _ElarniHomeState extends State<ElarniHome> {
                   value: 'proxy',
                   child: Text(l10n.testThroughProxy),
                 ),
-                DropdownMenuItem(
-                  value: 'activeProxy',
-                  child: Text(l10n.currentRulesActiveTunnel),
-                ),
                 DropdownMenuItem(value: 'tcp', child: Text(l10n.directTcp)),
                 DropdownMenuItem(value: 'icmp', child: Text(l10n.directIcmp)),
               ],
@@ -1563,7 +1559,7 @@ class _ElarniHomeState extends State<ElarniHome> {
                     },
             ),
             const SizedBox(height: 12),
-            if (const {'proxy', 'activeProxy'}.contains(_pingProtocol)) ...[
+            if (_pingProtocol == 'proxy') ...[
               ElarniSelect<String>(
                 isExpanded: true,
                 label: l10n.httpMethod,
@@ -1574,7 +1570,7 @@ class _ElarniHomeState extends State<ElarniHome> {
                 ],
                 onChanged:
                     _pingControlsDisabled ||
-                        !const {'proxy', 'activeProxy'}.contains(_pingProtocol)
+                        _pingProtocol != 'proxy'
                     ? null
                     : (value) {
                         setState(() => _pingMethod = value!);
@@ -1602,7 +1598,7 @@ class _ElarniHomeState extends State<ElarniHome> {
                 ],
                 onChanged:
                     _pingControlsDisabled ||
-                        !const {'proxy', 'activeProxy'}.contains(_pingProtocol)
+                        _pingProtocol != 'proxy'
                     ? null
                     : (value) {
                         setState(() => _pingMode = value!);
@@ -1632,7 +1628,7 @@ class _ElarniHomeState extends State<ElarniHome> {
             ),
           ],
         ),
-        if (const {'proxy', 'activeProxy'}.contains(_pingProtocol)) ...[
+        if (_pingProtocol == 'proxy') ...[
           section(l10n.httpRequest),
           TextField(
             key: const Key('ping-url'),

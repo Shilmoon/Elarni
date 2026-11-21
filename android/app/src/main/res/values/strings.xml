@@ -371,7 +371,6 @@
     <string name="timeout_in_seconds_1_15">Timeout in seconds · 1–15</string>
     <string name="test_method">Test method</string>
     <string name="proxy">Proxy</string>
-    <string name="active_proxy_2">Active proxy</string>
     <string name="direct_tcp_2">Direct TCP</string>
     <string name="direct_icmp_2">Direct ICMP</string>
     <string name="test_all_servers">Test all servers</string>
@@ -523,7 +522,6 @@
     <string name="trusted_wi_fi_networks">Trusted Wi-Fi networks</string>
     <string name="connection_2">Connection</string>
     <string name="provider_profile">Provider profile</string>
-    <string name="current_rules_active_tunnel">Current rules / active tunnel</string>
     <string name="use_profile">Use profile</string>
     <string name="evergreen">Evergreen</string>
     <string name="blue">Blue</string>

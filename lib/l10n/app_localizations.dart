@@ -2420,12 +2420,6 @@ abstract class AppLocalizations {
   /// **'HTTP method'**
   String get httpMethod;
 
-  /// No description provided for @currentRulesActiveTunnel.
-  ///
-  /// In en, this message translates to:
-  /// **'Current rules / active tunnel'**
-  String get currentRulesActiveTunnel;
-
   /// No description provided for @testType.
   ///
   /// In en, this message translates to:

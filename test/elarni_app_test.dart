@@ -2885,7 +2885,7 @@ void main() {
   );
 
   testWidgets(
-    'a test of the active tunnel tests the selected server, whichever row asks, and marks no other row',
+    'a saved "active tunnel" test type is Proxy: Test all tests every server',
     (tester) async {
       final messenger = tester.binding.defaultBinaryMessenger;
       messenger.setMockMethodCallHandler(DesktopIntegration.channel, (
@@ -2901,34 +2901,26 @@ void main() {
           null,
         ),
       );
-      // As the desktop backend does, the reply names the selected server (a),
-      // whichever one the request named.
       final control = FakeTunnelControl()
-        ..onPing = (_) async => PingResult(
-          nodeId: 'a',
+        ..onPing = (id) async => PingResult(
+          nodeId: id,
           status: 'success',
           latencyMs: 41,
           timestamp: DateTime.now().millisecondsSinceEpoch / 1000,
         );
       await pumpApp(tester, control, windows: true);
-      List<String> asked() => [
-        for (final call in control.pingCalls) call.nodeId,
-      ];
       control.pingCalls.clear();
       await reveal(tester, find.byKey(const Key('ping-all')));
       await tester.tap(find.byKey(const Key('ping-all')));
       await tester.pumpAndSettle();
-      expect(asked(), ['a']);
-      expect(find.text('41 ms'), findsWidgets);
-      expect(find.text('Unavailable'), findsNothing);
-      expect(find.textContaining('Tested 1 of 1'), findsOneWidget);
-      // Another server's own button is the same test of the active tunnel.
-      control.pingCalls.clear();
-      await reveal(tester, find.byKey(const ValueKey('ping:b')));
-      await tester.tap(find.byKey(const ValueKey('ping:b')));
-      await tester.pumpAndSettle();
-      expect(asked(), ['a']);
-      expect(find.text('41 ms'), findsWidgets);
+      expect(control.pingCalls.length, greaterThan(1));
+      expect({for (final call in control.pingCalls) call.protocol}, {'proxy'});
+      expect(
+        find.textContaining(
+          'Tested ${control.pingCalls.length} of ${control.pingCalls.length}',
+        ),
+        findsOneWidget,
+      );
       expect(find.text('Unavailable'), findsNothing);
       await tester.pumpWidget(const SizedBox());
     },

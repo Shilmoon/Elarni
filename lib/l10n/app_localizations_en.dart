@@ -1396,9 +1396,6 @@ class AppLocalizationsEn extends AppLocalizations {
   String get httpMethod => 'HTTP method';
 
   @override
-  String get currentRulesActiveTunnel => 'Current rules / active tunnel';
-
-  @override
   String get testType => 'Test type';
 
   @override

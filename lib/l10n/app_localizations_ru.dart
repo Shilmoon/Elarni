@@ -1415,9 +1415,6 @@ class AppLocalizationsRu extends AppLocalizations {
   String get httpMethod => 'Метод HTTP';
 
   @override
-  String get currentRulesActiveTunnel => 'Текущие правила / активный туннель';
-
-  @override
   String get testType => 'Тип проверки';
 
   @override

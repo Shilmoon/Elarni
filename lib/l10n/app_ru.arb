@@ -387,7 +387,6 @@
   "timeout": "Тайм-аут",
   "testMode": "Режим проверки",
   "httpMethod": "Метод HTTP",
-  "currentRulesActiveTunnel": "Текущие правила / активный туннель",
   "testType": "Тип проверки",
   "refreshingEllipsis": "Обновление…",
   "refresh": "Обновить",
