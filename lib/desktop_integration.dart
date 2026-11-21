@@ -42,10 +42,13 @@ final class DesktopIntegration extends ChangeNotifier {
   String language = 'system';
   String accent = 'evergreen', sort = 'provider';
   Set<String> pinned = {};
-  bool expiryReminders = false, _notifying = false;
+  bool expiryReminders = false, _notifying = false, _hinting = false;
   bool favoritesFirst = true;
   int lastExpiryReminderDay = 0;
   bool loginWarningDismissed = false;
+
+  /// The first close that hid the window to the tray said Elarni keeps running.
+  bool trayHintShown = false;
   // An empty feed keeps the update check off; Not now stores the version it hid.
   String updateFeedURL = '', dismissedUpdate = '';
   // The latency test, as Settings > Server tests last left it.
@@ -139,13 +142,14 @@ final class DesktopIntegration extends ChangeNotifier {
 
   Future<void> load() async {
     channel.setMethodCallHandler((call) async {
-      if (!_closed &&
-          call.method == 'action' &&
-          const [
-            'connect',
-            'disconnect',
-            'settings',
-          ].contains(call.arguments)) {
+      if (_closed || call.method != 'action') return;
+      // A close hid the window to the tray (Windows, Linux).
+      if (call.arguments == 'closedToTray') return _hintTray();
+      if (const [
+        'connect',
+        'disconnect',
+        'settings',
+      ].contains(call.arguments)) {
         onAction?.call(call.arguments as String);
       }
     });
@@ -188,6 +192,7 @@ final class DesktopIntegration extends ChangeNotifier {
       favoritesFirst = value['favoritesFirst'] != false;
       lastExpiryReminderDay = value['lastExpiryReminderDay'] as int? ?? 0;
       loginWarningDismissed = value['loginWarningDismissed'] == true;
+      trayHintShown = value['trayHintShown'] == true;
       updateFeedURL = nextFeed;
       dismissedUpdate = nextDismissed;
       // Test settings an older or another version left unreadable keep their
@@ -234,6 +239,7 @@ final class DesktopIntegration extends ChangeNotifier {
   Future<bool> _store({
     bool? reconnectAfterUpdate,
     String? updateAttempted,
+    bool? trayHintShown,
   }) async {
     while (saving && !_closed) await _saved?.future;
     if (_closed || !available) return false;
@@ -241,6 +247,7 @@ final class DesktopIntegration extends ChangeNotifier {
       await update(
         reconnectAfterUpdate: reconnectAfterUpdate,
         updateAttempted: updateAttempted,
+        trayHintShown: trayHintShown,
       );
       return true;
     } on Object {
@@ -258,6 +265,7 @@ final class DesktopIntegration extends ChangeNotifier {
     bool? favoritesFirst,
     int? lastExpiryReminderDay,
     bool? loginWarningDismissed,
+    bool? trayHintShown,
     String? updateFeedURL,
     String? dismissedUpdate,
     String? pingProtocol,
@@ -301,6 +309,7 @@ final class DesktopIntegration extends ChangeNotifier {
             lastExpiryReminderDay ?? this.lastExpiryReminderDay,
         'loginWarningDismissed':
             loginWarningDismissed ?? this.loginWarningDismissed,
+        'trayHintShown': trayHintShown ?? this.trayHintShown,
         'updateFeedURL': updateFeedURL ?? this.updateFeedURL,
         'dismissedUpdate': dismissedUpdate ?? this.dismissedUpdate,
         'pingProtocol': pingProtocol ?? this.pingProtocol,
@@ -330,6 +339,7 @@ final class DesktopIntegration extends ChangeNotifier {
           lastExpiryReminderDay ?? this.lastExpiryReminderDay;
       this.loginWarningDismissed =
           loginWarningDismissed ?? this.loginWarningDismissed;
+      this.trayHintShown = trayHintShown ?? this.trayHintShown;
       this.dismissedUpdate = dismissedUpdate ?? this.dismissedUpdate;
       this.pingProtocol = pingProtocol ?? this.pingProtocol;
       this.pingMethod = pingMethod ?? this.pingMethod;
@@ -627,6 +637,24 @@ final class DesktopIntegration extends ChangeNotifier {
       }
     } finally {
       _notifying = false;
+    }
+  }
+
+  // Says once that closing the window left Elarni running in the tray, and
+  // that the tray's Quit stops it.
+  Future<void> _hintTray() async {
+    if (_closed || !available || trayHintShown || _hinting) return;
+    _hinting = true;
+    try {
+      await channel.invokeMethod<void>('showTrayHint');
+      if (_closed) return;
+      // Keep the in-session receipt even if persisting preferences fails.
+      trayHintShown = true;
+      await _store(trayHintShown: true);
+    } on Object {
+      // A hint that could not be shown is tried again at the next close.
+    } finally {
+      _hinting = false;
     }
   }
 

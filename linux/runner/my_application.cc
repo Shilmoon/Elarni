@@ -56,6 +56,17 @@ static void first_frame_cb(FlView* view, gpointer) {
   gtk_widget_show(gtk_widget_get_toplevel(GTK_WIDGET(view)));
 }
 
+// The user's close hides the window while the tray icon can bring it back, so the VPN and the
+// app's automation keep running. Otherwise (the tray's Quit, Ctrl+Q, no tray) Flutter's own
+// handler, connected after this one, sends Dart the exit request as before.
+static gboolean delete_event_cb(GtkWidget* window, GdkEvent*, gpointer data) {
+  auto* self = MY_APPLICATION(data);
+  if (!desktop_host_hides_on_close(self->host)) return FALSE;
+  gtk_widget_hide(window);
+  desktop_host_closed_to_tray(self->host);
+  return TRUE;
+}
+
 static void my_application_activate(GApplication* application) {
   auto* self = MY_APPLICATION(application);
   if (self->window) { gtk_window_present(self->window); return; }
@@ -64,6 +75,8 @@ static void my_application_activate(GApplication* application) {
   gtk_window_set_default_size(self->window, 800, 600);
   gtk_window_set_icon_name(self->window, APPLICATION_ID);
   g_signal_connect_swapped(self->window, "destroy", G_CALLBACK(g_application_quit), self);
+  // Before the view exists: its own delete-event handler must run after this one.
+  g_signal_connect(self->window, "delete-event", G_CALLBACK(delete_event_cb), self);
   g_autoptr(FlDartProject) project = fl_dart_project_new();
   // The engine reads the renderer choice when the view creates it; a user's own setting wins. Processes the app
   // starts later must not inherit the choice.

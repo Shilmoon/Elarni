@@ -4,6 +4,18 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
 
 ## Unreleased
 
+### Changed
+
+- **Closing the window no longer quits Elarni.** On Windows, and on Linux desktops that show
+  tray icons, the window hides to the tray, and the first time a notification says so; **Show
+  Elarni** in the tray menu (on Windows also a click on the icon) brings it back. On macOS the
+  app keeps running in the Dock and the menu bar, and a click on its Dock icon shows the window.
+  The VPN, **Connect on untrusted Wi-Fi**, reconnecting, subscription refresh and expiry
+  reminders go on with the window closed. **Quit Elarni** in the tray menu (Ctrl+Q on Linux, Cmd+Q on macOS)
+  quits; on a Linux desktop without a tray closing the window still quits. Quitting on Windows
+  and Linux now waits for the disconnect, for up to 8 seconds, before the app ends. Windows,
+  Linux, macOS.
+
 ### Fixed
 
 - With **Block traffic without VPN** on, **Disconnect** and quitting Elarni now lift the block

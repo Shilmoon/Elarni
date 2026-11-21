@@ -133,6 +133,23 @@ def session(args):
         def click_button(label):
             # Keep AT-SPI's event loop separate from the fixture's DBus services.
             run(sys.executable,str(Path(__file__).resolve()),'--click',label)
+        def click_tray(label):
+            # The newest status icon is the running app's.
+            wait_until(lambda: bool(notifier))
+            service,path=notifier[-1]
+            properties=dbus.Interface(bus.get_object(service,path),'org.freedesktop.DBus.Properties')
+            menu_path=properties.Get('org.kde.StatusNotifierItem','Menu')
+            menu=dbus.Interface(bus.get_object(service,str(menu_path)),'com.canonical.dbusmenu')
+            _,layout=menu.GetLayout(0,-1,dbus.Array([],signature='s'))
+            def find(row):
+                if row[1].get('label')==label:
+                    assert row[1].get('enabled',True),label+' tray action disabled'
+                    return int(row[0])
+                for child in row[2]:
+                    result=find(child)
+                    if result is not None:return result
+            item=find(layout);assert item is not None,label+' menu item missing'
+            menu.Event(item,'clicked',dbus.Int32(0),dbus.UInt32(0))
         def select_file(path):
             # Native Wayland dialogs receive keyboard input through nested Weston.
             time.sleep(.3)
@@ -164,21 +181,7 @@ def session(args):
             elif stage=='cancel-picker':
                 time.sleep(.3);keys('key','--clearmodifiers','Escape')
             elif stage=='tray-connect':
-                wait_until(lambda: bool(notifier))
-                service,path=notifier[-1]
-                properties=dbus.Interface(bus.get_object(service,path),'org.freedesktop.DBus.Properties')
-                menu_path=properties.Get('org.kde.StatusNotifierItem','Menu')
-                menu=dbus.Interface(bus.get_object(service,str(menu_path)),'com.canonical.dbusmenu')
-                _,layout=menu.GetLayout(0,-1,dbus.Array([],signature='s'))
-                def find(row):
-                    if row[1].get('label')=='Connect':
-                        assert row[1].get('enabled',True),'Connect tray action disabled'
-                        return int(row[0])
-                    for child in row[2]:
-                        result=find(child)
-                        if result is not None:return result
-                item=find(layout);assert item is not None,'Connect menu item missing'
-                menu.Event(item,'clicked',dbus.Int32(0),dbus.UInt32(0))
+                click_tray('Connect')
             elif stage=='sleep-events':
                 services[2].PrepareForSleep(True);time.sleep(.15);services[2].PrepareForSleep(False)
             elif stage=='camera-removed':
@@ -215,10 +218,14 @@ def session(args):
                 import_status=summary;print('Imported fixture nodes:',summary,flush=True)
             return len(nodes)==1 and nodes[0].get('name')=='Linux fixture'
         def close_release():
+            # The fixture's watcher shows the tray icon, so closing the window only hides it.
             if args.display=='wayland': click_button('Close')
             else: keys('key','--clearmodifiers','alt+F4')
+            time.sleep(2)
+            assert actual.poll() is None,'Closing the window quit although the tray icon can show it again'
+            click_tray('Quit Elarni')
             actual.wait(timeout=10)
-            assert actual.returncode==0,'Release application failed graceful close'
+            assert actual.returncode==0,'Release application failed graceful quit'
         # A concurrent helper reader takes the catalog lock and can reject the
         # app's save. Inspect persistence only after closing its writer.
         time.sleep(3)

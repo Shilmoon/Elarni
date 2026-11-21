@@ -775,8 +775,8 @@ final class DesktopProxy {
     }
   }
 
-  /// Puts the user's proxy setting back. Quitting the window does not wait
-  /// for [dispose], and the OS proxy must not outlive its listener.
+  /// Puts the user's proxy setting back. A quit waits for [dispose] only so
+  /// long, and the OS proxy must not outlive its listener.
   Future<void> releaseSystemProxy() async {
     _proxyReleased = true;
     await _syncSystemProxy();

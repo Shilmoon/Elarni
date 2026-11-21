@@ -422,6 +422,51 @@ void main() {
   );
 
   test(
+    'the first close to the tray says Elarni keeps running, once across relaunch',
+    () async {
+      var stored = '{}';
+      var hints = 0;
+      final actions = <String>[];
+      messenger.setMockMethodCallHandler(channel, (call) async {
+        switch (call.method) {
+          case 'getPreferences':
+            return stored;
+          case 'setPreferences':
+            stored = (call.arguments as Map)['json'] as String;
+          case 'showTrayHint':
+            hints++;
+        }
+        return null;
+      });
+      addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
+      Future<void> action(String name) => messenger.handlePlatformMessage(
+        channel.name,
+        channel.codec.encodeMethodCall(MethodCall('action', name)),
+        null,
+      );
+      final desktop = DesktopIntegration()..onAction = actions.add;
+      await desktop.load();
+      expect(desktop.trayHintShown, isFalse);
+      await action('closedToTray');
+      expect(hints, 1);
+      expect(desktop.trayHintShown, isTrue);
+      expect(jsonDecode(stored)['trayHintShown'], isTrue);
+      await action('closedToTray');
+      expect(hints, 1);
+      // The hint is the integration's own; pages see neither it nor an unknown action.
+      await action('somethingElse');
+      expect(actions, isEmpty);
+      desktop.dispose();
+      final reopened = DesktopIntegration();
+      await reopened.load();
+      expect(reopened.trayHintShown, isTrue);
+      await action('closedToTray');
+      expect(hints, 1);
+      reopened.dispose();
+    },
+  );
+
+  test(
     'desktop preferences survive relaunch and failed writes preserve prior choices',
     () async {
       var stored = '{}', fail = false;
