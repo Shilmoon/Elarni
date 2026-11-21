@@ -364,10 +364,19 @@ void main() {
     });
     await catalog.refresh('feed');
     final nodes = catalogList(catalog.source('feed')['nodes']);
-    catalog.data['selectedNodeId'] = nodes.first['id'];
+    final removed = nodes.first['id']! as String;
+    catalog.data['selectedNodeId'] = removed;
+    // The window says the server changed only when the refresh replaced it.
+    await catalog.refresh('feed');
+    expect(catalog.replacedSelection(removed), isFalse);
     feed = [server('b')];
     await catalog.refresh('feed');
     expect(catalog.selected, nodes.last['id']);
+    expect(catalog.replacedSelection(removed), isTrue);
+    expect(catalog.replacedSelection(null), isFalse);
+    expect(catalog.replacedSelection(catalog.selected), isFalse);
+    catalog.data['selectedNodeId'] = null;
+    expect(catalog.replacedSelection(removed), isFalse);
   });
 
   // 3x-ui sends its Happ routing header to every client (3x-ui #5999).

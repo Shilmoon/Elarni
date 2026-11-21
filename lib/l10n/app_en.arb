@@ -526,6 +526,7 @@
     }
   },
   "scheduledRefreshFailed": "A scheduled subscription or routing refresh failed.",
+  "selectedServerReplaced": "The server you had selected is gone from its subscription. Elarni selected another server.",
   "groupSelectionFailed": "Group selection failed. The saved selection was restored.",
   "serverIpPreferenceNotApplied": "Could not apply the server IP preference.",
   "telegramNotOpened": "Telegram could not be opened. Check that it is installed.",

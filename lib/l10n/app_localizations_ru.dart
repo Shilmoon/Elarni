@@ -1156,6 +1156,10 @@ class AppLocalizationsRu extends AppLocalizations {
       'Не удалось выполнить плановое обновление подписки или маршрутизации.';
 
   @override
+  String get selectedServerReplaced =>
+      'Выбранного сервера больше нет в его подписке. Elarni выбрал другой сервер.';
+
+  @override
   String get groupSelectionFailed =>
       'Не удалось выбрать сервер в группе. Восстановлен сохранённый выбор.';
 

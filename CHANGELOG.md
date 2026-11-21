@@ -4,6 +4,14 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
 
 ## Unreleased
 
+### Fixed
+
+- When a subscription update removes the selected server, macOS now moves to another server of
+  that subscription (recovery's first allowed server when recovery is on) instead of
+  disconnecting, and Windows, Linux, macOS and Android say that the server changed (iPhone
+  already did). On Android only an update you start says so; a scheduled one changes the
+  server without a word, as before.
+
 ## 0.6.2 - 2026-11-18
 
 ### Added

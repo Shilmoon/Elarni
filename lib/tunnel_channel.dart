@@ -1486,7 +1486,11 @@ final class SubscriptionSafetyWarning {
 }
 
 final class SubscriptionOperationResult {
-  const SubscriptionOperationResult({required this.snapshot, this.warning});
+  const SubscriptionOperationResult({
+    required this.snapshot,
+    this.warning,
+    this.notice,
+  });
 
   factory SubscriptionOperationResult.fromMap(Map<String, Object?> value) {
     final warning = value['warning'];
@@ -1499,11 +1503,16 @@ final class SubscriptionOperationResult {
           : SubscriptionSafetyWarning.fromMap(
               Map<String, Object?>.from(warning as Map),
             ),
+      notice: value['notice'] as String?,
     );
   }
 
   final SubscriptionSnapshot snapshot;
   final SubscriptionSafetyWarning? warning;
+
+  /// What the refresh changed that the user should know, worded by macOS
+  /// (the selected server it replaced); Windows and Linux use the listener.
+  final String? notice;
 }
 
 /// A subscription download failure's short label and its text, which says whether

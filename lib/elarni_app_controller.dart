@@ -1145,7 +1145,13 @@ extension _HomeController on _ElarniHomeState {
     var current = operation;
     while (true) {
       if (!mounted) return false;
-      _set(() => _applySnapshot(current.snapshot));
+      final notice = current.notice;
+      _set(() {
+        _applySnapshot(current.snapshot);
+        // macOS words what the refresh changed, such as the server it replaced.
+        if (current.warning == null && notice != null)
+          _message = listenerNotice(notice);
+      });
       final warning = current.warning;
       if (warning == null) return true;
       final approved = await showDialog<bool>(

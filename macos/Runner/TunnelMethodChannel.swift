@@ -26,6 +26,8 @@ final class TunnelMethodChannel {
   var automationUnreadable = false
   var automationStatus = "disabled"
   var automationCandidateFailures: [String: String] = [:]
+  /// Per subscription, the last publication's word on the server it replaced, until its refresh reports it.
+  private var refreshNotices: [String: String] = [:]
   var healthDiagnostics: [ProbeDiagnostic] = []
   var verifiedHealth: (node: String, at: Double, epoch: UInt64)?
   /// The last failed health check counted only because another server may take over (`countsAgainstServer`).
@@ -152,7 +154,7 @@ final class TunnelMethodChannel {
             }
             var id = ""
             try await self.commands.perform { id = try store.registerProfiles(content) }
-            result(try await store.refresh(id: id).channelMap)
+            result(self.refreshMap(try await store.refresh(id: id), id: id))
             return
           }
           // Downloads must not occupy the connection command owner.
@@ -163,11 +165,12 @@ final class TunnelMethodChannel {
               guard let url = arguments["url"] as? String else { throw SubscriptionError.invalidURL }
               var id = ""
               try await self.commands.perform { id = try store.register(urlText: url) }
-              result(try await store.refresh(id: id).channelMap)
+              result(self.refreshMap(try await store.refresh(id: id), id: id))
             } else {
               guard let id = arguments["id"] as? String else { throw SubscriptionError.notFound }
               if call.method == "refreshSubscription" {
-                result(try await store.refresh(id: id, challenge: arguments["challenge"] as? String, format: arguments["format"] as? String).channelMap)
+                result(self.refreshMap(try await store.refresh(id: id, challenge: arguments["challenge"] as? String,
+                                                               format: arguments["format"] as? String), id: id))
               } else if call.method == "refreshManagedLists" {
                 // Each list downloads on its own, as the schedule does. Like a geofile refresh, a failed
                 // download is recorded on the profile, which keeps the list's last good copy, and reported.
@@ -721,6 +724,7 @@ final class TunnelMethodChannel {
   @MainActor
   private func processDeepLinks(_ values: [String]) async {
     var failure: String?
+    var notice: String?
     for value in values {
       do {
         try Task.checkCancellation()
@@ -744,11 +748,12 @@ final class TunnelMethodChannel {
           var id = ""
           try await commands.perform { id = try store.registerProfiles(value) }
           _ = try await store.refresh(id: id)
+          notice = refreshNotices.removeValue(forKey: id) ?? notice
         }
       } catch RoutingStoreError.noSelectedSubscription { failure = failure ?? Self.noSelectionMessage }
       catch { failure = failure ?? "One or more client links could not be handled. Check the link and connection status." }
     }
-    channel.invokeMethod("subscriptionsChanged", arguments: failure.map { ["error": $0] })
+    channel.invokeMethod("subscriptionsChanged", arguments: (failure ?? notice).map { ["error": $0] })
   }
 
   /// Runs a connection link's action ("connect", "disconnect", "toggle" or "status", as
@@ -1180,6 +1185,14 @@ final class TunnelMethodChannel {
     await reclaimRoutingFiles()
   }
 
+  /// A refresh's result for the window, with the notice its publication left.
+  @MainActor
+  private func refreshMap(_ result: SubscriptionOperationResult, id: String) -> [String: Any] {
+    var map = result.channelMap
+    if let notice = refreshNotices.removeValue(forKey: id) { map["notice"] = notice }
+    return map
+  }
+
   @MainActor
   private func publishSubscription(_ candidate: RefreshCandidate, store: SubscriptionStore) async throws {
     let selected: NETunnelProviderManager?
@@ -1193,6 +1206,11 @@ final class TunnelMethodChannel {
     if let selected, !active && ![.disconnected, .invalid].contains(selected.connection.status) {
       throw RunnerTunnelError.invalidState
     }
+    refreshNotices.removeValue(forKey: candidate.subscriptionID)
+    // What the window called the selected server, which this publication may remove.
+    let previousNode = store.selectedNodeID()
+    let previousNames = previousNode.flatMap { store.names(nodeID: $0) }
+    let previousSubscription = previousNode.flatMap { try? store.subscriptionID(nodeID: $0) }
     let removed = try store.beginPublication(candidate)
     var released = selected == nil || selected?.connection.status == .disconnected || selected?.connection.status == .invalid
     var applied = false
@@ -1221,6 +1239,28 @@ final class TunnelMethodChannel {
             catch RunnerTunnelError.nodeSwitchRestoreFailed { throw RunnerTunnelError.nodeSwitchRestoreFailed }
             catch { automationCandidateFailures[node] = "refreshReplacementFailed" }
           }
+        }
+        // As on the iPhone, another server takes over instead of a disconnect: recovery's first
+        // allowed server, else the removed one's subscription's first. It keeps the connection and its intent.
+        if !replaced, let previousSubscription,
+           let node = store.refreshFallback(allowed: automationConfiguration.nodeIDs,
+                                            automationEnabled: automationConfiguration.enabled,
+                                            removedFrom: previousSubscription) {
+          do {
+            let subscriptionID = try store.subscriptionID(nodeID: node)
+            try await store.routing.prepareAssets(subscriptionID: subscriptionID)
+            let revision = try store.routing.runtimeRevision(subscriptionID: subscriptionID)
+            if let plan = try planUnlessTargetMissing(secretRef: store.outboundRef(nodeID: node),
+                                                      routingRevision: revision, active: active) {
+              try await applyRefreshPlan(plan, previous: previousPlan, selected: active ? selected : nil, health: nil)
+            }
+            applied = true
+            try store.commitSelection(nodeID: node)
+            replaced = true
+            released = true
+          } catch is CancellationError { throw CancellationError() }
+          catch RunnerTunnelError.nodeSwitchRestoreFailed { throw RunnerTunnelError.nodeSwitchRestoreFailed }
+          catch {}
         }
         if !replaced {
           if selected != nil { try await disconnect() }
@@ -1253,6 +1293,13 @@ final class TunnelMethodChannel {
         if stopped { try await connect(); try await waitForConnected() }
       }
       throw error
+    }
+    // The refresh result or the scheduled refresh's reload says which server took over.
+    if removed, let previousNames, let node = store.selectedNodeID(), node != previousNode,
+       let next = store.names(nodeID: node) {
+      refreshNotices[candidate.subscriptionID] = active
+        ? String(localized: "\(previousNames.server) is gone from \(previousNames.subscription). Connected to \(next.server).")
+        : String(localized: "\(previousNames.server) is gone from \(previousNames.subscription). \(next.server) is selected now.")
     }
     if released {
       try? store.reclaimRetiredSecrets()
@@ -1352,7 +1399,9 @@ final class TunnelMethodChannel {
         for id in subscriptions {
           if Task.isCancelled || store.publicationRecoveryRequired { return }
           _ = try? await store.refresh(id: id, interactive: false)
-          self.channel.invokeMethod("subscriptionsChanged", arguments: nil)
+          // The window's reload shows the notice, as Windows and Linux show theirs.
+          self.channel.invokeMethod("subscriptionsChanged",
+                                    arguments: self.refreshNotices.removeValue(forKey: id).map { ["error": $0] })
         }
         for source in sources {
           if Task.isCancelled || store.publicationRecoveryRequired { return }
