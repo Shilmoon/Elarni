@@ -3216,6 +3216,7 @@ for line in sys.stdin:
     await useStub('''
 import json, os, socket, sys, threading, time
 listeners = []
+tunnel = False
 output = threading.Lock()
 def note(entry):
     with open(${jsonEncode(events.path)}, 'a') as events: print(entry, file=events)
@@ -3244,8 +3245,11 @@ for line in sys.stdin:
         else:
             send({'success': True, 'data': {}})
         sys.exit(0)
-    note(' '.join([method] + [flag for flag in ('hold', 'release') if payload.get(flag)]))
+    # Other commands, such as the retiring of routing files at start, are not the tunnel's.
+    if method in ('runVPN', 'stopVPN'):
+        note(' '.join([method] + [flag for flag in ('hold', 'release') if payload.get(flag)]))
     if method == 'runVPN':
+        tunnel = True
         for inbound in json.loads(payload['configJSON'])['inbounds']:
             if inbound['protocol'] in ('socks', 'http'):
                 listener = socket.socket()
@@ -3256,7 +3260,7 @@ for line in sys.stdin:
         for listener in listeners: listener.close()
         listeners.clear()
     send({'success': True, 'data': {}})
-note('closed')
+if tunnel: note('closed')
 ''');
     return (events: events, lose: lose, decline: decline, messages: messages);
   }
