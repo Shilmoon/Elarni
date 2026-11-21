@@ -214,6 +214,78 @@ String routeEnforcementText(String code) => switch (code) {
   _ => l10n.routeEnforcementDefaultRoutes,
 };
 
+/// How long a server test stays current; the list marks an older one stale.
+const probeFreshness = Duration(minutes: 5);
+
+/// Whether [result] is current for a server whose configuration is
+/// [revision], as the list's stale mark counts it.
+bool probeFresh(PingResult result, String? revision, DateTime now) {
+  final age = now.millisecondsSinceEpoch / 1000 - result.timestamp;
+  return age >= 0 &&
+      age < probeFreshness.inSeconds &&
+      revision == result.configurationRevision;
+}
+
+/// A server test that failed without a result: when it ended, and whether it
+/// failed to reach the server.
+typedef PingFailure = ({DateTime at, bool unreachable});
+
+/// The record a failed server test leaves at [at], or null when the test
+/// never ran (busy or cancelled). It is unreachable unless the test was
+/// refused before reaching the server, or [cutShort] by the bulk test's bound
+/// before the user's timeout.
+PingFailure? pingFailureFor(
+  Object error,
+  DateTime at, {
+  bool cutShort = false,
+}) {
+  final code = error is PlatformException ? error.code : null;
+  if (const {'busy', 'cancelled', 'operation_cancelled'}.contains(code))
+    return null;
+  final notRun =
+      error is FormatException ||
+      code != null &&
+          (const {
+                'not_connected',
+                'unsupported_ping_method',
+                'disconnect_to_test',
+                'unavailableProbePath',
+                'icmp_restore_failed',
+                'stale_probe',
+                'native_unavailable',
+                'listener_unavailable',
+                'per_app_target_missing',
+                'missing_geodata',
+                'missing_credentials',
+                'unsupported_profile',
+                'unsupported_operation',
+                'no_selected_subscription',
+              }.contains(code) ||
+              // Settings and catalog checks, and macOS's checks of the active tunnel.
+              code.startsWith('invalid_') ||
+              code.startsWith('storage_') ||
+              code.startsWith('automation_'));
+  return (at: at, unreachable: !notRun && !cutShort);
+}
+
+/// Whether Select unreachable ticks a server: its latest test is still
+/// current and failed to reach the server. A [result] wins over a [failure],
+/// as in the server's row.
+bool pingUnreachable({
+  required PingResult? result,
+  required PingFailure? failure,
+  required String? revision,
+  required DateTime now,
+}) {
+  if (result != null) {
+    return (result.status != 'success' || result.latencyMs < 0) &&
+        probeFresh(result, revision, now);
+  }
+  if (failure == null || !failure.unreachable) return false;
+  final age = now.difference(failure.at);
+  return !age.isNegative && age < probeFreshness;
+}
+
 class ElarniHome extends StatefulWidget {
   const ElarniHome({
     required this.tunnelControl,
@@ -275,7 +347,8 @@ class _ElarniHomeState extends State<ElarniHome> {
   String? _routesError;
   bool _routesBusy = false;
   final Map<String, PingResult> _pingResults = <String, PingResult>{};
-  final Set<String> _pingUnavailable = <String>{};
+  // Failed tests without a result; only some of them speak about the server.
+  final Map<String, PingFailure> _pingUnavailable = <String, PingFailure>{};
   final Set<String> _pingSkipped = <String>{};
   final Set<String> _pingPending = <String>{};
   // When each server was last tested, so a failed one is not retried by every group open.

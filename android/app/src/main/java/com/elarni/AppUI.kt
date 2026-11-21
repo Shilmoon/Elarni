@@ -988,8 +988,11 @@ private fun quota(metadata: JSONObject): Triple<String, String, Float?> {
                 val ids = nodes.map { it.string("id") }.filter { it in chosen }
                 val count = trPlural(R.plurals.server_count, ids.size)
                 SettingsTile(tr(R.string.selected_count, ids.size), below = { FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    // As on the desktop: a failed latest test, and never the selected server, which the catalog keeps.
-                    TextButton({ chosen = (chosen + nodes.map { it.string("id") }.filter { nodeID -> nodeID != catalog.selected && pings[nodeID]?.let { it.string("status") != "success" || it.optLong("latencyMs", -1) < 0 } == true }).distinct() }) { Text(tr(R.string.select_unreachable)) }
+                    // As on the desktop: a current test that failed to reach the server, and never the selected server, which the catalog keeps.
+                    TextButton({
+                        val time = now()
+                        chosen = (chosen + nodes.filter { node -> node.string("id") != catalog.selected && pings[node.string("id")]?.let { pingUnreachable(node, it, time) } == true }.map { it.string("id") }).distinct()
+                    }) { Text(tr(R.string.select_unreachable)) }
                     TextButton({
                         confirm(if (remote) tr(R.string.hide, count) else tr(R.string.delete_2, count), if (remote) tr(R.string.they_stay_hidden_after_refreshes_show) else tr(R.string.they_are_removed_from, source.string("name")), if (remote) tr(R.string.hide_2) else tr(R.string.delete)) {
                             activity.run("deleteNodes", obj("ids" to JSONArray(ids))) { selecting = false; chosen = emptyList() }
@@ -1271,6 +1274,16 @@ private fun quota(metadata: JSONObject): Triple<String, String, Float?> {
     return produceState(now(), lifecycle) { lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) { while (true) { delay(((value + 30 - now()) * 1000).toLong().coerceIn(0, 30_000)); value = now() } } }
 }
 fun pingFresh(node: JSONObject, result: JSONObject, time: Double) = result.string("configurationRevision") == node.string("configurationRevision", node.string("id")) && time - result.optDouble("timestamp", 0.0) in 0.0..300.0
+// Failures of a test that did not run against the server: another test or no connection, a test method or profile
+// it does not support, a cancel, and settings, asset and storage checks.
+private val pingNotRun = setOf("not_connected", "unsupported_ping_method", "unsupported_profile", "per_app_target_missing", "assets_unavailable",
+    "probe_busy", "probe_cancelled", "cancelled", "not_found", "input_too_large")
+/** What Select unreachable ticks: a current test that failed to reach the server. */
+fun pingUnreachable(node: JSONObject, result: JSONObject, time: Double): Boolean {
+    if (!pingFresh(node, result, time) || result.string("status") == "success" && result.optLong("latencyMs", -1) >= 0) return false
+    val code = result.string("error")
+    return code !in pingNotRun && !code.startsWith("invalid_") && !code.startsWith("storage_")
+}
 fun pingScope(result: JSONObject) = when (result.string("protocol")) { "tcp" -> tr(R.string.direct_tcp); "icmp" -> tr(R.string.direct_icmp); "activeProxy" -> tr(R.string.active_proxy); else -> "proxy" }
 
 @Composable private fun DiagnosticsScreen(page: String, state: AppState, activity: MainActivity, navigate: (String, String) -> Unit, reset: () -> Unit) {

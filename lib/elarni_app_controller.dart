@@ -399,8 +399,9 @@ extension _HomeController on _ElarniHomeState {
         _set(() {
           if (_skippedProbe(error)) {
             _pingSkipped.add(nodeId);
-          } else {
-            _pingUnavailable.add(nodeId);
+          } else if (pingFailureFor(error, DateTime.now())
+              case final failure?) {
+            _pingUnavailable[nodeId] = failure;
           }
           _message = switch (error.code) {
             'unsupported_ping_method' => l10n.pingDirectTcpUnsupported,
@@ -412,10 +413,12 @@ extension _HomeController on _ElarniHomeState {
           };
         });
       }
-    } on Object {
+    } on Object catch (error) {
       if (mounted && run == _pingRun) {
         _set(() {
-          _pingUnavailable.add(nodeId);
+          if (pingFailureFor(error, DateTime.now()) case final failure?) {
+            _pingUnavailable[nodeId] = failure;
+          }
           _message = l10n.pingFailedForNode;
         });
       }
@@ -500,12 +503,8 @@ extension _HomeController on _ElarniHomeState {
     return _nodesById[id];
   }
 
-  bool _probeFresh(PingResult result) {
-    final age = DateTime.now().millisecondsSinceEpoch / 1000 - result.timestamp;
-    return age >= 0 &&
-        age < 300 &&
-        _findNode(result.nodeId)?.revision == result.configurationRevision;
-  }
+  bool _probeFresh(PingResult result) =>
+      probeFresh(result, _findNode(result.nodeId)?.revision, DateTime.now());
 
   /// Whether a server's result is older than five minutes, or it has none and was not just tried.
   bool _pingStale(String id) {
@@ -514,7 +513,8 @@ extension _HomeController on _ElarniHomeState {
     if (result != null) return !_probeFresh(result);
     final tried = _pingTriedAt[id];
     return tried == null ||
-        DateTime.now().millisecondsSinceEpoch / 1000 - tried >= 300;
+        DateTime.now().millisecondsSinceEpoch / 1000 - tried >=
+            probeFreshness.inSeconds;
   }
 
   /// Opening a group tests its stale servers, after any test already running.
@@ -602,10 +602,12 @@ extension _HomeController on _ElarniHomeState {
         final nodeId = waiting.removeAt(0);
         if (waiting.isEmpty) queues.remove(key);
         busy[key] = (busy[key] ?? 0) + 1;
+        final bound = _pingTimeout.clamp(5, 7);
+        final watch = Stopwatch()..start();
         try {
           final result = await _measureNode(
             nodeId,
-            timeout: _pingTimeout.clamp(5, 7),
+            timeout: bound,
           ).timeout(const Duration(seconds: 7));
           if (mounted && run == _pingRun) {
             _set(() {
@@ -619,8 +621,18 @@ extension _HomeController on _ElarniHomeState {
                 _pingSkipped.add(nodeId);
                 needsDisconnect |=
                     (error as PlatformException).code == 'disconnect_to_test';
-              } else {
-                _pingUnavailable.add(nodeId);
+              } else if (pingFailureFor(
+                    error,
+                    DateTime.now(),
+                    // Under a longer timeout of the user's, a test that ran
+                    // out the bound was cut short, not given that timeout.
+                    cutShort:
+                        _pingTimeout > bound &&
+                        (error is TimeoutException ||
+                            watch.elapsed >= Duration(seconds: bound)),
+                  )
+                  case final failure?) {
+                _pingUnavailable[nodeId] = failure;
               }
             });
           }
@@ -652,12 +664,17 @@ extension _HomeController on _ElarniHomeState {
       );
       if (mounted && run == _pingRun) {
         _set(() {
-          _pingUnavailable.addAll(
-            nodeIds.where(
-              (id) =>
-                  !_pingResults.containsKey(id) && !_pingSkipped.contains(id),
-            ),
-          );
+          // A server left without a result (its test was busy or cancelled)
+          // shows as unavailable, as before, but says nothing about it.
+          final at = DateTime.now();
+          for (final id in nodeIds) {
+            if (!_pingResults.containsKey(id) && !_pingSkipped.contains(id)) {
+              _pingUnavailable.putIfAbsent(
+                id,
+                () => (at: at, unreachable: false),
+              );
+            }
+          }
           if (report) {
             final tested = nodeIds.where(_pingResults.containsKey).length;
             final skipped = nodeIds.where(_pingSkipped.contains).length;
@@ -989,7 +1006,7 @@ extension _HomeController on _ElarniHomeState {
     if (changed) {
       _pingRun++;
       _pingPending.clear();
-      _pingUnavailable.removeWhere((id) => oldNodes[id] != newNodes[id]);
+      _pingUnavailable.removeWhere((id, _) => oldNodes[id] != newNodes[id]);
       _pingSkipped.removeWhere((id) => oldNodes[id] != newNodes[id]);
     }
     _pingResults.removeWhere(
