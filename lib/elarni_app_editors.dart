@@ -1,5 +1,33 @@
 part of 'elarni_app.dart';
 
+/// What a saved backup left out and why, in one message; null when it left
+/// out nothing.
+String? _backupLeftOut(List<BackupExclusion> excluded) {
+  final forbidden = [
+    for (final item in excluded)
+      if (item.reason == 'sharing_disabled') item.name,
+  ];
+  final unrefreshed = [
+    for (final item in excluded)
+      if (item.reason != 'sharing_disabled') item.name,
+  ];
+  final text = [
+    if (forbidden.isNotEmpty)
+      l10n.backupSavedWithoutForbidden(forbidden.length, forbidden.join(', ')),
+    if (unrefreshed.isNotEmpty)
+      forbidden.isEmpty
+          ? l10n.backupSavedWithoutUnrefreshed(
+              unrefreshed.length,
+              unrefreshed.join(', '),
+            )
+          : l10n.backupAlsoWithoutUnrefreshed(
+              unrefreshed.length,
+              unrefreshed.join(', '),
+            ),
+  ].join(' ');
+  return text.isEmpty ? null : text;
+}
+
 extension _HomeEditors on _ElarniHomeState {
   Future<void> _troubleshoot() async {
     await _showEditorDialog<void>(
@@ -686,17 +714,18 @@ extension _HomeEditors on _ElarniHomeState {
     if (secret == null || !mounted || _busy) return;
     _set(() => _busy = true);
     try {
+      var excluded = const <BackupExclusion>[];
       if (restore) {
         await widget.tunnelControl.restoreCatalogBackup(secret);
         await _load();
       } else {
-        await widget.tunnelControl.exportCatalogBackup(secret);
+        excluded = await widget.tunnelControl.exportCatalogBackup(secret);
       }
       if (mounted)
         _set(
           () => _message = restore
               ? l10n.backupRestored
-              : l10n.encryptedBackupSaved,
+              : _backupLeftOut(excluded) ?? l10n.encryptedBackupSaved,
         );
     } on PlatformException catch (error) {
       if (mounted &&

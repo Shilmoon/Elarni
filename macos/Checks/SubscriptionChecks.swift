@@ -1546,14 +1546,23 @@ struct SubscriptionChecks {
     _ = try await store.selectProfileGroup(nodeID: clashNode, group: "PROXY", choice: "two")
     _ = try await store.setNodeIPPreference(nodeID: clashNode, preference: "ipv6")
     let remoteID = try store.register(urlText: fixture.appendingPathComponent("feed").absoluteString)
-    try rejects { _ = try store.backupCatalog() }
+    // A subscription never refreshed is left out and named, and the rest is saved.
+    let partial = try store.backupCatalog()
+    let remoteName = (store.snapshot()["subscriptions"] as! [[String: Any]]).first { $0["id"] as? String == remoteID }!["name"] as! String
+    try expect(partial.excluded == [["name": remoteName, "reason": "sharing_refresh_required"]] &&
+      (partial.document["subscriptions"] as! [[String: Any]]).map { $0["id"] as! String } == [groups[0]["id"] as! String] &&
+      partial.document["selectedNodeId"] as? String == clashNode &&
+      !String(decoding: try JSONSerialization.data(withJSONObject: partial.document), as: UTF8.self).contains(remoteID),
+      "an unrefreshed subscription was not left out of the backup on its own")
     var operation = try await store.refresh(id: remoteID)
     for _ in 0..<8 {
       guard let challenge = operation.warning?.challenge else { break }
       operation = try await store.refresh(id: remoteID, challenge: challenge)
     }
     try expect(operation.warning == nil, "backup fixture approvals did not converge")
-    let backup = try store.backupCatalog()
+    let saved = try store.backupCatalog()
+    try expect(saved.excluded.isEmpty, "a refreshed catalog left a subscription out of its backup")
+    let backup = saved.document
     let previous = store.snapshot() as NSDictionary
     let routes = store.routing.snapshot() as NSDictionary
     let oldSecrets = secrets.values
@@ -1607,8 +1616,32 @@ struct SubscriptionChecks {
     try expect((recovered.snapshot() as NSDictionary).isEqual(before), "invalid backup partially published")
     let hidden = try recovered.registerProfiles("#hide-url: yes\n" + vless)
     _ = try await recovered.refresh(id: hidden)
-    try rejects { _ = try recovered.backupCatalog() }
-    print("PASS unknown and hidden provider backup restrictions and invalid restore are enforced")
+    // The restored remote still waits for its approval, so it was never refreshed here.
+    let names = Dictionary(uniqueKeysWithValues: (recovered.snapshot()["subscriptions"] as! [[String: Any]]).map { ($0["id"] as! String, $0["name"] as! String) })
+    let limited = try recovered.backupCatalog()
+    try expect(limited.excluded == [["name": names[restoredRemote]!, "reason": "sharing_refresh_required"], ["name": names[hidden]!, "reason": "sharing_disabled"]],
+      "the backup did not name the subscriptions it left out")
+    let limitedText = String(decoding: try JSONSerialization.data(withJSONObject: limited.document), as: UTF8.self)
+    try expect((limited.document["subscriptions"] as! [[String: Any]]).map { $0["id"] as! String } == [mixedID] &&
+      !limitedText.contains(restoredRemote) && !limitedText.contains(hidden), "a left-out subscription reached the backup")
+    try expect((limited.document["assignments"] as! [String: String])[restoredRemote] == nil &&
+      (limited.document["routes"] as! [[String: Any]]).allSatisfy { $0["providerSubscriptionId"] as? String != restoredRemote },
+      "a left-out subscription's routing reached the backup")
+    let unchanged = recovered.snapshot() as NSDictionary
+    _ = try recovered.beginBackupRestore(limited.document)
+    try recovered.rollbackPublication()
+    try expect((recovered.snapshot() as NSDictionary).isEqual(unchanged), "a backup that left subscriptions out did not restore")
+    // With nothing else to save, the refusal stands.
+    let lone = try SubscriptionStore(directory: directory.appendingPathComponent("lone"),
+      routing: RoutingStore(directory: directory.appendingPathComponent("lone-routing")), secretAccess: MemorySecrets().access())
+    lone.publishRefresh = { [weak lone] candidate in
+      guard let lone else { throw SubscriptionError.invalidState }
+      _ = try lone.beginPublication(candidate)
+      try lone.finishPublication(candidate)
+    }
+    _ = try await lone.refresh(id: try lone.registerProfiles("#hide-url: yes\n" + vless))
+    try rejects { _ = try lone.backupCatalog() }
+    print("PASS unknown and hidden provider subscriptions are left out of backups and invalid restore is refused")
     return 3
   }
 
@@ -1812,7 +1845,7 @@ struct SubscriptionChecks {
     try expect(names(store) == ["First", "Mine"], "a refresh added a hidden server back")
     try expect((group(store)["hiddenNodes"] as! [[String: Any]]).map { $0["id"] as! String } == [ids[2]], "the hidden server was not listed")
     try expect(secrets.values.keys.contains { $0.hasSuffix(ref) }, "a hidden server's secret was reclaimed")
-    _ = try store.beginBackupRestore(try store.backupCatalog())
+    _ = try store.beginBackupRestore(try store.backupCatalog().document)
     try store.finishBackupRestore()
     guard let mine = (group(store)["nodes"] as! [[String: Any]]).first(where: { $0["name"] as? String == "Mine" }) else {
       throw Failure(message: "a restore lost a renamed server")

@@ -162,22 +162,49 @@ final class DesktopCatalog {
     throw desktopError('invalid_profile');
   }
 
-  CatalogMap backup() {
+  /// The backup [document], without the subscriptions a backup may not hold,
+  /// which [excluded] names with the reason: their provider forbids sharing
+  /// (`sharing_disabled`), or they were downloaded and never refreshed, so
+  /// whether it allows it is unknown (`sharing_refresh_required`). Nothing of
+  /// such a subscription is saved: not its servers, not its provider's routing
+  /// profiles, not the assignments or the selection that point at them. When
+  /// that leaves nothing to save, the first refusal stands.
+  ({CatalogMap document, List<CatalogMap> excluded}) backup() {
+    final included = <CatalogMap>[], excluded = <CatalogMap>[];
+    final left = <Object?>{};
     for (final source in sources) {
-      if (catalogMap(source['metadata'] ?? {})['hideURL'] == true ||
-          catalogList(source['nodes']).any((node) => node['hideURL'] == true)) {
-        throw desktopError('sharing_disabled');
-      }
-      if (source['url'] != null &&
-          catalogMap(source['metadata'] ?? {})['hideURL'] == null) {
-        throw desktopError('sharing_refresh_required');
+      final metadata = catalogMap(source['metadata'] ?? {});
+      final reason =
+          metadata['hideURL'] == true ||
+              catalogList(source['nodes']).any((node) => node['hideURL'] == true)
+          ? 'sharing_disabled'
+          : source['url'] != null && metadata['hideURL'] == null
+          ? 'sharing_refresh_required'
+          : null;
+      if (reason == null) {
+        included.add(source);
+      } else {
+        left.add(source['id']);
+        excluded.add({'name': source['name'], 'reason': reason});
       }
     }
-    return {
+    final kept = [
+      for (final route in routes)
+        if (!left.contains(route['providerSubscriptionId'])) route,
+    ];
+    if (excluded.isNotEmpty && included.isEmpty && kept.isEmpty)
+      throw desktopError(excluded.first['reason']! as String);
+    final keptRoutes = {for (final route in kept) route['id']};
+    final document = {
       'version': 1,
-      if (selected != null) 'selectedNodeId': selected,
+      if (included.any(
+        (source) => catalogList(
+          source['nodes'],
+        ).any((node) => node['id'] == selected),
+      ))
+        'selectedNodeId': selected,
       'subscriptions': [
-        for (final source in sources)
+        for (final source in included)
           {
             for (final key in [
               'id',
@@ -199,7 +226,7 @@ final class DesktopCatalog {
           },
       ],
       'routes': [
-        for (final route in routes)
+        for (final route in kept)
           {
             for (final key in [
               'id',
@@ -213,8 +240,12 @@ final class DesktopCatalog {
               'providerProfile': route['original'],
           },
       ],
-      'assignments': assignments,
+      'assignments': {
+        for (final MapEntry(:key, :value) in assignments.entries)
+          if (!left.contains(key) && keptRoutes.contains(value)) key: value,
+      },
     };
+    return (document: document, excluded: excluded);
   }
 
   // A renamed server carries the provider's name beside the user's.

@@ -1602,6 +1602,39 @@
   "refreshBeforeBackup": "Refresh every subscription before creating a backup.",
   "sharingDisabledByProvider": "A provider has disabled sharing and backups.",
   "encryptedBackupSaved": "Encrypted backup saved.",
+  "backupSavedWithoutForbidden": "{count, plural, =1{Backup saved without 1 subscription: {names}. Its provider does not allow backups.} other{Backup saved without {count} subscriptions: {names}. Their providers do not allow backups.}}",
+  "@backupSavedWithoutForbidden": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      },
+      "names": {
+        "type": "String"
+      }
+    }
+  },
+  "backupSavedWithoutUnrefreshed": "{count, plural, =1{Backup saved without 1 subscription: {names}. Update it once first.} other{Backup saved without {count} subscriptions: {names}. Update them once first.}}",
+  "@backupSavedWithoutUnrefreshed": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      },
+      "names": {
+        "type": "String"
+      }
+    }
+  },
+  "backupAlsoWithoutUnrefreshed": "{count, plural, =1{Also left out 1 subscription that was never updated: {names}. Update it once first.} other{Also left out {count} subscriptions that were never updated: {names}. Update them once first.}}",
+  "@backupAlsoWithoutUnrefreshed": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      },
+      "names": {
+        "type": "String"
+      }
+    }
+  },
   "backupRestored": "Backup restored. Refresh subscription and routing data before connecting.",
   "chooseBackupAndRestore": "Choose backup and restore",
   "saveBackup": "Save backup",
@@ -1609,7 +1642,7 @@
   "confirmPassword": "Confirm password",
   "atLeast12Characters": "At least 12 characters",
   "backupPassword": "Backup password",
-  "createBackupHelp": "Saves subscriptions, servers, group choices and routing in a password-protected file. Refresh subscriptions first; providers that disable sharing also disable backup. Keep the password: it cannot be recovered.",
+  "createBackupHelp": "Saves subscriptions, servers, group choices and routing in a password-protected file. It leaves out subscriptions whose provider disables sharing and ones never updated. Keep the password: it cannot be recovered.",
   "restoreBackupReplacesHelp": "Replaces subscriptions, servers and routing. Automatic failover is disabled. Refresh subscriptions and downloaded routing data afterward. Tunnel settings and login credentials stay on this device.",
   "trustedWifiRules": "Use up to 64 names of at most 32 bytes each, without tabs.",
   "oneNetworkPerLine": "One network name per line",

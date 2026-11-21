@@ -4,6 +4,21 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
 
 ## Unreleased
 
+### Fixed
+
+- **A backup is no longer refused because of one subscription.** A subscription whose provider
+  forbids backups, or one never updated (so whether its provider allows them is unknown), used
+  to stop the whole backup. It is now left out, together with its provider's routing and the
+  assignments and selection that point at it, and the message after saving names it and why.
+  Nothing of such a subscription is saved, as before; the backup still fails when nothing else
+  is left to save. Windows, Linux, macOS, Android and iPhone; `exportCatalogBackup` in headless
+  mode returns the left-out subscriptions in `data.excluded`.
+- **Android:** when Elarni's saved data could no longer be decrypted because its key was gone (as
+  when a backup tool brings back its files without the key), it said to restart the app and
+  offered no way out but clearing its storage in Android Settings. It now offers **Reset
+  Elarni** and says to restore a backup or add the subscriptions again afterwards. A Keystore
+  that only fails to answer still keeps the data and offers no reset.
+
 ## 0.6.2 - 2026-11-18
 
 ### Added

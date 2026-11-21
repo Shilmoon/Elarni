@@ -86,7 +86,7 @@ your user. Nothing listens on the network.
 | `configureAutomation` | `schemaVersion:1`, `enabled`, `policy` (`fixed`, `lowestLatency`, `orderedFallback`), `subscriptionID`, `nodeIDs`, `targets`; each target has `id`, `url`, `expectedStatus`, `expectedBody`. Select a member node first. |
 | `pingNode` | `nodeId`, `protocol`, `method`, `mode`, `timeout`, `url`, `expectedStatus`, `expectedBody`; same options as the GUI. An ICMP probe may stop and restore a system VPN. |
 | `shareClient` | `id`, optional `subscription:true`; returns export text and QR data subject to provider restrictions. |
-| `exportCatalogBackup` | `password`; returns encrypted backup in `data.text`. |
+| `exportCatalogBackup` | `password`; returns encrypted backup in `data.text`, and in `data.excluded` the subscriptions it left out, each a `name` and a `reason`: `sharing_disabled` (the provider forbids backups) or `sharing_refresh_required` (never updated, so unknown). Fails with that reason only when nothing else is left to save. |
 | `restoreCatalogBackup` | `password`, `content` (the encrypted text returned above). Disconnect before restoring. |
 | `exportEvidence` | Optional `issueCodes` array; returns redacted diagnostics directly. |
 | `markRecording` | Recording builds only ([DIAGNOSTICS.md](DIAGNOSTICS.md)). None; notes "problem seen now" in the connection recording (setting `recordDiagnostics`). |

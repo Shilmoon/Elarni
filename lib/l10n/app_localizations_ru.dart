@@ -2967,6 +2967,57 @@ class AppLocalizationsRu extends AppLocalizations {
   String get encryptedBackupSaved => 'Зашифрованная копия сохранена.';
 
   @override
+  String backupSavedWithoutForbidden(int count, String names) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other:
+          'Копия сохранена без $count подписки, провайдеры которых запрещают резервное копирование: $names.',
+      many:
+          'Копия сохранена без $count подписок, провайдеры которых запрещают резервное копирование: $names.',
+      few:
+          'Копия сохранена без $count подписок, провайдеры которых запрещают резервное копирование: $names.',
+      one:
+          'Копия сохранена без $count подписки, провайдер которой запрещает резервное копирование: $names.',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String backupSavedWithoutUnrefreshed(int count, String names) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other:
+          'Копия сохранена без $count подписки, которые ещё не обновлялись: $names. Обновите их хотя бы раз перед копированием.',
+      many:
+          'Копия сохранена без $count подписок, которые ещё не обновлялись: $names. Обновите их хотя бы раз перед копированием.',
+      few:
+          'Копия сохранена без $count подписок, которые ещё не обновлялись: $names. Обновите их хотя бы раз перед копированием.',
+      one:
+          'Копия сохранена без $count подписки, которая ещё не обновлялась: $names. Обновите хотя бы раз перед копированием.',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String backupAlsoWithoutUnrefreshed(int count, String names) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other:
+          'Также не сохранено $count подписки, которые ещё не обновлялись: $names. Обновите их хотя бы раз перед копированием.',
+      many:
+          'Также не сохранено $count подписок, которые ещё не обновлялись: $names. Обновите их хотя бы раз перед копированием.',
+      few:
+          'Также не сохранены $count подписки, которые ещё не обновлялись: $names. Обновите их хотя бы раз перед копированием.',
+      one:
+          'Также не сохранена $count подписка, которая ещё не обновлялась: $names. Обновите хотя бы раз перед копированием.',
+    );
+    return '$_temp0';
+  }
+
+  @override
   String get backupRestored =>
       'Копия восстановлена. Перед подключением обновите подписки и данные маршрутизации.';
 
@@ -2991,7 +3042,7 @@ class AppLocalizationsRu extends AppLocalizations {
 
   @override
   String get createBackupHelp =>
-      'Сохраняет подписки, серверы, выбор в группах и маршрутизацию в файл, защищённый паролем. Сначала обновите подписки; провайдеры, запрещающие обмен, запрещают и резервное копирование. Сохраните пароль: восстановить его нельзя.';
+      'Сохраняет подписки, серверы, выбор в группах и маршрутизацию в файл, защищённый паролем. Подписки, провайдер которых запрещает обмен, и ещё ни разу не обновлённые подписки в копию не попадают. Сохраните пароль: восстановить его нельзя.';
 
   @override
   String get restoreBackupReplacesHelp =>

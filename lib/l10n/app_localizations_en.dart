@@ -2925,6 +2925,44 @@ class AppLocalizationsEn extends AppLocalizations {
   String get encryptedBackupSaved => 'Encrypted backup saved.';
 
   @override
+  String backupSavedWithoutForbidden(int count, String names) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other:
+          'Backup saved without $count subscriptions: $names. Their providers do not allow backups.',
+      one:
+          'Backup saved without 1 subscription: $names. Its provider does not allow backups.',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String backupSavedWithoutUnrefreshed(int count, String names) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other:
+          'Backup saved without $count subscriptions: $names. Update them once first.',
+      one: 'Backup saved without 1 subscription: $names. Update it once first.',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String backupAlsoWithoutUnrefreshed(int count, String names) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other:
+          'Also left out $count subscriptions that were never updated: $names. Update them once first.',
+      one:
+          'Also left out 1 subscription that was never updated: $names. Update it once first.',
+    );
+    return '$_temp0';
+  }
+
+  @override
   String get backupRestored =>
       'Backup restored. Refresh subscription and routing data before connecting.';
 
@@ -2949,7 +2987,7 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get createBackupHelp =>
-      'Saves subscriptions, servers, group choices and routing in a password-protected file. Refresh subscriptions first; providers that disable sharing also disable backup. Keep the password: it cannot be recovered.';
+      'Saves subscriptions, servers, group choices and routing in a password-protected file. It leaves out subscriptions whose provider disables sharing and ones never updated. Keep the password: it cannot be recovered.';
 
   @override
   String get restoreBackupReplacesHelp =>

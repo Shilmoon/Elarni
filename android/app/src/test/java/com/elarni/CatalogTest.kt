@@ -148,6 +148,62 @@ class CatalogTest {
         assertNull("Nothing worked yet", Catalog.lastSuccessful(listOf(node("never", null), node("unrecorded", 400.0, success = null)), ""))
     }
 
+    private fun backupNode(id: String, address: String, hideURL: Boolean = false) = obj("id" to id, "name" to id, "format" to "xrayProfile",
+        "config" to obj("outbounds" to JSONArray(listOf(obj("protocol" to "vless", "settings" to obj("address" to address, "port" to 443)))))).apply { if (hideURL) put("hideURL", true) }
+    private fun backupSource(id: String, name: String, nodes: List<JSONObject>, url: String? = null, hideURL: Boolean? = null) =
+        obj("id" to id, "name" to name, "nodes" to JSONArray(nodes), "metadata" to JSONObject().apply { if (hideURL != null) put("hideURL", hideURL) })
+            .apply { if (url != null) put("url", url) }
+    private fun backupRoute(id: String, provider: String? = null) = obj("id" to id, "profile" to obj("Name" to id), "original" to obj("Name" to id), "enabled" to true, "edited" to false)
+        .apply { if (provider != null) put("providerSubscriptionId", provider) }
+    private fun backupCatalog(selected: String?, sources: List<JSONObject>, routes: List<JSONObject> = emptyList(), assignments: JSONObject = JSONObject()) =
+        Catalog(obj("subscriptions" to JSONArray(sources), "profiles" to JSONArray(routes), "assignments" to assignments).apply { if (selected != null) put("selectedNodeId", selected) })
+
+    // One subscription whose provider forbids backups, or that was never updated, used to refuse the backup of everything else.
+    @Test fun aBackupLeavesOutAndNamesWhatItMayNotHold() {
+        val catalog = backupCatalog("forbidden-1", listOf(
+            backupSource("local", "My servers", listOf(backupNode("local-1", "local.example")), hideURL = false),
+            backupSource("provider", "Allowed provider", listOf(backupNode("provider-1", "allowed.example")), "https://allowed.example/sub", false),
+            backupSource("forbidden", "No backups", listOf(backupNode("forbidden-1", "forbidden.example")), "https://forbidden.example/sub", true),
+            // A hidden import keeps its own local group, flagged per server.
+            backupSource("hidden", "Hidden import", listOf(backupNode("hidden-1", "hidden.example", hideURL = true))),
+            // Never updated: whether its provider allows backups is unknown.
+            backupSource("fresh", "Never updated", listOf(backupNode("fresh-1", "fresh.example")), "https://fresh.example/sub"),
+        ), listOf(backupRoute("route-local"), backupRoute("route-provider", "provider"), backupRoute("route-forbidden", "forbidden"), backupRoute("route-fresh", "fresh")),
+            obj("local" to "route-forbidden", "provider" to "route-provider", "forbidden" to "route-forbidden", "fresh" to "route-local"))
+        val (document, excluded) = catalog.backup()
+        assertEquals(listOf("No backups" to "sharing_disabled", "Hidden import" to "sharing_disabled", "Never updated" to "sharing_refresh_required"),
+            excluded.map { it.getString("name") to it.getString("reason") })
+        assertEquals(listOf("local", "provider"), document.objects("subscriptions").map { it.getString("id") })
+        // Nothing of a left-out subscription is in the file: no server, no link, no routing profile of its provider.
+        val text = document.toString()
+        for (private in listOf("forbidden.example", "hidden.example", "fresh.example", "route-forbidden", "route-fresh")) assertFalse(private, text.contains(private))
+        assertTrue("The selection was a left-out server", document.string("selectedNodeId").isEmpty())
+        assertEquals(listOf("route-local", "route-provider"), document.objects("routes").map { it.getString("id") })
+        assertEquals("provider", document.objects("routes")[1].getString("providerSubscriptionId"))
+        assertEquals(mapOf("provider" to "route-provider"), document.mapObject("assignments").let { a -> a.keys().asSequence().associateWith { a.getString(it) } })
+        assertEquals("The catalog itself is unchanged", 5, catalog.sources.size)
+        assertEquals("forbidden-1", catalog.selected)
+        val kept = backupCatalog("local-1", listOf(backupSource("local", "My servers", listOf(backupNode("local-1", "local.example"))),
+            backupSource("forbidden", "No backups", listOf(backupNode("forbidden-1", "forbidden.example")), hideURL = true))).backup()
+        assertEquals("A selection the backup holds stays", "local-1", kept.document.string("selectedNodeId"))
+    }
+
+    @Test fun aBackupWithNothingLeftToSaveFailsWithTheFirstRefusal() {
+        val forbidden = backupSource("forbidden", "No backups", listOf(backupNode("forbidden-1", "forbidden.example")), "https://forbidden.example/sub", true)
+        val fresh = backupSource("fresh", "Never updated", listOf(backupNode("fresh-1", "fresh.example")), "https://fresh.example/sub")
+        fun refusal(catalog: Catalog) = (runCatching { catalog.backup() }.exceptionOrNull() as? AppFailure)?.code
+        // A left-out provider's routing profile is not left to save.
+        assertEquals("sharing_disabled", refusal(backupCatalog(null, listOf(forbidden, fresh), listOf(backupRoute("route-forbidden", "forbidden")), obj("forbidden" to "route-forbidden"))))
+        assertEquals("sharing_refresh_required", refusal(backupCatalog(null, listOf(fresh, forbidden))))
+        // A routing profile of the user's own is worth saving alone.
+        val (document, excluded) = backupCatalog(null, listOf(fresh), listOf(backupRoute("route-local")), obj("fresh" to "route-local")).backup()
+        assertEquals(0, document.objects("subscriptions").size)
+        assertEquals(listOf("route-local"), document.objects("routes").map { it.getString("id") })
+        assertEquals(0, document.mapObject("assignments").length())
+        assertEquals(listOf("sharing_refresh_required"), excluded.map { it.getString("reason") })
+        assertTrue("An empty catalog leaves out nothing", backupCatalog(null, emptyList()).backup().excluded.isEmpty())
+    }
+
     @Test fun retryDelayAndCanonicalForm() {
         assertEquals(listOf(60, 60, 300, 1800, 1800), listOf(0, 1, 2, 3, 9).map(Catalog::retryDelay))
         assertEquals(Catalog.canonical(JSONObject("""{"b":[1,{"y":2,"x":"s"}],"a":null}""")), Catalog.canonical(JSONObject("""{"a":null,"b":[1,{"x":"s","y":2}]}""")))
