@@ -85,6 +85,18 @@ class MainActivity : ComponentActivity() {
         }
     }
     private val notifications = registerForActivityResult(ActivityResultContracts.RequestPermission()) { /* The foreground connection remains accessible in Android's active-apps UI. */ }
+    // Each answer to the reminders' notification request makes Settings check the notifications again.
+    var notificationAnswers by mutableIntStateOf(0)
+    private val reminderNotifications = registerForActivityResult(ActivityResultContracts.RequestPermission()) { notificationAnswers++ }
+    /** Android 13 and later show an app's notifications only once it may post them. */
+    fun notificationsDenied() = Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED
+    fun askNotifications() = reminderNotifications.launch(Manifest.permission.POST_NOTIFICATIONS)
+    // After a final no, Android shows no dialog, and notifications turned off in its settings stay off with the permission; only those settings turn them on.
+    fun allowNotifications() {
+        if (notificationsDenied() && (notificationAnswers == 0 || shouldShowRequestPermissionRationale(Manifest.permission.POST_NOTIFICATIONS))) askNotifications()
+        else try { startActivity(Intent(AndroidSettings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(AndroidSettings.EXTRA_APP_PACKAGE, packageName)) }
+        catch (_: ActivityNotFoundException) { appSettings() }
+    }
     private val openFile = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> if (uri != null) read(uri, interaction.fileAction) }
     private val createFile = registerForActivityResult(ActivityResultContracts.CreateDocument("application/octet-stream")) { uri ->
         val bytes = interaction.export; interaction.export = null
