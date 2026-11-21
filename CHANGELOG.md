@@ -4,6 +4,20 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
 
 ## Unreleased
 
+### Fixed
+
+- **Headless control:** the log can be read with `elarni-cli call readLogs` (pass
+  `{"after": <seq>}` for only newer lines), and a daemon writes the notices the window would
+  show, such as a connection that stopped or a scheduled refresh that failed, and the
+  connection state they leave, to its output, so the Linux boot service has them in its journal
+  (`journalctl -u elarni`). Before, the service logged one line at start. `elarni-cli shutdown`
+  now stops the Linux boot service until `systemctl start elarni` or the next boot: before,
+  systemd started it again five seconds later and it reconnected. A crash or a keyring failure
+  still restarts it. The README said the `.deb` updates itself; that is so only where the app's
+  window runs. A headless install never checks for updates: update a server with its package
+  (`sudo apt install ./elarni_*_amd64.deb`). The log over `elarni-cli` works on Linux, Windows
+  and macOS; the notices on Linux and Windows.
+
 ## 0.6.2 - 2026-11-18
 
 ### Added

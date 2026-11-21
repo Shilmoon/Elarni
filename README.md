@@ -26,6 +26,9 @@ Desktop and Android release builds check that page once a day. An install from t
 MSI, the `.deb`, the AppImage or the APK then updates itself with the signed release
 (turn **Install updates automatically** off in Settings to be asked first); the
 portable builds show a notice. Clear **Update feed** in Settings to turn the check off.
+Only the app's window checks: a headless install (`elarni-cli daemon`, the Linux boot
+service) does not update itself. Update a server with its package, for example
+`sudo apt install ./elarni_*_amd64.deb`.
 
 | Platform | Requires | Guide |
 |---|---|---|

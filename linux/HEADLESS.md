@@ -21,6 +21,15 @@ profile up.
 
 Before enabling a full-tunnel VPN on a remote server, make sure SSH stays reachable.
 
+`journalctl -u elarni` shows the service's notices and connection states, and
+`sudo elarni-cli call readLogs` prints the core's log. `sudo elarni-cli shutdown`
+stops the service until `systemctl start elarni` or the next boot;
+`systemctl restart elarni` restarts it. Either keeps the connection intent. A
+crash, SIGKILL or a keyring failure starts it again after five seconds.
+
+The service does not update itself. Install the new package with
+`sudo apt install ./elarni_*_amd64.deb`; a running service restarts on it.
+
 ## Example
 
 ```sh
