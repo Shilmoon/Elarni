@@ -2000,6 +2000,12 @@ abstract class AppLocalizations {
   /// **'A scheduled subscription or routing refresh failed.'**
   String get scheduledRefreshFailed;
 
+  /// No description provided for @scheduledRefreshNeedsReview.
+  ///
+  /// In en, this message translates to:
+  /// **'A subscription was not updated because the network answered unexpectedly. Elarni tries again in two hours; open Subscriptions to review it now.'**
+  String get scheduledRefreshNeedsReview;
+
   /// No description provided for @groupSelectionFailed.
   ///
   /// In en, this message translates to:

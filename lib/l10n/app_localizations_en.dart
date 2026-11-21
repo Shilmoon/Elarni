@@ -1144,6 +1144,10 @@ class AppLocalizationsEn extends AppLocalizations {
       'A scheduled subscription or routing refresh failed.';
 
   @override
+  String get scheduledRefreshNeedsReview =>
+      'A subscription was not updated because the network answered unexpectedly. Elarni tries again in two hours; open Subscriptions to review it now.';
+
+  @override
   String get groupSelectionFailed =>
       'Group selection failed. The saved selection was restored.';
 
