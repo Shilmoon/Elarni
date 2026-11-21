@@ -521,7 +521,15 @@
     <string name="allow_notifications">Allow notifications</string>
     <string name="reminders_need_elarni_s_notifications">Reminders need Elarni\'s notifications. They are off in Android settings.</string>
     <string name="none_every_wi_fi_network_connects">None. Every Wi-Fi network connects.</string>
-    <string name="one_network_name_per_line">One network name per line.</string>
+    <string name="connected_now">Connected now</string>
+    <string name="trust">Trust</string>
+    <string name="trusted">Trusted</string>
+    <string name="not_trusted_the_vpn_connects_here">Not trusted. The VPN connects here.</string>
+    <string name="trusted_the_vpn_stays_as_it">Trusted. The VPN stays as it is here.</string>
+    <string name="add_by_name">Add by name</string>
+    <string name="for_a_network_that_is_not">For a network that is not connected now</string>
+    <string name="remove_name">Remove %1$s</string>
+    <string name="joining_a_trusted_network_leaves">Joining a trusted network leaves the VPN as it is.</string>
     <string name="trusted_wi_fi_networks">Trusted Wi-Fi networks</string>
     <string name="connection_2">Connection</string>
     <string name="provider_profile">Provider profile</string>

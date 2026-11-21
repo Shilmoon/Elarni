@@ -521,7 +521,15 @@
     <string name="allow_notifications">Разрешить уведомления</string>
     <string name="reminders_need_elarni_s_notifications">Для напоминаний нужны уведомления Elarni. Они выключены в настройках Android.</string>
     <string name="none_every_wi_fi_network_connects">Нет. Подключение в любой сети Wi-Fi.</string>
-    <string name="one_network_name_per_line">Одно имя сети на строку.</string>
+    <string name="connected_now">Подключена сейчас</string>
+    <string name="trust">Доверять</string>
+    <string name="trusted">Доверенные</string>
+    <string name="not_trusted_the_vpn_connects_here">Не доверенная. VPN здесь подключается.</string>
+    <string name="trusted_the_vpn_stays_as_it">Доверенная. VPN здесь остаётся как есть.</string>
+    <string name="add_by_name">Добавить по имени</string>
+    <string name="for_a_network_that_is_not">Для сети, к которой вы сейчас не подключены</string>
+    <string name="remove_name">Удалить %1$s</string>
+    <string name="joining_a_trusted_network_leaves">При входе в доверенную сеть VPN остаётся как есть.</string>
     <string name="trusted_wi_fi_networks">Доверенные сети Wi-Fi</string>
     <string name="connection_2">Подключение</string>
     <string name="provider_profile">Профиль провайдера</string>
