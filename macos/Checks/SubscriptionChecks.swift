@@ -508,8 +508,8 @@ struct SubscriptionChecks {
       var checkpoint = try JSONSerialization.jsonObject(with: routes.checkpoint()) as! [String: Any]
       var profiles = checkpoint["profiles"] as! [[String: Any]]
       let profileID = profiles[0]["id"] as! String
-      let failed = try persisted(clockNow) { $0.failed(now: clockNow, interval: 86400, category: "refresh", authorization: false) }
-      let waiting = try persisted(clockNow) { $0.failed(now: clockNow, interval: 86400, category: "authorization", authorization: true) }
+      let failed = try persisted(clockNow) { $0.failed(now: clockNow, interval: 86400, category: "refresh", failure: .other) }
+      let waiting = try persisted(clockNow) { $0.failed(now: clockNow, interval: 86400, category: "authorization", failure: .approval) }
       let due = try persisted(clockNow) { _ in }
       let lists: [(String, [String: Any], Bool)] = [("fetched", due, true), ("never", due, false),
         ("waiting", waiting, false), ("failed", failed, false)]

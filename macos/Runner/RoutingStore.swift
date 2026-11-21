@@ -870,11 +870,12 @@ final class RoutingStore {
   }
 
   /// The lists that were never downloaded of the profile a connection with this subscription uses, when it is
-  /// on: their rules are not in its route model yet. One waiting for approval waits for the user.
+  /// on: their rules are not in its route model yet. One whose last download needed approval waits for the
+  /// user or its two-hour retry: a schedule no longer pauses for it, so its error names it.
   func missingManagedSources(subscriptionID: String?) -> [(profileID: String, sourceID: String)] {
     guard let subscriptionID, let profileID = catalog.assignments[subscriptionID],
           let record = catalog.profiles.first(where: { $0.id == profileID }), record.enabled else { return [] }
-    return (record.managedSources ?? []).filter { $0.lastSuccessfulFetch == nil && !$0.schedule.paused }
+    return (record.managedSources ?? []).filter { $0.lastSuccessfulFetch == nil && $0.schedule.errorCategory != "authorization" }
       .map { (record.id, $0.source.id) }
   }
 
