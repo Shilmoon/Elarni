@@ -202,6 +202,9 @@ private fun canonical(json: String) = JSONObject(json).let { value -> value.keys
     // Android's battery dialog answers with no result; back from it, the tile reads the answer again.
     var batteryExempt by remember { mutableStateOf(true) }
     LifecycleResumeEffect(Unit) { batteryExempt = activity.batteryExempt(); onPauseOrDispose {} }
+    // Back from Android's notification dialog or its notification settings, the reminders tile reads them again.
+    var remindersShown by remember { mutableStateOf(true) }
+    LifecycleResumeEffect(activity.notificationAnswers) { remindersShown = ElarniApplication.instance.canShowReminders(); onPauseOrDispose {} }
     /** Saves the edits: only the flipped switches after their pause, or the whole draft for Save changes and for leaving ([move]). */
     fun apply(switchesOnly: Boolean, move: String? = null) {
         val edits = fields.filter { it.key !in immediate && edited(it.key) && (!switchesOnly || it.initial is Boolean) }
@@ -237,6 +240,7 @@ private fun canonical(json: String) = JSONObject(json).let { value -> value.keys
     @Composable fun toggle(item: SettingField) = SettingsSwitch(item.title, saved.optBoolean(item.key), item.detail, enabled = !busy) {
         activity.runShown("settings", obj("settings" to obj(item.key to it)))
         if (item.key == "connectOnUntrustedWiFi" && it && !WiFiRule.namesAllowed(activity)) activity.allowWiFiNames()
+        if (item.key == "expiryReminders" && it && activity.notificationsDenied()) activity.askNotifications()
     }
     @Composable fun field(field: SettingField) {
         val value = (if (edited(field.key)) values[field.key] else current[field.key]) ?: field.initial.toString()
@@ -286,7 +290,11 @@ private fun canonical(json: String) = JSONObject(json).let { value -> value.keys
             SettingsTile(tr(R.string.connection_recovery), if (catalog.data.mapObject("automation").optBoolean("enabled")) tr(R.string.on) else tr(R.string.off)) { navigate("automation", "") }
             SettingsTile(tr(R.string.run_in_the_background), if (batteryExempt) tr(R.string.allowed) else tr(R.string.android_may_stop_the_vpn_while),
                 trailing = if (batteryExempt) null else {{ TextButton({ activity.allowBackground() }) { Text(tr(R.string.allow)) } }})
-            fields.filter { it.key in immediate && it.key != "allowExternalControl" && it.key != "autoUpdate" }.forEach { toggle(it) }
+            fields.filter { it.key in immediate && it.key != "allowExternalControl" && it.key != "autoUpdate" }.forEach {
+                toggle(it)
+                if (it.key == "expiryReminders" && saved.optBoolean("expiryReminders") && !remindersShown) SettingsTile(tr(R.string.allow_notifications), tr(R.string.reminders_need_elarni_s_notifications),
+                    trailing = { TextButton({ activity.allowNotifications() }) { Text(tr(R.string.allow)) } })
+            }
             if (saved.optBoolean("connectOnUntrustedWiFi")) {
                 SettingsText(tr(R.string.trusted_wi_fi_networks), values["trustedWiFiNetworks"] ?: "", lines(values["trustedWiFiNetworks"] ?: "").joinToString(", ")
                     .ifEmpty { tr(R.string.none_every_wi_fi_network_connects) }, tr(R.string.one_network_name_per_line), lines = 3) { values["trustedWiFiNetworks"] = it }
