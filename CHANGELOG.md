@@ -14,6 +14,9 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
 
 ### Changed
 
+- **Android: the subscriptions' update time sits at the top of Home.** The line that says when
+  the subscriptions were updated is now the first thing on Home, above the connection, where a
+  pull shows its spinner. A tap on it still updates them.
 - **Home shows every server.** On every platform Home lists the servers by subscription and,
   under it, by country (Android and iPhone had the countries alone), and every subscription
   and country starts open. A group you close stays closed the next time the app starts, until
@@ -36,6 +39,13 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
   options menu, and its server rows are shorter, so more servers fit on a screen. A
   subscription's server list keeps the search (on Android also the country filter, the sort and
   favorites first); the sort and favorites first are in Settings › General as before.
+
+### Fixed
+
+- **Android: one failing provider no longer keeps Home at "Updated 6 days ago".** The line
+  showed the oldest subscription, so after an update in which one provider could not be reached
+  it still gave that provider's old time. It now gives the time of the subscriptions that did
+  update and counts the rest next to it ("Updated just now · 1 not updated").
 
 ## 0.6.2 - 2026-11-18
 

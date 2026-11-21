@@ -719,6 +719,10 @@
         <item quantity="one">Updated %d h ago</item>
         <item quantity="other">Updated %d h ago</item>
     </plurals>
+    <plurals name="subscriptions_not_updated">
+        <item quantity="one">%d not updated</item>
+        <item quantity="other">%d not updated</item>
+    </plurals>
     <plurals name="updated_days_ago">
         <item quantity="one">Updated %d day ago</item>
         <item quantity="other">Updated %d days ago</item>

@@ -433,10 +433,11 @@ private val LocalReselect = compositionLocalOf { 0 }
 }
 
 // Compact, so the server list starts on the first screen; Troubleshooting and recovery live in Settings.
-@Composable private fun ConnectionPanel(catalog: Catalog, state: AppState, activity: MainActivity, scrollServers: () -> Unit) {
+@Composable private fun ConnectionPanel(catalog: Catalog, state: AppState, activity: MainActivity, scrollServers: () -> Unit, freshness: @Composable () -> Unit = {}) {
     val active = state.connection in listOf("connected", "connecting", "paused", "disconnecting")
     val selected = catalog.nodes.firstOrNull { it.string("id") == catalog.selected }
     Column(Modifier.fillMaxWidth().padding(start = 24.dp, end = 24.dp, top = 8.dp, bottom = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+        freshness()
         val prefs = remember { activity.getSharedPreferences("ui", android.content.Context.MODE_PRIVATE) }
         var loginNoticeHidden by remember { mutableStateOf(prefs.getBoolean("loginWarningDismissed", false)) }
         // With System VPN on, the proxy always needs a login; only local proxy mode can be open.
@@ -551,21 +552,28 @@ fun updatedAgo(seconds: Double): String = when {
     else -> trPlural(R.plurals.updated_days_ago, (seconds / 86400).toInt())
 }
 
-// How old the subscriptions' servers are, above the list a pull refreshes. Pulling is not shown anywhere else, and
-// TalkBack cannot pull, so the line also refreshes when tapped.
-@Composable private fun FreshnessLine(fetched: Double?, clock: Double, refreshing: Boolean, hint: Boolean, enabled: Boolean, refresh: () -> Unit) {
-    val age = when {
-        refreshing -> tr(R.string.updating_subscriptions)
-        fetched == null -> tr(R.string.not_updated_yet)
-        else -> updatedAgo(clock - fetched)
-    }
+// How old the subscriptions' servers are and how many the last update left out, first on Home, where a pull shows its
+// spinner. Pulling is not shown anywhere else, and TalkBack cannot pull, so the line also refreshes when tapped.
+@Composable private fun FreshnessLine(fetched: Double?, failed: Int, clock: Double, refreshing: Boolean, hint: Boolean, enabled: Boolean, modifier: Modifier = Modifier, refresh: () -> Unit) {
     val primary = MaterialTheme.colorScheme.primary
-    Row(Modifier.padding(horizontal = 16.dp).fillMaxWidth().heightIn(min = 48.dp).clip(MaterialTheme.shapes.small)
+    val error = MaterialTheme.colorScheme.error
+    val age = buildAnnotatedString {
+        append(when {
+            refreshing -> tr(R.string.updating_subscriptions)
+            fetched == null -> tr(R.string.not_updated_yet)
+            else -> updatedAgo(clock - fetched)
+        })
+        // A list that was never fetched is "not updated yet" already.
+        if (!refreshing && fetched != null && failed > 0) { append(" · "); withStyle(SpanStyle(color = error)) { append(trPlural(R.plurals.subscriptions_not_updated, failed)) } }
+    }
+    Column(modifier.clip(MaterialTheme.shapes.small)
         .clickable(enabled = enabled, onClickLabel = tr(R.string.update_subscriptions), role = Role.Button, onClick = refresh)
-        .padding(horizontal = 8.dp).testTag("subscription-freshness"),
-        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-        RouteIcon(if (hint) "pull" else "refresh", color = primary, iconSize = 16.dp)
-        Text(if (hint && !refreshing) age + " · " else age, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        .heightIn(min = 48.dp).padding(horizontal = 8.dp).testTag("subscription-freshness"),
+        verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            RouteIcon(if (hint) "pull" else "refresh", color = primary, iconSize = 16.dp)
+            Text(age, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
+        }
         if (hint && !refreshing) Text(tr(R.string.pull_down_to_update), style = MaterialTheme.typography.bodySmall, color = primary, fontWeight = FontWeight.Medium)
     }
 }
@@ -646,9 +654,16 @@ fun updatedAgo(seconds: Double): String = when {
         refresh()
     }) {
     Row(Modifier.fillMaxSize()) {
-        if (expanded) Box(Modifier.widthIn(max = 360.dp).weight(0.38f).verticalScroll(rememberScrollState())) { ConnectionPanel(catalog, state, activity, scrollServers) }
+        // Where the connection panel shows, the line is its first row; a subscription's own list has no panel.
+        val freshness: @Composable (Modifier) -> Unit = { modifier ->
+            if (remote.isNotEmpty() && catalog.nodes.isNotEmpty()) {
+                val (fetched, failed) = Catalog.freshness(remote)
+                FreshnessLine(fetched, failed, clock, refreshing, hint = !pulled, enabled = !state.busy && !refreshing, modifier = modifier, refresh = refresh)
+            }
+        }
+        if (expanded) Box(Modifier.widthIn(max = 360.dp).weight(0.38f).verticalScroll(rememberScrollState())) { ConnectionPanel(catalog, state, activity, scrollServers) { freshness(Modifier) } }
         LazyColumn(Modifier.weight(if (expanded) 0.62f else 1f), state = listState, contentPadding = PaddingValues(bottom = 24.dp)) {
-            if (!expanded && sourceId.isEmpty()) item { ConnectionPanel(catalog, state, activity, scrollServers) }
+            if (!expanded && sourceId.isEmpty()) item { ConnectionPanel(catalog, state, activity, scrollServers) { freshness(Modifier) } }
             if (sourceId.isNotEmpty()) item { TextButton({ navigate("sourcePing", sourceId) }, Modifier.padding(horizontal = 24.dp), enabled = !state.busy) { Text(tr(R.string.test_subscription_servers)) } }
             // Elarni ships no servers, so a new install starts with where one comes from.
             if (catalog.nodes.isEmpty()) item {
@@ -713,11 +728,7 @@ fun updatedAgo(seconds: Double): String = when {
                         }
                     }
                 } }
-                if (remote.isNotEmpty()) item(key = "freshness") {
-                    // The oldest list decides: one stale subscription is reason enough to update.
-                    val fetched = if (remote.all { it.has("lastSuccessfulFetch") }) remote.minOf { it.optDouble("lastSuccessfulFetch") } else null
-                    FreshnessLine(fetched, clock, refreshing, hint = !pulled, enabled = !state.busy && !refreshing, refresh = refresh)
-                }
+                if (!expanded && sourceId.isNotEmpty()) item(key = "freshness") { freshness(Modifier.padding(horizontal = 16.dp)) }
                 // A plain row: ListItem's 72dp two-line minimum made the list too tall.
                 fun LazyListScope.serverItems(entries: List<Pair<JSONObject, JSONObject>>, first: Int, count: Int, provider: Boolean, flag: Boolean = false) =
                     itemsIndexed(entries, key = { _, entry -> entry.second.string("id") }) { index, (source, node) ->

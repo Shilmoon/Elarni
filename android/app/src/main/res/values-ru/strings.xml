@@ -743,6 +743,12 @@
         <item quantity="many">Обновлено %d ч назад</item>
         <item quantity="other">Обновлено %d ч назад</item>
     </plurals>
+    <plurals name="subscriptions_not_updated">
+        <item quantity="one">%d не обновлена</item>
+        <item quantity="few">%d не обновлены</item>
+        <item quantity="many">%d не обновлено</item>
+        <item quantity="other">%d не обновлены</item>
+    </plurals>
     <plurals name="updated_days_ago">
         <item quantity="one">Обновлено %d день назад</item>
         <item quantity="few">Обновлено %d дня назад</item>
