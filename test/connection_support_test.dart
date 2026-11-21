@@ -15,6 +15,8 @@ void main() {
         'Select a server first. This routing link turns its profile on for the selected server’s subscription.',
     'scheduled_refresh_failed':
         'A scheduled subscription or routing refresh failed.',
+    'scheduled_refresh_needs_review':
+        'A subscription was not updated because the network answered unexpectedly. Elarni tries again in two hours; open Subscriptions to review it now.',
     'connection_stopped':
         'Connection stopped unexpectedly. Reconnect to retry.',
     'connection_stopped_blocked':

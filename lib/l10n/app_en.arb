@@ -526,6 +526,7 @@
     }
   },
   "scheduledRefreshFailed": "A scheduled subscription or routing refresh failed.",
+  "scheduledRefreshNeedsReview": "A subscription was not updated because the network answered unexpectedly. Elarni tries again in two hours; open Subscriptions to review it now.",
   "groupSelectionFailed": "Group selection failed. The saved selection was restored.",
   "serverIpPreferenceNotApplied": "Could not apply the server IP preference.",
   "telegramNotOpened": "Telegram could not be opened. Check that it is installed.",

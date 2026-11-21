@@ -329,7 +329,8 @@ void main() {
           ...source,
           'status': 'needsApproval',
         }),
-        isNull,
+        last + 86400,
+        reason: 'One waiting for approval keeps its retry',
       );
       expect(
         reopened.nextSubscriptionRefresh({
@@ -337,7 +338,8 @@ void main() {
           'refreshError': 'hwid_required',
           'nextRefreshAt': null,
         }),
-        isNull,
+        last + 12 * 3600,
+        reason: 'An older device reply waits an interval',
       );
       expect(
         reopened.nextSubscriptionRefresh({
@@ -347,6 +349,201 @@ void main() {
           'nextRefreshAt': last + 60,
         }),
         last + 60,
+      );
+    },
+  );
+
+  // A captive portal or a redirect to a private address once must not stop a
+  // subscription's refreshes for good.
+  test(
+    'a refresh that meets a risky answer is retried in two hours, or one interval when that is shorter',
+    () async {
+      var now = DateTime.fromMillisecondsSinceEpoch(100000 * 1000);
+      final catalog = DesktopCatalog(
+        DesktopCatalog.empty(),
+        (method, payload) async => {
+          'warning': {
+            'riskCodes': ['privateTarget'],
+            'chain': ['fingerprint'],
+          },
+        },
+        (_, _) => {},
+        clock: () => now,
+      );
+      for (final (hours, retry) in [(24, 7200), (4, 7200), (1, 3600)]) {
+        catalog.putSource({
+          'id': 'source',
+          'url': 'https://provider.example/feed',
+          'status': 'ready',
+          'format': 'source',
+          'fetchOptions': {'refreshHours': '$hours'},
+          'lastSuccessfulFetch': catalog.now,
+          'refreshInterval': hours * 3600,
+          'nextRefreshAt': catalog.now,
+        });
+        final warning = await catalog.refresh('source');
+        expect(warning?['riskCodes'], ['privateTarget'], reason: '$hours h');
+        final source = catalog.source('source');
+        expect(source['status'], 'needsApproval', reason: '$hours h');
+        expect(
+          source['nextRefreshAt'],
+          catalog.now + retry,
+          reason: '$hours h',
+        );
+        expect(
+          catalog.nextSubscriptionRefresh(source),
+          catalog.now + retry,
+          reason: '$hours h',
+        );
+        expect(
+          catalogList(
+            catalog.snapshot()['subscriptions'],
+          ).single['nextRefreshAt'],
+          catalog.now + retry,
+          reason: 'The shown time is the retry',
+        );
+        expect(catalog.subscriptionRefreshDue(source), isFalse);
+        now = now.add(Duration(seconds: retry));
+        expect(catalog.subscriptionRefreshDue(source), isTrue);
+      }
+    },
+  );
+
+  test(
+    'a subscription waiting for approval is due at its retry, and at once when an older version saved none',
+    () {
+      final now = DateTime.fromMillisecondsSinceEpoch(100000 * 1000);
+      final catalog = DesktopCatalog(
+        DesktopCatalog.empty(),
+        (_, _) async => {},
+        (_, _) => {},
+        clock: () => now,
+      );
+      final waiting = <String, Object?>{
+        'id': 'source',
+        'url': 'https://provider.example/feed',
+        'status': 'needsApproval',
+        'riskCodes': ['privateTarget'],
+        'lastSuccessfulFetch': catalog.now - 86400,
+        'refreshInterval': 4 * 3600,
+      };
+      expect(catalog.subscriptionRefreshDue(waiting), isTrue, reason: 'none');
+      expect(
+        catalog.subscriptionRefreshDue({
+          ...waiting,
+          'nextRefreshAt': catalog.now - 1,
+        }),
+        isTrue,
+        reason: 'passed',
+      );
+      expect(
+        catalog.subscriptionRefreshDue({
+          ...waiting,
+          'nextRefreshAt': catalog.now + 600,
+        }),
+        isFalse,
+        reason: 'ahead',
+      );
+      expect(
+        catalog.nextSubscriptionRefresh({...waiting, 'url': null}),
+        isNull,
+        reason: 'local profiles are never fetched',
+      );
+    },
+  );
+
+  // A provider that wants a device registered, or has too many, is asked
+  // again at the regular interval: the user may free a slot on its site.
+  test(
+    'a device reply waits one regular interval, not a retry delay and not for good',
+    () {
+      var now = DateTime.fromMillisecondsSinceEpoch(100000 * 1000);
+      final catalog = DesktopCatalog(
+        DesktopCatalog.empty(),
+        (_, _) async => {},
+        (_, _) => {},
+        clock: () => now,
+      );
+      for (final code in ['hwid_required', 'hwid_limit']) {
+        catalog.putSource({
+          'id': 'source',
+          'url': 'https://provider.example/feed',
+          'status': 'ready',
+          'fetchOptions': {'refreshHours': '6'},
+          'lastSuccessfulFetch': catalog.now,
+          'refreshInterval': 6 * 3600,
+          'nextRefreshAt': catalog.now + 6 * 3600,
+        });
+        for (var attempt = 1; attempt <= 3; attempt++) {
+          catalog.refreshFailed('source', code);
+          final source = catalog.source('source');
+          expect(source['status'], 'failed', reason: code);
+          expect(source['refreshError'], code);
+          expect(source['failures'], attempt);
+          expect(
+            source['nextRefreshAt'],
+            catalog.now + 6 * 3600,
+            reason: '$code, attempt $attempt',
+          );
+          expect(catalog.subscriptionRefreshDue(source), isFalse);
+          now = now.add(const Duration(hours: 6));
+          expect(catalog.subscriptionRefreshDue(source), isTrue);
+        }
+      }
+      // Other failures keep their short retries.
+      catalog.refreshFailed('source', 'fetch_failed');
+      expect(catalog.source('source')['nextRefreshAt'], catalog.now + 1800);
+    },
+  );
+
+  test(
+    'a device reply an older version saved with no time is due an interval after the last success, or at once',
+    () {
+      final now = DateTime.fromMillisecondsSinceEpoch(100000 * 1000);
+      final catalog = DesktopCatalog(
+        DesktopCatalog.empty(),
+        (_, _) async => {},
+        (_, _) => {},
+        clock: () => now,
+      );
+      final parked = <String, Object?>{
+        'id': 'source',
+        'url': 'https://provider.example/feed',
+        'status': 'failed',
+        'fetchOptions': {'refreshHours': '6'},
+        'failures': 1,
+        'nextRefreshAt': null,
+      };
+      for (final code in ['hwid_required', 'hwid_limit']) {
+        final source = {...parked, 'refreshError': code};
+        expect(
+          catalog.nextSubscriptionRefresh(source),
+          lessThanOrEqualTo(catalog.now),
+        );
+        expect(catalog.subscriptionRefreshDue(source), isTrue, reason: code);
+        final recent = {...source, 'lastSuccessfulFetch': catalog.now - 3600};
+        expect(
+          catalog.nextSubscriptionRefresh(recent),
+          catalog.now + 5 * 3600,
+          reason: code,
+        );
+        expect(catalog.subscriptionRefreshDue(recent), isFalse);
+        expect(
+          catalog.subscriptionRefreshDue({
+            ...source,
+            'lastSuccessfulFetch': catalog.now - 7 * 3600,
+          }),
+          isTrue,
+          reason: code,
+        );
+      }
+      expect(
+        catalog.nextSubscriptionRefresh({
+          ...parked,
+          'refreshError': 'fetch_failed',
+        }),
+        isNull,
+        reason: 'Only the device replies were saved with no time',
       );
     },
   );

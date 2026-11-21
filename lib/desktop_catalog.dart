@@ -1144,10 +1144,14 @@ final class DesktopCatalog {
               : []),
     });
     if (feed['warning'] case final Map warning) {
+      // A captive portal or a redirect may be gone in two hours; the scheduled
+      // retry applies nothing over a chain the user did not approve.
       putSource({
         ...current,
         'status': 'needsApproval',
         'riskCodes': warning['riskCodes'],
+        'nextRefreshAt':
+            now + min(7200, refreshHours(current).clamp(1, 168) * 3600),
       });
       return {
         ...catalogMap(warning),
@@ -1437,15 +1441,22 @@ final class DesktopCatalog {
       (hours.clamp(1, 168) * 3600 * jitter).clamp(900, 604800);
 
   num? nextSubscriptionRefresh(CatalogMap source) {
-    if (source['url'] == null || source['status'] == 'needsApproval')
-      return null;
+    if (source['url'] == null) return null;
     final scheduled = source['nextRefreshAt'] as num?;
-    // Failed refreshes retain their backoff or authorization pause.
+    // One waiting for approval is tried again; older versions saved no time
+    // for it and never tried.
+    if (source['status'] == 'needsApproval') return scheduled ?? now;
+    final last = source['lastSuccessfulFetch'] as num?;
+    // Failed refreshes retain their backoff. After a device reply older
+    // versions saved none; it waits an interval, as it does now.
     if (source['refreshError'] != null ||
         (source['failures'] as int? ?? 0) > 0) {
-      return scheduled;
+      if (scheduled != null || !_deviceReplies.contains(source['refreshError']))
+        return scheduled;
+      return last == null
+          ? now
+          : last + refreshHours(source).clamp(1, 168) * 3600;
     }
-    final last = source['lastSuccessfulFetch'] as num?;
     final interval = refreshHours(source) * 3600;
     if (last != null && source['refreshInterval'] != interval)
       return last + interval;
@@ -1466,6 +1477,11 @@ final class DesktopCatalog {
   static int retryDelay(int failures) =>
       const [60, 300, 1800][(failures - 1).clamp(0, 2)];
 
+  // A provider that wants this device registered, or has too many, answers the
+  // same until the user acts on its site: it is asked again at the regular
+  // interval, not after the short retries.
+  static const _deviceReplies = {'hwid_required', 'hwid_limit'};
+
   void refreshFailed(String id, String code) {
     final current = source(id);
     final failures = (current['failures'] as int? ?? 0) + 1;
@@ -1474,8 +1490,8 @@ final class DesktopCatalog {
       'status': 'failed',
       'refreshError': code,
       'failures': failures,
-      'nextRefreshAt': {'hwid_required', 'hwid_limit'}.contains(code)
-          ? null
+      'nextRefreshAt': _deviceReplies.contains(code)
+          ? now + refreshHours(current).clamp(1, 168) * 3600
           : now + retryDelay(failures),
     });
   }

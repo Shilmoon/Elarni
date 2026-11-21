@@ -153,6 +153,9 @@ final class DesktopProxy {
         })
       >{};
   final _refreshBackoff = <String, ({DateTime until, int failures})>{};
+  // Subscriptions whose scheduled refresh met a risky answer since their last
+  // update; each is announced once.
+  final _reviewNoticed = <String>{};
   Future<void>? _initializing, _stopping;
   // With Block traffic without VPN the core keeps its kill switch after a
   // tunnel that ended by itself and, when asked, between a restart's two

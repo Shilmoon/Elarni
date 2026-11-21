@@ -6,10 +6,21 @@ import Foundation
 import Security
 
 struct RefreshSchedule: Codable, Equatable {
+  /// What a failed refresh met, which sets when the next one runs.
+  enum Failure {
+    /// An answer that needs the user's approval, such as a captive portal's or a redirect to a private address.
+    case approval
+    /// A provider that wants this device registered, or has too many.
+    case device
+    /// Anything else.
+    case other
+  }
+
   var nextRefreshAt: Date
   var retryIndex = 0
   var retryAt: Date?
   var errorCategory: String?
+  /// Older versions stopped refreshing after an approval requirement or a device reply; read, never set.
   var paused = false
 
   static func interval(_ seconds: Double?, default fallback: Double) -> Double {
@@ -31,9 +42,10 @@ struct RefreshSchedule: Codable, Equatable {
     return at.timeIntervalSince(now) > longest + 3600 ? now : at
   }
 
-  var due: Date? { paused ? nil : (retryAt ?? nextRefreshAt) }
+  /// A schedule an older version paused is due like any other.
+  var due: Date? { retryAt ?? nextRefreshAt }
 
-  /// `due` under `deadline`. Retries, at most 1800 s ahead, stay within the bound of the shortest interval.
+  /// `due` under `deadline`. Retries, at most 1800 s or the interval ahead, stay within its bound.
   func due(now: Date, interval: Double) -> Date? {
     Self.deadline(due, now: now, longest: interval * (1 + Self.jitterShare))
   }
@@ -44,16 +56,26 @@ struct RefreshSchedule: Codable, Equatable {
     retryIndex = 0; retryAt = nil; errorCategory = nil; paused = false
   }
 
-  mutating func failed(now: Date, interval: Double, category: String, authorization: Bool) {
+  mutating func failed(now: Date, interval: Double, category: String, failure: Failure) {
     // One written while the clock ran ahead counts as passed, or every round of retries would start at once.
     if (Self.deadline(nextRefreshAt, now: now, longest: interval * (1 + Self.jitterShare)) ?? now) <= now {
       nextRefreshAt = now.addingTimeInterval(interval)
     }
-    errorCategory = category; paused = authorization
+    errorCategory = category; paused = false
     let delays: [Double] = [60, 300, 1800]
-    if !authorization && (0..<delays.count).contains(retryIndex) {
+    switch failure {
+    case .approval:
+      // A captive portal or a redirect may be gone in two hours. A refresh the user did not start applies
+      // nothing over a chain they did not approve.
+      retryAt = now.addingTimeInterval(min(7200, interval)); retryIndex = 0
+    case .device:
+      // The provider answers the same until the user acts on its site or resets the device ID.
+      nextRefreshAt = now.addingTimeInterval(interval); retryAt = nil; retryIndex = 0
+    case .other where (0..<delays.count).contains(retryIndex):
       retryAt = now.addingTimeInterval(delays[retryIndex]); retryIndex += 1
-    } else { retryAt = nil; retryIndex = 0 }
+    case .other:
+      retryAt = nil; retryIndex = 0
+    }
   }
 }
 
@@ -486,7 +508,7 @@ final class SubscriptionStore {
         }
         catalog.subscriptions[index].status = "approval_required"
         catalog.subscriptions[index].riskCodes = requirement.riskCodes.map(\.rawValue)
-        recordFailure(index: index, interactive: interactive, category: "authorization", authorization: true)
+        recordFailure(index: index, interactive: interactive, category: "authorization", failure: .approval)
         try saveCatalog()
       } catch {
         if let warning { challengeVault.revoke(warning.challenge) }
@@ -511,10 +533,11 @@ final class SubscriptionStore {
       let index = try requireRefresh(id, generation)
       catalog.subscriptions[index].status = (error as? SubscriptionError)?.hwidStatus ?? "refresh_failed"
       catalog.subscriptions[index].riskCodes = nil
-      let authorization = (error as? SubscriptionError)?.hwidStatus != nil
+      let device = (error as? SubscriptionError)?.hwidStatus != nil
       recordFailure(index: index, interactive: interactive,
         category: error is RoutingStoreError ? "routing" :
-          (authorization ? "authorization" : (error as? SubscriptionError == .keychainFailure ? "secret" : "refresh")), authorization: authorization)
+          (device ? "authorization" : (error as? SubscriptionError == .keychainFailure ? "secret" : "refresh")),
+        failure: device ? .device : .other)
       if transaction == nil { try? saveCatalog() }
       throw error
     }
@@ -535,15 +558,14 @@ final class SubscriptionStore {
       }
       return schedule
     }
-    var schedule = RefreshSchedule.initial(last: record.lastSuccessfulFetch, now: now(), interval: intervalFor(record))
-    schedule.paused = record.status == "approval_required"
-    return schedule
+    // One waiting for approval with no schedule yet, restored from a backup or saved by an older version, is due.
+    return RefreshSchedule.initial(last: record.lastSuccessfulFetch, now: now(), interval: intervalFor(record))
   }
 
-  private func recordFailure(index: Int, interactive: Bool, category: String, authorization: Bool) {
+  private func recordFailure(index: Int, interactive: Bool, category: String, failure: RefreshSchedule.Failure) {
     var schedule = scheduleFor(catalog.subscriptions[index])
     if interactive { schedule.retryIndex = 0; schedule.retryAt = nil }
-    schedule.failed(now: now(), interval: intervalFor(catalog.subscriptions[index]), category: category, authorization: authorization)
+    schedule.failed(now: now(), interval: intervalFor(catalog.subscriptions[index]), category: category, failure: failure)
     catalog.subscriptions[index].refreshSchedule = schedule
   }
 
@@ -868,6 +890,10 @@ final class SubscriptionStore {
           catalog.subscriptions[index].isLocal != true else { throw SubscriptionError.notFound }
     let previous = catalog
     catalog.subscriptions[index].deviceSalt = UUID().uuidString.lowercased()
+    // The next scheduled refresh sends it at once: after a device reply the provider may take this one.
+    var schedule = scheduleFor(catalog.subscriptions[index])
+    schedule.nextRefreshAt = now(); schedule.retryAt = nil
+    catalog.subscriptions[index].refreshSchedule = schedule
     do { try saveCatalog() } catch { catalog = previous; throw error }
     return snapshot()
   }

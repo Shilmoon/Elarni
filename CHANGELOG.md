@@ -4,6 +4,12 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
 
 ## Unreleased
 
+### Fixed
+
+- A subscription no longer stops updating for good after a network answered unexpectedly once
+  (retried every two hours; Windows, Linux, macOS, iPhone) or after a device-limit reply
+  (retried at its regular interval, and right after Reset device ID; all platforms).
+
 ## 0.6.2 - 2026-11-18
 
 ### Added
