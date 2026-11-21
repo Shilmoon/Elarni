@@ -46,8 +46,6 @@ Future<void> _openSubscription(
   await tester.pumpAndSettle();
   await tester.tap(find.byKey(const Key('nav-subscriptions')));
   await tester.pumpAndSettle();
-  await tester.tap(find.text('Acme VPN'));
-  await tester.pumpAndSettle();
 }
 
 SubscriptionSnapshot _group({
@@ -173,6 +171,9 @@ void main() {
   testWidgets(
     'subscription details label what the provider set and reset only that device ID',
     (tester) async {
+      // The details are under the server table: room for both and the refresh button.
+      await tester.binding.setSurfaceSize(const Size(900, 1400));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
       final copied = <String>[];
       tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
         SystemChannels.platform,
@@ -203,8 +204,6 @@ void main() {
       await tester.pumpWidget(ElarniApp(tunnelControl: control));
       await tester.pumpAndSettle();
       await tester.tap(find.byKey(const Key('nav-subscriptions')));
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('Acme VPN'));
       await tester.pumpAndSettle();
       await tester.tap(
         find.byKey(const PageStorageKey('subscription-details:acme')),
@@ -276,6 +275,9 @@ void main() {
   testWidgets(
     'the device ID shown is the one the next download sends, and a failed lookup is asked again',
     (tester) async {
+      // The details are under the server table: room for both and the refresh button.
+      await tester.binding.setSurfaceSize(const Size(900, 1400));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
       final copied = <String>[];
       tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
         SystemChannels.platform,

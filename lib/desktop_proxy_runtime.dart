@@ -12,7 +12,7 @@ extension _ProxyRuntime on DesktopProxy {
       if (Platform.isWindows || Platform.isLinux) {
         final settings = _catalog!.settings;
         // A crashed Windows helper's kill switch lets the next helper through,
-        // so with Block traffic without VPN it stays until the new tunnel
+        // so with the Kill switch setting it stays until the new tunnel
         // replaces it. A dead Linux supervisor's rejects the next one's traffic.
         if (Platform.isWindows &&
             settings.xrayTunEnabled &&
@@ -51,6 +51,9 @@ extension _ProxyRuntime on DesktopProxy {
       if (generation == _generation ||
           {'connecting', 'connected'}.contains(_state))
         _state = 'failed';
+      // System proxy mode's kill switch holds from the failure on, not from
+      // the next tick.
+      await _syncSystemProxy();
       _checkGeneration(generation);
       if (error is PlatformException) rethrow;
       throw desktopError('connection_failed');
@@ -165,10 +168,14 @@ extension _ProxyRuntime on DesktopProxy {
       } on SocketException catch (error) {
         // Linux EACCES only means a low port, which the elevated VPN core may
         // bind. The local proxy core runs as this user and would fail the same way.
-        if (error.osError?.errorCode != 13 || !catalog.settings.xrayTunEnabled)
+        if (error.osError?.errorCode != 13 ||
+            !catalog.settings.xrayTunEnabled) {
+          _listenerTaken = true;
           throw desktopError('listener_unavailable');
+        }
       }
     }
+    _listenerTaken = false;
     final tunnel = catalog.settings.xrayTunEnabled;
     try {
       await _startCore(catalog, config);
@@ -620,9 +627,13 @@ extension _ProxyRuntime on DesktopProxy {
     if (session && _catalog?.settings.blockWithoutVPN == true)
       _guardKept = true;
     // Settings edits reconnect, so the catalog matches the running session.
+    final settings = _catalog?.settings;
     _listener?.call(
       !session
-          ? 'connection_stopped'
+          // The OS proxy stays on the closed listener.
+          ? settings != null && settings.systemProxy && settings.blockWithoutVPN
+                ? 'connection_stopped_proxy_blocked'
+                : 'connection_stopped'
           : _catalog?.settings.blockWithoutVPN == true
           ? 'connection_stopped_blocked'
           // A killed helper can leave its DNS guard; Repair VPN setup clears it.
@@ -652,7 +663,7 @@ extension _ProxyRuntime on DesktopProxy {
     }
   }
 
-  // hold: another start follows. With Block traffic without VPN the core then
+  // hold: another start follows. With the Kill switch setting the core then
   // keeps its kill switch between the two tunnels, so nothing leaves outside
   // while a server switch, a settings change or failover restarts the tunnel.
   // The plain stop of a disconnect lifts it.

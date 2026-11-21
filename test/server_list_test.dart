@@ -12,6 +12,7 @@ import 'package:elarni/tunnel_channel.dart';
 import 'elarni_app_test.dart' show reveal, selectCategory;
 import 'server_browser_test.dart'
     show NoticeControl, closedGroups, countryFixture, server;
+import 'support/subscriptions_page.dart';
 
 PingResult reply(String id, {int latency = 30}) => PingResult(
   nodeId: id,
@@ -23,13 +24,8 @@ PingResult reply(String id, {int latency = 30}) => PingResult(
 Future<void> openServers(WidgetTester tester, String id, String name) async {
   await tester.tap(find.byKey(const Key('nav-subscriptions')));
   await tester.pumpAndSettle();
-  await tester.tap(
-    find.descendant(
-      of: find.byKey(ValueKey('subscription:$id')),
-      matching: find.text(name),
-    ),
-  );
-  await tester.pumpAndSettle();
+  await showSubscription(tester, name);
+  expect(find.byKey(ValueKey('subscription:$id')), findsOneWidget);
 }
 
 void main() {
@@ -486,8 +482,7 @@ void main() {
     await openServers(tester, 'daily', 'boVPN');
     await tester.tap(find.byKey(const ValueKey('subscription-ping-all:daily')));
     await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const ValueKey('select-servers:daily')));
-    await tester.pumpAndSettle();
+    await subscriptionMenu(tester, 'daily', 'Select servers');
     // The connected server cannot be removed, so it cannot be selected.
     expect(
       tester
@@ -547,8 +542,7 @@ void main() {
       await tester.pumpWidget(ElarniApp(tunnelControl: control, windows: true));
       await tester.pumpAndSettle();
       await openServers(tester, 'mine', 'Local profiles');
-      await tester.tap(find.byKey(const ValueKey('select-servers:mine')));
-      await tester.pumpAndSettle();
+      await subscriptionMenu(tester, 'mine', 'Select servers');
       final share = find.byKey(const ValueKey('share-servers:mine'));
       expect(tester.widget<TextButton>(share).onPressed, isNull);
       // Chosen out of order, they are shared in the group's order.
@@ -599,8 +593,7 @@ void main() {
       await tester.tap(find.text('Cancel'));
       await tester.pumpAndSettle();
       await openServers(tester, 'daily', 'boVPN');
-      await tester.tap(find.byKey(const ValueKey('select-servers:daily')));
-      await tester.pumpAndSettle();
+      await subscriptionMenu(tester, 'daily', 'Select servers');
       expect(find.widgetWithText(TextButton, 'Hide'), findsOneWidget);
       expect(find.byKey(const ValueKey('share-servers:daily')), findsNothing);
       expect(control.sharedLinks, hasLength(2));
@@ -630,8 +623,7 @@ void main() {
       await tester.pumpWidget(ElarniApp(tunnelControl: control, windows: true));
       await tester.pumpAndSettle();
       await openServers(tester, 'daily', 'boVPN');
-      await tester.tap(find.byKey(const ValueKey('check-exit:nl-vless')));
-      await tester.pumpAndSettle();
+      await serverMenu(tester, 'nl-vless', 'Check exit');
       final call = control.pingCalls.last;
       expect(call.nodeId, 'nl-vless');
       expect(call.trace, isTrue);
@@ -651,9 +643,7 @@ void main() {
         ),
         findsOneWidget,
       );
-      expect(find.byKey(const ValueKey('check-exit:nl-vless')), findsNothing);
-      await tester.tap(find.byKey(const ValueKey('check-exit:de')));
-      await tester.pumpAndSettle();
+      await serverMenu(tester, 'de', 'Check exit');
       expect(
         find.descendant(
           of: find.byKey(const ValueKey('node:de')),

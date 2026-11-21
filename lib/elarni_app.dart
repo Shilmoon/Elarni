@@ -246,6 +246,7 @@ class ElarniHome extends StatefulWidget {
 class _ElarniHomeState extends State<ElarniHome> {
   final _editorSaving = ValueNotifier<bool>(false);
   final TextEditingController _nodeSearch = TextEditingController();
+  final TextEditingController _settingsSearch = TextEditingController();
   final TextEditingController _pingURL = TextEditingController(
     text: DesktopIntegration.defaultPingURL,
   );
@@ -369,10 +370,16 @@ class _ElarniHomeState extends State<ElarniHome> {
   String? _locationFilter;
   String? _healthRevision;
   DesktopPage _page = DesktopPage.home;
-  String? _expandedSubscription;
   // The Home groups closed, once one was opened or closed in this run;
   // until then those the preferences remember.
   Set<String>? _closedGroupsNow;
+
+  /// The subscription the Subscriptions page shows, once one was chosen.
+  String? _shownSubscription;
+  bool _subscriptionFavorites = false;
+  final _subscriptionDetailsTile = ExpansibleController();
+  final _subscriptionsScroll = ScrollController();
+  final _subscriptionFooter = GlobalKey();
   SettingsCategory _settingsCategory = SettingsCategory.general;
   // The Routing page's tab: 0 routing profiles, 1 per-app routing.
   int _routingTab = 0;
@@ -455,6 +462,9 @@ class _ElarniHomeState extends State<ElarniHome> {
     _pingSaveTimer?.cancel();
     _editorSaving.dispose();
     _nodeSearch.dispose();
+    _settingsSearch.dispose();
+    _subscriptionDetailsTile.dispose();
+    _subscriptionsScroll.dispose();
     widget.tunnelControl.setImportListener(null);
     _pingURL.dispose();
     _pingExpectedStatus.dispose();
@@ -616,16 +626,7 @@ class _ElarniHomeState extends State<ElarniHome> {
               },
       ),
     );
-    Widget section(String title) => Padding(
-      padding: const EdgeInsets.fromLTRB(16, 24, 16, 8),
-      child: Semantics(
-        header: true,
-        child: Text(
-          title,
-          style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
-        ),
-      ),
-    );
+    Widget section(String title) => ElarniSettingsSection(title);
     Widget action({
       required Widget title,
       Widget? subtitle,
@@ -1034,15 +1035,19 @@ class _ElarniHomeState extends State<ElarniHome> {
         // macOS has no guard of its own: the switch is Include all networks.
         ElarniCheckboxTile(
           title: ElarniHelpLabel(
-            l10n.blockTrafficWithoutVpn,
+            l10n.killSwitch,
             help: widget.desktopCore
-                ? l10n.blockTrafficDesktopHelp
-                : l10n.blockTrafficMacHelp,
+                ? l10n.killSwitchDesktopHelp
+                : l10n.killSwitchMacHelp,
           ),
           value: widget.desktopCore
               ? _settings.blockWithoutVPN
               : _settings.includeAllNetworks,
-          onChanged: _busy || widget.desktopCore && !_settings.xrayTunEnabled
+          onChanged:
+              _busy ||
+                  widget.desktopCore &&
+                      !_settings.xrayTunEnabled &&
+                      !_settings.systemProxy
               ? null
               : (value) {
                   final next = widget.desktopCore
@@ -1671,11 +1676,15 @@ class _ElarniHomeState extends State<ElarniHome> {
         ),
       ],
     };
+    // As the shell and the settings, a narrow window keeps its width for content.
     Widget pageList(
       String key,
       String title,
       List<Widget> children, {
+      required bool narrowPage,
       Widget? action,
+      String? caption,
+      ScrollController? controller,
     }) => Material(
       color: Theme.of(context).colorScheme.surfaceContainerLow,
       child: Align(
@@ -1684,21 +1693,40 @@ class _ElarniHomeState extends State<ElarniHome> {
           constraints: const BoxConstraints(maxWidth: 920),
           child: ListView(
             key: ValueKey(key),
-            padding: const EdgeInsets.all(24),
+            controller: controller,
+            padding: EdgeInsets.all(narrowPage ? 16 : 24),
             children: [
               Row(
                 children: [
                   Expanded(
-                    child: Text(
-                      title,
-                      style: Theme.of(context).textTheme.headlineMedium
-                          ?.copyWith(fontWeight: FontWeight.w600),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          title,
+                          style: Theme.of(context).textTheme.headlineMedium
+                              ?.copyWith(fontWeight: FontWeight.w600),
+                        ),
+                        if (caption != null)
+                          Padding(
+                            padding: const EdgeInsets.only(top: 2),
+                            child: Text(
+                              caption,
+                              style: TextStyle(
+                                fontSize: 13,
+                                color: Theme.of(
+                                  context,
+                                ).colorScheme.onSurfaceVariant,
+                              ),
+                            ),
+                          ),
+                      ],
                     ),
                   ),
                   ?action,
                 ],
               ),
-              const SizedBox(height: 20),
+              SizedBox(height: caption == null ? 20 : 16),
               for (final child in children)
                 if (child is Card)
                   Padding(
@@ -1723,98 +1751,135 @@ class _ElarniHomeState extends State<ElarniHome> {
         child: Stack(
           children: [
             Positioned.fill(
-              child: switch (_page) {
-                DesktopPage.settings => ElarniSettings(
-                  category: _settingsCategory,
-                  help: _settingsCategory == SettingsCategory.routes
-                      ? l10n.routeTableHelp
-                      : null,
-                  onSelect: _selectSettingsCategory,
-                  children: settingsSections[_settingsCategory]!(),
-                ),
-                DesktopPage.routing => pageList(
-                  'routing-list',
-                  l10n.routing,
-                  [
-                    DefaultTabController(
-                      // An import that opens the profiles moves the tab too.
-                      key: ValueKey((_routingTab, _routingTabRefusals)),
-                      length: 2,
-                      initialIndex: _routingTab,
-                      child: TabBar(
-                        isScrollable: true,
-                        tabAlignment: TabAlignment.start,
-                        onTap: (index) => unawaited(_openRoutingTab(index)),
-                        tabs: [
-                          Tab(text: l10n.routingProfiles),
-                          Tab(text: l10n.perAppRouting),
+              child: LayoutBuilder(
+                builder: (context, constraints) {
+                  final narrowPage = constraints.maxWidth < 700;
+                  return switch (_page) {
+                    DesktopPage.settings => ElarniSettings(
+                      category: _settingsCategory,
+                      help: _settingsCategory == SettingsCategory.routes
+                          ? l10n.routeTableHelp
+                          : null,
+                      onSelect: _selectSettingsCategory,
+                      search: _settingsSearch,
+                      onSearch: (_) => setState(() {}),
+                      // A search builds every category; a category's own name
+                      // finds all of its rows.
+                      results: switch (_settingsSearch.text
+                          .trim()
+                          .toLowerCase()) {
+                        '' => null,
+                        final query => [
+                          for (final category in SettingsCategory.values)
+                            if (category.label.toLowerCase().contains(query)
+                                    ? settingsSections[category]!()
+                                    : settingSearchResults(
+                                        settingsSections[category]!(),
+                                        query,
+                                      )
+                                case final rows when rows.isNotEmpty)
+                              (category, rows),
                         ],
-                      ),
+                      },
+                      children: settingsSections[_settingsCategory]!(),
                     ),
-                    const SizedBox(height: 12),
-                    if (_routingTab == 0)
-                      ..._routingItems()
-                    else
-                      Padding(
-                        padding: const EdgeInsets.fromLTRB(20, 8, 20, 0),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              l10n.perAppRoutingIntro,
-                              style: TextStyle(
-                                color: Theme.of(
-                                  context,
-                                ).colorScheme.onSurfaceVariant,
-                              ),
-                            ),
-                            const SizedBox(height: 16),
-                            perAppRouting(),
-                          ],
+                    DesktopPage.routing => pageList(
+                      'routing-list',
+                      l10n.routing,
+                      [
+                        DefaultTabController(
+                          // An import that opens the profiles moves the tab too.
+                          key: ValueKey((_routingTab, _routingTabRefusals)),
+                          length: 2,
+                          initialIndex: _routingTab,
+                          child: TabBar(
+                            isScrollable: true,
+                            tabAlignment: TabAlignment.start,
+                            onTap: (index) => unawaited(_openRoutingTab(index)),
+                            tabs: [
+                              Tab(text: l10n.routingProfiles),
+                              Tab(text: l10n.perAppRouting),
+                            ],
+                          ),
                         ),
-                      ),
-                  ],
-                  action: _routingTab == 0
-                      ? IconButton(
-                          tooltip: l10n.refreshProfiles,
-                          onPressed: _busy ? null : _refreshRouting,
-                          icon: const Icon(CupertinoIcons.arrow_clockwise),
-                        )
-                      : null,
-                ),
-                DesktopPage.subscriptions => pageList(
-                  'subscriptions-list',
-                  l10n.subscriptions,
-                  [
-                    if (_subscriptions.subscriptions.isEmpty) ...[
-                      const SizedBox(height: 12),
-                      Text(l10n.noSubscriptionsYet),
-                      const SizedBox(height: 8),
-                      Text(l10n.addSubscriptionToStart),
-                    ],
-                    // Built only here: each card parses every server name.
-                    for (final group in _subscriptions.subscriptions)
-                      _subscriptionCard(group),
-                  ],
-                  action:
-                      _subscriptions.subscriptions.any(
-                        (group) => !group.isLocal,
-                      )
-                      ? IconButton(
-                          key: const Key('refresh-all-subscriptions'),
-                          tooltip: l10n.refreshAllSubscriptions,
-                          onPressed: _busy || _refreshingAll
-                              ? null
-                              : _refreshAllSubscriptions,
-                          icon: const Icon(CupertinoIcons.arrow_clockwise),
-                        )
-                      : null,
-                ),
-                DesktopPage.home => _homeContent(
-                  memorySummary,
-                  activitySummary,
-                ),
-              },
+                        const SizedBox(height: 12),
+                        if (_routingTab == 0)
+                          ..._routingItems()
+                        else
+                          Padding(
+                            padding: EdgeInsets.fromLTRB(
+                              narrowPage ? 0 : 20,
+                              8,
+                              narrowPage ? 0 : 20,
+                              0,
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  l10n.perAppRoutingIntro,
+                                  style: TextStyle(
+                                    color: Theme.of(
+                                      context,
+                                    ).colorScheme.onSurfaceVariant,
+                                  ),
+                                ),
+                                const SizedBox(height: 16),
+                                perAppRouting(),
+                              ],
+                            ),
+                          ),
+                      ],
+                      narrowPage: narrowPage,
+                      action: _routingTab == 0
+                          ? IconButton(
+                              tooltip: l10n.refreshProfiles,
+                              onPressed: _busy ? null : _refreshRouting,
+                              icon: const Icon(CupertinoIcons.arrow_clockwise),
+                            )
+                          : null,
+                    ),
+                    DesktopPage.subscriptions => pageList(
+                      'subscriptions-list',
+                      l10n.subscriptions,
+                      [
+                        if (_subscriptions.subscriptions.isEmpty) ...[
+                          const SizedBox(height: 12),
+                          Text(l10n.noSubscriptionsYet),
+                          const SizedBox(height: 8),
+                          Text(l10n.addSubscriptionToStart),
+                        ],
+                        // Built only here: the table parses every server name.
+                        if (_shownGroup case final group?)
+                          ..._subscriptionPage(group, narrow: narrowPage),
+                      ],
+                      narrowPage: narrowPage,
+                      controller: _subscriptionsScroll,
+                      caption: _subscriptions.subscriptions.isEmpty
+                          ? null
+                          : '${l10n.subscriptionCount(_subscriptions.subscriptions.length)}'
+                                ' · ${l10n.serverCount(_subscriptions.subscriptions.fold(0, (count, group) => count + group.nodes.length))}',
+                      action:
+                          _subscriptions.subscriptions.any(
+                            (group) => !group.isLocal,
+                          )
+                          ? IconButton(
+                              key: const Key('refresh-all-subscriptions'),
+                              tooltip: l10n.refreshAllSubscriptions,
+                              onPressed: _busy || _refreshingAll
+                                  ? null
+                                  : _refreshAllSubscriptions,
+                              icon: const Icon(CupertinoIcons.arrow_clockwise),
+                            )
+                          : null,
+                    ),
+                    DesktopPage.home => _homeContent(
+                      memorySummary,
+                      activitySummary,
+                    ),
+                  };
+                },
+              ),
             ),
             if (_message != null)
               Positioned(

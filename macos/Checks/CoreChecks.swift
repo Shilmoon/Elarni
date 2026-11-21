@@ -352,7 +352,7 @@ struct CoreChecks {
       try expect(v6.includedRoutes?.first?.destinationNetworkPrefixLength == 32, "IPv6 included prefix")
       try expect(v6.excludedRoutes?.map(\.destinationNetworkPrefixLength) == [128, 48, 8], "IPv6 exclusions")
       try expect(v6.excludedRoutes?.last?.destinationAddress == "ff00::", "IPv6 multicast exclusion")
-      // Block traffic without VPN (includeAllNetworks) keeps discovery in the tunnel.
+      // The kill switch (includeAllNetworks) keeps discovery in the tunnel.
       let blocked = try TunnelSettingsFactory.make(plan: value, excludedEndpointAddresses: ["203.0.113.1", "2001:db8::1"], keepDiscovery: true)
       try expect(blocked.ipv4Settings?.excludedRoutes?.map(\.destinationAddress) == ["203.0.113.1", "192.0.2.0"], "blocked IPv4 exclusions")
       try expect(blocked.ipv6Settings?.excludedRoutes?.map(\.destinationNetworkPrefixLength) == [128, 48], "blocked IPv6 exclusions")

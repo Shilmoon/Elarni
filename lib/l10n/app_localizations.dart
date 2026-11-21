@@ -263,13 +263,13 @@ abstract class AppLocalizations {
   /// No description provided for @issueInvalidRouteEnforcementRemedy.
   ///
   /// In en, this message translates to:
-  /// **'Replace 0.0.0.0/0 and ::/0 with specific routes, or turn enforcement off. For a full tunnel, turn enforcement off and use Block traffic without VPN.'**
+  /// **'Replace 0.0.0.0/0 and ::/0 with specific routes, or turn enforcement off. For a full tunnel, turn enforcement off and use the kill switch.'**
   String get issueInvalidRouteEnforcementRemedy;
 
   /// No description provided for @issueInvalidRouteEnforcement.
   ///
   /// In en, this message translates to:
-  /// **'Enforce tunnel routes needs specific included routes and cannot be combined with Block traffic without VPN.'**
+  /// **'Enforce tunnel routes needs specific included routes and cannot be combined with the kill switch.'**
   String get issueInvalidRouteEnforcement;
 
   /// No description provided for @issueRouteModelTooLargeRemedy.
@@ -719,7 +719,7 @@ abstract class AppLocalizations {
   /// No description provided for @routeEnforcementWithBlock.
   ///
   /// In en, this message translates to:
-  /// **'Enforce tunnel routes cannot be combined with Block traffic without VPN. Turn one of them off.'**
+  /// **'Enforce tunnel routes cannot be combined with the kill switch. Turn one of them off.'**
   String get routeEnforcementWithBlock;
 
   /// No description provided for @routeEnforcementDefaultRoutes.
@@ -853,12 +853,6 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Home'**
   String get home;
-
-  /// No description provided for @backToHome.
-  ///
-  /// In en, this message translates to:
-  /// **'Back to Home'**
-  String get backToHome;
 
   /// No description provided for @settingsGroupSupport.
   ///
@@ -1970,10 +1964,16 @@ abstract class AppLocalizations {
   /// **'Connection stopped unexpectedly. Reconnect to retry; if sites stay unreachable, use Repair VPN setup.'**
   String get connectionStoppedRepair;
 
+  /// No description provided for @connectionStoppedProxyBlocked.
+  ///
+  /// In en, this message translates to:
+  /// **'Connection stopped unexpectedly. The kill switch keeps the system proxy on Elarni, so apps that follow it have no connection until you reconnect. Disconnect to lift the block.'**
+  String get connectionStoppedProxyBlocked;
+
   /// No description provided for @connectionStoppedBlocked.
   ///
   /// In en, this message translates to:
-  /// **'Connection stopped unexpectedly. Block traffic without VPN keeps traffic blocked until you reconnect, or use Repair VPN setup to lift the block.'**
+  /// **'Connection stopped unexpectedly. The kill switch keeps traffic blocked until you reconnect, or use Repair VPN setup to lift the block.'**
   String get connectionStoppedBlocked;
 
   /// No description provided for @windowsDnsNotRestored.
@@ -1993,6 +1993,18 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'The system proxy could not be set. Apps can still use the HTTP proxy at 127.0.0.1:{port}.'**
   String systemProxyNotSet(Object port);
+
+  /// No description provided for @systemProxyChanged.
+  ///
+  /// In en, this message translates to:
+  /// **'Another program changed the system proxy. Elarni set it again.'**
+  String get systemProxyChanged;
+
+  /// No description provided for @systemProxyTaken.
+  ///
+  /// In en, this message translates to:
+  /// **'Another program keeps changing the system proxy, so Elarni left it. Apps that follow the system proxy may not use the VPN. Use VPN mode, or stop the other program.'**
+  String get systemProxyTaken;
 
   /// No description provided for @scheduledRefreshFailed.
   ///
@@ -2864,23 +2876,23 @@ abstract class AppLocalizations {
   /// **'Server addressing'**
   String get serverAddressing;
 
-  /// No description provided for @blockTrafficMacHelp.
+  /// No description provided for @killSwitchMacHelp.
   ///
   /// In en, this message translates to:
   /// **'macOS keeps all traffic inside the tunnel, including while it reconnects. Route exclusions do not apply.'**
-  String get blockTrafficMacHelp;
+  String get killSwitchMacHelp;
 
-  /// No description provided for @blockTrafficDesktopHelp.
+  /// No description provided for @killSwitchDesktopHelp.
   ///
   /// In en, this message translates to:
-  /// **'If the VPN stops unexpectedly, nothing leaves this device outside it until you reconnect or use Repair VPN setup. Disconnecting lifts the block. Needs System-wide VPN; cannot be combined with Enforce tunnel routes.'**
-  String get blockTrafficDesktopHelp;
+  /// **'If the VPN stops unexpectedly, nothing leaves this device outside it until you reconnect or use Repair VPN setup. Disconnecting lifts the block. In System proxy mode the system proxy stays on Elarni instead: apps that follow it get no connection until you reconnect or disconnect, and apps that ignore it are not covered. Not available with Local proxy only; cannot be combined with Enforce tunnel routes.'**
+  String get killSwitchDesktopHelp;
 
-  /// No description provided for @blockTrafficWithoutVpn.
+  /// No description provided for @killSwitch.
   ///
   /// In en, this message translates to:
-  /// **'Block traffic without VPN'**
-  String get blockTrafficWithoutVpn;
+  /// **'Kill switch'**
+  String get killSwitch;
 
   /// No description provided for @connectWithoutAdminApprovalHelp.
   ///
@@ -3239,7 +3251,7 @@ abstract class AppLocalizations {
   /// No description provided for @enforceRoutesMacHelp.
   ///
   /// In en, this message translates to:
-  /// **'Enforcement requires specific included routes; default routes such as 0.0.0.0/0 and ::/0 are unsupported. For a full tunnel, turn enforcement off and use Block traffic without VPN in Connection settings.'**
+  /// **'Enforcement requires specific included routes; default routes such as 0.0.0.0/0 and ::/0 are unsupported. For a full tunnel, turn enforcement off and use the kill switch in Connection settings.'**
   String get enforceRoutesMacHelp;
 
   /// No description provided for @enforceRoutesDesktopHelp.
@@ -3457,6 +3469,48 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'No matching servers'**
   String get noMatchingServers;
+
+  /// No description provided for @searchSettings.
+  ///
+  /// In en, this message translates to:
+  /// **'Search settings'**
+  String get searchSettings;
+
+  /// No description provided for @noMatchingSettings.
+  ///
+  /// In en, this message translates to:
+  /// **'No settings match'**
+  String get noMatchingSettings;
+
+  /// No description provided for @selectServers.
+  ///
+  /// In en, this message translates to:
+  /// **'Select servers'**
+  String get selectServers;
+
+  /// No description provided for @testAll.
+  ///
+  /// In en, this message translates to:
+  /// **'Test all'**
+  String get testAll;
+
+  /// No description provided for @serverColumn.
+  ///
+  /// In en, this message translates to:
+  /// **'Server'**
+  String get serverColumn;
+
+  /// No description provided for @latencyColumn.
+  ///
+  /// In en, this message translates to:
+  /// **'Latency'**
+  String get latencyColumn;
+
+  /// No description provided for @subscriptionCount.
+  ///
+  /// In en, this message translates to:
+  /// **'{count, plural, =1{1 subscription} other{{count} subscriptions}}'**
+  String subscriptionCount(int count);
 
   /// No description provided for @noServersInSubscription.
   ///

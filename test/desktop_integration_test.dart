@@ -12,6 +12,7 @@ import 'package:elarni/strings.dart' show appLocale;
 import 'elarni_app_test.dart' show openPerAppRouting, selectCategory, reveal;
 import 'package:elarni/tunnel_channel.dart';
 import 'support/fake_tunnel_control.dart';
+import 'support/subscriptions_page.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -104,7 +105,7 @@ void main() {
 
   for (final windows in [true, false])
     testWidgets(
-      'Block traffic without VPN shows a red Home banner only while it blocks (${windows ? 'Windows' : 'macOS'})',
+      'The kill switch shows a red Home banner only while it blocks (${windows ? 'Windows' : 'macOS'})',
       (tester) async {
         messenger.setMockMethodCallHandler(
           channel,
@@ -126,8 +127,8 @@ void main() {
         await tester.tap(find.byKey(const Key('nav-settings')));
         await tester.pumpAndSettle();
         await selectCategory(tester, SettingsCategory.connection);
-        await reveal(tester, find.text('Block traffic without VPN'));
-        await tester.tap(find.text('Block traffic without VPN'));
+        await reveal(tester, find.text('Kill switch'));
+        await tester.tap(find.text('Kill switch'));
         await tester.pumpAndSettle();
         // macOS has no guard of its own: the switch is Include all networks.
         expect(control.settings.blockWithoutVPN, windows);
@@ -785,12 +786,8 @@ void main() {
         await tester.pumpAndSettle();
         await tester.tap(find.byKey(const Key('nav-subscriptions')));
         await tester.pumpAndSettle();
-        await tester.tap(
-          find.byKey(const ValueKey('subscription-actions:second')),
-        );
-        await tester.pumpAndSettle();
-        await tester.tap(find.text('Pin subscription'));
-        await tester.pumpAndSettle();
+        await showSubscription(tester, 'Second subscription');
+        await subscriptionMenu(tester, 'second', 'Pin subscription');
         await tester.tap(find.byKey(const Key('nav-home')));
         await tester.pumpAndSettle();
         expect(

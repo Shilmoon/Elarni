@@ -101,11 +101,11 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get issueInvalidRouteEnforcementRemedy =>
-      'Replace 0.0.0.0/0 and ::/0 with specific routes, or turn enforcement off. For a full tunnel, turn enforcement off and use Block traffic without VPN.';
+      'Replace 0.0.0.0/0 and ::/0 with specific routes, or turn enforcement off. For a full tunnel, turn enforcement off and use the kill switch.';
 
   @override
   String get issueInvalidRouteEnforcement =>
-      'Enforce tunnel routes needs specific included routes and cannot be combined with Block traffic without VPN.';
+      'Enforce tunnel routes needs specific included routes and cannot be combined with the kill switch.';
 
   @override
   String get issueRouteModelTooLargeRemedy =>
@@ -384,7 +384,7 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get routeEnforcementWithBlock =>
-      'Enforce tunnel routes cannot be combined with Block traffic without VPN. Turn one of them off.';
+      'Enforce tunnel routes cannot be combined with the kill switch. Turn one of them off.';
 
   @override
   String get routeEnforcementDefaultRoutes =>
@@ -464,9 +464,6 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get home => 'Home';
-
-  @override
-  String get backToHome => 'Back to Home';
 
   @override
   String get settingsGroupSupport => 'Support';
@@ -1123,8 +1120,12 @@ class AppLocalizationsEn extends AppLocalizations {
       'Connection stopped unexpectedly. Reconnect to retry; if sites stay unreachable, use Repair VPN setup.';
 
   @override
+  String get connectionStoppedProxyBlocked =>
+      'Connection stopped unexpectedly. The kill switch keeps the system proxy on Elarni, so apps that follow it have no connection until you reconnect. Disconnect to lift the block.';
+
+  @override
   String get connectionStoppedBlocked =>
-      'Connection stopped unexpectedly. Block traffic without VPN keeps traffic blocked until you reconnect, or use Repair VPN setup to lift the block.';
+      'Connection stopped unexpectedly. The kill switch keeps traffic blocked until you reconnect, or use Repair VPN setup to lift the block.';
 
   @override
   String get windowsDnsNotRestored =>
@@ -1138,6 +1139,14 @@ class AppLocalizationsEn extends AppLocalizations {
   String systemProxyNotSet(Object port) {
     return 'The system proxy could not be set. Apps can still use the HTTP proxy at 127.0.0.1:$port.';
   }
+
+  @override
+  String get systemProxyChanged =>
+      'Another program changed the system proxy. Elarni set it again.';
+
+  @override
+  String get systemProxyTaken =>
+      'Another program keeps changing the system proxy, so Elarni left it. Apps that follow the system proxy may not use the VPN. Use VPN mode, or stop the other program.';
 
   @override
   String get scheduledRefreshFailed =>
@@ -1634,15 +1643,15 @@ class AppLocalizationsEn extends AppLocalizations {
   String get serverAddressing => 'Server addressing';
 
   @override
-  String get blockTrafficMacHelp =>
+  String get killSwitchMacHelp =>
       'macOS keeps all traffic inside the tunnel, including while it reconnects. Route exclusions do not apply.';
 
   @override
-  String get blockTrafficDesktopHelp =>
-      'If the VPN stops unexpectedly, nothing leaves this device outside it until you reconnect or use Repair VPN setup. Disconnecting lifts the block. Needs System-wide VPN; cannot be combined with Enforce tunnel routes.';
+  String get killSwitchDesktopHelp =>
+      'If the VPN stops unexpectedly, nothing leaves this device outside it until you reconnect or use Repair VPN setup. Disconnecting lifts the block. In System proxy mode the system proxy stays on Elarni instead: apps that follow it get no connection until you reconnect or disconnect, and apps that ignore it are not covered. Not available with Local proxy only; cannot be combined with Enforce tunnel routes.';
 
   @override
-  String get blockTrafficWithoutVpn => 'Block traffic without VPN';
+  String get killSwitch => 'Kill switch';
 
   @override
   String get connectWithoutAdminApprovalHelp =>
@@ -1848,7 +1857,7 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get enforceRoutesMacHelp =>
-      'Enforcement requires specific included routes; default routes such as 0.0.0.0/0 and ::/0 are unsupported. For a full tunnel, turn enforcement off and use Block traffic without VPN in Connection settings.';
+      'Enforcement requires specific included routes; default routes such as 0.0.0.0/0 and ::/0 are unsupported. For a full tunnel, turn enforcement off and use the kill switch in Connection settings.';
 
   @override
   String get enforceRoutesDesktopHelp =>
@@ -1977,6 +1986,35 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get noMatchingServers => 'No matching servers';
+
+  @override
+  String get searchSettings => 'Search settings';
+
+  @override
+  String get noMatchingSettings => 'No settings match';
+
+  @override
+  String get selectServers => 'Select servers';
+
+  @override
+  String get testAll => 'Test all';
+
+  @override
+  String get serverColumn => 'Server';
+
+  @override
+  String get latencyColumn => 'Latency';
+
+  @override
+  String subscriptionCount(int count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: '$count subscriptions',
+      one: '1 subscription',
+    );
+    return '$_temp0';
+  }
 
   @override
   String get noServersInSubscription => 'No servers in this subscription';

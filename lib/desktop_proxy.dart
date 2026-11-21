@@ -154,7 +154,7 @@ final class DesktopProxy {
       >{};
   final _refreshBackoff = <String, ({DateTime until, int failures})>{};
   Future<void>? _initializing, _stopping;
-  // With Block traffic without VPN the core keeps its kill switch after a
+  // With the Kill switch setting the core keeps its kill switch after a
   // tunnel that ended by itself and, when asked, between a restart's two
   // tunnels. _guardKept: one is in place, so no lookup is answered.
   // _guardHeld: a restart's stop kept it, and a plain stop lifts it.
@@ -163,6 +163,10 @@ final class DesktopProxy {
   // The addresses each server name last resolved to, for starts under a kept
   // kill switch.
   final _hostAddresses = <String, List<InternetAddress>>{};
+  // Where the OS proxy was last sent, and whether the last start found a
+  // listener port taken by another program.
+  int? _proxyPort;
+  var _listenerTaken = false;
   Future<CatalogMap>? _disconnecting;
   Future<Process>? _process, _lease;
   StreamIterator<List<int>>? _leaseOutput;
@@ -782,18 +786,35 @@ final class DesktopProxy {
     await _syncSystemProxy();
   }
 
-  // The OS proxy follows a running System proxy session; any other state gives
-  // the user's own setting back.
+  // The OS proxy follows a running System proxy session, restarts included:
+  // a server switch, a settings change or failover keeps it on the listener,
+  // so apps that follow it never go direct in between. A first start points
+  // it only once its listener is up. Any other state gives the user's own
+  // setting back. No elevated helper runs in this mode, so its kill switch is
+  // the setting itself: it stays on the listener, closed or not, while the
+  // session is down against the user's wish. Apps that follow the setting
+  // then get no connection instead of a direct one, until a reconnect, a
+  // disconnect or a quit.
   Future<void> _syncSystemProxy() async {
     final settings = _catalog?.settings;
+    final wanted =
+        !_disposed &&
+        !_proxyReleased &&
+        settings != null &&
+        settings.systemProxy &&
+        switch (_state) {
+          'connected' || 'reconnecting' || 'reasserting' => true,
+          // Set only by a session that was up: a restart keeps the setting.
+          // The catalog is the running one until the restart succeeds, so the
+          // port is the one Elarni's listener had.
+          'connecting' => _proxyPort != null,
+          // Never a port another program holds: the setting would hand it
+          // this user's traffic.
+          'failed' => settings.blockWithoutVPN && !_listenerTaken,
+          _ => false,
+        };
     final code = await _systemProxy?.sync(
-      !_disposed &&
-              !_proxyReleased &&
-              settings != null &&
-              settings.systemProxy &&
-              {'connected', 'reconnecting', 'reasserting'}.contains(_state)
-          ? settings.httpPort
-          : null,
+      _proxyPort = wanted ? settings.httpPort : null,
     );
     if (code != null) _listener?.call(code);
   }

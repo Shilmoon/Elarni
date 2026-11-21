@@ -29,6 +29,10 @@ final class _FakeOS implements SystemProxy {
 
   @override
   bool pointsAt(ProxySettings settings, int port) => settings['port'] == port;
+
+  @override
+  bool matchesPoint(ProxySettings settings, int port) =>
+      settings['port'] == port;
 }
 
 // A core that answers each request with [answer]'s reply, if any, and exits

@@ -100,11 +100,11 @@ class AppLocalizationsRu extends AppLocalizations {
 
   @override
   String get issueInvalidRouteEnforcementRemedy =>
-      'Замените 0.0.0.0/0 и ::/0 конкретными маршрутами или выключите принудительность. Для полного туннеля выключите принудительность и включите «Блокировать трафик без VPN».';
+      'Замените 0.0.0.0/0 и ::/0 конкретными маршрутами или выключите принудительность. Для полного туннеля выключите принудительность и включите «Kill switch».';
 
   @override
   String get issueInvalidRouteEnforcement =>
-      '«Принудительным маршрутам туннеля» нужны конкретные включённые маршруты, и их нельзя совмещать с «Блокировать трафик без VPN».';
+      '«Принудительным маршрутам туннеля» нужны конкретные включённые маршруты, и их нельзя совмещать с «Kill switch».';
 
   @override
   String get issueRouteModelTooLargeRemedy =>
@@ -385,7 +385,7 @@ class AppLocalizationsRu extends AppLocalizations {
 
   @override
   String get routeEnforcementWithBlock =>
-      '«Принудительные маршруты туннеля» нельзя совмещать с «Блокировать трафик без VPN». Выключите одно из них.';
+      '«Принудительные маршруты туннеля» нельзя совмещать с «Kill switch». Выключите одно из них.';
 
   @override
   String get routeEnforcementDefaultRoutes =>
@@ -466,9 +466,6 @@ class AppLocalizationsRu extends AppLocalizations {
 
   @override
   String get home => 'Главная';
-
-  @override
-  String get backToHome => 'Назад на главную';
 
   @override
   String get settingsGroupSupport => 'Поддержка';
@@ -677,7 +674,7 @@ class AppLocalizationsRu extends AppLocalizations {
 
   @override
   String get appRoutingNotFirewall =>
-      'DNS и локальные SOCKS/HTTP-слушатели сохраняют свои правила. Маршрутизация приложений — не межсетевой экран и не аварийный выключатель.';
+      'DNS и локальные SOCKS/HTTP-слушатели сохраняют свои правила. Маршрутизация приложений — не межсетевой экран и не kill switch.';
 
   @override
   String get macMatchingHelp =>
@@ -1135,8 +1132,12 @@ class AppLocalizationsRu extends AppLocalizations {
       'Подключение неожиданно прервалось. Переподключитесь, чтобы повторить; если сайты останутся недоступны, используйте «Исправить настройку VPN».';
 
   @override
+  String get connectionStoppedProxyBlocked =>
+      'Подключение неожиданно прервалось. «Kill switch» оставляет системный прокси на Elarni, поэтому приложения, которые им пользуются, остаются без связи, пока вы не переподключитесь. Чтобы снять блокировку, отключитесь.';
+
+  @override
   String get connectionStoppedBlocked =>
-      'Подключение неожиданно прервалось. «Блокировать трафик без VPN» не пропускает трафик, пока вы не переподключитесь; чтобы снять блокировку, используйте «Исправить настройку VPN».';
+      'Подключение неожиданно прервалось. «Kill switch» не пропускает трафик, пока вы не переподключитесь; чтобы снять блокировку, используйте «Исправить настройку VPN».';
 
   @override
   String get windowsDnsNotRestored =>
@@ -1150,6 +1151,14 @@ class AppLocalizationsRu extends AppLocalizations {
   String systemProxyNotSet(Object port) {
     return 'Не удалось настроить системный прокси. Приложения по-прежнему могут использовать HTTP-прокси 127.0.0.1:$port.';
   }
+
+  @override
+  String get systemProxyChanged =>
+      'Другая программа изменила системный прокси. Elarni настроил его снова.';
+
+  @override
+  String get systemProxyTaken =>
+      'Другая программа раз за разом меняет системный прокси, поэтому Elarni оставил его ей. Приложения, которые его учитывают, могут работать в обход VPN. Включите «Системный VPN» или остановите другую программу.';
 
   @override
   String get scheduledRefreshFailed =>
@@ -1653,15 +1662,15 @@ class AppLocalizationsRu extends AppLocalizations {
   String get serverAddressing => 'Адресация серверов';
 
   @override
-  String get blockTrafficMacHelp =>
+  String get killSwitchMacHelp =>
       'macOS держит весь трафик внутри туннеля, в том числе во время переподключения. Исключения маршрутов не действуют.';
 
   @override
-  String get blockTrafficDesktopHelp =>
-      'Если VPN неожиданно остановится, ничего не уйдёт с этого устройства мимо него, пока вы не переподключитесь или не используете «Исправить настройку VPN». Отключение снимает блокировку. Нужен системный VPN; нельзя совмещать с «Принудительными маршрутами туннеля».';
+  String get killSwitchDesktopHelp =>
+      'Если VPN неожиданно остановится, ничего не уйдёт с этого устройства мимо него, пока вы не переподключитесь или не используете «Исправить настройку VPN». Отключение снимает блокировку. В режиме «Системный прокси» системный прокси остаётся на Elarni: приложения, которые им пользуются, остаются без связи, пока вы не переподключитесь или не отключитесь, а приложения, которые его не используют, не защищены. Недоступно в режиме «Только локальный прокси»; нельзя совмещать с «Принудительными маршрутами туннеля».';
 
   @override
-  String get blockTrafficWithoutVpn => 'Блокировать трафик без VPN';
+  String get killSwitch => 'Kill switch';
 
   @override
   String get connectWithoutAdminApprovalHelp =>
@@ -1870,7 +1879,7 @@ class AppLocalizationsRu extends AppLocalizations {
 
   @override
   String get enforceRoutesMacHelp =>
-      'Принудительности нужны конкретные включённые маршруты; маршруты по умолчанию, такие как 0.0.0.0/0 и ::/0, не поддерживаются. Для полного туннеля выключите принудительность и включите «Блокировать трафик без VPN» в настройках подключения.';
+      'Принудительности нужны конкретные включённые маршруты; маршруты по умолчанию, такие как 0.0.0.0/0 и ::/0, не поддерживаются. Для полного туннеля выключите принудительность и включите «Kill switch» в настройках подключения.';
 
   @override
   String get enforceRoutesDesktopHelp =>
@@ -1999,6 +2008,37 @@ class AppLocalizationsRu extends AppLocalizations {
 
   @override
   String get noMatchingServers => 'Нет подходящих серверов';
+
+  @override
+  String get searchSettings => 'Поиск настроек';
+
+  @override
+  String get noMatchingSettings => 'Нет подходящих настроек';
+
+  @override
+  String get selectServers => 'Выбрать серверы';
+
+  @override
+  String get testAll => 'Проверить все';
+
+  @override
+  String get serverColumn => 'Сервер';
+
+  @override
+  String get latencyColumn => 'Задержка';
+
+  @override
+  String subscriptionCount(int count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: '$count подписки',
+      many: '$count подписок',
+      few: '$count подписки',
+      one: '$count подписка',
+    );
+    return '$_temp0';
+  }
 
   @override
   String get noServersInSubscription => 'В этой подписке нет серверов';

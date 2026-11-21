@@ -229,7 +229,7 @@ struct ConnectionEditor: View {
   // Its own builder keeps the body within what the type checker solves in time.
   @ViewBuilder private var routeSections: some View {
     Section {
-      Toggle("Block traffic without VPN", isOn: $value.includeAllNetworks)
+      Toggle("Kill switch", isOn: $value.includeAllNetworks)
     } header: { Text("Protection") } footer: { Text("iOS keeps all traffic inside the tunnel, including while it reconnects.") }
     Section {
       DisclosureGroup("Advanced network routes") {
@@ -241,7 +241,7 @@ struct ConnectionEditor: View {
       }
     } footer: {
       VStack(alignment: .leading, spacing: 6) {
-        Text("Enforce routes is for specific networks and cannot be combined with Block traffic without VPN or a default /0 route.")
+        Text("Enforce routes is for specific networks and cannot be combined with the kill switch or a default /0 route.")
         Text("Hide VPN icon adds the route exclusions of the hide-icon workaround: it changes excluded network routes, not only the icon. Hiding the VPN icon is not verified.")
       }
     }

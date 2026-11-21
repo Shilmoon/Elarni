@@ -367,7 +367,7 @@ extension _ProxyCatalog on DesktopProxy {
           });
       }
       if (restart) {
-        // Another tunnel follows: the core keeps Block traffic without VPN in
+        // Another tunnel follows: the core keeps the kill switch in
         // place between the two.
         final hold =
             candidate.selected != null && candidate.settings.xrayTunEnabled;
@@ -440,6 +440,8 @@ extension _ProxyCatalog on DesktopProxy {
       // TUN helper leaves its fail-closed DNS guard.
       if (!wasConnected && !runtimeChanged && previousState != 'failed')
         _state = candidate.selected == null ? 'disconnected' : 'prepared';
+      // A changed mode or kill switch moves the OS proxy now, not a tick later.
+      await _syncSystemProxy();
       _listener?.call(null);
       return _currentResult(result, candidate);
     } on Object catch (error) {

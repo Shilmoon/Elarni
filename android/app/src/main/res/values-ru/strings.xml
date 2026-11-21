@@ -78,7 +78,6 @@
     <string name="network">Сеть</string>
     <string name="available">Доступно</string>
     <string name="unavailable">Недоступно</string>
-    <string name="block_without_vpn">Блокировать без VPN</string>
     <string name="on">Вкл.</string>
     <string name="always_on_vpn">Постоянный VPN</string>
     <string name="vpn_permission">Разрешение VPN</string>
@@ -512,7 +511,7 @@
     <string name="open_server_list">Открыть список серверов</string>
     <string name="open">Открыть</string>
     <string name="android_manages_this_turn_on_always">Этим управляет Android: включите «Постоянный VPN» и «Блокировать подключения без VPN».</string>
-    <string name="block_traffic_without_vpn">Блокировать трафик без VPN</string>
+    <string name="kill_switch">Kill switch</string>
     <string name="show">Показать</string>
     <string name="allow">Разрешить</string>
     <string name="allow_location_all_the_time">Разрешить геолокацию всегда</string>

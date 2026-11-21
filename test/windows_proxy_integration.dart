@@ -155,18 +155,32 @@ Future<void> checkHTTPRejected(int proxyPort, int targetPort) async {
 // The OS proxy setting, kept in memory: the user's own, or Elarni's port.
 final class FakeSystemProxy implements SystemProxy {
   ProxySettings current = {'user': 'pac'};
+  // Each setting written back, and the next read while a test waits for one.
+  final writes = <ProxySettings>[];
+  Completer<void>? reading;
 
   @override
-  Future<ProxySettings> read() async => {...current};
+  Future<ProxySettings> read() async {
+    reading?.complete();
+    reading = null;
+    return {...current};
+  }
 
   @override
   Future<void> point(int port) async => current = {'port': port};
 
   @override
-  Future<void> write(ProxySettings settings) async => current = {...settings};
+  Future<void> write(ProxySettings settings) async {
+    writes.add(settings);
+    current = {...settings};
+  }
 
   @override
   bool pointsAt(ProxySettings settings, int port) => settings['port'] == port;
+
+  @override
+  bool matchesPoint(ProxySettings settings, int port) =>
+      settings['port'] == port;
 }
 
 // A core that hands each request line to [record], so a test can count what
@@ -1154,41 +1168,51 @@ rules:
   );
 
   // A revision follows the compiled configuration, so it shows the setting reached the compiler.
-  test('the TLS fingerprint setting changes a TLS server\'s configuration', () async {
-    final imported = await backend.control.importClientProfiles(
-      content: profile.replaceFirst(
-        'security=none&type=tcp',
-        'security=tls&type=tcp&sni=fixture.test',
-      ),
-    );
-    final id = imported.snapshot.subscriptions.single.nodes.single.id;
-    await backend.control.selectNode(id);
-    Future<String?> revision() async => (await backend.control.subscriptions())
-        .subscriptions
-        .single
-        .nodes
-        .single
-        .configurationRevision;
-    final settings = await backend.control.tunnelSettings();
-    expect(settings.tlsFingerprint, 'server');
-    final first = await revision();
-    final chosen = await backend.control.updateTunnelSettings(
-      settings.copyWith(tlsFingerprint: 'firefox'),
-    );
-    expect(chosen.tlsFingerprint, 'firefox');
-    final second = await revision();
-    expect(second, isNot(first));
-    expect((await backend.control.tunnelSettings()).tlsFingerprint, 'firefox');
-    // A hello the app does not offer is refused and the choice stays.
-    await expectLater(
-      backend.control.updateTunnelSettings(
-        settings.copyWith(tlsFingerprint: 'edge'),
-      ),
-      throwsA(isA<PlatformException>()),
-    );
-    expect((await backend.control.tunnelSettings()).tlsFingerprint, 'firefox');
-    expect(await revision(), second);
-  });
+  test(
+    'the TLS fingerprint setting changes a TLS server\'s configuration',
+    () async {
+      final imported = await backend.control.importClientProfiles(
+        content: profile.replaceFirst(
+          'security=none&type=tcp',
+          'security=tls&type=tcp&sni=fixture.test',
+        ),
+      );
+      final id = imported.snapshot.subscriptions.single.nodes.single.id;
+      await backend.control.selectNode(id);
+      Future<String?> revision() async =>
+          (await backend.control.subscriptions())
+              .subscriptions
+              .single
+              .nodes
+              .single
+              .configurationRevision;
+      final settings = await backend.control.tunnelSettings();
+      expect(settings.tlsFingerprint, 'server');
+      final first = await revision();
+      final chosen = await backend.control.updateTunnelSettings(
+        settings.copyWith(tlsFingerprint: 'firefox'),
+      );
+      expect(chosen.tlsFingerprint, 'firefox');
+      final second = await revision();
+      expect(second, isNot(first));
+      expect(
+        (await backend.control.tunnelSettings()).tlsFingerprint,
+        'firefox',
+      );
+      // A hello the app does not offer is refused and the choice stays.
+      await expectLater(
+        backend.control.updateTunnelSettings(
+          settings.copyWith(tlsFingerprint: 'edge'),
+        ),
+        throwsA(isA<PlatformException>()),
+      );
+      expect(
+        (await backend.control.tunnelSettings()).tlsFingerprint,
+        'firefox',
+      );
+      expect(await revision(), second);
+    },
+  );
 
   test('configuration revisions follow each compiled-settings edit', () async {
     await prepare();
@@ -1676,10 +1700,10 @@ for line in sys.stdin:
     },
   );
 
-  // Regression: with Block traffic without VPN, each restart the app made
+  // Regression: with the Kill switch setting, each restart the app made
   // (another server, a settings change, failover) lifted the kill switch with
   // the old tunnel, and traffic left outside until the next tunnel was up.
-  test('a restart keeps Block traffic without VPN between its tunnels', () async {
+  test('a restart keeps the kill switch between its tunnels', () async {
     await prepare();
     final settings = (await backend.control.tunnelSettings()).copyWith(
       xrayTunEnabled: true,
@@ -3004,6 +3028,166 @@ rules:
     },
   );
 
+  // System proxy mode runs no elevated helper, so its kill switch is the OS
+  // proxy setting itself, left on the closed listener.
+  test(
+    'System proxy mode keeps the OS proxy on its closed listener under the kill switch',
+    () async {
+      final os = FakeSystemProxy();
+      final backup = File.fromUri(temporary.uri.resolve('system-proxy.json'));
+      await backend.dispose();
+      backend = createBackend(systemProxy: SystemProxySession(os, backup));
+      await prepare();
+      final messages = <String>[];
+      backend.control.setImportListener((message) {
+        if (message != null) messages.add(message);
+      });
+      final settings = (await backend.control.tunnelSettings()).copyWith(
+        systemProxyEnabled: true,
+        blockWithoutVPN: true,
+      );
+      await backend.control.updateTunnelSettings(settings);
+      expect(await backend.control.connect(), 'connected');
+      expect(os.current, {'port': settings.httpPort});
+      lastProcess!.kill();
+      await lastProcess!.exitCode;
+      await Future<void>.delayed(Duration.zero);
+      expect(messages, contains('connection_stopped_proxy_blocked'));
+      expect(messages, isNot(contains('connection_stopped')));
+      // A catalog edit moves the setting to where the state puts it, as the
+      // next tick does: failed, or already starting again, it stays.
+      final id = (await backend.control.subscriptions()).selectedNodeId!;
+      await backend.control.setNodeFavorite(id, true);
+      expect(os.current, {'port': settings.httpPort});
+      expect(await backup.exists(), isTrue);
+
+      // Disconnecting lifts the block.
+      expect(await backend.control.disconnect(), 'disconnected');
+      expect(os.current, {'user': 'pac'});
+      expect(await backup.exists(), isFalse);
+
+      // A port another program holds is never made the system proxy.
+      final occupied = await ServerSocket.bind(
+        InternetAddress.loopbackIPv4,
+        settings.httpPort,
+      );
+      try {
+        await expectLater(
+          backend.control.connect(),
+          throwsA(
+            isA<PlatformException>().having(
+              (e) => e.code,
+              'code',
+              'listener_unavailable',
+            ),
+          ),
+        );
+        expect(await backend.control.state(), 'failed');
+        expect(os.current, {'user': 'pac'});
+      } finally {
+        await occupied.close();
+      }
+      expect(await backend.control.disconnect(), 'disconnected');
+    },
+  );
+
+  // Without the kill switch, too, the setting stays on Elarni while a running
+  // connection restarts: apps would go direct for those seconds. A first start
+  // still waits for its listener, and a stopped connection gives it back.
+  test(
+    'System proxy mode keeps the OS proxy on its listener through a restart',
+    () async {
+      final os = FakeSystemProxy();
+      final backup = File.fromUri(temporary.uri.resolve('system-proxy.json'));
+      // Moved on, it has the next sync read the setting back, which shows
+      // that a tick ran.
+      var now = Duration.zero;
+      await backend.dispose();
+      backend = createBackend(
+        systemProxy: SystemProxySession(os, backup, clock: () => now),
+      );
+      await prepare();
+      final messages = <String>[];
+      backend.control.setImportListener((message) {
+        if (message != null) messages.add(message);
+      });
+      final settings = (await backend.control.tunnelSettings()).copyWith(
+        systemProxyEnabled: true,
+      );
+      expect(settings.blockWithoutVPN, isFalse);
+      await backend.control.updateTunnelSettings(settings);
+
+      // Runs [start] with its runtime launch held, in connecting, until
+      // [whileHeld] returns. Configuration checks launch cores before it.
+      Future<T> held<T>(
+        Future<T> Function() start,
+        Future<void> Function() whileHeld,
+      ) async {
+        launchGate = Completer<void>();
+        launchEntered = Completer<void>();
+        final started = start();
+        try {
+          for (;;) {
+            await launchEntered!.future.timeout(const Duration(seconds: 10));
+            if (await backend.control.state() == 'connecting') break;
+            final gate = launchGate!;
+            launchEntered = Completer<void>();
+            launchGate = Completer<void>();
+            gate.complete();
+          }
+          await whileHeld();
+        } finally {
+          final gate = launchGate!;
+          launchGate = launchEntered = null;
+          gate.complete();
+        }
+        return started;
+      }
+
+      // A first start points the setting once its listener is up; the 1 Hz
+      // sync leaves it alone meanwhile.
+      expect(
+        await held(backend.control.connect, () async {
+          await Future<void>.delayed(const Duration(milliseconds: 1500));
+          expect(os.current, {'user': 'pac'});
+        }),
+        'connected',
+      );
+      expect(os.current, {'port': settings.httpPort});
+
+      // A settings change restarts the core.
+      await held(
+        () => backend.control.updateTunnelSettings(
+          settings.copyWith(httpInboundEnabled: !settings.httpInboundEnabled),
+        ),
+        () async {
+          // Restoring the user's setting would read it as well.
+          final reading = os.reading = Completer<void>();
+          now += const Duration(seconds: 30);
+          await reading.future.timeout(const Duration(seconds: 5));
+          await Future<void>.delayed(Duration.zero);
+          expect(os.current, {'port': settings.httpPort});
+        },
+      );
+      expect(await backend.control.state(), 'connected');
+      expect(os.current, {'port': settings.httpPort});
+      expect(os.writes, isEmpty, reason: 'the user setting never came back');
+      expect(messages, isEmpty);
+
+      // A connection that stopped by itself gives the user's setting back.
+      lastProcess!.kill();
+      await lastProcess!.exitCode;
+      await Future<void>.delayed(Duration.zero);
+      expect(messages, contains('connection_stopped'));
+      final id = (await backend.control.subscriptions()).selectedNodeId!;
+      await backend.control.setNodeFavorite(id, true);
+      expect(await backend.control.state(), 'failed');
+      expect(os.current, {'user': 'pac'});
+      expect(await backup.exists(), isFalse);
+      expect(await backend.control.disconnect(), 'disconnected');
+    },
+  );
+
   test(
     'occupied listener fails startup without replacing the selected profile',
     () async {
@@ -3069,7 +3253,7 @@ rules:
     expect(await backend.control.state(), 'failed');
   });
 
-  // Only Block traffic without VPN keeps the guard after a broker exit.
+  // Only the Kill switch setting keeps the guard after a broker exit.
   test('a VPN crash claims a block only when the kill switch is on', () async {
     await prepare();
     final messages = <String>[];

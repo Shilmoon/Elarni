@@ -18,7 +18,9 @@ void main() {
     'connection_stopped':
         'Connection stopped unexpectedly. Reconnect to retry.',
     'connection_stopped_blocked':
-        'Connection stopped unexpectedly. Block traffic without VPN keeps traffic blocked until you reconnect, or use Repair VPN setup to lift the block.',
+        'Connection stopped unexpectedly. The kill switch keeps traffic blocked until you reconnect, or use Repair VPN setup to lift the block.',
+    'connection_stopped_proxy_blocked':
+        'Connection stopped unexpectedly. The kill switch keeps the system proxy on Elarni, so apps that follow it have no connection until you reconnect. Disconnect to lift the block.',
     'connection_stopped_repair':
         'Connection stopped unexpectedly. Reconnect to retry; if sites stay unreachable, use Repair VPN setup.',
     'vpn_dns_release_failed':
@@ -27,6 +29,10 @@ void main() {
         'The system proxy setting could not be restored. Check it in your system network settings.',
     'system_proxy_not_set:10891':
         'The system proxy could not be set. Apps can still use the HTTP proxy at 127.0.0.1:10891.',
+    'system_proxy_changed':
+        'Another program changed the system proxy. Elarni set it again.',
+    'system_proxy_taken':
+        'Another program keeps changing the system proxy, so Elarni left it. Apps that follow the system proxy may not use the VPN. Use VPN mode, or stop the other program.',
     'storage_unavailable':
         'Elarni could not read or save its catalog. Restart Elarni. If this continues, restore an encrypted backup.',
   };

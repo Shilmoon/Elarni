@@ -160,9 +160,12 @@ String listenerNotice(String value) {
     'scheduled_refresh_failed' => l10n.scheduledRefreshFailed,
     'connection_stopped' => l10n.connectionStoppedUnexpectedly,
     'connection_stopped_blocked' => l10n.connectionStoppedBlocked,
+    'connection_stopped_proxy_blocked' => l10n.connectionStoppedProxyBlocked,
     'connection_stopped_repair' => l10n.connectionStoppedRepair,
     'vpn_dns_release_failed' => l10n.windowsDnsNotRestored,
     'system_proxy_restore_failed' => l10n.systemProxyNotRestored,
+    'system_proxy_changed' => l10n.systemProxyChanged,
+    'system_proxy_taken' => l10n.systemProxyTaken,
     _ => failureText(value) ?? value,
   };
 }
