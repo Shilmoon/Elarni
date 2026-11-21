@@ -285,6 +285,19 @@ let savedNoteDuration: Duration = ProcessInfo.processInfo.arguments.contains("--
 func carry<Root, Value: Equatable>(_ key: WritableKeyPath<Root, Value>, from draft: Root, since base: Root, to next: inout Root) {
   if draft[keyPath: key] != base[keyPath: key] { next[keyPath: key] = draft[keyPath: key] }
 }
+/// A page's title, with "Saving…", then "Saved" for a moment, under it.
+struct PageTitle: View {
+  @Environment(IOSAppModel.self) private var model
+  let title: LocalizedStringKey
+  var body: some View {
+    VStack(spacing: 0) {
+      Text(title).font(.headline)
+      if let status = model.saveStatus {
+        Text(status == .saving ? "Saving…" : "Saved").font(.caption2).foregroundStyle(AppPalette.secondary).accessibilityIdentifier("saveStatus")
+      }
+    }
+  }
+}
 /// A settings page with a draft. Switches save themselves; what is typed or picked is saved by Save and by leaving the page
 /// (Back, another tab, a page opened from it), and Cancel drops it. A draft the app would refuse hides Back until it is
 /// corrected or cancelled, so leaving never loses it unseen.
@@ -301,14 +314,7 @@ private struct DraftPage: ViewModifier {
       .navigationBarBackButtonHidden(dirty && !valid)
       .toolbar {
         // Always present: a toolbar item added while the page is open does not reach the bar.
-        ToolbarItem(placement: .principal) {
-          VStack(spacing: 0) {
-            Text(title).font(.headline)
-            if let status = model.saveStatus {
-              Text(status == .saving ? "Saving…" : "Saved").font(.caption2).foregroundStyle(AppPalette.secondary).accessibilityIdentifier("saveStatus")
-            }
-          }
-        }
+        ToolbarItem(placement: .principal) { PageTitle(title: title) }
         if dirty { ToolbarItem(placement: .topBarTrailing) { Button("Cancel", action: cancel).disabled(model.busy) } }
         ToolbarItem(placement: .confirmationAction) { Button("Save") { save(false) }.disabled(model.busy || !canSave) }
       }
