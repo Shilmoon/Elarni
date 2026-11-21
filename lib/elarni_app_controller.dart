@@ -25,6 +25,98 @@ extension _HomeController on _ElarniHomeState {
       _recentIssues.add(issue);
       if (_recentIssues.length > 8) _recentIssues.removeAt(0);
     }
+    // Every storage failure shares one support code; the core says which.
+    if (issue.code == 'storage_unavailable') _checkStorage();
+  }
+
+  /// Whether [error] says the desktop core's catalog could not be read or
+  /// saved; then the core is asked why, which words the message.
+  bool _storageFailed(Object error) {
+    if (!widget.desktopCore ||
+        error is! PlatformException ||
+        supportIssueCode(error.code) != 'storage_unavailable')
+      return false;
+    _checkStorage(error.code);
+    return true;
+  }
+
+  // Each failed load asks once, not once per page it failed for.
+  void _checkStorage([String? failed]) {
+    if (!widget.desktopCore) return;
+    _storageCheck ??= _refreshStorage(
+      failed: failed,
+    ).whenComplete(() => _storageCheck = null);
+  }
+
+  /// Asks the desktop core why its catalog did not load, shows that failure's
+  /// text, with Reset where it applies, and returns its code; null once the
+  /// catalog loads. [failed] is the code a command just failed with.
+  Future<String?> _refreshStorage({String? failed}) async {
+    if (!widget.desktopCore) return null;
+    var status = const <String, Object?>{};
+    try {
+      status = await widget.tunnelControl.storageStatus();
+    } on Object {
+      // The failure's own code still says what happened.
+    }
+    if (!mounted) return null;
+    final code = status['code'] is String ? status['code'] as String : failed;
+    final resettable = code != null && status['resettable'] == true;
+    _set(() {
+      _storageResettable = resettable;
+      if (code == null) return;
+      final text = ConnectionIssue.forCode(code).description;
+      _message = text;
+      _messageAction = resettable
+          ? (message: text, label: l10n.reset, onPressed: _resetStorage)
+          : null;
+    });
+    return code;
+  }
+
+  // The core keeps the unreadable file beside the new, empty catalog.
+  Future<void> _resetStorage() async {
+    if (_busy) return;
+    final confirmed = await _showEditorDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(l10n.resetElarniQuestion),
+        content: SizedBox(width: 460, child: Text(l10n.resetElarniBody)),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: Text(l10n.cancel),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: Text(l10n.reset),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted || _busy) return;
+    _set(() {
+      _busy = true;
+      _message = null;
+    });
+    try {
+      await widget.tunnelControl.resetStorage();
+      if (!mounted) return;
+      _set(() {
+        _busy = false;
+        _storageResettable = false;
+      });
+      await _load();
+      if (mounted) _set(() => _message = l10n.elarniWasReset);
+    } on Object catch (error) {
+      if (mounted)
+        _set(() {
+          _busy = false;
+          _recordIssue(ConnectionIssue.from(error));
+        });
+    } finally {
+      if (mounted && _busy) _set(() => _busy = false);
+    }
   }
 
   Future<void> _refreshAutomation() async {
@@ -201,8 +293,8 @@ extension _HomeController on _ElarniHomeState {
         _configureMonitoring();
         await _loadInboundLogin();
       }
-    } on Object {
-      if (mounted) {
+    } on Object catch (error) {
+      if (mounted && !_storageFailed(error)) {
         _set(() => _message = l10n.tunnelSettingsNotLoaded);
       }
     }
@@ -317,6 +409,7 @@ extension _HomeController on _ElarniHomeState {
             _systemInfo = Map<String, Object?>.from(error.details as Map);
           }
         });
+      if (mounted) _storageFailed(error);
     } on Object {
       if (mounted) _set(() => _systemError = l10n.systemInfoUnavailable);
     } finally {
@@ -966,9 +1059,11 @@ extension _HomeController on _ElarniHomeState {
           (value.signature == null ||
               value.signature != _subscriptions.signature))
         _set(() => _applySnapshot(value));
-    } on Object {
+      // The catalog loads again, so nothing is left to reset.
+      if (mounted && _storageResettable) _set(() => _storageResettable = false);
+    } on Object catch (error) {
       _subscriptionsLoaded = false;
-      if (mounted) {
+      if (mounted && !_storageFailed(error)) {
         _set(() => _message = l10n.subscriptionsNotLoaded);
       }
     }
@@ -1568,8 +1663,8 @@ extension _HomeController on _ElarniHomeState {
     try {
       final value = await widget.tunnelControl.routingProfiles();
       if (mounted) _set(() => _routing = value);
-    } on Object {
-      if (mounted) {
+    } on Object catch (error) {
+      if (mounted && !_storageFailed(error)) {
         _set(() => _message = l10n.routingProfilesNotLoaded);
       }
     }

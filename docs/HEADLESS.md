@@ -41,6 +41,27 @@ in files or stdin, not as arguments. A new subscription source returns
 `riskCodes`, the `destinations` it downloads from and a `challenge`; review them, then
 `refresh <id> <challenge>`.
 
+### Unreadable saved data
+
+On Linux and Windows, a catalog that can never be read again (`storage_corrupt`:
+a damaged file, a Windows profile whose keys changed, a reset Linux keyring) can
+be set aside. With the app running, `elarni-cli call storageStatus` says why the
+catalog did not load and whether it is `resettable`; `elarni-cli call
+resetStorage` then renames the file to `catalog.unreadable-<UTC time>.enc` (Linux)
+or `.dpapi` (Windows) in the same folder and starts with an empty catalog. Restore
+a backup or add the subscriptions again afterward. A busy store, a locked keyring
+or a missing `secret-tool` is never reset.
+
+A daemon exits at start instead. Stop it, move the catalog out of its data folder,
+then start it again:
+
+- Linux: `catalog.enc` in `$XDG_DATA_HOME/Elarni`, by default
+  `~/.local/share/Elarni` (`/var/lib/elarni/data/Elarni` for the root service).
+  A damaged key item refuses even an empty catalog; remove it with
+  `secret-tool clear application com.elarni.Elarni catalog <data folder>`, where
+  the data folder is the one above, without a trailing slash.
+- Windows: `catalog.dpapi` in `%LOCALAPPDATA%\Elarni`.
+
 ## Endpoint
 
 | System | Default endpoint |
@@ -88,6 +109,8 @@ your user. Nothing listens on the network.
 | `shareClient` | `id`, optional `subscription:true`; returns export text and QR data subject to provider restrictions. |
 | `exportCatalogBackup` | `password`; returns encrypted backup in `data.text`. |
 | `restoreCatalogBackup` | `password`, `content` (the encrypted text returned above). Disconnect before restoring. |
+| `storageStatus` | None. Linux and Windows: `code` (why the catalog did not load; null once it loads) and `resettable`. |
+| `resetStorage` | None. Linux and Windows, only while `storageStatus` says `resettable`: sets the unreadable catalog aside and starts empty; returns `setAside`, `name` and `state`. |
 | `exportEvidence` | Optional `issueCodes` array; returns redacted diagnostics directly. |
 | `markRecording` | Recording builds only ([DIAGNOSTICS.md](DIAGNOSTICS.md)). None; notes "problem seen now" in the connection recording (setting `recordDiagnostics`). |
 | `exportRecording` | Recording builds only. `destination`: absolute path of a new ZIP, written on the controller's host as the controller's user. macOS ignores it and returns `path`, a ZIP in the sandboxed app's temporary folder. |

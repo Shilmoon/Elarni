@@ -133,7 +133,7 @@ func platformRequest(method string, payload json.RawMessage) (any, error, bool) 
 		}
 		data, err := prepareAssets(filepath.Join(root, "Elarni", "assets"), request, downloadAsset(request.Proxy))
 		return data, err, true
-	case "acquireCatalog", "loadCatalog", "saveCatalog":
+	case "acquireCatalog", "loadCatalog", "saveCatalog", "setAsideCatalog":
 		root, err := os.UserCacheDir()
 		if err != nil {
 			return nil, errors.New("storage_unavailable"), true
@@ -231,6 +231,9 @@ func catalogOperation(root, method string, payload json.RawMessage) (any, error)
 	}
 	defer windows.UnlockFileEx(windows.Handle(lock.Fd()), 0, 1, 0, &overlap)
 	path := filepath.Join(root, "catalog.dpapi")
+	if method == "setAsideCatalog" {
+		return setAsideCatalog(root, path, payload)
+	}
 	current, err := readCatalog(path)
 	if err != nil {
 		return nil, err // Never replace an unreadable catalog.
@@ -282,4 +285,33 @@ func catalogOperation(root, method string, payload json.RawMessage) (any, error)
 		return nil, errors.New("storage_unavailable")
 	}
 	return map[string]any{"revision": current.Revision}, nil
+}
+
+// setAsideCatalog moves a catalog that cannot be used to a new name in its
+// folder, so the next load starts empty; nothing deletes it. The caller holds
+// catalog.lock.
+func setAsideCatalog(root, path string, payload json.RawMessage) (any, error) {
+	rejected, err := setAsideRevision(payload)
+	if err != nil {
+		return nil, err
+	}
+	current, err := readCatalog(path)
+	unusable, err := catalogUnusable(err, current, rejected)
+	if err != nil {
+		return nil, err
+	}
+	if !unusable {
+		return map[string]any{"setAside": false}, nil
+	}
+	target, err := unreadableCatalogPath(root, ".dpapi")
+	if err != nil {
+		return nil, err
+	}
+	from, e1 := windows.UTF16PtrFromString(path)
+	to, e2 := windows.UTF16PtrFromString(target)
+	// Without MOVEFILE_REPLACE_EXISTING the move never replaces another file.
+	if e1 != nil || e2 != nil || windows.MoveFileEx(from, to, windows.MOVEFILE_WRITE_THROUGH) != nil {
+		return nil, errors.New("storage_unavailable")
+	}
+	return map[string]any{"setAside": true, "name": filepath.Base(target)}, nil
 }

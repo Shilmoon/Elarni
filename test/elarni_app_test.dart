@@ -17,10 +17,13 @@ Future<void> pumpApp(
   WidgetTester tester,
   FakeTunnelControl control, {
   bool windows = false,
+  bool linux = false,
 }) async {
   await tester.binding.setSurfaceSize(const Size(1200, 900));
   addTearDown(() => tester.binding.setSurfaceSize(null));
-  await tester.pumpWidget(ElarniApp(tunnelControl: control, windows: windows));
+  await tester.pumpWidget(
+    ElarniApp(tunnelControl: control, windows: windows, linux: linux),
+  );
   await tester.pumpAndSettle();
 }
 
@@ -2324,6 +2327,164 @@ void main() {
     },
   );
 
+  // The desktop core's four storage failures need different steps: another
+  // copy holds the data, the data cannot be read again, or the disk or
+  // keyring failed. Only data that cannot be read again offers Reset.
+  group('storage failures', () {
+    const busy =
+        'Elarni’s data is in use by another copy of Elarni. Close the other '
+        'copy or stop its background service. Elarni tries again by itself.';
+    const corrupt =
+        'Elarni cannot read its saved data on this computer. Reset Elarni in '
+        'Settings › Backup and repair, then restore a backup or add your '
+        'subscriptions again.';
+    const unavailableWindows =
+        'Elarni could not read or save its data. Restart Elarni and check '
+        'the free disk space.';
+    const unavailableLinux =
+        'Elarni could not read or save its data. Unlock your keyring and '
+        'check that secret-tool is installed, then restart Elarni.';
+    Finder toastReset() => find.widgetWithText(TextButton, 'Reset');
+    Finder resetTile() => find.text('Reset Elarni');
+
+    for (final (code, linux, text) in [
+      ('storage_busy', false, busy),
+      ('storage_corrupt', false, corrupt),
+      ('storage_corrupt', true, corrupt),
+      ('storage_unavailable', false, unavailableWindows),
+      ('storage_unavailable', true, unavailableLinux),
+      ('storage_conflict', true, unavailableLinux),
+    ]) {
+      testWidgets('$code says what it is on ${linux ? 'Linux' : 'Windows'}', (
+        tester,
+      ) async {
+        final control = _UnreadableStore(code);
+        await pumpApp(tester, control, windows: !linux, linux: linux);
+        expect(find.text(text), findsOneWidget);
+        expect(
+          find.textContaining('restore an encrypted backup'),
+          findsNothing,
+        );
+        final resettable = code == 'storage_corrupt';
+        expect(toastReset(), resettable ? findsOneWidget : findsNothing);
+        await openSettings(tester);
+        await selectCategory(tester, SettingsCategory.backup);
+        expect(resetTile(), resettable ? findsOneWidget : findsNothing);
+        if (resettable)
+          expect(
+            find.text(
+              'Saved data cannot be read. Reset sets it aside and starts empty.',
+            ),
+            findsOneWidget,
+          );
+        expect(control.resetStorageCalls, 0);
+      });
+    }
+
+    testWidgets('Reset asks first, then starts empty', (tester) async {
+      final control = _UnreadableStore('storage_corrupt');
+      await pumpApp(tester, control, windows: true);
+      Finder dialogButton(String label) => find.descendant(
+        of: find.byType(AlertDialog),
+        matching: find.ancestor(
+          of: find.text(label),
+          matching: find.byWidgetPredicate(
+            (widget) => widget is ButtonStyleButton,
+          ),
+        ),
+      );
+      await tester.tap(toastReset());
+      await tester.pumpAndSettle();
+      expect(find.text('Reset Elarni?'), findsOneWidget);
+      expect(
+        find.text(
+          'Elarni’s saved data on this computer cannot be read. Reset keeps '
+          'the unreadable file and starts with an empty list: subscriptions, '
+          'servers and settings must be restored from a backup or added '
+          'again. Providers that count devices will see this computer as a '
+          'new device.',
+        ),
+        findsOneWidget,
+      );
+      await tester.tap(dialogButton('Cancel'));
+      await tester.pumpAndSettle();
+      expect(control.resetStorageCalls, 0);
+      expect(find.byType(AlertDialog), findsNothing);
+
+      await openSettings(tester);
+      await selectCategory(tester, SettingsCategory.backup);
+      await tester.tap(find.widgetWithText(OutlinedButton, 'Reset'));
+      await tester.pumpAndSettle();
+      final reads = control.subscriptionReads;
+      await tester.tap(dialogButton('Reset'));
+      await tester.pumpAndSettle();
+      expect(control.resetStorageCalls, 1);
+      expect(control.subscriptionReads, greaterThan(reads));
+      expect(
+        find.text('Elarni was reset. Restore a backup or add a subscription.'),
+        findsOneWidget,
+      );
+      expect(resetTile(), findsNothing);
+      expect(toastReset(), findsNothing);
+      expect(find.text(corrupt), findsNothing);
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('a failed Reset shows its own storage text', (tester) async {
+      final control = _UnreadableStore('storage_corrupt')
+        ..resetStorageError = PlatformException(code: 'storage_unavailable');
+      await pumpApp(tester, control, linux: true);
+      await tester.tap(toastReset());
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.descendant(
+          of: find.byType(AlertDialog),
+          matching: find.widgetWithText(FilledButton, 'Reset'),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(control.resetStorageCalls, 1);
+      expect(find.text(unavailableLinux), findsOneWidget);
+    });
+
+    // A restore needs a catalog that loads: the storage failure is said
+    // first, not after a password that could not have helped.
+    testWidgets('a restore in a storage failure says why it cannot work', (
+      tester,
+    ) async {
+      final control = _UnreadableStore('storage_busy');
+      await pumpApp(tester, control, windows: true);
+      await openSettings(tester);
+      await selectCategory(tester, SettingsCategory.backup);
+      await tester.tap(find.widgetWithText(OutlinedButton, 'Restore'));
+      await tester.pumpAndSettle();
+      expect(find.byType(AlertDialog), findsNothing);
+      expect(find.text(busy), findsOneWidget);
+      expect(control.restoredPasswords, isEmpty);
+
+      // The catalog loaded, but the restore's own save failed.
+      control.code = null;
+      control.restoreError = PlatformException(code: 'storage_unavailable');
+      await tester.tap(find.widgetWithText(OutlinedButton, 'Restore'));
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.descendant(
+          of: find.byType(AlertDialog),
+          matching: find.byType(TextField),
+        ),
+        'synthetic backup password',
+      );
+      await tester.tap(find.text('Choose backup and restore'));
+      await tester.pumpAndSettle();
+      expect(control.restoredPasswords, ['synthetic backup password']);
+      expect(find.text(unavailableWindows), findsOneWidget);
+      expect(
+        find.text('Restore failed. Check the password and backup file.'),
+        findsNothing,
+      );
+    });
+  });
+
   testWidgets('the Import button says Importing only while importing', (
     tester,
   ) async {
@@ -2960,6 +3121,63 @@ void main() {
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox());
   });
+}
+
+// A desktop core whose catalog does not load: every read fails with [code]
+// until a reset, and storageStatus says why.
+final class _UnreadableStore extends FakeTunnelControl {
+  _UnreadableStore(this.code);
+  String? code;
+  Object? restoreError;
+
+  Future<T> _read<T>(Future<T> Function() read) {
+    if (code case final code?) throw PlatformException(code: code);
+    return read();
+  }
+
+  @override
+  Future<String> state() => _read(super.state);
+  @override
+  Future<SubscriptionSnapshot> subscriptions() async {
+    subscriptionReads++;
+    if (code case final code?) throw PlatformException(code: code);
+    return snapshot;
+  }
+
+  @override
+  Future<RoutingSnapshot> routingProfiles() => _read(super.routingProfiles);
+  @override
+  Future<TunnelSettings> tunnelSettings() => _read(super.tunnelSettings);
+  @override
+  Future<Map<String, Object?>> systemInfo() => _read(super.systemInfo);
+
+  @override
+  Future<Map<String, Object?>> storageStatus() async {
+    storageStatusCalls++;
+    return {'code': code, 'resettable': code == 'storage_corrupt'};
+  }
+
+  @override
+  Future<Map<String, Object?>> resetStorage() async {
+    final Map<String, Object?> result;
+    try {
+      result = await super.resetStorage();
+    } on PlatformException catch (error) {
+      // As the desktop core: a failed reset is the latest reason.
+      code = error.code;
+      rethrow;
+    }
+    code = null;
+    snapshot = const SubscriptionSnapshot(subscriptions: []);
+    return result;
+  }
+
+  @override
+  Future<SubscriptionSnapshot> restoreCatalogBackup(String password) async {
+    await super.restoreCatalogBackup(password);
+    if (restoreError case final error?) throw error;
+    return snapshot;
+  }
 }
 
 final class _DeletingControl extends FakeTunnelControl {

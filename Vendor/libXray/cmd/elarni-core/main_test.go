@@ -514,6 +514,8 @@ func TestCatalogLeaseServesStorageUntilOwnerEOF(t *testing.T) {
 		"saveCatalog": {`{"success":false,"error":"storage_conflict"}`, `{"success":true,"data":{"revision":"r"}}`},
 		// Each Windows connect first checks for a crashed helper's DNS guard.
 		"staleVPNGuard": {`{"success":true,"data":{"stale":false}}`},
+		// Reset sets an unreadable catalog aside under the same lease.
+		"setAsideCatalog": {`{"success":true,"data":{"setAside":true,"name":"catalog.unreadable-20261121T000000Z.dpapi"}}`},
 	}
 	var invoked []string
 	done := make(chan int, 1)
@@ -532,7 +534,7 @@ func TestCatalogLeaseServesStorageUntilOwnerEOF(t *testing.T) {
 		done <- code
 	}()
 	reader := bufio.NewReader(output)
-	for _, method := range []string{"acquireCatalog", "loadCatalog", "saveCatalog", "staleVPNGuard", "saveCatalog"} {
+	for _, method := range []string{"acquireCatalog", "loadCatalog", "saveCatalog", "staleVPNGuard", "setAsideCatalog", "saveCatalog"} {
 		_, _ = io.WriteString(parent, `{"apiVersion":1,"method":"`+method+`","payload":{}}`+"\n")
 		line, err := reader.ReadString('\n')
 		if err != nil || !strings.HasPrefix(line, `{"success":`) {
@@ -548,7 +550,7 @@ func TestCatalogLeaseServesStorageUntilOwnerEOF(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("lease survived owner EOF")
 	}
-	if strings.Join(invoked, ",") != "acquireCatalog,loadCatalog,saveCatalog,staleVPNGuard,saveCatalog" {
+	if strings.Join(invoked, ",") != "acquireCatalog,loadCatalog,saveCatalog,staleVPNGuard,setAsideCatalog,saveCatalog" {
 		t.Fatal("unexpected lease commands", invoked)
 	}
 }

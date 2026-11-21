@@ -28,7 +28,11 @@ void main() {
     'system_proxy_not_set:10891':
         'The system proxy could not be set. Apps can still use the HTTP proxy at 127.0.0.1:10891.',
     'storage_unavailable':
-        'Elarni could not read or save its catalog. Restart Elarni. If this continues, restore an encrypted backup.',
+        'Elarni could not read or save its data. Restart Elarni and check the free disk space.',
+    'storage_busy':
+        'Elarni’s data is in use by another copy of Elarni. Close the other copy or stop its background service. Elarni tries again by itself.',
+    'storage_corrupt':
+        'Elarni cannot read its saved data on this computer. Reset Elarni in Settings › Backup and repair, then restore a backup or add your subscriptions again.',
   };
 
   test('each backend notice code reads in the interface language', () {

@@ -186,6 +186,29 @@ class FakeTunnelControl implements TunnelControl {
     return snapshot;
   }
 
+  /// The desktop core's storage replies: by default a catalog that loaded.
+  Map<String, Object?> storageStatusValue = const {
+    'code': null,
+    'resettable': false,
+  };
+  int storageStatusCalls = 0;
+  int resetStorageCalls = 0;
+  Object? resetStorageError;
+
+  @override
+  Future<Map<String, Object?>> storageStatus() async {
+    storageStatusCalls++;
+    return storageStatusValue;
+  }
+
+  @override
+  Future<Map<String, Object?>> resetStorage() async {
+    resetStorageCalls++;
+    if (resetStorageError case final Object error) throw error;
+    storageStatusValue = const {'code': null, 'resettable': false};
+    return {'setAside': true, 'name': null, 'state': phase};
+  }
+
   @override
   Future<void> repairTunnel() async {
     repairCalls++;

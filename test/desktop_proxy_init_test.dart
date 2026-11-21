@@ -281,6 +281,217 @@ void main() {
     }
   });
 
+  // A catalog nothing can read again (a damaged file, a profile whose keys
+  // changed, a reset keyring) blocks every command. Reset sets it aside
+  // through the store and loads again, so the app starts empty.
+  group('resetting unreadable storage', () {
+    Matcher refused(String code) => throwsA(
+      isA<PlatformException>().having((error) => error.code, 'code', code),
+    );
+
+    // The store answers from [stored] until something is set aside; then it
+    // holds no catalog until the next save.
+    ({DesktopProxy proxy, List<String> calls, List<CatalogMap> payloads}) store(
+      Future<CatalogMap> Function() stored, {
+      Future<void>? setAside,
+    }) {
+      final calls = <String>[], payloads = <CatalogMap>[];
+      var reset = false;
+      final proxy = DesktopProxy(
+        corePath: 'unused-core',
+        domainPath: 'unused-domain',
+        catalogIO: (method, payload) async {
+          calls.add(method);
+          payloads.add(payload);
+          switch (method) {
+            case 'setAsideCatalog':
+              await setAside;
+              reset = true;
+              return {
+                'setAside': true,
+                'name': 'catalog.unreadable-20261121T120000Z.enc',
+              };
+            case 'saveCatalog':
+              return {'revision': 'r-new'};
+            case 'loadCatalog':
+              return reset ? {'revision': ''} : await stored();
+          }
+          throw PlatformException(code: 'invalid_request');
+        },
+        platformIO: (_, _) async => {},
+      );
+      addTearDown(proxy.dispose);
+      return (proxy: proxy, calls: calls, payloads: payloads);
+    }
+
+    test('a corrupt store is reset once and starts empty', () async {
+      final (:proxy, :calls, :payloads) = store(
+        () async => throw PlatformException(code: 'storage_corrupt'),
+      );
+      await expectLater(
+        proxy.control.subscriptions(),
+        refused('storage_corrupt'),
+      );
+      expect(await proxy.request('storageStatus'), {
+        'code': 'storage_corrupt',
+        'resettable': true,
+      });
+      expect(calls, ['loadCatalog'], reason: 'asking loads nothing');
+      expect(await proxy.request('resetStorage'), {
+        'setAside': true,
+        'name': 'catalog.unreadable-20261121T120000Z.enc',
+        'state': 'disconnected',
+      });
+      expect(calls, [
+        'loadCatalog',
+        'setAsideCatalog',
+        'loadCatalog',
+        'saveCatalog',
+      ]);
+      expect(payloads[1], {'revision': ''});
+      final saved = catalogMap(catalogMap(payloads[3]['catalog'])['committed']);
+      expect(saved['subscriptions'], isEmpty);
+      expect(saved['profiles'], isEmpty);
+      expect(await proxy.request('state'), {'state': 'disconnected'});
+      expect((await proxy.control.subscriptions()).subscriptions, isEmpty);
+      expect(await proxy.request('storageStatus'), {
+        'code': null,
+        'resettable': false,
+      });
+      // A readable store is never set aside.
+      await expectLater(proxy.request('resetStorage'), refused('busy'));
+      expect(calls.where((call) => call == 'setAsideCatalog'), hasLength(1));
+    });
+
+    test('a busy, locked or changed store is not reset', () async {
+      for (final code in [
+        'storage_busy',
+        'storage_unavailable',
+        'storage_conflict',
+      ]) {
+        final (:proxy, :calls, payloads: _) = store(
+          () async => throw PlatformException(code: code),
+        );
+        await expectLater(proxy.control.subscriptions(), refused(code));
+        expect(await proxy.request('storageStatus'), {
+          'code': code,
+          'resettable': false,
+        }, reason: code);
+        await expectLater(proxy.request('resetStorage'), refused('busy'));
+        expect(calls, ['loadCatalog'], reason: code);
+        await proxy.dispose();
+      }
+    });
+
+    // The file decrypts, but this app cannot use it: only that revision is
+    // set aside, so a catalog another copy saved meanwhile stays.
+    test('a rejected catalog is set aside by its revision', () async {
+      final (:proxy, :calls, :payloads) = store(
+        () async => {'revision': 'r-rejected', 'catalog': 'x'},
+      );
+      await expectLater(
+        proxy.control.subscriptions(),
+        refused('storage_corrupt'),
+      );
+      expect((await proxy.request('storageStatus'))['resettable'], isTrue);
+      expect((await proxy.request('resetStorage'))['setAside'], isTrue);
+      expect(calls.take(2), ['loadCatalog', 'setAsideCatalog']);
+      expect(payloads[1], {'revision': 'r-rejected'});
+    });
+
+    // Neither the retry pause nor the window's polling loads the store
+    // between the set-aside and the reset's own load.
+    test('nothing loads between the set-aside and its load', () async {
+      final timers = <Timer>[];
+      await runZoned(
+        () async {
+          final release = Completer<void>();
+          final (:proxy, :calls, payloads: _) = store(
+            () async => throw PlatformException(code: 'storage_corrupt'),
+            setAside: release.future,
+          );
+          await expectLater(
+            proxy.control.subscriptions(),
+            refused('storage_corrupt'),
+          );
+          final retry = timers.where((timer) => timer.isActive).toList();
+          expect(retry, hasLength(1), reason: 'the failed load armed a retry');
+          final reset = proxy.request('resetStorage');
+          await pumpEventQueue();
+          expect(calls, ['loadCatalog', 'setAsideCatalog']);
+          expect(retry.single.isActive, isFalse);
+          final polled = proxy.request('state');
+          final asked = proxy.request('storageStatus');
+          await pumpEventQueue();
+          expect(calls, ['loadCatalog', 'setAsideCatalog']);
+          release.complete();
+          expect((await reset)['setAside'], isTrue);
+          expect(await polled, {'state': 'disconnected'});
+          expect(await asked, {'code': null, 'resettable': false});
+          expect(calls, [
+            'loadCatalog',
+            'setAsideCatalog',
+            'loadCatalog',
+            'saveCatalog',
+          ]);
+        },
+        zoneSpecification: ZoneSpecification(
+          createTimer: (self, parent, zone, duration, callback) {
+            final timer = parent.createTimer(zone, duration, callback);
+            timers.add(timer);
+            return timer;
+          },
+        ),
+      );
+    });
+
+    // A reset that cannot finish leaves the store as it was and retries the
+    // load after the usual pause.
+    test('a failed set-aside is reported and retried', () async {
+      final timers = <Timer>[];
+      await runZoned(
+        () async {
+          final calls = <String>[];
+          final proxy = DesktopProxy(
+            corePath: 'unused-core',
+            domainPath: 'unused-domain',
+            catalogIO: (method, _) async {
+              calls.add(method);
+              throw PlatformException(
+                code: method == 'setAsideCatalog'
+                    ? 'storage_unavailable'
+                    : 'storage_corrupt',
+              );
+            },
+            platformIO: (_, _) async => {},
+          );
+          await expectLater(
+            proxy.control.subscriptions(),
+            refused('storage_corrupt'),
+          );
+          await expectLater(
+            proxy.request('resetStorage'),
+            refused('storage_unavailable'),
+          );
+          expect(await proxy.request('storageStatus'), {
+            'code': 'storage_unavailable',
+            'resettable': false,
+          });
+          expect(timers.where((timer) => timer.isActive), hasLength(1));
+          expect(calls, ['loadCatalog', 'setAsideCatalog']);
+          await proxy.dispose();
+        },
+        zoneSpecification: ZoneSpecification(
+          createTimer: (self, parent, zone, duration, callback) {
+            final timer = parent.createTimer(zone, duration, callback);
+            timers.add(timer);
+            return timer;
+          },
+        ),
+      );
+    });
+  });
+
   // What automation was doing when the app last stopped is not worth the catalog.
   test('an unreadable automation episode starts a new one', () async {
     for (final episode in <Object>[

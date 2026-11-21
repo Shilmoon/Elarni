@@ -202,6 +202,17 @@ abstract interface class TunnelControl {
   );
   Future<void> exportCatalogBackup(String password);
   Future<SubscriptionSnapshot> restoreCatalogBackup(String password);
+
+  /// Desktop core only (Windows and Linux): why the saved catalog could not
+  /// be loaded, `{'code': String?, 'resettable': bool}`; the code is null
+  /// once it loads. Asking starts no load.
+  Future<Map<String, Object?>> storageStatus();
+
+  /// Desktop core only: sets a catalog that cannot be read again aside in
+  /// its folder and starts with an empty one, `{'setAside': bool, 'name':
+  /// String?, 'state': String}`. Refused (`busy`) unless [storageStatus]
+  /// says it is resettable.
+  Future<Map<String, Object?>> resetStorage();
   Future<void> repairTunnel();
   Future<SubscriptionSnapshot> deleteSubscription(String id);
   Future<NodeSelectionResult> selectNode(String id);
@@ -397,6 +408,14 @@ final class NativeTunnelControl implements TunnelControl {
       SubscriptionSnapshot.fromMap(
         await _mapResult('restoreCatalogBackup', {'password': password}),
       );
+
+  @override
+  Future<Map<String, Object?>> storageStatus() =>
+      _mapResult('storageStatus', <String, Object?>{});
+
+  @override
+  Future<Map<String, Object?>> resetStorage() =>
+      _mapResult('resetStorage', <String, Object?>{});
 
   @override
   Future<void> repairTunnel() async {

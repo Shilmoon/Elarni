@@ -4,6 +4,14 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
 
 ## Unreleased
 
+### Fixed
+
+- When Elarni's saved data can no longer be read (a damaged file, a Windows profile whose keys
+  changed, a reset Linux keyring), Settings › Backup and repair offers **Reset**, which sets the
+  unreadable file aside and starts empty so a backup can be restored; another running copy and a
+  locked keyring now say what they are instead of advising a restore that could not work.
+  Windows, Linux.
+
 ## 0.6.2 - 2026-11-18
 
 ### Added

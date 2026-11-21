@@ -28,6 +28,13 @@ extension _ProxyCommands on DesktopProxy {
     }
     // Updates replace the app, not the catalog. The core checks each file.
     if (method == 'updateStatus') return _native('updateStatus', {});
+    // Why the catalog cannot be read: asking never starts a load, it only
+    // waits for the one in flight.
+    if (method == 'storageStatus') {
+      await _initializing?.then<void>((_) {}, onError: (Object _) {});
+      return _storageStatus();
+    }
+    if (method == 'resetStorage') return _resetStorage();
     if (method == 'downloadUpdate') {
       final assets = arguments?['assets'];
       if (assets is! List || assets.any((asset) => asset is! Map))

@@ -339,6 +339,9 @@ class _ElarniHomeState extends State<ElarniHome> {
 
   /// A button for the message it was made with; a later message hides it.
   ({String message, String label, VoidCallback onPressed})? _messageAction;
+  // The desktop core's catalog cannot be read again: Backup offers Reset.
+  bool _storageResettable = false;
+  Future<String?>? _storageCheck;
   bool _working = false;
   bool get _busy => _working;
   set _busy(bool value) {
@@ -548,6 +551,7 @@ class _ElarniHomeState extends State<ElarniHome> {
     // The resolver skips its callback when the language returns to the system
     // one, so [appLocale] follows the Localizations scope, rebuilding with it.
     appLocale = Localizations.localeOf(context);
+    linuxStorageText = widget.linux;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       widget.desktop.status(
@@ -1419,6 +1423,13 @@ class _ElarniHomeState extends State<ElarniHome> {
       ],
       SettingsCategory.backup: () => [
         section(l10n.backups),
+        if (_storageResettable)
+          action(
+            label: l10n.reset,
+            title: Text(l10n.resetElarni),
+            subtitle: Text(l10n.resetElarniHelp),
+            onPressed: _busy ? null : _resetStorage,
+          ),
         action(
           label: l10n.export,
           title: Text(l10n.createEncryptedBackup),
