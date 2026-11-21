@@ -5,14 +5,14 @@ import 'dart:io';
 import 'package:ffi/ffi.dart';
 
 /// The Wi-Fi network this computer has joined: its name, or null off Wi-Fi.
-/// [denied] means the system keeps the name from Elarni: Windows 11 24H2 and
-/// later ask for Location access first.
+/// [denied] means joined to Wi-Fi, but the name cannot be read: Windows 11
+/// 24H2 and later ask for Location access first, and Linux needs nmcli or iw.
 typedef WiFiReading = ({String? name, bool denied});
 
 Future<WiFiReading> readWiFiNetwork() async {
   if (Platform.isWindows) return _windowsWiFi();
-  if (Platform.isLinux) return (name: await _linuxWiFi(), denied: false);
-  return (name: null, denied: false);
+  if (Platform.isLinux) return linuxWiFi();
+  return _offWiFi;
 }
 
 const _offWiFi = (name: null, denied: false);
@@ -151,10 +151,20 @@ WiFiReading _windowsWiFi() {
 }
 
 // NetworkManager runs most desktops; iw reads the kernel's view otherwise.
-Future<String?> _linuxWiFi() async {
+// Tests pass their own [run] and a folder in place of /sys/class/net.
+Future<WiFiReading> linuxWiFi({
+  Future<ProcessResult> Function(
+        String executable,
+        List<String> arguments, {
+        Map<String, String>? environment,
+      })
+      run =
+      Process.run,
+  String sysfs = '/sys/class/net',
+}) async {
   const english = {'LC_ALL': 'C'};
   try {
-    final result = await Process.run('nmcli', [
+    final result = await run('nmcli', [
       '-t',
       '-f',
       'ACTIVE,SSID',
@@ -164,29 +174,58 @@ Future<String?> _linuxWiFi() async {
       '--rescan',
       'no',
     ], environment: english);
-    if (result.exitCode == 0) return nmcliWiFi(result.stdout as String);
+    // A device NetworkManager does not manage has no active line; iw sees it.
+    final name = result.exitCode == 0
+        ? nmcliWiFi(result.stdout as String)
+        : null;
+    if (name != null) return (name: name, denied: false);
   } on ProcessException {
     // Not installed.
   }
-  try {
-    final devices = await Process.run('iw', ['dev'], environment: english);
-    if (devices.exitCode != 0) return null;
-    for (final match in RegExp(
-      r'^\s*Interface\s+(\S+)',
-      multiLine: true,
-    ).allMatches(devices.stdout as String)) {
-      final link = await Process.run('iw', [
-        'dev',
-        match[1]!,
-        'link',
-      ], environment: english);
-      final name = link.exitCode == 0 ? iwWiFi(link.stdout as String) : null;
-      if (name != null) return name;
+  // iw lives in sbin, which a user's PATH may lack (Debian's does).
+  for (final iw in const ['iw', '/usr/sbin/iw', '/sbin/iw']) {
+    try {
+      final devices = await run(iw, ['dev'], environment: english);
+      if (devices.exitCode != 0) break;
+      for (final match in RegExp(
+        r'^\s*Interface\s+(\S+)',
+        multiLine: true,
+      ).allMatches(devices.stdout as String)) {
+        final link = await run(iw, [
+          'dev',
+          match[1]!,
+          'link',
+        ], environment: english);
+        final name = link.exitCode == 0 ? iwWiFi(link.stdout as String) : null;
+        if (name != null) return (name: name, denied: false);
+      }
+      break;
+    } on ProcessException {
+      // Not installed here.
     }
-  } on ProcessException {
-    // Not installed.
   }
-  return null;
+  // A wireless link that is up has joined a network whose name went unread.
+  return (name: null, denied: _wirelessUp(sysfs));
+}
+
+bool _wirelessUp(String sysfs) {
+  try {
+    for (final entry in Directory(sysfs).listSync()) {
+      final path = entry.path;
+      if (!FileSystemEntity.isDirectorySync('$path/wireless') &&
+          !FileSystemEntity.isDirectorySync('$path/phy80211'))
+        continue;
+      try {
+        if (File('$path/operstate').readAsStringSync().trim() == 'up')
+          return true;
+      } on FileSystemException {
+        // The interface went away while listing.
+      }
+    }
+  } on FileSystemException {
+    // No sysfs.
+  }
+  return false;
 }
 
 /// The active network in `nmcli -t -f ACTIVE,SSID device wifi list` output,

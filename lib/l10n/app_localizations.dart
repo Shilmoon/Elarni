@@ -3131,8 +3131,14 @@ abstract class AppLocalizations {
   /// No description provided for @windowsWifiLocationHelp.
   ///
   /// In en, this message translates to:
-  /// **'Windows keeps the Wi-Fi name from Elarni. Turn on Location services and Let desktop apps access your location in Settings › Privacy & security › Location.'**
+  /// **'Windows keeps the Wi-Fi name from Elarni. Turn on Location services and Let desktop apps access your location in Settings › Privacy & security › Location. Until then every Wi-Fi network counts as untrusted.'**
   String get windowsWifiLocationHelp;
+
+  /// No description provided for @linuxWifiNameHelp.
+  ///
+  /// In en, this message translates to:
+  /// **'Elarni cannot read the Wi-Fi name on this system: it needs NetworkManager\'s nmcli or iw. Until then every Wi-Fi network counts as untrusted.'**
+  String get linuxWifiNameHelp;
 
   /// No description provided for @noTrustedWifi.
   ///

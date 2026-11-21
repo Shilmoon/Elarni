@@ -26,7 +26,8 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
 
 /**
- * Connect on untrusted Wi-Fi: joining a Wi-Fi network that is not on the trusted list connects, once per join.
+ * Connect on untrusted Wi-Fi: joining a Wi-Fi network that is not on the trusted list, or whose name Android hides, connects,
+ * once per join.
  * Android sends a network callback's PendingIntent once, for the first matching network, then drops the request,
  * so Elarni asks for one change at a time: the next Wi-Fi join while off Wi-Fi, leaving Wi-Fi while on it.
  */
@@ -98,37 +99,57 @@ object WiFiRule {
         }
     }
 
+    /** Whether a join connects: a name Android hides ([name] null) counts as untrusted, and an empty list trusts nothing. */
+    internal fun connects(name: String?, trusted: List<String>) = name == null || name !in trusted
+
     private suspend fun joined(app: ElarniApplication, network: Network) {
-        val settings = Catalog(app.repository.state.value.catalog).settings
+        val trusted = Catalog(app.repository.state.value.catalog).settings.strings("trustedWiFiNetworks")
         // Network handles repeat after a restart; the boot count tells the joins apart.
         val join = "${android.provider.Settings.Global.getInt(app.contentResolver, android.provider.Settings.Global.BOOT_COUNT, 0)}:${network.networkHandle}"
         val seen = app.getSharedPreferences("wifi-rule", Context.MODE_PRIVATE)
         if (seen.getString("join", null) == join) return
-        // Without location access the name is hidden; Settings shows what to allow.
-        val name = name(app, network) ?: return
+        // With no trusted network every Wi-Fi connects, so the name is not read. Without location access Android hides it,
+        // and Settings shows what to allow; until then each join connects.
+        val name = if (trusted.isEmpty()) null else when (val read = name(app, network)) {
+            // Gone while reading: the next network is a join of its own.
+            Ssid.Lost -> return
+            Ssid.Unknown -> null
+            is Ssid.Named -> read.name
+        }
         seen.edit().putString("join", join).apply()
-        if (name !in settings.strings("trustedWiFiNetworks")) app.control(ACTION_CONNECT)
+        if (connects(name, trusted)) app.control(ACTION_CONNECT)
     }
 
-    private suspend fun name(app: ElarniApplication, network: Network): String? {
-        val ssid = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+    /** A Wi-Fi name as Android gives it: the name, the network gone while reading, or a name it keeps hidden. */
+    private sealed interface Ssid {
+        data class Named(val name: String) : Ssid
+        data object Lost : Ssid
+        data object Unknown : Ssid
+    }
+
+    private suspend fun name(app: ElarniApplication, network: Network): Ssid {
+        val connectivity = app.getSystemService(ConnectivityManager::class.java)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             // Only a callback that asks for location information sees the name; other reads get it redacted.
-            val result = CompletableDeferred<String?>()
-            val connectivity = app.getSystemService(ConnectivityManager::class.java)
+            val result = CompletableDeferred<Ssid>()
             val callback = object : ConnectivityManager.NetworkCallback(FLAG_INCLUDE_LOCATION_INFO) {
                 override fun onCapabilitiesChanged(changed: Network, capabilities: NetworkCapabilities) {
-                    if (changed == network) result.complete((capabilities.transportInfo as? WifiInfo)?.ssid)
+                    if (changed == network) result.complete(named((capabilities.transportInfo as? WifiInfo)?.ssid))
                 }
-                override fun onLost(lost: Network) { if (lost == network) result.complete(null) }
+                override fun onLost(lost: Network) { if (lost == network) result.complete(Ssid.Lost) }
             }
-            // Android caps an app's callbacks; without one the name stays unknown, and the next check asks again.
-            if (runCatching { connectivity.registerNetworkCallback(wifi, callback) }.isFailure) return null
-            try { withTimeoutOrNull(5000) { result.await() } } finally { connectivity.unregisterNetworkCallback(callback) }
-        } else @Suppress("DEPRECATION") app.getSystemService(WifiManager::class.java).connectionInfo
-            ?.takeIf { app.getSystemService(ConnectivityManager::class.java).getNetworkCapabilities(network)?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true }?.ssid
-        // UTF-8 names come quoted; other bytes come as hex, which the trusted list can hold too.
-        return ssid?.takeIf { it.isNotEmpty() && it != WifiManager.UNKNOWN_SSID }?.removeSurrounding("\"")
+            // Android caps an app's callbacks; without one the name stays unknown.
+            if (runCatching { connectivity.registerNetworkCallback(wifi, callback) }.isFailure) return Ssid.Unknown
+            return try { withTimeoutOrNull(5000) { result.await() } ?: Ssid.Unknown } finally { connectivity.unregisterNetworkCallback(callback) }
+        }
+        if (connectivity.getNetworkCapabilities(network)?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) != true) return Ssid.Lost
+        @Suppress("DEPRECATION") val info = app.getSystemService(WifiManager::class.java).connectionInfo
+        return named(info?.ssid)
     }
+
+    // UTF-8 names come quoted; other bytes come as hex, which the trusted list can hold too.
+    private fun named(ssid: String?) = ssid?.takeIf { it != WifiManager.UNKNOWN_SSID }?.removeSurrounding("\"")?.takeIf { it.isNotEmpty() }
+        ?.let { Ssid.Named(it) } ?: Ssid.Unknown
 }
 
 /** Android sends this for a watched network change, at the backup check, and after an app update. */

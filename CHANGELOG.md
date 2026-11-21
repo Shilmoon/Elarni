@@ -4,6 +4,18 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
 
 ## Unreleased
 
+### Fixed
+
+- **Connect on untrusted Wi-Fi** now connects when the Wi-Fi name cannot be read, as it does on a
+  network that is not on the trusted list. Before, an unreadable name turned the rule off without
+  a word: on Android without location allowed all the time, on Windows 11 24H2 and later without
+  Location access, and on Linux when neither NetworkManager's `nmcli` nor `iw` gave the name.
+  Linux now also asks `iw` when NetworkManager does not manage the Wi-Fi, and finds it in
+  `/usr/sbin` when PATH lacks it (as on Debian). Settings says what to allow. Such a network still
+  connects once per join; on Windows and Linux the computer's addresses tell it from the next
+  one, so a new address counts as a new join. With no trusted networks Android no longer reads
+  the name at all. Android, Windows and Linux.
+
 ## 0.6.2 - 2026-11-18
 
 ### Added
