@@ -15,6 +15,9 @@ void main() {
         'Select a server first. This routing link turns its profile on for the selected server’s subscription.',
     'scheduled_refresh_failed':
         'A scheduled subscription or routing refresh failed.',
+    // A refresh took a per-app server; the running tunnel kept its settings.
+    'per_app_target_missing':
+        'A server that an app is routed through is gone from its subscription. The connection keeps the old settings; choose another server for that app in Per-app routing.',
     'connection_stopped':
         'Connection stopped unexpectedly. Reconnect to retry.',
     'connection_stopped_blocked':

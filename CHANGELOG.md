@@ -4,6 +4,25 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
 
 ## Unreleased
 
+### Fixed
+
+- A subscription refresh that removes the server an app is routed through no longer drops the
+  connection. Before, the refresh stopped the tunnel, could not start it without that server,
+  started the old one again and failed, so every scheduled retry cut every app's connections
+  for a moment and the subscription never updated. The refresh now applies, the running
+  connection keeps its old settings and a notice says to choose another server for that app.
+  A change that would restart the tunnel without that server fails before the connection
+  stops, and the next Connect names the app's rule. Windows and Linux; Android already did this.
+- Leaving VPN mode (for System proxy or Local proxy only, or turning Xray TUN off on macOS) and
+  coming back turns per-app routing on again with the mode it had. Before, leaving VPN mode
+  turned it off for good, so after the return every app took the default route until per-app
+  routing was turned on by hand. The app list and its targets were kept, and still are.
+  Windows, Linux and macOS.
+- With **Only listed apps** and none of the listed apps installed, Connect now says so instead
+  of connecting. Before, the VPN then took every app, all of them went direct, and Elarni showed
+  Connected. A settings change that would restart a running tunnel that way fails the same way,
+  before the tunnel stops. Android.
+
 ## 0.6.2 - 2026-11-18
 
 ### Added

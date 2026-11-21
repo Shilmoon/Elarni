@@ -652,6 +652,11 @@ class Catalog(val data: JSONObject, private val snapshot: Boolean = false) {
                 else -> null
             }
         }
+        /** Whether Only listed apps names apps of which none is installed besides [self]: [tunnelApps] would then take every
+         *  app into the tunnel, and every one would go direct. An empty list is not refused. */
+        fun noListedAppInstalled(settings: JSONObject, self: String, uid: (String) -> Int?) =
+            settings.string("perAppMode") == "proxyOnly" &&
+                settings.strings("perAppProcesses").let { listed -> listed.isNotEmpty() && listed.none { it != self && uid(it) != null } }
         /**
          * Each listed app's UID, or null for one not installed. Android works out the tunnel's apps by UID when the VPN
          * starts, and so do the per-app rules, so an app installed, removed or reinstalled later needs a new start.

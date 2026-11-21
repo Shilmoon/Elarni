@@ -1994,6 +1994,163 @@ for line in sys.stdin:
     },
   );
 
+  // A refresh that took the server an app is routed through stopped the
+  // tunnel, failed to start the new one and started the old one again: the
+  // connection dropped at every scheduled retry, and the refresh never applied.
+  test(
+    'a scheduled refresh that drops a per-app server keeps the running tunnel',
+    () async {
+      var now = DateTime.now();
+      await backend.dispose();
+      backend = createBackend(
+        clock: () => now,
+        refreshInterval: const Duration(milliseconds: 50),
+        // The stub listeners pass no traffic; the stub helper never exits.
+        livenessTargets: const [],
+        helperExitGrace: const Duration(milliseconds: 500),
+      );
+      final pinnedProfile = profile
+          .replaceFirst(userID, '00000000-0000-4000-8000-000000000002')
+          .replaceFirst('#Fixture', '#Pinned');
+      var listed = true;
+      final feed = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      addTearDown(() => feed.close(force: true));
+      feed.listen((request) async {
+        request.response.write(listed ? '$profile\n$pinnedProfile' : profile);
+        await request.response.close();
+      });
+      final added = await backend.control.addSubscription(
+        'http://127.0.0.1:${feed.port}/feed',
+      );
+      final nodes = (await backend.control.refreshSubscription(
+        added.snapshot.subscriptions.single.id,
+        challenge: added.warning!.challenge,
+      )).snapshot.subscriptions.single.nodes;
+      final pinned = nodes.singleWhere((node) => node.name == 'Pinned').id;
+      await backend.control.selectNode(
+        nodes.singleWhere((node) => node.name == 'Fixture').id,
+      );
+      final settings = (await backend.control.tunnelSettings()).copyWith(
+        xrayTunEnabled: true,
+        perAppMode: 'bypass',
+        perAppProcesses: ['fixture.exe'],
+        perAppTargets: {'fixture.exe': 'node:$pinned'},
+      );
+      await backend.control.updateTunnelSettings(settings);
+      final events = File.fromUri(temporary.uri.resolve('vpn-pinned-events'));
+      await useStub('''
+import json, socket, subprocess, sys
+listeners = []
+for line in sys.stdin:
+    request = json.loads(line)
+    method = request['method']
+    if method in ('runVPN', 'reloadVPN', 'stopVPN'):
+        with open(${jsonEncode(events.path)}, 'a') as events: print(method, file=events)
+    if method == 'runVPN':
+        config = json.loads(request['payload']['configJSON'])
+        for inbound in config['inbounds']:
+            if inbound['protocol'] in ('socks', 'http'):
+                listener = socket.socket()
+                listener.bind(('127.0.0.1', inbound['port']))
+                listener.listen(32)
+                listeners.append(listener)
+        print(json.dumps({'success': True, 'data': {}}), flush=True)
+    elif method in ('reloadVPN', 'stopVPN'):
+        if method == 'stopVPN':
+            for listener in listeners: listener.close()
+            listeners.clear()
+        print(json.dumps({'success': True, 'data': {}}), flush=True)
+    else:
+        child = subprocess.Popen([${jsonEncode(corePath)}], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+        child.stdin.write(line)
+        child.stdin.flush()
+        print(child.stdout.readline(), end='', flush=True)
+        child.stdin.close()
+        child.wait(timeout=10)
+        break
+''');
+      final notices = <String>[];
+      final noticed = Completer<String>();
+      backend.control.setImportListener((notice) {
+        if (notice == null) return;
+        notices.add(notice);
+        if (!noticed.isCompleted &&
+            {
+              'per_app_target_missing',
+              'scheduled_refresh_failed',
+            }.contains(notice))
+          noticed.complete(notice);
+      });
+      try {
+        await backend.control.connect();
+        expect(await events.readAsLines(), ['runVPN']);
+        // The provider drops the server; the scheduled refresh runs.
+        listed = false;
+        now = now.add(const Duration(hours: 5));
+        expect(
+          await noticed.future.timeout(
+            const Duration(seconds: 20),
+            onTimeout: () => fail('No scheduled refresh: $notices'),
+          ),
+          'per_app_target_missing',
+        );
+        // It applied and counts as a success, so it is not retried.
+        final source = catalogList(
+          catalogMap(storedCatalog!['committed'])['subscriptions'],
+        ).single;
+        expect(catalogList(source['nodes']).map((node) => node['name']), [
+          'Fixture',
+        ]);
+        expect(source['failures'], 0);
+        expect(
+          (await backend.control.subscriptions()).subscriptions.single.nodes
+              .map((node) => node.name),
+          ['Fixture'],
+        );
+        // The running tunnel keeps its old configuration.
+        expect(await backend.control.state(), 'connected');
+        expect(await events.readAsLines(), ['runVPN']);
+
+        // A change that restarts the tunnel needs the server, so it fails
+        // before the tunnel stops.
+        await expectLater(
+          backend.control.updateTunnelSettings(
+            settings.copyWith(excludedRoutes: ['203.0.113.0/24']),
+          ),
+          throwsA(
+            isA<PlatformException>().having(
+              (error) => error.code,
+              'code',
+              'per_app_target_missing',
+            ),
+          ),
+        );
+        expect(await backend.control.state(), 'connected');
+        expect(await events.readAsLines(), ['runVPN']);
+        expect(
+          (await backend.control.tunnelSettings()).excludedRoutes,
+          settings.excludedRoutes,
+        );
+        expect(notices, ['per_app_target_missing']);
+
+        // The next Connect names the app's rule.
+        await backend.control.disconnect();
+        await expectLater(
+          backend.control.connect(),
+          throwsA(
+            isA<PlatformException>().having(
+              (error) => error.code,
+              'code',
+              'per_app_target_missing',
+            ),
+          ),
+        );
+      } finally {
+        backend.control.setImportListener(null);
+      }
+    },
+  );
+
   // A crashed Windows helper leaves its kill switch, which lets the next
   // helper through: clearing it before the reconnect let traffic out until the
   // new tunnel was up.

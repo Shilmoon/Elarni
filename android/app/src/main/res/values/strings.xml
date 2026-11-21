@@ -33,6 +33,7 @@
     <string name="check_the_automation_s_group_selected">Check the automation\'s group, selected servers, and distinct HTTP health targets.</string>
     <string name="select_installed_android_apps_and_a">Select installed Android apps and a valid routing mode. Profiles from other operating systems cannot be used here.</string>
     <string name="an_app_in_per_app_routing">An app in Per-app routing uses a server that no longer exists. Choose another target for it in Per-app routing.</string>
+    <string name="none_of_the_apps_chosen_for_the_vpn">None of the apps chosen for the VPN is installed. Choose apps in Per-app routing or turn it off.</string>
     <string name="use_up_to_64_wi_fi">Use up to 64 Wi-Fi names of at most 32 bytes each, without tabs.</string>
     <string name="use_an_https_address_for_the">Use an https:// address for the update feed, or leave it empty.</string>
     <string name="some_settings_are_invalid_check_port">Some settings are invalid. Check port numbers, ranges, DNS addresses, and required login details.</string>

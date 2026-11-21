@@ -1427,6 +1427,7 @@ fun errorMessage(code: String): String = when (code) {
     "invalid_update_feed" -> tr(R.string.use_an_https_address_for_the)
     "invalid_trusted_wifi" -> tr(R.string.use_up_to_64_wi_fi)
     "per_app_target_missing" -> tr(R.string.an_app_in_per_app_routing)
+    "per_app_none_installed" -> tr(R.string.none_of_the_apps_chosen_for_the_vpn)
     "invalid_per_app", "app_unavailable" -> tr(R.string.select_installed_android_apps_and_a)
     "invalid_automation" -> tr(R.string.check_the_automation_s_group_selected)
     "inbound_credentials_required" -> tr(R.string.save_a_proxy_username_and_password)
