@@ -511,6 +511,68 @@ void main() {
     await tester.pumpWidget(const SizedBox());
   });
 
+  for (final timeout in [7, 12]) {
+    testWidgets(
+      'select unreachable skips a server whose test did not run or was cut short, with a $timeout s timeout',
+      (tester) async {
+        final messenger = tester.binding.defaultBinaryMessenger;
+        messenger.setMockMethodCallHandler(DesktopIntegration.channel, (
+          call,
+        ) async {
+          if (call.method == 'getPreferences')
+            return jsonEncode({'pingTimeout': timeout});
+          return null;
+        });
+        addTearDown(
+          () => messenger.setMockMethodCallHandler(
+            DesktopIntegration.channel,
+            null,
+          ),
+        );
+        await tester.binding.setSurfaceSize(const Size(1280, 1400));
+        addTearDown(() => tester.binding.setSurfaceSize(null));
+        final control = NoticeControl()..snapshot = countryFixture();
+        // Amsterdam 01 never answers, so the bulk test's seven-second bound ends it.
+        control.onPing = (id) async => switch (id) {
+          'nl-vless' => Completer<PingResult>().future,
+          'nl-trojan' => throw PlatformException(code: 'ping_failed'),
+          'unknown' => throw PlatformException(code: 'busy'),
+          _ => reply(id),
+        };
+        await tester.pumpWidget(
+          ElarniApp(tunnelControl: control, windows: true),
+        );
+        await tester.pumpAndSettle();
+        await openServers(tester, 'daily', 'boVPN');
+        await tester.tap(
+          find.byKey(const ValueKey('subscription-ping-all:daily')),
+        );
+        await tester.pump();
+        await tester.pump(const Duration(seconds: 8));
+        await tester.pumpAndSettle();
+        // The rows read as before: each failure, whatever its reason, is unavailable.
+        expect(find.text('Unavailable'), findsNWidgets(3));
+        await tester.tap(find.byKey(const ValueKey('select-servers:daily')));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Select unreachable'));
+        await tester.pumpAndSettle();
+        bool ticked(String id) =>
+            tester
+                .widget<Checkbox>(find.byKey(ValueKey('select-node:$id')))
+                .value ==
+            true;
+        expect(ticked('nl-trojan'), isTrue);
+        expect(ticked('unknown'), isFalse, reason: 'busy: never tested');
+        // Within the user's own timeout the bound is that timeout; beyond it, the bound cut the test short.
+        expect(ticked('nl-vless'), timeout == 7);
+        expect(ticked('de'), isFalse);
+        expect(find.text('${timeout == 7 ? 2 : 1} selected'), findsOneWidget);
+        expect(tester.takeException(), isNull);
+        await tester.pumpWidget(const SizedBox());
+      },
+    );
+  }
+
   testWidgets(
     'a local group shares its chosen servers as links in group order; a provider group does not',
     (tester) async {

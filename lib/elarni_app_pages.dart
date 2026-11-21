@@ -1222,7 +1222,7 @@ extension _HomePages on _ElarniHomeState {
         ? l10n.testing
         : _pingSkipped.contains(node.id)
         ? l10n.skipped
-        : _pingUnavailable.contains(node.id)
+        : _pingUnavailable.containsKey(node.id)
         ? l10n.unavailable
         : l10n.ping;
     // Rename any server; remove any but the selected or last one. A
@@ -2323,13 +2323,6 @@ extension _HomePages on _ElarniHomeState {
     final selectedCount = group.nodes
         .where((node) => _selectedServers.contains(node.id))
         .length;
-    bool unreachable(String id) {
-      final result = _pingResults[id];
-      return _pingUnavailable.contains(id) ||
-          result != null &&
-              (result.status != 'success' || result.latencyMs < 0);
-    }
-
     final picker = ElarniSelect<String>(
       key: const Key('subscription-picker'),
       value: group.id,
@@ -2418,13 +2411,23 @@ extension _HomePages on _ElarniHomeState {
           child: Text(l10n.selectedCount(selectedCount)),
         ),
         TextButton(
-          onPressed: () => _set(
-            () => _selectedServers.addAll([
-              for (final node in nodes)
-                if (!node.selected && node.isVPN && unreachable(node.id))
-                  node.id,
-            ]),
-          ),
+          onPressed: () {
+            final now = DateTime.now();
+            _set(
+              () => _selectedServers.addAll([
+                for (final node in nodes)
+                  if (!node.selected &&
+                      node.isVPN &&
+                      pingUnreachable(
+                        result: _pingResults[node.id],
+                        failure: _pingUnavailable[node.id],
+                        revision: node.revision,
+                        now: now,
+                      ))
+                    node.id,
+              ]),
+            );
+          },
           child: Text(l10n.selectUnreachable),
         ),
         // A local group has no subscription link to share.
