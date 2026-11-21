@@ -1259,8 +1259,8 @@ class AndroidUIE2E {
             assertTrue(feed.requests.get() > before)
         }
     }
-    // Nothing else on Home says that a pull updates subscriptions, and TalkBack cannot pull: a line above the servers
-    // says how old they are, offers the gesture until it is used once, and refreshes when tapped.
+    // Nothing else on Home says that a pull updates subscriptions, and TalkBack cannot pull: a line above the connection
+    // says how old the servers are, offers the gesture until it is used once, and refreshes when tapped.
     @Test fun homeFreshnessLineTeachesThePullAndRefreshesOnTap() {
         val prefs = ui.activity.getSharedPreferences("ui", android.content.Context.MODE_PRIVATE)
         prefs.edit().remove("pulledToRefresh").commit()
@@ -1274,6 +1274,7 @@ class AndroidUIE2E {
             val line = hasTestTag("subscription-freshness")
             list.performScrollToNode(line)
             ui.onNode(line).assert(hasText("Updated just now", substring = true)).assert(hasText("Pull down to update", substring = true)).assertHasClickAction()
+            assertTrue("First on Home, above the connection", ui.onNode(line).fetchSemanticsNode().boundsInRoot.bottom <= ui.onAllNodesWithText("Disconnected").onFirst().fetchSemanticsNode().boundsInRoot.top)
             feed.body = "socks://127.0.0.1:18100#Germany%20Demo\nsocks://127.0.0.1:18101#Germany%20Tapped"
             ui.onNode(line).performClick()
             ui.waitUntil(10_000) { snapshot().nodes.any { it.string("name") == "Germany Tapped" } }
@@ -1286,6 +1287,15 @@ class AndroidUIE2E {
             list.performScrollToNode(line)
             ui.waitUntil(10_000) { ui.onAllNodes(line and hasText("Updated just now", substring = true)).fetchSemanticsNodes().isNotEmpty() }
             ui.onNode(line).assert(hasText("Pull down to update", substring = true).not())
+            // A provider that fails is counted and does not hold the line at its own older time.
+            HTTPFixture().use { broken ->
+                broken.body = "socks://127.0.0.1:18102#Germany%20Broken"
+                call("approveSource", obj("token" to call("import", obj("text" to broken.url)).getJSONObject("warning").getString("token")))
+                broken.status = 503
+                ui.onNode(line).performClick()
+                ui.waitUntil(10_000) { ui.onAllNodes(line and hasText("1 not updated", substring = true)).fetchSemanticsNodes().isNotEmpty() }
+                ui.onNode(line).assert(hasText("Updated just now", substring = true))
+            }
         }
     }
     @Test fun subscriptionsAndRoutingUseIPhoneSections() {
