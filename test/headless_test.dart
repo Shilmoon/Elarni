@@ -5,8 +5,10 @@ import 'dart:io';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:elarni/desktop_catalog.dart';
+import 'package:elarni/desktop_proxy.dart';
 import 'package:elarni/headless.dart';
-import 'package:elarni/tunnel_channel.dart' show recordingBuild;
+import 'package:elarni/tunnel_channel.dart'
+    show NativeTunnelControl, recordingBuild;
 import 'package:elarni/windows_private_directory.dart';
 
 void main() {
@@ -125,6 +127,52 @@ void main() {
     },
   );
 
+  // A server install had no way to read the log the window shows.
+  test('the log can be read over the control socket', () async {
+    final temporary = await Directory.systemTemp.createTemp('rv-logs-');
+    addTearDown(() => temporary.delete(recursive: true));
+    final path = '${temporary.path}/private/control';
+    final calls = <({String method, CatalogMap args})>[];
+    final server = await HeadlessServer.bind(
+      path,
+      // As the Linux daemon serves its controller.
+      HeadlessControl(
+        (method, args) async {
+          calls.add((method: method, args: args));
+          return {
+            'level': 'warning',
+            'entries': [
+              {'seq': 2, 'time': 1, 'level': 'warning', 'text': 'fixture'},
+            ],
+            'last': 2,
+          };
+        },
+        unattended: true,
+        desktopIntegration: false,
+      ).request,
+    );
+    addTearDown(server.close);
+    final reply = await headlessClient(path, {
+      'command': 'call',
+      'method': 'readLogs',
+      'arguments': {'after': 1},
+    });
+    expect(reply['success'], true, reason: '$reply');
+    expect(reply['data'], {
+      'level': 'warning',
+      'entries': [
+        {'seq': 2, 'time': 1, 'level': 'warning', 'text': 'fixture'},
+      ],
+      'last': 2,
+    });
+    expect(calls.single.method, 'readLogs');
+    expect(calls.single.args, {'after': 1});
+    expect(
+      (await headlessClient(path, {'command': 'commands'}))['data'],
+      containsPair('methods', contains('readLogs')),
+    );
+  });
+
   test('connection recording is headless only in recording builds', () async {
     var calls = 0;
     final control = HeadlessControl((method, args) async {
@@ -194,6 +242,136 @@ echo "/org/freedesktop/login1: org.freedesktop.login1.Manager.PrepareForSleep (f
       isNull,
     );
   }, skip: Platform.isWindows);
+
+  // The daemon had no window to show these, and wrote nothing about them.
+  test('notices and the state they leave go to the service log', () async {
+    void Function(String?)? listener;
+    final control = NativeTunnelControl(
+      importListener: (value) => listener = value,
+    );
+    var state = 'connected';
+    final lines = <String>[];
+    logHeadlessNotices(
+      control,
+      (method, _) async =>
+          method == 'state' ? {'state': state} : throw StateError(method),
+      lines.add,
+      state: 'connected',
+    );
+    // A catalog change that leaves the connection as it was says nothing.
+    listener!(null);
+    await Future<void>.delayed(Duration.zero);
+    expect(lines, isEmpty);
+    state = 'failed';
+    listener!('connection_stopped_repair');
+    await Future<void>.delayed(Duration.zero);
+    state = 'connected';
+    listener!(null);
+    await Future<void>.delayed(Duration.zero);
+    expect(lines, [
+      'notice: connection_stopped_repair',
+      'state: failed',
+      'state: connected',
+    ]);
+  });
+
+  group('the daemon', () {
+    late Directory temporary;
+    late String path;
+    late DesktopProxy proxy;
+    final lines = <String>[];
+    late Completer<void> ready;
+    void log(String line) {
+      lines.add(line);
+      if (line == 'Elarni headless control ready.' && !ready.isCompleted)
+        ready.complete();
+    }
+
+    setUp(() async {
+      temporary = await Directory.systemTemp.createTemp('rv-daemon-');
+      path = '${temporary.path}/private/control';
+      lines.clear();
+      ready = Completer<void>();
+      proxy = DesktopProxy(
+        corePath: 'unused-core',
+        domainPath: 'unused-domain',
+        unattended: true,
+        startProcess: (_) =>
+            Future.error(const ProcessException('unused-core', [])),
+        catalogIO: (method, _) async => method == 'loadCatalog'
+            ? {
+                'revision': '1',
+                'catalog': {'version': 1, 'committed': DesktopCatalog.empty()},
+              }
+            : {'revision': '2'},
+        platformIO: (_, _) async => {},
+        // Accepted, so the link's import runs and fails without a core.
+        confirmLink: (_) async => true,
+      );
+    });
+    tearDown(() async {
+      await proxy.dispose();
+      await temporary.delete(recursive: true);
+    });
+
+    // Under systemd the daemon's end decides whether it is started again: a
+    // requested shutdown must end it cleanly, which the CLI exits 0 for.
+    test(
+      'a shutdown request ends it normally, after its notices and logs',
+      () async {
+        final serving = serveHeadless(path, proxy, log: log);
+        await Future.any([ready.future, serving]);
+        await proxy.handleLinks([
+          'vless://00000000-0000-4000-8000-000000000001@127.0.0.1:443#Fixture',
+        ]);
+        expect(lines, contains('notice: links_failed'));
+        final logs = await headlessClient(path, {
+          'command': 'call',
+          'method': 'readLogs',
+          'arguments': {'after': 0},
+        });
+        expect(logs['success'], true, reason: '$logs');
+        expect(catalogMap(logs['data']), {
+          'level': isA<String>(),
+          'entries': isEmpty,
+          'last': 0,
+        });
+        expect((await headlessClient(path, {'command': 'shutdown'}))['data'], {
+          'stopping': true,
+        });
+        await serving;
+        expect(
+          await FileSystemEntity.type(path),
+          FileSystemEntityType.notFound,
+        );
+      },
+    );
+
+    // The keyring helper exiting ends the daemon with its code, which the CLI
+    // exits 1 for, so systemd starts it again.
+    test('a failure ends it with that failure', () async {
+      final exited = Completer<Object>();
+      final serving = serveHeadless(
+        path,
+        proxy,
+        log: log,
+        failure: exited.future,
+      );
+      await Future.any([ready.future, serving]);
+      exited.complete(StateError('keyring_exited'));
+      await expectLater(
+        serving,
+        throwsA(
+          isA<StateError>().having(
+            (e) => headlessFailureCode(e, daemon: true),
+            'code',
+            'keyring_exited',
+          ),
+        ),
+      );
+      expect(await FileSystemEntity.type(path), FileSystemEntityType.notFound);
+    });
+  });
 
   test(
     'the Linux endpoint needs no HOME for root or a runtime directory',

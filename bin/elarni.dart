@@ -16,6 +16,7 @@ const usage = '''Elarni headless controls (Linux, macOS, Windows)
   elarni-cli [--socket PATH] settings [JSON_FILE|-]
   elarni-cli [--socket PATH] commands
   elarni-cli [--socket PATH] call METHOD [JSON_FILE|-]
+  elarni-cli [--socket PATH] call readLogs [JSON_FILE|-] # {"after":SEQ}: newer lines
   elarni-cli [--socket PATH] shutdown       # standalone daemon only
 
 Inputs containing credentials should use a private file or stdin, not arguments.
