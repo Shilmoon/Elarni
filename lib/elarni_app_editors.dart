@@ -641,6 +641,10 @@ extension _HomeEditors on _ElarniHomeState {
   }
 
   Future<void> _catalogBackup({required bool restore}) async {
+    // A restore replaces a catalog that loads; while it does not, the reason
+    // is said before a password that could not help.
+    if (restore && await _refreshStorage() != null) return;
+    if (!mounted) return;
     final password = TextEditingController();
     final confirmation = TextEditingController();
     String? error;
@@ -736,9 +740,15 @@ extension _HomeEditors on _ElarniHomeState {
             'sharing_refresh_required' => l10n.refreshBeforeBackup,
             'rollback_failed' => l10n.restoreRollbackFailed,
             'backup_unsupported' => l10n.backupUnsupported,
+            // The store failed, not the password or the file.
+            final code
+                when restore &&
+                    supportIssueCode(code) == 'storage_unavailable' =>
+              ConnectionIssue.forCode(code).description,
             _ => restore ? l10n.restoreFailedCheck : l10n.backupNotSavedCheck,
           },
         );
+        _storageFailed(error);
       }
       if (restore) await _load();
     } on Object {

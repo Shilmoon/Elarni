@@ -52,6 +52,8 @@ const headlessMethods = {
   'shareClient',
   'exportCatalogBackup',
   'restoreCatalogBackup',
+  'storageStatus',
+  'resetStorage',
   'exportEvidence',
   if (recordingBuild) ...{'markRecording', 'exportRecording'},
 };

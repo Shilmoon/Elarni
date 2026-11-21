@@ -287,14 +287,44 @@ abstract class AppLocalizations {
   /// No description provided for @issueStorageUnavailableRemedy.
   ///
   /// In en, this message translates to:
-  /// **'Restart Elarni. If this continues, restore an encrypted backup.'**
+  /// **'Restart Elarni and check the free disk space.'**
   String get issueStorageUnavailableRemedy;
+
+  /// No description provided for @issueStorageUnavailableLinuxRemedy.
+  ///
+  /// In en, this message translates to:
+  /// **'Unlock your keyring and check that secret-tool is installed, then restart Elarni.'**
+  String get issueStorageUnavailableLinuxRemedy;
 
   /// No description provided for @issueStorageUnavailable.
   ///
   /// In en, this message translates to:
-  /// **'Elarni could not read or save its catalog.'**
+  /// **'Elarni could not read or save its data.'**
   String get issueStorageUnavailable;
+
+  /// No description provided for @issueStorageBusyRemedy.
+  ///
+  /// In en, this message translates to:
+  /// **'Close the other copy or stop its background service. Elarni tries again by itself.'**
+  String get issueStorageBusyRemedy;
+
+  /// No description provided for @issueStorageBusy.
+  ///
+  /// In en, this message translates to:
+  /// **'Elarni’s data is in use by another copy of Elarni.'**
+  String get issueStorageBusy;
+
+  /// No description provided for @issueStorageCorruptRemedy.
+  ///
+  /// In en, this message translates to:
+  /// **'Reset Elarni in Settings › Backup and repair, then restore a backup or add your subscriptions again.'**
+  String get issueStorageCorruptRemedy;
+
+  /// No description provided for @issueStorageCorrupt.
+  ///
+  /// In en, this message translates to:
+  /// **'Elarni cannot read its saved data on this computer.'**
+  String get issueStorageCorrupt;
 
   /// No description provided for @issueBusyRemedy.
   ///
@@ -5125,6 +5155,36 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Backup restored. Refresh subscription and routing data before connecting.'**
   String get backupRestored;
+
+  /// No description provided for @resetElarni.
+  ///
+  /// In en, this message translates to:
+  /// **'Reset Elarni'**
+  String get resetElarni;
+
+  /// No description provided for @resetElarniHelp.
+  ///
+  /// In en, this message translates to:
+  /// **'Saved data cannot be read. Reset sets it aside and starts empty.'**
+  String get resetElarniHelp;
+
+  /// No description provided for @resetElarniQuestion.
+  ///
+  /// In en, this message translates to:
+  /// **'Reset Elarni?'**
+  String get resetElarniQuestion;
+
+  /// No description provided for @resetElarniBody.
+  ///
+  /// In en, this message translates to:
+  /// **'Elarni’s saved data on this computer cannot be read. Reset keeps the unreadable file and starts with an empty list: subscriptions, servers and settings must be restored from a backup or added again. Providers that count devices will see this computer as a new device.'**
+  String get resetElarniBody;
+
+  /// No description provided for @elarniWasReset.
+  ///
+  /// In en, this message translates to:
+  /// **'Elarni was reset. Restore a backup or add a subscription.'**
+  String get elarniWasReset;
 
   /// No description provided for @chooseBackupAndRestore.
   ///

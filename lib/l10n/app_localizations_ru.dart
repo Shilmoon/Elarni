@@ -116,11 +116,30 @@ class AppLocalizationsRu extends AppLocalizations {
 
   @override
   String get issueStorageUnavailableRemedy =>
-      'Перезапустите Elarni. Если ошибка повторится, восстановите зашифрованную резервную копию.';
+      'Перезапустите Elarni и проверьте, хватает ли места на диске.';
+
+  @override
+  String get issueStorageUnavailableLinuxRemedy =>
+      'Разблокируйте связку ключей и проверьте, что установлен secret-tool, затем перезапустите Elarni.';
 
   @override
   String get issueStorageUnavailable =>
-      'Elarni не удалось прочитать или сохранить свой каталог.';
+      'Elarni не удалось прочитать или сохранить свои данные.';
+
+  @override
+  String get issueStorageBusyRemedy =>
+      'Закройте другую копию или остановите её фоновую службу. Elarni повторит попытку сам.';
+
+  @override
+  String get issueStorageBusy => 'Данные Elarni заняты другой копией Elarni.';
+
+  @override
+  String get issueStorageCorruptRemedy =>
+      'Сбросьте Elarni в «Настройки › Резервная копия и исправление», затем восстановите копию или снова добавьте подписки.';
+
+  @override
+  String get issueStorageCorrupt =>
+      'Elarni не может прочитать свои сохранённые данные на этом компьютере.';
 
   @override
   String get issueBusyRemedy => 'Дождитесь её завершения и повторите попытку.';
@@ -3074,6 +3093,24 @@ class AppLocalizationsRu extends AppLocalizations {
   @override
   String get backupRestored =>
       'Копия восстановлена. Перед подключением обновите подписки и данные маршрутизации.';
+
+  @override
+  String get resetElarni => 'Сбросить Elarni';
+
+  @override
+  String get resetElarniHelp =>
+      'Сохранённые данные не удаётся прочитать. Сброс сохранит их в отдельном файле и начнёт с пустого списка.';
+
+  @override
+  String get resetElarniQuestion => 'Сбросить Elarni?';
+
+  @override
+  String get resetElarniBody =>
+      'Сохранённые данные Elarni на этом компьютере не удаётся прочитать. Сброс сохранит нечитаемый файл и начнёт с пустого списка: подписки, серверы и настройки придётся восстановить из копии или добавить заново. Провайдеры, которые считают устройства, увидят этот компьютер как новое устройство.';
+
+  @override
+  String get elarniWasReset =>
+      'Elarni сброшен. Восстановите копию или добавьте подписку.';
 
   @override
   String get chooseBackupAndRestore => 'Выбрать копию и восстановить';

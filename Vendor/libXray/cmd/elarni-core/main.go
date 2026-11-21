@@ -405,8 +405,9 @@ func logEvent(cursor *int64) any {
 
 // The storage lease also serves its owner's catalog reads and writes, one at a
 // time, so they need no core launch each. They keep the same lock, revision
-// check and atomic replacement. It also answers the unelevated DNS guard check
-// before each Windows connect. Any other command ends the lease.
+// check and atomic replacement; a reset sets an unreadable catalog aside the
+// same way. It also answers the unelevated DNS guard check before each Windows
+// connect. Any other command ends the lease.
 func serveCatalogLease(requests <-chan string, closed <-chan struct{}, output io.Writer, invoke func(string) response) int {
 	for {
 		select {
@@ -418,7 +419,8 @@ func serveCatalogLease(requests <-chan string, closed <-chan struct{}, output io
 				Method     string `json:"method"`
 			}
 			if json.Unmarshal([]byte(raw), &request) != nil || request.APIVersion != 1 ||
-				request.Method != "loadCatalog" && request.Method != "saveCatalog" && request.Method != "staleVPNGuard" {
+				request.Method != "loadCatalog" && request.Method != "saveCatalog" && request.Method != "setAsideCatalog" &&
+					request.Method != "staleVPNGuard" {
 				return 1
 			}
 			done := make(chan response, 1)

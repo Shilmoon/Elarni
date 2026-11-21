@@ -41,7 +41,11 @@ void main() {
     'system_proxy_taken':
         'Another program keeps changing the system proxy, so Elarni left it. Apps that follow the system proxy may not use the VPN. Use VPN mode, or stop the other program.',
     'storage_unavailable':
-        'Elarni could not read or save its catalog. Restart Elarni. If this continues, restore an encrypted backup.',
+        'Elarni could not read or save its data. Restart Elarni and check the free disk space.',
+    'storage_busy':
+        'Elarni’s data is in use by another copy of Elarni. Close the other copy or stop its background service. Elarni tries again by itself.',
+    'storage_corrupt':
+        'Elarni cannot read its saved data on this computer. Reset Elarni in Settings › Backup and repair, then restore a backup or add your subscriptions again.',
   };
 
   test('each backend notice code reads in the interface language', () {

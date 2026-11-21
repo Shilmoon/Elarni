@@ -405,6 +405,7 @@ extension _ProxyRuntime on DesktopProxy {
         storage = {
           'loadCatalog',
           'saveCatalog',
+          'setAsideCatalog',
           'staleVPNGuard',
         }.contains(method);
     final cancellable = !runtime && !session && !lease && !storage;

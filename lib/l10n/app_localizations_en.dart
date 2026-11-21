@@ -117,11 +117,31 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get issueStorageUnavailableRemedy =>
-      'Restart Elarni. If this continues, restore an encrypted backup.';
+      'Restart Elarni and check the free disk space.';
+
+  @override
+  String get issueStorageUnavailableLinuxRemedy =>
+      'Unlock your keyring and check that secret-tool is installed, then restart Elarni.';
 
   @override
   String get issueStorageUnavailable =>
-      'Elarni could not read or save its catalog.';
+      'Elarni could not read or save its data.';
+
+  @override
+  String get issueStorageBusyRemedy =>
+      'Close the other copy or stop its background service. Elarni tries again by itself.';
+
+  @override
+  String get issueStorageBusy =>
+      'Elarni’s data is in use by another copy of Elarni.';
+
+  @override
+  String get issueStorageCorruptRemedy =>
+      'Reset Elarni in Settings › Backup and repair, then restore a backup or add your subscriptions again.';
+
+  @override
+  String get issueStorageCorrupt =>
+      'Elarni cannot read its saved data on this computer.';
 
   @override
   String get issueBusyRemedy => 'Wait for it to finish, then retry.';
@@ -3017,6 +3037,24 @@ class AppLocalizationsEn extends AppLocalizations {
   @override
   String get backupRestored =>
       'Backup restored. Refresh subscription and routing data before connecting.';
+
+  @override
+  String get resetElarni => 'Reset Elarni';
+
+  @override
+  String get resetElarniHelp =>
+      'Saved data cannot be read. Reset sets it aside and starts empty.';
+
+  @override
+  String get resetElarniQuestion => 'Reset Elarni?';
+
+  @override
+  String get resetElarniBody =>
+      'Elarni’s saved data on this computer cannot be read. Reset keeps the unreadable file and starts with an empty list: subscriptions, servers and settings must be restored from a backup or added again. Providers that count devices will see this computer as a new device.';
+
+  @override
+  String get elarniWasReset =>
+      'Elarni was reset. Restore a backup or add a subscription.';
 
   @override
   String get chooseBackupAndRestore => 'Choose backup and restore';

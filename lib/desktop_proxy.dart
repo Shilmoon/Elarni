@@ -190,6 +190,11 @@ final class DesktopProxy {
   String? _coreVersion;
   ({Object? enabled, int at})? _vpnService;
   Timer? _timer, _initRetry;
+  // Why the last load failed, until one succeeds: its error code, and the
+  // revision of a stored catalog that decrypted but was not one ('' else).
+  // storageStatus reports them; resetStorage sets that catalog aside.
+  String? _initFailure;
+  String _rejectedRevision = '';
   void Function(String?)? _listener;
   bool _disposed = false, _storageLost = false;
   int _generation = 0;
@@ -360,6 +365,7 @@ final class DesktopProxy {
             _listener?.call(code);
         }
 
+        _rejectedRevision = '';
         final CatalogMap stored;
         try {
           if (_catalogIO == null) {
@@ -395,6 +401,7 @@ final class DesktopProxy {
             rethrow;
           } on Object {
             // Not a catalog, whatever it is: it stays on disk untouched.
+            _rejectedRevision = _revision;
             throw desktopError('storage_corrupt');
           }
           final migrated = _catalog!.migrateSessionLimits();
@@ -429,6 +436,8 @@ final class DesktopProxy {
           _automation.intent = false;
           _automation.status = 'unreadableConfiguration';
         }
+        _initFailure = null;
+        _rejectedRevision = '';
         if (!_disposed) {
           if ((Platform.isWindows || Platform.isLinux) && _platformIO == null) {
             _platform.setMethodCallHandler((call) async {
@@ -454,14 +463,59 @@ final class DesktopProxy {
           );
         }
       }().onError<Object>((error, stack) {
-        // A locked keyring or busy store at login must not need an app restart, but
-        // the UI's 1 Hz polling must not respawn the core or re-prompt every second.
-        _initRetry = Timer(
-          const Duration(seconds: 10),
-          () => _initializing = null,
-        );
+        _failInitialization(error);
         Error.throwWithStackTrace(error, stack);
       });
+
+  // A locked keyring or busy store at login must not need an app restart, but
+  // the UI's 1 Hz polling must not respawn the core or re-prompt every second.
+  void _failInitialization(Object error) {
+    _initFailure = error is PlatformException ? error.code : 'operation_failed';
+    _initRetry = Timer(const Duration(seconds: 10), () => _initializing = null);
+  }
+
+  // Only a catalog that cannot be read again is reset, never a busy store or
+  // a locked keyring that a retry or an unlock may still open.
+  bool get _resettable => !_storageLost && _initFailure == 'storage_corrupt';
+
+  CatalogMap _storageStatus() {
+    final code = _storageLost ? 'storage_unavailable' : _initFailure;
+    return {'code': code, 'resettable': _resettable};
+  }
+
+  // Sets the unreadable catalog aside in its folder, never deleting it, and
+  // loads again, which starts an empty catalog. The reset stands in for the
+  // load until that load ends, so neither a retry nor another command reads
+  // the store between the two.
+  Future<CatalogMap> _resetStorage() async {
+    // A load in flight decides whether the store is still unreadable.
+    await _initializing?.then<void>((_) {}, onError: (Object _) {});
+    if (_disposed) throw desktopError('cancelled');
+    if (!_resettable) throw desktopError('busy');
+    _initRetry?.cancel();
+    final rejected = _rejectedRevision;
+    final reset = () async {
+      final CatalogMap aside;
+      try {
+        // The lease of the failed load, or a new one if its core exited.
+        if (_catalogIO == null && _lease == null)
+          await _native('acquireCatalog', {});
+        aside = await _storage('setAsideCatalog', {'revision': rejected});
+      } on Object catch (error) {
+        _failInitialization(error);
+        rethrow;
+      }
+      _initializing = null;
+      await _initialize();
+      return <String, Object?>{
+        'setAside': aside['setAside'] == true,
+        'name': aside['name'] is String ? aside['name'] : null,
+        'state': _state,
+      };
+    }();
+    _initializing = reset;
+    return reset;
+  }
 
   Future<void> _retireAssets() async {
     if (!(Platform.isWindows || Platform.isLinux) ||
