@@ -1141,6 +1141,14 @@ class AppLocalizationsEn extends AppLocalizations {
   }
 
   @override
+  String get systemProxyChanged =>
+      'Another program changed the system proxy. Elarni set it again.';
+
+  @override
+  String get systemProxyTaken =>
+      'Another program keeps changing the system proxy, so Elarni left it. Apps that follow the system proxy may not use the VPN. Use VPN mode, or stop the other program.';
+
+  @override
   String get scheduledRefreshFailed =>
       'A scheduled subscription or routing refresh failed.';
 

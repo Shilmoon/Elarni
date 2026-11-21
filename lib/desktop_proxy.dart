@@ -786,12 +786,15 @@ final class DesktopProxy {
     await _syncSystemProxy();
   }
 
-  // The OS proxy follows a running System proxy session; any other state gives
-  // the user's own setting back. No elevated helper runs in this mode, so its
-  // kill switch is the setting itself: it stays on the listener, closed or
-  // not, while the session is down against the user's wish. Apps that follow
-  // the setting then get no connection instead of a direct one, until a
-  // reconnect, a disconnect or a quit.
+  // The OS proxy follows a running System proxy session, restarts included:
+  // a server switch, a settings change or failover keeps it on the listener,
+  // so apps that follow it never go direct in between. A first start points
+  // it only once its listener is up. Any other state gives the user's own
+  // setting back. No elevated helper runs in this mode, so its kill switch is
+  // the setting itself: it stays on the listener, closed or not, while the
+  // session is down against the user's wish. Apps that follow the setting
+  // then get no connection instead of a direct one, until a reconnect, a
+  // disconnect or a quit.
   Future<void> _syncSystemProxy() async {
     final settings = _catalog?.settings;
     final wanted =
@@ -801,8 +804,10 @@ final class DesktopProxy {
         settings.systemProxy &&
         switch (_state) {
           'connected' || 'reconnecting' || 'reasserting' => true,
-          // A restart keeps the setting; a first start waits for its listener.
-          'connecting' => settings.blockWithoutVPN && _proxyPort != null,
+          // Set only by a session that was up: a restart keeps the setting.
+          // The catalog is the running one until the restart succeeds, so the
+          // port is the one Elarni's listener had.
+          'connecting' => _proxyPort != null,
           // Never a port another program holds: the setting would hand it
           // this user's traffic.
           'failed' => settings.blockWithoutVPN && !_listenerTaken,

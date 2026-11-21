@@ -1153,6 +1153,14 @@ class AppLocalizationsRu extends AppLocalizations {
   }
 
   @override
+  String get systemProxyChanged =>
+      'Другая программа изменила системный прокси. Elarni настроил его снова.';
+
+  @override
+  String get systemProxyTaken =>
+      'Другая программа раз за разом меняет системный прокси, поэтому Elarni оставил его ей. Приложения, которые его учитывают, могут работать в обход VPN. Включите «Системный VPN» или остановите другую программу.';
+
+  @override
   String get scheduledRefreshFailed =>
       'Не удалось выполнить плановое обновление подписки или маршрутизации.';
 

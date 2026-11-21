@@ -525,6 +525,8 @@
       }
     }
   },
+  "systemProxyChanged": "Another program changed the system proxy. Elarni set it again.",
+  "systemProxyTaken": "Another program keeps changing the system proxy, so Elarni left it. Apps that follow the system proxy may not use the VPN. Use VPN mode, or stop the other program.",
   "scheduledRefreshFailed": "A scheduled subscription or routing refresh failed.",
   "groupSelectionFailed": "Group selection failed. The saved selection was restored.",
   "serverIpPreferenceNotApplied": "Could not apply the server IP preference.",

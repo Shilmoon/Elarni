@@ -164,6 +164,8 @@ String listenerNotice(String value) {
     'connection_stopped_repair' => l10n.connectionStoppedRepair,
     'vpn_dns_release_failed' => l10n.windowsDnsNotRestored,
     'system_proxy_restore_failed' => l10n.systemProxyNotRestored,
+    'system_proxy_changed' => l10n.systemProxyChanged,
+    'system_proxy_taken' => l10n.systemProxyTaken,
     _ => failureText(value) ?? value,
   };
 }

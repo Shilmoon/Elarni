@@ -1994,6 +1994,18 @@ abstract class AppLocalizations {
   /// **'The system proxy could not be set. Apps can still use the HTTP proxy at 127.0.0.1:{port}.'**
   String systemProxyNotSet(Object port);
 
+  /// No description provided for @systemProxyChanged.
+  ///
+  /// In en, this message translates to:
+  /// **'Another program changed the system proxy. Elarni set it again.'**
+  String get systemProxyChanged;
+
+  /// No description provided for @systemProxyTaken.
+  ///
+  /// In en, this message translates to:
+  /// **'Another program keeps changing the system proxy, so Elarni left it. Apps that follow the system proxy may not use the VPN. Use VPN mode, or stop the other program.'**
+  String get systemProxyTaken;
+
   /// No description provided for @scheduledRefreshFailed.
   ///
   /// In en, this message translates to:
