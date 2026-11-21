@@ -11,6 +11,11 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
   disconnecting, and Windows, Linux, macOS and Android say that the server changed (iPhone
   already did). On Android only an update you start says so; a scheduled one changes the
   server without a word, as before.
+- A subscription update that removes the server an app is routed through in Per-app routing
+  now applies while connected: the connection keeps its settings, and a notice says to choose
+  another server for that app. Until now every update of that subscription, manual or
+  scheduled, failed until the per-app rule was changed. macOS; Windows, Linux and Android
+  already applied it.
 
 ## 0.6.2 - 2026-11-18
 

@@ -208,6 +208,7 @@ struct NativeControlChecks {
     await record { try await otherSubscriptionAssetsCheck(defaults: defaults) }
     await record { try await crossSubscriptionRecoveryCheck(defaults: defaults) }
     await record { try await perAppTargetCheck(defaults: defaults) }
+    await record { try await perAppTargetRefreshCheck(defaults: defaults) }
     await record { try await failedDeletionCheck(defaults: defaults) }
     await record { try await coreLogCheck(defaults: defaults) }
     await record { try await nodeConfigCheck(defaults: defaults) }
@@ -927,6 +928,93 @@ struct NativeControlChecks {
       throw Failure(message: "a restore did not follow the per-app target to its renumbered server")
     }
     print("PASS a catalog restore keeps per-app server targets on their renumbered servers")
+  }
+
+  // While connected, an update that drops the server an app is routed through still publishes, as
+  // on Windows, Linux and Android: the tunnel keeps its plan and that server's secret, the refresh says
+  // why, and once nothing runs the next Connect names the rule.
+  static func perAppTargetRefreshCheck(defaults: UserDefaults) async throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent("elarni-per-app-refresh-\(UUID())")
+    defer { try? FileManager.default.removeItem(at: directory) }
+    var values: [String: Data] = [:]
+    func key(_ query: CFDictionary) -> String { (query as NSDictionary)[kSecAttrAccount] as! String }
+    let secrets = SubscriptionSecretAccess(add: { query, _ in
+      let account = key(query)
+      guard values[account] == nil else { return errSecDuplicateItem }
+      values[account] = (query as NSDictionary)[kSecValueData] as? Data
+      return errSecSuccess
+    }, copy: { query, output in
+      guard let data = values[key(query)] else { return errSecItemNotFound }
+      output?.pointee = data as CFData; return errSecSuccess
+    }, update: { query, attributes in
+      values[key(query)] = (attributes as NSDictionary)[kSecValueData] as? Data; return errSecSuccess
+    }, delete: { query in values.removeValue(forKey: key(query)); return errSecSuccess },
+      accessGroup: { "TEST.com.elarni.per-app-refresh-checks" })
+    let store = try SubscriptionStore(directory: directory,
+      routing: RoutingStore(directory: directory.appendingPathComponent("routing")), secretAccess: secrets)
+    store.publishRefresh = { candidate in
+      _ = try store.beginPublication(candidate); try store.finishPublication(candidate)
+    }
+    let id = try store.registerProfiles("socks://127.0.0.1:1080#Selected\nsocks://127.0.0.1:1081#Routed")
+    _ = try await store.refresh(id: id)
+    let groups = store.snapshot()["subscriptions"] as! [[String: Any]]
+    let nodes = groups[0]["nodes"] as! [[String: Any]]
+    guard nodes.count == 2 else { throw Failure(message: "per-app refresh fixture import") }
+    let selected = nodes[0]["id"] as! String, routed = nodes[1]["id"] as! String
+    try store.commitSelection(nodeID: selected)
+    let routedRef = try store.outboundRef(nodeID: routed)
+    try TunnelCommandCoordinator(defaults: defaults).persist(.connected)
+    defer { try? TunnelCommandCoordinator(defaults: defaults).persist(.disconnected) }
+    let manager = SwitchManager(plan: Data("{}".utf8))
+    manager.fixtureSession.fixtureStatus = .disconnected
+    let messenger = ControlMessenger()
+    let controller = TunnelMethodChannel(messenger: messenger, defaults: defaults, observesSystem: false,
+      makeSubscriptions: { store }, loadPreferences: { [manager] })
+    defer { withExtendedLifetime(controller) {} }
+    let savedSettings = defaults.data(forKey: "ElarniTunnelSettingsV1")
+    defer {
+      defaults.set(savedSettings, forKey: "ElarniTunnelSettingsV1")
+      defaults.removeObject(forKey: TunnelMethodChannel.automationKey)
+    }
+    let app = "/Applications/A.app/"
+    _ = try await messenger.call("updateTunnelSettings", arguments: ["xrayTunEnabled": true, "includeAllNetworks": false,
+      "perAppMode": "bypass", "perAppProcesses": [app], "perAppTargets": [app: "node:\(routed)"]])
+    func savedPlan() -> Data? {
+      (manager.protocolConfiguration as? NETunnelProviderProtocol)?.providerConfiguration?["planPayload"] as? Data
+    }
+    let running = savedPlan()
+    guard let running, String(decoding: running, as: UTF8.self).contains("server:\(routedRef)") else {
+      throw Failure(message: "the per-app refresh fixture's plan does not route the app through its server")
+    }
+    // The tunnel now runs this plan, and the provider's next list leaves out the app's server.
+    manager.fixtureSession.fixtureStatus = .connected
+    values["subscription.\(id).source"] = Data("socks://127.0.0.1:1080#Selected".utf8)
+    let reply = try await messenger.call("refreshSubscription", arguments: ["id": id])
+    let notice = "A server that an app is routed through is gone from its subscription. The connection keeps the old settings; " +
+      "choose another server for that app in Per-app routing."
+    guard store.names(nodeID: routed) == nil, store.selectedNodeID() == selected, reply["notice"] as? String == notice,
+          !store.publicationInProgress, !store.runtimeReconciliationRequired else {
+      throw Failure(message: "a refresh that dropped a per-app target's server was not published with its notice: " +
+        "\(String(describing: reply["notice"]))")
+    }
+    guard manager.fixtureSession.status == .connected, manager.fixtureSession.switches == 0, savedPlan() == running,
+          TunnelCommandCoordinator(defaults: defaults).intent == .connected, values[routedRef] != nil else {
+      throw Failure(message: "a refresh that dropped a per-app target's server changed the running tunnel, its plan " +
+        "or intent, or took that server's secret: \(manager.fixtureSession.switches) switches")
+    }
+    // An edit is not a provider's update: it still has to reach the running tunnel, so it is refused.
+    do {
+      _ = try await messenger.call("setNodeIPPreference", arguments: ["nodeId": selected, "preference": "ipv4"])
+      throw Failure(message: "a server edit was saved while a per-app target is missing and the tunnel runs")
+    } catch let failure as Failure where failure.message == "setNodeIPPreference: per_app_target_missing" {}
+    guard savedPlan() == running, manager.fixtureSession.switches == 0, !store.publicationInProgress else {
+      throw Failure(message: "a refused server edit changed the running tunnel or left a publication open")
+    }
+    _ = try await messenger.call("disconnect")
+    guard values[routedRef] == nil else { throw Failure(message: "the dropped per-app target's secret outlived the tunnel") }
+    do { _ = try await messenger.call("connect"); throw Failure(message: "Connect accepted a per-app target a refresh dropped") }
+    catch let failure as Failure where failure.message == "connect: per_app_target_missing" {}
+    print("PASS a refresh that drops a per-app target's server publishes while connected, keeps the tunnel and says why")
   }
 
   // The log level reaches the extension through the shared container without a reconnect. A running

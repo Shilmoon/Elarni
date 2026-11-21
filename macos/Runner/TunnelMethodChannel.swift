@@ -28,6 +28,9 @@ final class TunnelMethodChannel {
   var automationCandidateFailures: [String: String] = [:]
   /// Per subscription, the last publication's word on the server it replaced, until its refresh reports it.
   private var refreshNotices: [String: String] = [:]
+  /// True while a server edit publishes. Unlike a provider's update, an edit that cannot reach the running
+  /// tunnel is refused. The command owner's task inherits the value.
+  @TaskLocal private static var publishingEdit = false
   var healthDiagnostics: [ProbeDiagnostic] = []
   var verifiedHealth: (node: String, at: Double, epoch: UInt64)?
   /// The last failed health check counted only because another server may take over (`countsAgainstServer`).
@@ -114,15 +117,20 @@ final class TunnelMethodChannel {
             guard let nodeID = arguments["nodeId"] as? String,
                   arguments["preference"] == nil || arguments["preference"] is NSNull || arguments["preference"] is String
             else { throw SubscriptionError.invalidFeed }
-            result(try await self.subscriptionStore().setNodeIPPreference(nodeID: nodeID,
-              preference: arguments["preference"] as? String).channelMap)
+            let store = try self.subscriptionStore()
+            result(try await Self.$publishingEdit.withValue(true) {
+              try await store.setNodeIPPreference(nodeID: nodeID, preference: arguments["preference"] as? String)
+            }.channelMap)
             return
           }
           if call.method == "selectProfileGroup" {
             let arguments = try Self.arguments(call)
             guard let nodeID = arguments["nodeId"] as? String, let group = arguments["group"] as? String,
                   let choice = arguments["choice"] as? String else { throw SubscriptionError.invalidFeed }
-            result(try await self.subscriptionStore().selectProfileGroup(nodeID: nodeID, group: group, choice: choice).channelMap)
+            let store = try self.subscriptionStore()
+            result(try await Self.$publishingEdit.withValue(true) {
+              try await store.selectProfileGroup(nodeID: nodeID, group: group, choice: choice)
+            }.channelMap)
             return
           }
           // Published like a group choice, which takes the command owner itself.
@@ -131,7 +139,10 @@ final class TunnelMethodChannel {
             guard let nodeID = arguments["nodeId"] as? String, let content = arguments["content"] as? String else {
               throw SubscriptionError.invalidFeed
             }
-            result(try await self.subscriptionStore().replaceNodeConfig(nodeID: nodeID, content: content))
+            let store = try self.subscriptionStore()
+            result(try await Self.$publishingEdit.withValue(true) {
+              try await store.replaceNodeConfig(nodeID: nodeID, content: content)
+            })
             return
           }
           if call.method == "importClientProfiles" {
@@ -1216,6 +1227,7 @@ final class TunnelMethodChannel {
     var applied = false
     var stopped = false
     var stoppedIntent = false
+    var perAppTargetGone = false
     do {
       try await store.routing.prepareAssets(subscriptionID: store.selectedSubscriptionID())
       if removed {
@@ -1270,12 +1282,24 @@ final class TunnelMethodChannel {
         }
       } else if let node = store.selectedNodeID() {
         let revision = try store.routing.runtimeRevision(subscriptionID: store.subscriptionID(nodeID: node))
-        if let plan = try planUnlessTargetMissing(secretRef: store.outboundRef(nodeID: node),
-                                                  routingRevision: revision, active: active) {
-          try await applyRefreshPlan(plan, previous: previousPlan, selected: active ? selected : nil, health: nil)
+        let plan: Data?
+        do {
+          plan = try planUnlessTargetMissing(secretRef: store.outboundRef(nodeID: node),
+                                             routingRevision: revision, active: active)
+        } catch RunnerTunnelError.perAppTargetMissing where active && !Self.publishingEdit {
+          // An app's server is gone. As on Windows, Linux and Android the update stands and the tunnel
+          // runs on: nothing reaches the provider, and that server's secret and routing files stay for
+          // it until a Stop. The next Connect names the rule.
+          plan = nil
+          perAppTargetGone = true
         }
-        applied = true
-        released = true
+        if !perAppTargetGone {
+          if let plan {
+            try await applyRefreshPlan(plan, previous: previousPlan, selected: active ? selected : nil, health: nil)
+          }
+          applied = true
+          released = true
+        }
       }
       try Task.checkCancellation()
       if stopped, commands.intent == .connected {
@@ -1300,6 +1324,9 @@ final class TunnelMethodChannel {
       refreshNotices[candidate.subscriptionID] = active
         ? String(localized: "\(previousNames.server) is gone from \(previousNames.subscription). Connected to \(next.server).")
         : String(localized: "\(previousNames.server) is gone from \(previousNames.subscription). \(next.server) is selected now.")
+    }
+    if perAppTargetGone {
+      refreshNotices[candidate.subscriptionID] = String(localized: "A server that an app is routed through is gone from its subscription. The connection keeps the old settings; choose another server for that app in Per-app routing.")
     }
     if released {
       try? store.reclaimRetiredSecrets()
