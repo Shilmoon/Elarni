@@ -301,6 +301,9 @@ void main() {
         corePath: 'unused-core',
         domainPath: 'unused-domain',
         catalogIO: (method, payload) async {
+          // Windows and Linux also ask the lease about a left-over VPN block
+          // once the catalog is loaded; that is no catalog command.
+          if (method == 'staleVPNGuard') return {'stale': false};
           calls.add(method);
           payloads.add(payload);
           switch (method) {
