@@ -1551,10 +1551,12 @@ extension _HomeController on _ElarniHomeState {
               }.contains(_state) &&
               state == TunnelState.disconnected)
             _connectFailed = true;
-          if (widget.desktopCore &&
-              !_busy &&
-              _state == TunnelState.connected &&
-              state == TunnelState.failed) {
+          // The macOS provider keeps its routes when its core stops, so
+          // the system says reconnecting until the app reads the failure.
+          if (!_busy &&
+              state == TunnelState.failed &&
+              (_state == TunnelState.connected ||
+                  !widget.desktopCore && _state == TunnelState.reasserting)) {
             _message = l10n.connectionStoppedUnexpectedly;
           }
           if (_state != state) {

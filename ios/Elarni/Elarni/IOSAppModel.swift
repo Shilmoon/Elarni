@@ -1357,6 +1357,8 @@ final class IOSAppModel {
           let node = selected, config.nodeIDs.contains(node.id) else { return }
     let now = ProcessInfo.processInfo.systemUptime
     guard recovery.online else { recoveryStatus = String(localized: "Waiting for network"); return }
+    // A spent episode starts over by itself after a wait, as on the other platforms.
+    if recovery.episode.exhausted && recovery.rearmUnattended(now: now, intent: true) { try? saveEpisode() }
     guard !recovery.episode.exhausted else { recoveryStatus = String(localized: "Retry limit reached. Tap Connect to retry."); return }
     // A failed provider reports reasserting until it is restarted; treat it as down.
     let failed = vpn.failed

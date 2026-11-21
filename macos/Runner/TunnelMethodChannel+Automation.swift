@@ -232,6 +232,8 @@ extension TunnelMethodChannel {
         if [.disconnected, .invalid].contains(connection.status) {
           self.invalidateAutomation()
         }
+        // A core that stops by itself leaves the provider reasserting behind its routes.
+        if connection.status == .reasserting, let selected = self.manager { self.restartStoppedCore(selected) }
         if self.automationWork == nil { self.scheduleAutomation(immediate: true) }
       }
     })
@@ -257,8 +259,37 @@ extension TunnelMethodChannel {
     }
     if automation.sleeping { automationStatus = "sleeping"; return false }
     if !automation.online && !canRestartProviderWithoutPath() { automationStatus = "offline"; return false }
-    if automation.episode.exhausted { automationStatus = "exhausted"; return false }
+    if automation.episode.exhausted {
+      // A spent episode starts over by itself after a wait, as on the other platforms.
+      guard !automationPaused, automationWork == nil,
+            automation.rearmUnattended(now: automationNow(), intent: true) else {
+        automationStatus = "exhausted"
+        return false
+      }
+      automationFailover = false
+      saveEpisode()
+    }
     return !automationPaused && automationWork == nil
+  }
+
+  /// Nothing else asks again while an exhausted episode waits, so a timer ends the wait.
+  @MainActor
+  private func scheduleUnattendedRearm() {
+    guard automationStatus == "exhausted", let at = automation.unattendedRearmAt, at > automationNow() else {
+      automationRearmTimer?.cancel()
+      automationRearmTimer = nil
+      return
+    }
+    if let timer = automationRearmTimer, !timer.isCancelled, automationRearmDue == at { return }
+    automationRearmTimer?.cancel()
+    automationRearmDue = at
+    automationRearmTimer = Task { @MainActor [weak self] in
+      do { try await self?.automationSleep(max(0, at - (self?.automationNow() ?? at))) }
+      catch { return }
+      guard let self, !Task.isCancelled else { return }
+      self.automationRearmTimer = nil
+      self.scheduleAutomation()
+    }
   }
 
   @MainActor
@@ -267,8 +298,11 @@ extension TunnelMethodChannel {
     guard automationMayRun() else {
       automationTimer?.cancel()
       automationTimer = nil
+      scheduleUnattendedRearm()
       return
     }
+    automationRearmTimer?.cancel()
+    automationRearmTimer = nil
     let now = self.automationNow()
     let due = automation.retryAt ?? (immediate ? now : automation.healthAt ?? now)
     let epoch = automation.epoch
@@ -313,6 +347,31 @@ extension TunnelMethodChannel {
             self.automation.scheduleHealth(now: self.automationNow(), jitter: self.automationJitter())
           }
         }
+      }
+    }
+  }
+
+  /// With recovery off nothing else restarts a core that stopped by itself, so the app does, at
+  /// most twice in ten minutes (CoreRestartBudget); recovery, when on, restarts it within its own
+  /// budget. Only live, behind the routes the provider kept: a restart that fails leaves the
+  /// connection failed, never open.
+  @MainActor
+  func restartStoppedCore(_ selected: NETunnelProviderManager) {
+    guard coreRestartWork == nil, commands.intent == .connected, !automationConfiguration.enabled,
+          Self.liveRestartPlan(selected) != nil, coreRestarts.allows(now: automationNow()) else { return }
+    coreRestartWork = Task { @MainActor [weak self] in
+      guard let self else { return }
+      defer { self.coreRestartWork = nil }
+      try? await self.commands.perform(automatic: true) {
+        let selected = try await self.loadManager()
+        guard self.commands.intent == .connected, !self.automationConfiguration.enabled,
+              selected.connection.status == .reasserting else { return }
+        // The provider refuses a switch out of quarantine or after a packet bridge failure.
+        let metrics = try await self.runtimeMetrics()
+        guard metrics["state"] as? String == "protectedFailure", metrics["resourceRecoveryRequired"] as? Bool != true,
+              Self.liveRestartPlan(selected) != nil, self.coreRestarts.take(now: self.automationNow()) else { return }
+        let restarted = try await self.restartFailedCore(selected)
+        DiagnosticLog.record("app_state", ["core_restarted": restarted ? 1 : 0])
       }
     }
   }

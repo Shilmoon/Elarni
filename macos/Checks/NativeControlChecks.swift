@@ -539,6 +539,71 @@ struct NativeControlChecks {
     await record { try await fixedAutomationSelectionCheck(store: store, defaults: defaults, plan: candidate, pinned: second, other: first) }
     await record { try await refusedAutomaticSwitchCheck(store: store, defaults: defaults, nodes: [first, second]) }
     await record { try await extensionVersionCheck(store: store, defaults: defaults, plan: candidate) }
+    await record { try await stoppedCoreCheck(store: store, defaults: defaults, plan: candidate) }
+  }
+
+  // The provider keeps its routes when its core stops by itself and the system says reasserting,
+  // as during a server switch. The app reads the provider to tell them apart.
+  static func stoppedCoreCheck(store: SubscriptionStore, defaults: UserDefaults, plan: Data) async throws {
+    let kept = defaults.object(forKey: "ElarniConnectionIntentV1")
+    defer { defaults.set(kept, forKey: "ElarniConnectionIntentV1") }
+    try TunnelCommandCoordinator(defaults: defaults).persist(.connected)
+    let manager = SwitchManager(plan: plan)
+    let session = manager.fixtureSession
+    let messenger = ControlMessenger()
+    let controller = TunnelMethodChannel(messenger: messenger, defaults: defaults, observesSystem: false,
+      makeSubscriptions: { store }, loadPreferences: { [manager] })
+    defer { withExtendedLifetime(controller) {} }
+    func state() async throws -> String { try await messenger.call("state")["state"] as? String ?? "" }
+    func stop() { session.fixtureStatus = .reasserting; session.providerState = "protectedFailure" }
+    func restarted(_ count: Int) async throws {
+      while session.switches < count || controller.coreRestartWork != nil { await Task.yield() }
+      guard try await state() == "connected" else { throw Failure(message: "restart \(count) left the core stopped") }
+    }
+    session.fixtureStatus = .reasserting
+    session.providerState = "reasserting"
+    guard try await state() == "reasserting", controller.coreRestartWork == nil else {
+      throw Failure(message: "a server switch in progress was reported as a stopped core")
+    }
+    // With recovery off the app restarts the core itself, live: the routes stay and nothing stops.
+    stop()
+    guard try await state() == "failed" else { throw Failure(message: "a core that stopped by itself showed as reconnecting") }
+    try await restarted(1)
+    stop()
+    guard try await state() == "failed" else { throw Failure(message: "a second stop was not reported") }
+    try await restarted(2)
+    // A third stop within ten minutes stays failed.
+    stop()
+    guard try await state() == "failed", controller.coreRestartWork == nil, session.switches == 2 else {
+      throw Failure(message: "a core restarted more than twice in ten minutes")
+    }
+    // Connect still restarts it, past that bound.
+    _ = try await messenger.call("connect")
+    guard session.switches == 3, session.starts == 0, try await state() == "connected" else {
+      throw Failure(message: "Connect left a stopped core: \(session.switches) switches, \(session.starts) starts")
+    }
+    // Recovery, when on, restarts the core within its own budget.
+    controller.coreRestarts = CoreRestartBudget()
+    controller.automationConfiguration.enabled = true
+    stop()
+    guard try await state() == "failed", controller.coreRestartWork == nil, session.switches == 3 else {
+      throw Failure(message: "the app restarted a core that recovery owns")
+    }
+    controller.automationConfiguration.enabled = false
+    // Xray's own TUN cannot switch live, and a stopped provider would open the routes, so it stays failed.
+    var xray = try JSONSerialization.jsonObject(with: plan) as! [String: Any]
+    xray["backend"] = "xrayTun"
+    let configuration = manager.protocolConfiguration as! NETunnelProviderProtocol
+    configuration.providerConfiguration = ["planPayload": try JSONSerialization.data(withJSONObject: xray)]
+    guard try await state() == "failed", controller.coreRestartWork == nil, session.switches == 3 else {
+      throw Failure(message: "the app restarted Xray's own TUN by itself")
+    }
+    // Stop releases the routes of a failed provider.
+    _ = try await messenger.call("disconnect")
+    guard session.fixtureStatus == .disconnected, try await state() == "disconnected" else {
+      throw Failure(message: "Stop left a failed provider running")
+    }
+    print("PASS a core that stopped by itself shows as failed, restarts live twice in ten minutes, then on Connect")
   }
 
   // A stale build can register its own extension, which macOS then runs for this app; the app says so once per instance.
@@ -1317,6 +1382,8 @@ final class SwitchSession: NETunnelProviderSession {
   var instanceID = "fixture"
   // As NativeControlInfo.plist gives this check binary; nil models an extension from before the field.
   var extensionVersion: String? = "1.2.3+45"
+  // The provider's lifecycle in its state answer (ProviderLifecycleState.label); nil leaves it out.
+  var providerState: String?
   weak var owner: NEVPNManager?
   // As the system does, a stop under a Connect rule shows disconnected once, then the tunnel is back.
   var onDemandRestarts = 0
@@ -1341,6 +1408,7 @@ final class SwitchSession: NETunnelProviderSession {
     if messageData == Data("state".utf8) {
       var state = identity
       state["extensionVersion"] = extensionVersion
+      state["state"] = providerState
       responseHandler?(try JSONSerialization.data(withJSONObject: state)); return
     }
     let request = try JSONSerialization.jsonObject(with: messageData) as! [String: Any]
@@ -1349,6 +1417,11 @@ final class SwitchSession: NETunnelProviderSession {
     case "switch":
       switches += 1
       response = ["code": switchCode, "digest": (request["envelope"] as! [String: Any])["digest"]!]
+      // A switch out of a protected failure starts a new core behind the routes the provider kept.
+      if providerState == "protectedFailure", ["switched", "restored"].contains(switchCode) {
+        providerState = "connected"
+        fixtureStatus = .connected
+      }
     case "prepareStop": response["code"] = stopCode
     case "cancelSwitch": response = [:]
     case "logs":
