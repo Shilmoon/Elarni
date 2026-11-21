@@ -162,7 +162,7 @@ Future<void> main(List<String> arguments) async {
           ? null
           : ({required bool restart}) async {
               try {
-                // Block traffic without VPN covers the gap until the new
+                // The kill switch covers the gap until the new
                 // build connects.
                 await close(keepBlock: true);
               } on Object {
@@ -193,7 +193,7 @@ Future<void> main(List<String> arguments) async {
 
 /// Answers a quit of the window on Windows and Linux: puts the user's proxy
 /// setting back, then disconnects, which stops the VPN helper normally and lifts
-/// Block traffic without VPN. A disconnect that fails or takes longer than
+/// the kill switch. A disconnect that fails or takes longer than
 /// [timeout] does not keep the app from quitting.
 Future<AppExitResponse> quitDesktop(
   Future<void> Function() releaseSystemProxy,

@@ -881,8 +881,8 @@ final class DesktopProxy {
     if (code != null) _listener?.call(code);
   }
 
-  /// Ends the connection and the helpers. With Block traffic without VPN the
-  /// helper lifts its kill switch first; [keepBlock] (a quit for an update)
+  /// Ends the connection and the helpers. With the kill switch on, the
+  /// helper lifts its block first; [keepBlock] (a quit for an update)
   /// leaves it in place until the new build connects.
   Future<void> dispose({bool keepBlock = false}) async {
     if (_disposed) return;

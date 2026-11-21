@@ -519,8 +519,13 @@ void main() {
         messenger.setMockMethodCallHandler(DesktopIntegration.channel, (
           call,
         ) async {
+          // Home's groups start closed, so the start tests no server and
+          // leaves Test all to the subscription's page.
           if (call.method == 'getPreferences')
-            return jsonEncode({'pingTimeout': timeout});
+            return jsonEncode({
+              'pingTimeout': timeout,
+              'closedGroups': ['daily', 'travel'],
+            });
           return null;
         });
         addTearDown(
@@ -552,8 +557,7 @@ void main() {
         await tester.pumpAndSettle();
         // The rows read as before: each failure, whatever its reason, is unavailable.
         expect(find.text('Unavailable'), findsNWidgets(3));
-        await tester.tap(find.byKey(const ValueKey('select-servers:daily')));
-        await tester.pumpAndSettle();
+        await subscriptionMenu(tester, 'daily', 'Select servers');
         await tester.tap(find.text('Select unreachable'));
         await tester.pumpAndSettle();
         bool ticked(String id) =>
