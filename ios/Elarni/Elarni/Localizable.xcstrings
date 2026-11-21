@@ -443,12 +443,32 @@
         }
       }
     },
+    "Add" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Добавить"
+          }
+        }
+      }
+    },
     "Add DNS host" : {
       "localizations" : {
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Добавить DNS-хост"
+          }
+        }
+      }
+    },
+    "Add by name" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Добавить по имени"
           }
         }
       }
@@ -1237,6 +1257,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Подключено"
+          }
+        }
+      }
+    },
+    "Connected now" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Подключена сейчас"
           }
         }
       }
@@ -2539,6 +2569,16 @@
         }
       }
     },
+    "For a network that is not connected now" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Для сети, к которой вы сейчас не подключены"
+          }
+        }
+      }
+    },
     "Fragment interval" : {
       "localizations" : {
         "ru" : {
@@ -3134,6 +3174,16 @@
         }
       }
     },
+    "Joining a trusted network leaves the VPN as it is." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "При входе в доверенную сеть VPN остаётся как есть."
+          }
+        }
+      }
+    },
     "Keep domain identity with Fake DNS" : {
       "localizations" : {
         "ru" : {
@@ -3599,6 +3649,16 @@
         }
       }
     },
+    "Network name" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Имя сети"
+          }
+        }
+      }
+    },
     "Never" : {
       "localizations" : {
         "ru" : {
@@ -3739,6 +3799,16 @@
         }
       }
     },
+    "None. Every Wi-Fi network connects." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Нет. Подключение в любой сети Wi-Fi."
+          }
+        }
+      }
+    },
     "Not configured" : {
       "localizations" : {
         "ru" : {
@@ -3775,6 +3845,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Не указано"
+          }
+        }
+      }
+    },
+    "Not trusted. The VPN connects here." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Не доверенная. VPN здесь подключается."
           }
         }
       }
@@ -3865,16 +3945,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "По одному имени хоста на строку, не больше 8. Токен вашей подписки тоже будет отправляться на эти хосты. Добавляйте только хосты, которым доверяете."
-          }
-        }
-      }
-    },
-    "One network name per line. Joining one of these leaves the VPN as it is." : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "По одному имени сети на строку. При подключении к одной из них VPN остаётся как есть."
           }
         }
       }
@@ -4686,6 +4756,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Убрать"
+          }
+        }
+      }
+    },
+    "Remove %@" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Удалить %@"
           }
         }
       }
@@ -6475,6 +6555,26 @@
         }
       }
     },
+    "Trust" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Доверять"
+          }
+        }
+      }
+    },
+    "Trusted" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Доверенные"
+          }
+        }
+      }
+    },
     "Trusted Wi-Fi" : {
       "localizations" : {
         "ru" : {
@@ -6491,6 +6591,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Доверенные сети Wi-Fi"
+          }
+        }
+      }
+    },
+    "Trusted. The VPN stays as it is here." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Доверенная. VPN здесь остаётся как есть."
           }
         }
       }

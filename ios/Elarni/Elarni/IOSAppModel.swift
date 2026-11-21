@@ -1,6 +1,7 @@
 import CryptoKit
 import Foundation
 import Network
+import NetworkExtension
 import Observation
 import Security
 import UIKit
@@ -801,6 +802,19 @@ final class IOSAppModel {
     let rules = (compiled["routing"] as? [String: Any])?["rules"] as? [[String: Any]] ?? []
     guard !rules.contains(where: { ($0["process"] as? [String])?.isEmpty == false }) else { throw IOSAppError.unsupportedProcessRouting }
     return compiled
+  }
+
+  /// The joined Wi-Fi network's name, or nil without one. iOS tells it to an app that holds the Access Wi-Fi Information
+  /// entitlement and has a VPN configuration installed, which is Elarni once it has connected.
+  func joinedWiFi() async -> String? {
+#if DEBUG
+    if isolation != nil {
+      let args = ProcessInfo.processInfo.arguments
+      return args.firstIndex(of: "--joined-wifi").flatMap { args.indices.contains($0 + 1) ? args[$0 + 1] : nil }
+    }
+#endif
+    guard let name = await NEHotspotNetwork.fetchCurrent()?.ssid, !name.isEmpty else { return nil }
+    return name
   }
 
   func saveSettings(_ next: IOSTunnelSettings) async throws {
