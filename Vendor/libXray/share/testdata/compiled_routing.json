@@ -308,7 +308,7 @@
     "policy": {
       "levels": {
         "0": {
-          "connIdle": 300,
+          "connIdle": 1800,
           "downlinkOnly": 0
         }
       },
