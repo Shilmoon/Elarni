@@ -101,6 +101,18 @@ func TestSniffedNameIsRoutedBeforeTheDialedAddress(t *testing.T) {
 		{TargetTag: &RoutingRule_Tag{Tag: "direct"}, Ip: home},
 		{TargetTag: &RoutingRule_Tag{Tag: "block"}, Networks: all, Fallback: true},
 	}
+	// A rule set's own catch-all is no fallback rule, and a rule may read neither a name nor an
+	// address: neither hides the IP rules ahead of it from a named connection.
+	provider := []*RoutingRule{
+		{TargetTag: &RoutingRule_Tag{Tag: "proxy"}, Ip: listed},
+		{TargetTag: &RoutingRule_Tag{Tag: "udp"}, Networks: []net.Network{net.Network_UDP}},
+		{TargetTag: &RoutingRule_Tag{Tag: "direct"}, Domain: site},
+		{TargetTag: &RoutingRule_Tag{Tag: "block"}, Networks: all},
+		{TargetTag: &RoutingRule_Tag{Tag: "direct"}, Ip: home},
+	}
+	quic := func(ip, name string) *session.Outbound {
+		return &session.Outbound{Target: net.UDPDestination(net.ParseAddress(ip), 443), RouteTarget: net.UDPDestination(net.DomainAddress(name), 443)}
+	}
 	sniffed := func(ip, name string) *session.Outbound {
 		outbound := &session.Outbound{Target: net.TCPDestination(net.ParseAddress(ip), 443)}
 		if name != "" {
@@ -111,21 +123,27 @@ func TestSniffedNameIsRoutedBeforeTheDialedAddress(t *testing.T) {
 	for _, test := range []struct {
 		name     string
 		strategy Config_DomainStrategy
+		rules    []*RoutingRule
 		outbound *session.Outbound
 		tag      string
 	}{
-		{"a later domain rule wins over an earlier IP rule", Config_IpIfNonMatch, sniffed("198.51.100.7", "www.site.test"), "direct"},
-		{"an unlisted name is routed by the dialed address", Config_IpIfNonMatch, sniffed("198.51.100.7", "other.test"), "proxy"},
-		{"the addresses of a decoy name are not read", Config_IpIfNonMatch, sniffed("192.0.2.9", "decoy.test"), "block"},
-		{"no name: one pass by address", Config_IpIfNonMatch, sniffed("198.51.100.7", ""), "proxy"},
-		{"a private address keeps the written order", Config_IpIfNonMatch, sniffed("192.168.1.5", "www.site.test"), "proxy"},
-		{"AsIs keeps the written order", Config_AsIs, sniffed("198.51.100.7", "www.site.test"), "proxy"},
-		{"IPOnDemand keeps the written order", Config_IpOnDemand, sniffed("198.51.100.7", "www.site.test"), "proxy"},
+		{"a later domain rule wins over an earlier IP rule", Config_IpIfNonMatch, rules, sniffed("198.51.100.7", "www.site.test"), "direct"},
+		{"an unlisted name is routed by the dialed address", Config_IpIfNonMatch, rules, sniffed("198.51.100.7", "other.test"), "proxy"},
+		{"the addresses of a decoy name are not read", Config_IpIfNonMatch, rules, sniffed("192.0.2.9", "decoy.test"), "block"},
+		{"no name: one pass by address", Config_IpIfNonMatch, rules, sniffed("198.51.100.7", ""), "proxy"},
+		{"a private address keeps the written order", Config_IpIfNonMatch, rules, sniffed("192.168.1.5", "www.site.test"), "proxy"},
+		{"AsIs keeps the written order", Config_AsIs, rules, sniffed("198.51.100.7", "www.site.test"), "proxy"},
+		{"IPOnDemand keeps the written order", Config_IpOnDemand, rules, sniffed("198.51.100.7", "www.site.test"), "proxy"},
+		{"a catch-all that is no fallback leaves the IP rule ahead of it", Config_IpIfNonMatch, provider, sniffed("198.51.100.7", "other.test"), "proxy"},
+		{"a catch-all that is no fallback hides the IP rule after it", Config_IpIfNonMatch, provider, sniffed("203.0.113.7", "other.test"), "block"},
+		{"a later domain rule still wins over an earlier IP rule", Config_IpIfNonMatch, provider, sniffed("198.51.100.7", "www.site.test"), "direct"},
+		{"a rule that reads no name keeps its place ahead of a domain rule", Config_IpIfNonMatch, provider, quic("192.0.2.9", "www.site.test"), "udp"},
+		{"an IP rule ahead of a rule that reads no name is asked first", Config_IpIfNonMatch, provider, quic("198.51.100.7", "www.site.test"), "proxy"},
 	} {
 		// decoy.test resolves into the direct range: a lookup of it would send the flow direct.
 		resolver := &countingDNS{answers: map[string]string{"decoy.test": "203.0.113.5", "other.test": "203.0.113.6"}}
 		r := new(Router)
-		common.Must(r.Init(context.Background(), &Config{DomainStrategy: test.strategy, Rule: rules}, resolver, nil, nil))
+		common.Must(r.Init(context.Background(), &Config{DomainStrategy: test.strategy, Rule: test.rules}, resolver, nil, nil))
 		route, err := r.PickRoute(&routingsession.Context{Outbound: test.outbound, Content: &session.Content{}})
 		if err != nil {
 			t.Errorf("%s: %v", test.name, err)

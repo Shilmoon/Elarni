@@ -149,6 +149,7 @@ func (r *Router) ReloadRules(config *Config, shouldAppend bool) error {
 			Tag:            rule.GetTag(),
 			RuleTag:        rule.GetRuleTag(),
 			matchesProcess: len(rule.Process) > 0,
+			matchesDomain:  len(rule.Domain) > 0,
 			fallback:       rule.GetFallback(),
 		}
 		if rr.RuleTag != "" && existTags[rr.RuleTag] {
@@ -243,10 +244,16 @@ func (r *Router) pickRouteInternal(ctx routing.Context) (*Rule, routing.Context,
 	// is not looked up: its addresses are not where this connection goes, and a decoy name's
 	// addresses would pick the route. A private address keeps one pass in the written order: no
 	// name makes it reachable through another outbound.
+	// In that first pass only a rule that reads the name wins over the IP rules ahead of it. A rule
+	// that reads neither (a network, port or process rule, a rule set's own catch-all) matched in
+	// the written order before, when the dialed address was in sight, so the IP rules ahead of it
+	// are asked first, as for a fallback rule.
+	nameFirst := false
 	if dialed := ctx.GetTargetIPs(); len(dialed) != 0 {
 		secondPass = false
 		if r.domainStrategy == Config_IpIfNonMatch && len(ctx.GetTargetDomain()) != 0 && routedByNameFirst(dialed) {
 			secondPass = true
+			nameFirst = true
 			first = nameOnlyContext{ctx}
 			second = func() routing.Context { return ctx }
 		}
@@ -254,7 +261,7 @@ func (r *Router) pickRouteInternal(ctx routing.Context) (*Rule, routing.Context,
 
 	for index, rule := range rules {
 		if rule.Apply(first) {
-			if !rule.fallback || !secondPass {
+			if !secondPass || !rule.fallback && (!nameFirst || rule.matchesDomain) {
 				return rule, ctx, nil
 			}
 			// Elarni: a generated catch-all would end the first pass for every connection, so IP rules
@@ -296,7 +303,10 @@ func routedByNameFirst(ips []net.IP) bool {
 		if ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsMulticast() || ip.IsUnspecified() {
 			return false
 		}
-		if v4 := ip.To4(); v4 != nil && (v4[0] == 100 && v4[1]&0xc0 == 64 || v4[0] >= 240) {
+		// Shared address space, "this network", the protocol assignments and the benchmarking range
+		// other fake-address resolvers hand out, and the reserved top.
+		if v4 := ip.To4(); v4 != nil && (v4[0] == 100 && v4[1]&0xc0 == 64 || v4[0] == 0 || v4[0] >= 240 ||
+			v4[0] == 192 && v4[1] == 0 && v4[2] == 0 || v4[0] == 198 && v4[1]&0xfe == 18) {
 			return false
 		}
 	}
