@@ -80,7 +80,7 @@ object Settings {
         SettingField("tlsFingerprint", tr(R.string.tls_fingerprint), "server", "Advanced",
             listOf("server", "chrome", "firefox", "safari", "random", "randomized"), detail = tr(R.string.which_browser_a_connection_to_a)),
         SettingField("memoryLimitMB", tr(R.string.memory_budget_mb_0_automatic), 0, "Advanced"),
-        SettingField("idleTimeoutSeconds", tr(R.string.idle_timeout_seconds), 300, "Advanced"),
+        SettingField("idleTimeoutSeconds", tr(R.string.idle_timeout_seconds), 1800, "Advanced"),
         SettingField("tcpMaxConnections", tr(R.string.maximum_tcp_sessions), 2048, "Advanced"),
         SettingField("udpMaxConnections", tr(R.string.maximum_udp_sessions), 1024, "Advanced"),
         SettingField("monitoringEnabled", tr(R.string.live_traffic_monitoring), false, "Advanced"),

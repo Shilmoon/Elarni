@@ -28,6 +28,8 @@ pub use log::set_log_sink;
 const STOP_TIMEOUT: Duration = Duration::from_secs(2);
 /// QUIC needs 1200 bytes; a smaller value makes the transport refuse the configuration.
 const MIN_MTU: u16 = 1200;
+/// Milliseconds between keep-alive pings to the server.
+const KEEP_ALIVE_MS: u32 = 20_000;
 
 /// What the core sends. Unknown keys are refused so that a typo cannot silently
 /// fall back to a default.
@@ -222,6 +224,10 @@ fn build(config: ClientConfig) -> Result<(ShadowQuicClientCfg, SocksServerCfg), 
             "the MTU must be at least {MIN_MTU} and the initial MTU not below the minimum"
         ));
     }
+    // The client configuration file sends no keep-alive, and the connection ends after 30 s without a
+    // packet, with every stream on it: a quiet SSH session or push connection died as soon as nothing
+    // else was talking. A ping under that limit, and under a NAT's UDP timeout, keeps them.
+    client.keep_alive_interval = KEEP_ALIVE_MS;
     apply_socket_binding(&mut client, config.fw_mark, config.bind_interface_index)?;
     limit_for_platform(&mut client);
     let socks = SocksServerCfg {
@@ -341,7 +347,7 @@ mod tests {
         assert!(client.zero_rtt);
         assert!(!client.over_stream);
         assert!(client.congestion_control == CongestionControl::Bbr);
-        assert_eq!(client.keep_alive_interval, 0);
+        assert_eq!(client.keep_alive_interval, 20_000);
         assert!(client.gso && client.mtu_discovery);
         assert_eq!(client.socket_opt.fw_mark, None);
         assert!(client.socket_opt.bind_interface.is_none());

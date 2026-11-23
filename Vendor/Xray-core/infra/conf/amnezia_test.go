@@ -1,11 +1,13 @@
 package conf
 
 import (
+	"encoding/json"
 	"strconv"
 	"strings"
 	"testing"
 
 	awg "github.com/amnezia-vpn/amneziawg-go/v3/device"
+	"github.com/xtls/xray-core/proxy/wireguard"
 )
 
 // The engine allocates junk and I-packets on every handshake and reads transport
@@ -56,6 +58,42 @@ func TestOverlappingAmneziaHeaderRangesAreRejected(t *testing.T) {
 	} {
 		if err := validateAmneziaSettings(settings); err != nil {
 			t.Errorf("%v rejected: %v", settings, err)
+		}
+	}
+}
+
+func TestDefaultMTULeavesRoomForAmneziaPadding(t *testing.T) {
+	for _, test := range []struct {
+		settings map[string]string
+		mtu      int32
+	}{
+		{nil, 1420},
+		{map[string]string{"s1": "64", "s2": "64"}, 1420},
+		{map[string]string{"s4": "32"}, 1388},
+		{map[string]string{"s4": "140"}, 1280},
+		{map[string]string{"s4": "600"}, 1280},
+	} {
+		if mtu := defaultWireGuardMTU(test.settings); mtu != test.mtu {
+			t.Errorf("%v: MTU %d, want %d", test.settings, mtu, test.mtu)
+		}
+	}
+	const keys = `"secretKey": "YAnz5TF+lXXJte14tji3zlMNq+hd2rYUIgJBgB3fBmk=", "address": ["10.0.0.2/32"],
+		"peers": [{"publicKey": "xTIBA5rboUvnH4htodjb6e697QjLERt1NAB4mZqp8Dg=", "endpoint": "192.0.2.1:51820"}]`
+	for settings, mtu := range map[string]int32{
+		`{` + keys + `, "amnezia": {"s4": "32"}}`:              1388,
+		`{` + keys + `, "amnezia": {"s4": "32"}, "mtu": 1400}`: 1400,
+	} {
+		var config WireGuardConfig
+		if err := json.Unmarshal([]byte(settings), &config); err != nil {
+			t.Fatal(err)
+		}
+		config.IsClient, config.IsAmnezia, config.NoKernelTun = true, true, true
+		built, err := config.Build()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := built.(*wireguard.DeviceConfig).Mtu; got != mtu {
+			t.Errorf("%s: MTU %d, want %d", settings, got, mtu)
 		}
 	}
 }

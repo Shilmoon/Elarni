@@ -292,7 +292,7 @@ struct IOSTunnelSettings: Codable, Equatable {
   var sniffingEnabled = true
   var monitoringEnabled = false
   var recordDiagnostics: Bool? // optional, so settings saved by older builds still decode
-  var idleTimeoutSeconds = 300
+  var idleTimeoutSeconds = 1800
   var tcpMaxConnections = 2_048
   var udpMaxConnections = 1_024
   var includedRoutes = ["0.0.0.0/0", "::/0"]
