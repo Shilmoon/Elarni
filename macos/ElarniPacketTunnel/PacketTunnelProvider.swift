@@ -377,13 +377,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider, @unchecked Sendable {
       if case .hostPort(.ipv4(let address), _) = endpoint { return "\(address)" }
       return nil
     }.sorted()
-    // An IPv6-only network has neither: there the prefixes of the interface's IPv6 addresses tell
-    // two networks apart.
-    let primary = interfaces.first.map { interface -> [String] in
-      let addresses = Self.ipv4Addresses(of: interface.name)
-      return ["\(interface.type):\(interface.index)"]
-        + (addresses.isEmpty && gateways.isEmpty ? Self.ipv6Prefixes(of: interface.name) : addresses)
-    } ?? []
+    let primary = interfaces.first.map { ["\($0.type):\($0.index)"] + Self.ipv4Addresses(of: $0.name) } ?? []
     let signature = satisfied ? (primary + gateways).joined(separator: ",") : ""
     DiagnosticLog.record("network_path", ["available": satisfied ? 1 : 0, "interfaces": Int64(interfaces.count),
       "ipv4": path.supportsIPv4 ? 1 : 0, "ipv6": path.supportsIPv6 ? 1 : 0, "expensive": path.isExpensive ? 1 : 0])
@@ -409,25 +403,6 @@ final class PacketTunnelProvider: NEPacketTunnelProvider, @unchecked Sendable {
       }
     }
     return addresses.sorted()
-  }
-
-  /// The /64 prefixes of the interface's routable IPv6 addresses; the addresses themselves rotate.
-  private static func ipv6Prefixes(of name: String) -> [String] {
-    var list: UnsafeMutablePointer<ifaddrs>?
-    guard getifaddrs(&list) == 0, let first = list else { return [] }
-    defer { freeifaddrs(list) }
-    var prefixes = Set<String>()
-    for entry in sequence(first: first, next: { $0.pointee.ifa_next }) {
-      guard let address = entry.pointee.ifa_addr, address.pointee.sa_family == sa_family_t(AF_INET6),
-            String(cString: entry.pointee.ifa_name) == name else { continue }
-      let bytes = address.withMemoryRebound(to: sockaddr_in6.self, capacity: 1) {
-        withUnsafeBytes(of: $0.pointee.sin6_addr) { Array($0.prefix(8)) }
-      }
-      // Link-local addresses are the same on every network.
-      if bytes[0] == 0xfe, bytes[1] & 0xc0 == 0x80 { continue }
-      prefixes.insert(bytes.map { String(format: "%02x", $0) }.joined())
-    }
-    return prefixes.sorted()
   }
 
   /// Call with backendLock held.

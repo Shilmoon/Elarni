@@ -112,9 +112,6 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
 - **iPhone, Mac: ping is answered.** A ping through the VPN got no reply, so network tools and
   apps that check the connection with one reported "offline". It is answered by Elarni itself
   for every address, as on Android, Windows and Linux; it still does not measure the remote host.
-- **iPhone, Mac: a move between two IPv6-only networks is noticed.** The check that restarts
-  stale connections after a network change compared only IPv4 addresses, so on networks without
-  IPv4 the connections of the old network were kept until they timed out.
 
 ### Changed
 
