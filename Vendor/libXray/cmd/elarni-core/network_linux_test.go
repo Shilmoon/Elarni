@@ -92,7 +92,8 @@ func TestLinuxWithoutIPv6RejectsTunnelledIPv6InsteadOfLeaking(t *testing.T) {
 		t.Fatalf("guard without IPv6 = %v", got)
 	}
 	got = guarded(true, &share.WindowsRoutePolicy{IncludedRoutes: []string{"10.0.0.0/8", "2001:db8::/32"}, EnforceRoutes: true})
-	if fmt.Sprint(got) != "[10.0.0.0/8 2001:db8::/32]" {
+	// The FakeDNS ranges join every custom list, so the guard covers them too.
+	if fmt.Sprint(got) != "[10.0.0.0/8 198.18.0.0/15 2001:db8::/32 fc00::/18]" {
 		t.Fatalf("enforced guard without IPv6 = %v", got)
 	}
 }

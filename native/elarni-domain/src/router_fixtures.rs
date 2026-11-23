@@ -131,7 +131,21 @@ fn compiled_fixtures() -> Value {
         None,
     )
     .unwrap();
+    // FakeDNS answers every name but the ones whose address is the point.
+    let fake_dns: RouteModel = serde_json::from_value(json!({
+        "rules": [], "dnsServers": ["192.0.2.53"], "fakeDns": true, "fallbackAction": "proxy"}))
+    .unwrap();
+    let (fake_dns, _) = compile_xray_outbound_config_with_options(
+        client("node"),
+        &fake_dns,
+        10890,
+        PacketBackend::XrayTun,
+        1500,
+        &RuntimeOptions::default(),
+    )
+    .unwrap();
     json!({
+        "fake-dns": serde_json::from_slice::<Value>(&fake_dns).unwrap(),
         "tun": tun(&RuntimeOptions::default()),
         "tun-per-app": tun(&RuntimeOptions {
             per_app_mode: PerAppMode::ProxyOnly,

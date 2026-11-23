@@ -259,9 +259,18 @@ data class Cidr(val address: BigInteger, val bits: Int, val width: Int) {
             val value = BigInteger(1, address).shiftRight(width-bits).shiftLeft(width-bits)
             return Cidr(value, bits, width)
         }
+        /**
+         * What a custom route list always carries: the tunnel's own DNS addresses and the ranges FakeDNS answers from.
+         * Without them no name resolves, or every name resolves to an address that leaves by the physical network.
+         */
+        val required = listOf("198.51.100.252/30", "198.18.0.0/15", "fdfe:dcba:9876::/126", "fc00::/18")
         // keepDiscovery: Android's Block connections without VPN (lockdown) keeps everything inside the tunnel.
         fun routes(settings: JSONObject, keepDiscovery: Boolean = false): List<Cidr> {
             var routes = (if (settings.optBoolean("includeAllNetworks")) listOf("0.0.0.0/0", "::/0") else settings.strings("includedRoutes")).map(::parse)
+            // The IPv6 ranges join a list that routes IPv6.
+            routes = routes + required.map(::parse).filter { needed ->
+                (needed.width == 32 || routes.any { it.width == 128 }) && routes.none { needed.subtract(it).isEmpty() }
+            }
             (settings.strings("excludedRoutes") + if (keepDiscovery) emptyList() else discovery).map(::parse).forEach { exclude ->
                 routes = routes.flatMap { it.subtract(exclude) }
                 if (routes.size > 4096) throw AppFailure("invalid_settings")

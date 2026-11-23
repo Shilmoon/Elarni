@@ -1181,6 +1181,27 @@ fn dns_compilation_uses_bootstrap_through_proxy_and_explicit_domestic_rules() {
     request.routes.fake_dns = true;
     let fake = compiled(&request);
     assert_eq!(fake["dns"]["servers"][0], "fakedns");
+    // Names whose address is the point keep it: Windows compares the answer for dns.msftncsi.com
+    // and shows "No internet", and a name of the user's own machine or LAN must not reach the server.
+    let servers = fake["dns"]["servers"].as_array().unwrap();
+    let real = servers.last().unwrap();
+    assert_eq!(real["address"], servers[1]["address"]);
+    assert_eq!(real["skipFallback"], true);
+    assert_eq!(real["finalQuery"], true);
+    let kept = real["domains"].as_array().unwrap();
+    for name in [
+        "full:dns.msftncsi.com",
+        "domain:msftconnecttest.com",
+        "full:localhost.ptlogin2.qq.com",
+        "domain:lan",
+        "domain:home.arpa",
+    ] {
+        assert!(kept.contains(&json!(name)), "{name}");
+    }
+    assert_eq!(
+        legacy["dns"]["servers"].as_array().unwrap().len() + 2,
+        servers.len()
+    );
     // Domestic and AAAA answers are real IPs; only sniffing gives them a domain to route by.
     assert_eq!(
         tagged(&fake, "inbounds", "elarni-socks")["sniffing"],

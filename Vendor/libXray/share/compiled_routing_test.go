@@ -14,9 +14,11 @@ import (
 	dnsapp "github.com/xtls/xray-core/app/dns"
 	xnet "github.com/xtls/xray-core/common/net"
 	"github.com/xtls/xray-core/common/session"
+	"github.com/xtls/xray-core/features/dns"
 	"github.com/xtls/xray-core/features/routing"
 	routingsession "github.com/xtls/xray-core/features/routing/session"
 	"github.com/xtls/xray-core/infra/conf"
+	"golang.org/x/net/dns/dnsmessage"
 )
 
 // Configs written by native/elarni-domain/src/router_fixtures.rs. Their dns.hosts
@@ -98,6 +100,74 @@ func TestCompiledDNSKeysReachTheDNSApp(t *testing.T) {
 	// Only the remote resolver gives up early.
 	if len(built.NameServer) != 2 || built.NameServer[0].TimeoutMs != 2000 || built.NameServer[1].TimeoutMs != 0 {
 		t.Errorf("name servers %v", built.NameServer)
+	}
+}
+
+// FakeDNS answers every name except those whose address is the point: Windows compares the answer
+// for dns.msftncsi.com and reports "No internet", and a LAN name with a fake address goes to the server.
+func TestCompiledFakeDNSLeavesListedNamesToTheResolver(t *testing.T) {
+	resolver, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resolver.Close()
+	go func() {
+		packet := make([]byte, 2048)
+		for {
+			n, peer, err := resolver.ReadFrom(packet)
+			if err != nil {
+				return
+			}
+			var query dnsmessage.Message
+			if query.Unpack(packet[:n]) != nil || len(query.Questions) != 1 {
+				continue
+			}
+			question := query.Questions[0]
+			reply := dnsmessage.Message{Header: dnsmessage.Header{ID: query.ID, Response: true, RecursionAvailable: true}, Questions: query.Questions}
+			if question.Name.String() == "dns.msftncsi.com." && question.Type == dnsmessage.TypeA {
+				reply.Answers = []dnsmessage.Resource{{
+					Header: dnsmessage.ResourceHeader{Name: question.Name, Type: question.Type, Class: dnsmessage.ClassINET, TTL: 60},
+					Body:   &dnsmessage.AResource{A: [4]byte{131, 107, 255, 255}},
+				}}
+			} else {
+				reply.RCode = dnsmessage.RCodeNameError
+			}
+			if out, err := reply.Pack(); err == nil {
+				resolver.WriteTo(out, peer)
+			}
+		}
+	}()
+	port := resolver.LocalAddr().(*net.UDPAddr).Port
+
+	config := compiledRoutingFixture(t, "fake-dns")
+	// The copy of the resolver that serves the listed names is the test's; the plain one stays
+	// unreachable, so an answer can only come from FakeDNS or from the listed-names server.
+	servers := config["dns"].(map[string]any)["servers"].([]any)
+	listed := servers[len(servers)-1].(map[string]any)
+	if listed["finalQuery"] != true || listed["address"] != servers[1] {
+		t.Fatalf("the last server is not the resolver's copy for listed names: %v", listed)
+	}
+	listed["address"], listed["port"] = "127.0.0.1", port
+	routing := config["routing"].(map[string]any)
+	routing["rules"] = append([]any{map[string]any{"type": "field", "ip": []any{"127.0.0.1"}, "port": port, "outboundTag": "elarni-direct"}}, routing["rules"].([]any)...)
+
+	instance, stop := startTrafficCore(t, config)
+	defer stop()
+	client := instance.GetFeature(dns.ClientType()).(dns.Client)
+	option := dns.IPOption{IPv4Enable: true, FakeEnable: true}
+	_, pool, _ := net.ParseCIDR("198.18.0.0/15")
+
+	if ips, _, err := client.LookupIP("site.test", option); err != nil || len(ips) != 1 || !pool.Contains(ips[0]) {
+		t.Errorf("site.test: %v, %v; want a FakeDNS address", ips, err)
+	}
+	if ips, _, err := client.LookupIP("dns.msftncsi.com", option); err != nil || len(ips) != 1 || !ips[0].Equal(net.IPv4(131, 107, 255, 255)) {
+		t.Errorf("dns.msftncsi.com: %v, %v; want the resolver's 131.107.255.255", ips, err)
+	}
+	// A name the resolver does not know is not found; FakeDNS must not answer for it.
+	for _, name := range []string{"printer.lan", "nas", "router.home.arpa"} {
+		if ips, _, err := client.LookupIP(name, option); err == nil {
+			t.Errorf("%s: %v, want no answer", name, ips)
+		}
 	}
 }
 
