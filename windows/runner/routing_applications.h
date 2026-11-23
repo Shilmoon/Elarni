@@ -17,8 +17,10 @@ flutter::EncodableMap RoutingApplication(const std::wstring& path, bool running 
 // Discord run from <root>\app-<version>\, which each update replaces, and start
 // through <root>\Update.exe or a stub, so they match their whole <root>\ folder.
 std::wstring ExecutableRule(const std::wstring& path);
-// For a saved rule that names one version of a local app, the rule that matches every
-// version; otherwise empty. Store paths need none: the core matches them by package.
+// For a saved rule or a program's path, the rule the app list gives that program, when it is
+// another: the install folder of a Squirrel app, a folder of versions, a Store app's package.
+// "Add to list" saves it. The saved rule matches every version too: the core compares paths
+// without version numbers.
 std::wstring UpdateProofRule(const std::wstring& path);
 // Running programs by their rules; svchost processes also by the services they run
 // ("service:<name>", named by the service's display name).

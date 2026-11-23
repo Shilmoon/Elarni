@@ -244,7 +244,8 @@ final class _RoutingApp {
   final String name, process;
   final Uint8List? icon;
 
-  /// The host's update-proof rule for a saved rule that names one version.
+  /// The rule the host's app list gives this saved rule's program, when it is
+  /// another one, such as the app's folder: "Add to list" saves it.
   final String? suggested;
 }
 
@@ -678,7 +679,7 @@ class _PerAppRoutingEditorState extends State<PerAppRoutingEditor> {
     'case' => l10n.perAppWarningCase,
     'launcher' => l10n.perAppWarningLauncher,
     'bundleName' => l10n.perAppWarningBundleName,
-    'versioned' => l10n.perAppWarningVersioned,
+    'moved' => l10n.perAppWarningMoved,
     _ => l10n.perAppWarningUnknown,
   };
 
@@ -695,10 +696,7 @@ class _PerAppRoutingEditorState extends State<PerAppRoutingEditor> {
               ? l10n.perAppRunningNow(check.running)
               : l10n.perAppNotRunning
         : null;
-    final warnings = <(String, String?)>[
-      if (app.suggested != null) ('versioned', app.suggested),
-      ...?check?.warnings,
-    ];
+    final warnings = check?.warnings ?? const <(String, String?)>[];
     final dark = Theme.of(context).brightness == Brightness.dark;
     final warningColor = dark
         ? const Color(0xFFF5D08A)

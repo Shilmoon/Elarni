@@ -3400,8 +3400,8 @@ class AppLocalizationsRu extends AppLocalizations {
       'Имя без пути соответствует файлу программы, а не пакету приложения. Выберите приложение из списка.';
 
   @override
-  String get perAppWarningVersioned =>
-      'Указывает одну версию приложения и перестанет срабатывать после следующего обновления.';
+  String get perAppWarningMoved =>
+      'Здесь не найдено. Та же программа теперь запускается из другой папки.';
 
   @override
   String get perAppWarningUnknown =>

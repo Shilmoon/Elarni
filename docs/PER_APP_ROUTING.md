@@ -32,6 +32,25 @@ This is routing, not a firewall or kill switch.
 A bare name matches in any folder, and a path ending in `/` matches everything
 below it.
 
+## Rules and app updates
+
+An update moves many apps to a new path, each installer in its own way, so a rule for a path
+would stop matching. On Windows, macOS and Linux, paths are compared without the numbers that
+name a version, in rules and in running programs alike:
+
+- numbers joined by dots, anywhere in the path: `app-1.0.9265` (Discord and other Squirrel
+  apps), `Application\131.0.2903.86` (Edge WebView2), `jdk-21.0.2`, `rufus-4.6.exe`;
+- a number of three or more digits that ends a folder's name after a space, dot, dash or
+  underscore, or is the whole name: `Battle.net.15173`, `Adobe Photoshop 2025`;
+- a Microsoft Store app's package folder, compared as its package family (Windows), and a
+  Snap's revision (Linux).
+
+So a rule saved for one version of an app matches every version, whichever way it was added:
+from the app list, a file, **Recent connections**, a preset or a pasted profile. A rule saved
+before an update needs no change. Two versions installed side by side, such as
+`Python\3.12\python.exe` and `Python\3.13\python.exe`, are one app to a rule for either. Bare
+names are compared as they are, and other numbers stay: `Office16`, `Portal 2`, `x264`.
+
 The app list shows running programs and installed apps: on Windows the Start menu's
 programs and installed Microsoft Store apps, such as Claude, on macOS the Applications
 folders, and on Linux the apps with a desktop entry. **Choose app file** adds any other program.
@@ -43,7 +62,8 @@ Snap, so each gets the same rule as when picked from the list; an app it does no
 shown as not found. Apps that show web pages through WebView2 on Windows run
 `msedgewebview2.exe`, which the browsers preset does not include.
 
-Apps picked from the list get a rule that still matches after the app updates. On
+Apps picked from the list get the rule that names the whole app where the list knows its
+layout, so the app's other programs match too. On
 desktop platforms an app that keeps each version in its own folder beside the
 previous one matches that folder of versions, when it holds nothing else. Claude
 Code, which the Claude app installs as `claude-code/<version>/<build>/`, is one; on
@@ -148,13 +168,17 @@ app's user ID and changes nothing.
 On desktop, each listed rule shows how many running programs it matches now, counted
 with the same matcher routing uses, and warns when it may match nothing:
 
-- the file or folder is not on this computer;
+- the file or folder is not on this computer, in any version (see Rules and app updates). A
+  rule that matches a running program is never reported as not found, and neither is one in a
+  folder the check may not list, such as `WindowsApps`;
+- the program is gone, and the only running program with its file name runs from the same
+  folders but one, such as a folder an update names by a build's hash: the rule is offered
+  that path;
 - a folder rule lacks its trailing separator, or names a file;
 - the file is a script, a link or a launcher (`.lnk`, `.bat`, a Squirrel app's root
   `.exe`), so another program makes the connections;
 - the letter case differs from the disk (macOS and Linux compare it);
 - a bare `Example.app` on macOS, which names no program;
-- the rule names one version of an app that keeps each version in its own folder;
 - a Flatpak app or Windows service that is not installed, or an AppImage file that is gone.
 
 Where a better rule exists, **Use suggested rule** replaces it, keeping its target.

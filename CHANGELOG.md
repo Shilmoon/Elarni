@@ -4,6 +4,29 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
 
 ## Unreleased
 
+### Fixed
+
+- **Windows, macOS, Linux: per-app rules follow an app through its updates, whatever
+  installed it.** An update moves many apps to a new path, and a rule for the old path stopped
+  matching, one installer layout after another: Elarni knew Squirrel apps, Store apps and
+  folders of versions, and only for apps picked from the app list. Paths are now compared
+  without the numbers that name a version, in every rule and every running program: numbers
+  joined by dots (`app-1.0.9265`, `Application\131.0.2903.86`, `jdk-21.0.2`), a number of
+  three or more digits that ends a folder's name (`Battle.net.15173`, `Adobe Photoshop 2025`),
+  a Store app's package folder and a Snap's revision. Rules saved earlier match again without
+  a change, however they were added. See "Rules and app updates" in
+  [docs/PER_APP_ROUTING.md](docs/PER_APP_ROUTING.md).
+- **Desktop: a per-app rule that matches running programs is no longer shown as "Not found
+  on this computer".** The rule check looked for the exact path on disk while routing
+  compared Store apps by package, so a Store app saved by the path of one version, as "Add to
+  list" in Recent connections saved ChatGPT, showed the warning after its next update, beside
+  "13 programs running". The check now looks for the app as
+  routing compares it, reports nothing for a folder it may not list, and no longer warns that
+  a rule "names one version". When a program is gone and the same one runs from a sibling
+  folder, the rule is offered that path.
+- **Windows: "Add to list" in Recent connections gives a Microsoft Store app the same package
+  rule as the app list**, not the path of its current version.
+
 ## 0.6.3 - 2026-11-22
 
 ### Added

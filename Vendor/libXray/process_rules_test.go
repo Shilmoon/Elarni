@@ -8,6 +8,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	xnet "github.com/xtls/xray-core/common/net"
 )
 
 func warningCodes(check ProcessRuleCheck) []string {
@@ -271,4 +273,112 @@ func mustJSON(t *testing.T, value any) string {
 		t.Fatal(err)
 	}
 	return string(data)
+}
+
+// Routing compares paths without version numbers, so a rule saved for one version still matches
+// after an update removed that version's files. The check looks for the version on disk as
+// routing would, and says nothing about a folder it may not list, such as WindowsApps.
+func TestProcessRuleChecksFollowTheVersionOnDisk(t *testing.T) {
+	root := t.TempDir()
+	if resolved, err := filepath.EvalSymlinks(root); err == nil {
+		root = resolved
+	}
+	name := "example"
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	installed := filepath.Join(root, "Example", "app-1.0.2")
+	if err := os.MkdirAll(installed, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(installed, name), []byte("\x7fELF"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	saved := filepath.Join(root, "Example", "app-1.0.1")
+	sep := string(filepath.Separator)
+	want := map[string][]string{
+		filepath.Join(saved, name):       nil,
+		saved + sep:                      nil,
+		saved:                            {"folder=" + installed + sep},
+		filepath.Join(saved, name) + sep: {"notFolder=" + filepath.Join(installed, name)},
+		filepath.Join(saved, "gone"):     {"missing="},
+		filepath.Join(root, "Example", "other-1.0.1", name):      {"missing="},
+		filepath.Join(root, "Example", "app-1.0.1-beta") + sep:   {"missing="},
+		filepath.Join(root, "Absent", "app-1.0.1", name):         {"missing="},
+		"children:" + filepath.Join(saved, name):                 nil,
+		"children:" + filepath.Join(root, "Absent", "1.2", name): {"missing="},
+	}
+	if runtime.GOOS != "windows" && os.Geteuid() != 0 {
+		// Entries can be opened by name but not listed, as in WindowsApps.
+		locked := filepath.Join(root, "Locked")
+		if err := os.MkdirAll(filepath.Join(locked, "2.0"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(locked, 0o111); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { os.Chmod(locked, 0o755) })
+		want[filepath.Join(locked, "1.0", name)] = nil
+	}
+	var rules []string
+	for rule := range want {
+		rules = append(rules, rule)
+	}
+	slices.Sort(rules)
+	for _, check := range checkProcessRules(rules).Rules {
+		if got := warningCodes(check); !slices.Equal(got, want[check.Rule]) {
+			t.Errorf("%q: warnings %v, want %v", check.Rule, got, want[check.Rule])
+		}
+	}
+}
+
+// A rule that matches a running program is not missing, whatever the disk says: a Store app's
+// earlier version was reported as not found while it matched every program of the app. A program
+// that is gone while the same one runs from a sibling folder, such as one named by a build's
+// hash, is offered that path.
+func TestProcessRuleChecksOfProgramsRunningFromAnotherPath(t *testing.T) {
+	root := t.TempDir()
+	if resolved, err := filepath.EvalSymlinks(root); err == nil {
+		root = resolved
+	}
+	at := func(parts ...string) string { return filepath.Join(append([]string{root}, parts...)...) }
+	running := []string{
+		at("Store", "app-2.0.0", "chat"),
+		at("Hashed", "d4e5f6", "bin", "tool"),
+		at("Two", "x1y", "tool"), at("Two", "z2w", "tool"), at("Two", "z2w", "tool"),
+		at("Deep", "one", "two", "far"),
+	}
+	previous := listProcesses
+	listProcesses = func() ([]xnet.Process, error) {
+		var processes []xnet.Process
+		for i, path := range running {
+			// The core reports paths with forward slashes.
+			processes = append(processes, xnet.Process{PID: 100 + i, Name: filepath.Base(path), Path: filepath.ToSlash(path)})
+		}
+		return processes, nil
+	}
+	t.Cleanup(func() { listProcesses = previous })
+	sep := string(filepath.Separator)
+	for _, tc := range []struct {
+		rule     string
+		running  int
+		warnings []string
+	}{
+		{at("Store", "app-1.0.0", "chat"), 1, nil},
+		{"children:" + at("Store", "app-1.0.0", "chat"), 1, nil},
+		{at("Hashed", "a1b2c3", "bin", "tool"), 0, []string{"moved=" + at("Hashed", "d4e5f6", "bin", "tool")}},
+		{"children:" + at("Hashed", "a1b2c3", "bin", "tool"), 0, []string{"moved=children:" + at("Hashed", "d4e5f6", "bin", "tool")}},
+		// Not the same program: two candidates, another name, another depth, two folders renamed.
+		{at("Two", "aaa", "tool"), 0, []string{"missing="}},
+		{at("Hashed", "a1b2c3", "bin", "other"), 0, []string{"missing="}},
+		{at("Hashed", "a1b2c3", "tool"), 0, []string{"missing="}},
+		{at("Deep", "uno", "dos", "far"), 0, []string{"missing="}},
+		// A folder names no single program.
+		{at("Hashed", "a1b2c3") + sep, 0, []string{"missing="}},
+	} {
+		check := checkProcessRules([]string{tc.rule}).Rules[0]
+		if got := warningCodes(check); check.Running != tc.running || !slices.Equal(got, tc.warnings) {
+			t.Errorf("%q: %d running, warnings %v; want %d, %v", tc.rule, check.Running, got, tc.running, tc.warnings)
+		}
+	}
 }

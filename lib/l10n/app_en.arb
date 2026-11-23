@@ -1790,7 +1790,7 @@
   "perAppWarningCase": "The letter case differs from the file on disk, and rules compare it.",
   "perAppWarningLauncher": "A launcher: it starts another program, which this rule does not match.",
   "perAppWarningBundleName": "A bare name matches a program file, not an app bundle. Pick the app from the list.",
-  "perAppWarningVersioned": "Names one version of the app, so it stops matching after the next update.",
+  "perAppWarningMoved": "Not found here. The same program now runs from another folder.",
   "perAppWarningUnknown": "This rule may not match any program.",
   "perAppSuggestedRule": "Suggested rule: {rule}",
   "@perAppSuggestedRule": {

@@ -110,8 +110,10 @@ int main() {
         ExecutableRule(store + L"5319275A.WhatsAppDesktop_2.2450.6.0_neutral_~_cv1g1gvanyjgm\\WhatsApp.exe") ==
             store + L"5319275A.WhatsAppDesktop_cv1g1gvanyjgm\\",
         "a Store app did not match its package family");
-    Require(UpdateProofRule(store + L"Claude_4.23118.0.0_x64__pzs8sxrjxfjjc\\app\\Claude.exe").empty(),
-        "a saved Store rule was offered a replacement it does not need");
+    // "Add to list" in Recent connections saved a Store app's program by its one-version path.
+    Require(UpdateProofRule(store + L"Claude_4.23118.0.0_x64__pzs8sxrjxfjjc\\app\\Claude.exe") == family &&
+        UpdateProofRule(family).empty(),
+        "a Store app's program was not offered its package rule");
     for (const auto& path : {store + L"Tools\\tool.exe", store + L"Claude_4.23118_x64__pzs8sxrjxfjjc\\Claude.exe",
                              store + L"Claude_4.23118.0.0_x64__pzs8sxrjxfjj\\Claude.exe",
                              std::wstring(L"C:\\Apps\\Claude_4.23118.0.0_x64__pzs8sxrjxfjjc\\Claude.exe")}) {

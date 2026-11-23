@@ -850,6 +850,7 @@ void main() {
                   '/usr/bin/curl',
                   '/opt/tools',
                   '${versions}2.1.300',
+                  '/opt/app/a1b2/tool',
                   '-1',
                 ],
                 perAppTargets: {'/opt/tools': 'block'},
@@ -868,6 +869,11 @@ void main() {
                     ('folder', '/opt/tools/'),
                   ]),
                   '/opt/tools/': const ProcessRuleCheck('/opt/tools/', 3, []),
+                  '/opt/app/a1b2/tool': const ProcessRuleCheck(
+                    '/opt/app/a1b2/tool',
+                    0,
+                    [('moved', '/opt/app/c3d4/tool')],
+                  ),
                 });
               },
               onSave: (value) async => saved = value,
@@ -878,25 +884,50 @@ void main() {
     );
     await tester.pumpAndSettle();
     // "-1" is no program to look for.
-    expect(asked.first, ['/usr/bin/curl', '/opt/tools', '${versions}2.1.300']);
+    expect(asked.first, [
+      '/usr/bin/curl',
+      '/opt/tools',
+      '${versions}2.1.300',
+      '/opt/app/a1b2/tool',
+    ]);
     expect(find.textContaining('2 programs running'), findsOneWidget);
-    expect(find.textContaining('Not running now'), findsOneWidget);
+    expect(find.textContaining('Not running now'), findsNWidgets(2));
     expect(
       find.byKey(const Key('per-app-warning:/opt/tools:folder')),
       findsOneWidget,
     );
+    // A rule for one version matches the next one too, so it is no problem:
+    // the host's rule for it is only what "Add to list" saves.
     expect(
-      find.byKey(Key('per-app-warning:${versions}2.1.300:versioned')),
-      findsOneWidget,
+      find.byWidgetPredicate(
+        (widget) =>
+            widget.key is ValueKey<String> &&
+            (widget.key! as ValueKey<String>).value.startsWith(
+              'per-app-warning:${versions}2.1.300',
+            ),
+      ),
+      findsNothing,
     );
     expect(find.text('Suggested rule: /opt/tools/'), findsOneWidget);
     await tester.tap(find.byKey(const Key('per-app-use:/opt/tools:folder')));
     await tester.pumpAndSettle();
     // The fixed rule keeps its place and target, and is checked again.
-    expect(asked.last, ['/usr/bin/curl', '/opt/tools/', '${versions}2.1.300']);
+    expect(asked.last, [
+      '/usr/bin/curl',
+      '/opt/tools/',
+      '${versions}2.1.300',
+      '/opt/app/a1b2/tool',
+    ]);
     expect(find.textContaining('3 programs running'), findsOneWidget);
+    // A program that now runs from another folder is offered that path.
+    expect(
+      find.text(
+        'Not found here. The same program now runs from another folder.',
+      ),
+      findsOneWidget,
+    );
     await tester.tap(
-      find.byKey(Key('per-app-use:${versions}2.1.300:versioned')),
+      find.byKey(const Key('per-app-use:/opt/app/a1b2/tool:moved')),
     );
     await tester.pumpAndSettle();
     await tester.tap(find.text('Save changes'));
@@ -904,7 +935,8 @@ void main() {
     expect(saved!.perAppProcesses, [
       '/usr/bin/curl',
       '/opt/tools/',
-      versions,
+      '${versions}2.1.300',
+      '/opt/app/c3d4/tool',
       '-1',
     ]);
     expect(saved!.perAppTargets, {'/opt/tools/': 'block'});

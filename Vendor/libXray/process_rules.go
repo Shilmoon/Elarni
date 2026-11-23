@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"unicode"
 
@@ -23,8 +24,8 @@ type ProcessRuleCheckRequest struct {
 }
 
 type ProcessRuleWarning struct {
-	// missing, folder, notFolder, script, symlink, case, launcher or bundleName. Flatpak, AppImage
-	// and service rules can be missing; an AppImage rule's path can also need a fix.
+	// missing, moved, folder, notFolder, script, symlink, case, launcher or bundleName. Flatpak,
+	// AppImage and service rules can be missing; an AppImage rule's path can also need a fix.
 	Code       string `json:"code"`
 	Suggestion string `json:"suggestion,omitempty"`
 }
@@ -63,8 +64,11 @@ func validProcessRules(rules []string) bool {
 	return true
 }
 
+// listProcesses is swapped by tests to name the running programs.
+var listProcesses = xnet.ListProcesses
+
 func checkProcessRules(rules []string) ProcessRuleCheckResponse {
-	processes, err := xnet.ListProcesses()
+	processes, err := listProcesses()
 	response := ProcessRuleCheckResponse{Rules: make([]ProcessRuleCheck, 0, len(rules)), Listed: err == nil}
 	for _, rule := range rules {
 		check := ProcessRuleCheck{Rule: rule, Warnings: processRuleWarnings(rule)}
@@ -74,6 +78,15 @@ func checkProcessRules(rules []string) ProcessRuleCheckResponse {
 				if matcher.MatchesProcess(process.PID, process.Name, process.Path) {
 					check.Running++
 				}
+			}
+		}
+		if len(check.Warnings) == 1 && check.Warnings[0].Code == "missing" {
+			// What runs is here, wherever the rule's path points: routing compares paths without
+			// version numbers, and this check may not see every folder.
+			if check.Running > 0 {
+				check.Warnings = nil
+			} else if moved := movedProgram(rule, processes); moved != "" {
+				check.Warnings = []ProcessRuleWarning{{Code: "moved", Suggestion: moved}}
 			}
 		}
 		response.Rules = append(response.Rules, check)
@@ -153,12 +166,16 @@ func processRuleWarnings(rule string) []ProcessRuleWarning {
 	}
 	path := filepath.FromSlash(strings.TrimSuffix(slashed, "/"))
 	info, err := ruleLstat(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		if real := realCase(path); real != "" && !windows {
+			return warn("case", real+suffix)
+		}
+		// The rule also names the app's other versions; the checks below are of the one on disk.
+		path, info, err = otherVersion(path, folder)
+	}
 	if err != nil {
 		if !errors.Is(err, fs.ErrNotExist) {
 			return nil // unreadable here, as from the App Sandbox
-		}
-		if real := realCase(path); real != "" && !windows {
-			return warn("case", real+suffix)
 		}
 		return warn("missing", "")
 	}
@@ -197,6 +214,125 @@ func processRuleWarnings(rule string) []ProcessRuleWarning {
 
 // ruleLstat is swapped by tests to see which paths a check opens.
 var ruleLstat = os.Lstat
+
+// otherVersion finds what a path that is not on disk names for routing, which compares paths
+// without version numbers (router.ProcessPathKey): the same path through the folders of another
+// version. The error is fs.ErrNotExist when there is none, and another when a folder on the way
+// could not be read, so the answer is unknown.
+func otherVersion(path string, folder bool) (string, fs.FileInfo, error) {
+	sep := string(filepath.Separator)
+	volume := filepath.VolumeName(path)
+	parts := strings.FieldsFunc(path[len(volume):], func(r rune) bool { return r == filepath.Separator })
+	if len(parts) == 0 {
+		return "", nil, fs.ErrNotExist
+	}
+	listings := 8 // folders listed for one rule
+	var unreadable error
+	var find func(dir string, parts []string) (string, fs.FileInfo)
+	find = func(dir string, parts []string) (string, fs.FileInfo) {
+		last := len(parts) == 1
+		follow := func(candidate string) (string, fs.FileInfo) {
+			info, err := ruleLstat(candidate)
+			switch {
+			case err != nil && !errors.Is(err, fs.ErrNotExist):
+				unreadable = err
+			case err == nil && last:
+				return candidate, info
+			case err == nil:
+				return find(candidate, parts[1:])
+			}
+			return "", nil
+		}
+		named := filepath.Join(dir, parts[0])
+		if found, info := follow(named); info != nil {
+			return found, info
+		}
+		if listings == 0 {
+			return "", nil
+		}
+		listings--
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			if !errors.Is(err, fs.ErrNotExist) {
+				unreadable = err
+			}
+			return "", nil
+		}
+		// A version number ends a folder's name, not a file's.
+		end := sep
+		if last && !folder {
+			end = ""
+		}
+		key := router.ProcessPathKey(named + end)
+		for _, entry := range entries {
+			candidate := filepath.Join(dir, entry.Name())
+			if entry.Name() == parts[0] || router.ProcessPathKey(candidate+end) != key {
+				continue
+			}
+			if found, info := follow(candidate); info != nil {
+				return found, info
+			}
+		}
+		return "", nil
+	}
+	if found, info := find(volume+sep, parts); info != nil {
+		return found, info, nil
+	}
+	if unreadable != nil {
+		return "", nil, unreadable
+	}
+	return "", nil, fs.ErrNotExist
+}
+
+// movedProgram returns the running program that a rule's missing program seems to have become:
+// the only one with its file name in the same folders but one, such as a folder that an update
+// names by a build's hash. Empty for a folder rule or a rule that is not a path.
+func movedProgram(rule string, processes []xnet.Process) string {
+	kind := ""
+	if inner, ok := strings.CutPrefix(rule, "children:"); ok {
+		kind, rule = "children:", inner
+	}
+	windows := runtime.GOOS == "windows"
+	compared := func(path string) []string {
+		if windows {
+			path = strings.ToLower(strings.ReplaceAll(path, `\`, "/"))
+		}
+		return strings.Split(path, "/")
+	}
+	for _, typed := range []string{"flatpak:", "appimage:", "service:"} {
+		if strings.HasPrefix(rule, typed) {
+			return ""
+		}
+	}
+	want := compared(rule)
+	if len(want) < 3 || want[len(want)-1] == "" {
+		return ""
+	}
+	moved := ""
+	for _, process := range processes {
+		got := compared(process.Path)
+		if len(got) != len(want) || got[len(got)-1] != want[len(want)-1] {
+			continue
+		}
+		renamed := 0
+		for i := range got {
+			if got[i] != want[i] {
+				renamed++
+			}
+		}
+		if renamed != 1 {
+			continue
+		}
+		if moved != "" && !slices.Equal(compared(moved), got) {
+			return "" // two programs could be it
+		}
+		moved = process.Path
+	}
+	if moved == "" {
+		return ""
+	}
+	return kind + filepath.FromSlash(moved)
+}
 
 // flatpakInstallations lists the Flatpak installations: the user's and the system's.
 var flatpakInstallations = func() []string {

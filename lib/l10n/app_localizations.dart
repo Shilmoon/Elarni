@@ -5666,11 +5666,11 @@ abstract class AppLocalizations {
   /// **'A bare name matches a program file, not an app bundle. Pick the app from the list.'**
   String get perAppWarningBundleName;
 
-  /// No description provided for @perAppWarningVersioned.
+  /// No description provided for @perAppWarningMoved.
   ///
   /// In en, this message translates to:
-  /// **'Names one version of the app, so it stops matching after the next update.'**
-  String get perAppWarningVersioned;
+  /// **'Not found here. The same program now runs from another folder.'**
+  String get perAppWarningMoved;
 
   /// No description provided for @perAppWarningUnknown.
   ///

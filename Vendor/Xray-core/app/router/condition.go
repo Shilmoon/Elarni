@@ -362,16 +362,16 @@ func NewProcessNameMatcher(names []string) *ProcessNameMatcher {
 		}
 		name := filepath.ToSlash(name)
 		if runtime.GOOS == "windows" {
-			name = windowsPackageFamilyPath(strings.ToLower(name))
+			name = strings.ToLower(name)
 		}
 		// /usr/bin/
 		if strings.HasSuffix(name, "/") {
-			folders = append(folders, name)
+			folders = append(folders, ProcessPathKey(name))
 			continue
 		}
 		// /usr/bin/curl
 		if strings.Contains(name, "/") {
-			absPaths = append(absPaths, name)
+			absPaths = append(absPaths, ProcessPathKey(name))
 			continue
 		}
 		// curl.exe or curl
@@ -394,6 +394,98 @@ func NewProcessNameMatcher(names []string) *ProcessNameMatcher {
 		AppImages:     appImages,
 		Services:      services,
 	}
+}
+
+// ProcessPathKey returns a path as rules and process paths compare it.
+// Elarni: an update moves many apps to a new path, and a rule saved for one version must match the
+// next, whatever installed the app. So paths compare without the numbers that name a version:
+//   - numbers joined by dots, anywhere: app-1.0.9265 (Squirrel), Application\131.0.2903.86
+//     (Edge WebView2), jdk-21.0.2, rufus-4.6.exe;
+//   - a number of three or more digits that ends a folder's name after a space, dot, dash or
+//     underscore, or is that name: Battle.net.15173, Adobe Photoshop 2025;
+//   - a Microsoft Store package's folder, compared as its family (Windows), and a Snap's revision
+//     (Linux).
+//
+// The other version sits beside the one the rule names, in the same folder. Windows also ignores
+// the letter case. Bare names are compared as they are.
+func ProcessPathKey(path string) string {
+	return pathKey(filepath.ToSlash(path), runtime.GOOS)
+}
+
+func pathKey(path, goos string) string {
+	switch goos {
+	case "windows":
+		path = windowsPackageFamilyPath(strings.ToLower(strings.ReplaceAll(path, `\`, "/")))
+	case "linux":
+		path = snapPath(path)
+	}
+	return versionlessPath(path)
+}
+
+// snapPath replaces the revision in /snap/<name>/<revision>/, which each refresh changes: a
+// number, or x and a number for a locally installed Snap.
+func snapPath(path string) string {
+	const parent = "/snap/"
+	if !strings.HasPrefix(path, parent) {
+		return path
+	}
+	name := strings.IndexByte(path[len(parent):], '/')
+	if name <= 0 {
+		return path
+	}
+	start := len(parent) + name + 1
+	end := strings.IndexByte(path[start:], '/')
+	if end < 0 {
+		return path
+	}
+	end += start
+	revision := strings.TrimPrefix(path[start:end], "x")
+	if revision == "" || strings.Trim(revision, "0123456789") != "" {
+		return path
+	}
+	return path[:start] + "*" + path[end:]
+}
+
+// versionlessPath replaces each version number in a path with forward slashes by "*".
+func versionlessPath(path string) string {
+	digit := func(i int) bool { return i < len(path) && path[i] >= '0' && path[i] <= '9' }
+	var key strings.Builder
+	copied := 0
+	for i := 0; i < len(path); {
+		if !digit(i) {
+			i++
+			continue
+		}
+		start := i
+		for digit(i) {
+			i++
+		}
+		version := false
+		for i < len(path) && path[i] == '.' && digit(i+1) {
+			version = true
+			for i++; digit(i); i++ {
+			}
+		}
+		if !version {
+			// A build number or a year that ends a folder's name.
+			version = i-start >= 3 && i < len(path) && path[i] == '/' &&
+				(start == 0 || strings.IndexByte("/ .-_", path[start-1]) >= 0)
+		}
+		if !version {
+			continue
+		}
+		if copied == 0 {
+			key.Grow(len(path))
+		}
+		key.WriteString(path[copied:start])
+		key.WriteByte('*')
+		copied = i
+	}
+	if copied == 0 {
+		return path
+	}
+	key.WriteString(path[copied:])
+	return key.String()
 }
 
 // Elarni: Microsoft Store (MSIX) apps run from <volume>\WindowsApps\<name>_<version>_<arch>_<resource>_<publisher>\,
@@ -564,8 +656,8 @@ func (m *ProcessNameMatcher) matchesSelf(pid int, name, absPath string) bool {
 	reportedName, reportedPath := name, absPath
 	if runtime.GOOS == "windows" {
 		name = strings.TrimSuffix(strings.ToLower(name), ".exe")
-		absPath = windowsPackageFamilyPath(strings.ToLower(absPath))
 	}
+	absPath = ProcessPathKey(absPath)
 	if slices.Contains(m.ProcessNames, name) {
 		return true
 	}

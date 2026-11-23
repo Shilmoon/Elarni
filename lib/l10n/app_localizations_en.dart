@@ -3339,8 +3339,8 @@ class AppLocalizationsEn extends AppLocalizations {
       'A bare name matches a program file, not an app bundle. Pick the app from the list.';
 
   @override
-  String get perAppWarningVersioned =>
-      'Names one version of the app, so it stops matching after the next update.';
+  String get perAppWarningMoved =>
+      'Not found here. The same program now runs from another folder.';
 
   @override
   String get perAppWarningUnknown => 'This rule may not match any program.';
