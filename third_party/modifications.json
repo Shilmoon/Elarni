@@ -6,6 +6,9 @@
       "upstreamRevision": "676eaf66f8f05d4d558ee7a74b4736623d3feeb9",
       "files": [
         "Vendor/Xray-core/app/dispatcher/default.go",
+        "Vendor/Xray-core/app/dispatcher/named_target_test.go",
+        "Vendor/Xray-core/app/dispatcher/quic_names.go",
+        "Vendor/Xray-core/app/dispatcher/quic_names_test.go",
         "Vendor/Xray-core/app/dispatcher/sniffer.go",
         "Vendor/Xray-core/app/dispatcher/sniffer_test.go",
         "Vendor/Xray-core/app/dns/answers.go",

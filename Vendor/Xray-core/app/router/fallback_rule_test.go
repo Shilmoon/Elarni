@@ -83,3 +83,59 @@ func TestFallbackRuleWaitsForTheSecondPass(t *testing.T) {
 		}
 	}
 }
+
+// A connection from the TUN has the dialed address and a sniffed name for routing only. With
+// IPIfNonMatch the name is read first and the dialed address second; the name is never looked up, so
+// the addresses of a decoy name cannot pick the route.
+func TestSniffedNameIsRoutedBeforeTheDialedAddress(t *testing.T) {
+	listed, err := geodata.ParseIPRules([]string{"198.51.100.0/24", "192.168.0.0/16"})
+	common.Must(err)
+	home, err := geodata.ParseIPRules([]string{"203.0.113.0/24"})
+	common.Must(err)
+	site, err := geodata.ParseDomainRules([]string{"domain:site.test"}, geodata.Domain_Substr)
+	common.Must(err)
+	all := []net.Network{net.Network_TCP, net.Network_UDP}
+	rules := []*RoutingRule{
+		{TargetTag: &RoutingRule_Tag{Tag: "proxy"}, Ip: listed},
+		{TargetTag: &RoutingRule_Tag{Tag: "direct"}, Domain: site},
+		{TargetTag: &RoutingRule_Tag{Tag: "direct"}, Ip: home},
+		{TargetTag: &RoutingRule_Tag{Tag: "block"}, Networks: all, Fallback: true},
+	}
+	sniffed := func(ip, name string) *session.Outbound {
+		outbound := &session.Outbound{Target: net.TCPDestination(net.ParseAddress(ip), 443)}
+		if name != "" {
+			outbound.RouteTarget = net.TCPDestination(net.DomainAddress(name), 443)
+		}
+		return outbound
+	}
+	for _, test := range []struct {
+		name     string
+		strategy Config_DomainStrategy
+		outbound *session.Outbound
+		tag      string
+	}{
+		{"a later domain rule wins over an earlier IP rule", Config_IpIfNonMatch, sniffed("198.51.100.7", "www.site.test"), "direct"},
+		{"an unlisted name is routed by the dialed address", Config_IpIfNonMatch, sniffed("198.51.100.7", "other.test"), "proxy"},
+		{"the addresses of a decoy name are not read", Config_IpIfNonMatch, sniffed("192.0.2.9", "decoy.test"), "block"},
+		{"no name: one pass by address", Config_IpIfNonMatch, sniffed("198.51.100.7", ""), "proxy"},
+		{"a private address keeps the written order", Config_IpIfNonMatch, sniffed("192.168.1.5", "www.site.test"), "proxy"},
+		{"AsIs keeps the written order", Config_AsIs, sniffed("198.51.100.7", "www.site.test"), "proxy"},
+		{"IPOnDemand keeps the written order", Config_IpOnDemand, sniffed("198.51.100.7", "www.site.test"), "proxy"},
+	} {
+		// decoy.test resolves into the direct range: a lookup of it would send the flow direct.
+		resolver := &countingDNS{answers: map[string]string{"decoy.test": "203.0.113.5", "other.test": "203.0.113.6"}}
+		r := new(Router)
+		common.Must(r.Init(context.Background(), &Config{DomainStrategy: test.strategy, Rule: rules}, resolver, nil, nil))
+		route, err := r.PickRoute(&routingsession.Context{Outbound: test.outbound, Content: &session.Content{}})
+		if err != nil {
+			t.Errorf("%s: %v", test.name, err)
+			continue
+		}
+		if tag := route.GetOutboundTag(); tag != test.tag || resolver.lookups != 0 {
+			t.Errorf("%s: outbound %s after %d lookups, want %s after none", test.name, tag, resolver.lookups, test.tag)
+		}
+		if ips := route.GetTargetIPs(); len(ips) != 1 {
+			t.Errorf("%s: the route lost the dialed address: %v", test.name, ips)
+		}
+	}
+}
