@@ -1339,6 +1339,8 @@ class AndroidUIE2E {
             // Connect waits for the update; it used to turn into a second Stop.
             ui.onNode(hasText("Stop") and hasClickAction()).assertDoesNotExist()
             ui.onNode(connect).assertIsNotEnabled()
+            // The line shows before the first download is asked for; Cancel is for one that is held.
+            ui.waitUntil(5000) { requests() == before + 1 }
             ui.onNode(cancel).performClick()
             ui.waitUntil(3000) { !repo.state.value.busy }
             assertEquals("Cancel ends the update, not only the download it interrupted", before + 1, requests())
@@ -1353,6 +1355,8 @@ class AndroidUIE2E {
             ui.onNode(hasScrollToIndexAction()).performTouchInput { swipeDown() }
             ui.waitUntil(5000) { ui.onAllNodes(updating).fetchSemanticsNodes().isNotEmpty() }
             ui.onNode(strip).assertDoesNotExist()
+            // The line shows before the first download is asked for; Cancel is for one that is held.
+            ui.waitUntil(5000) { requests() == before + 1 }
             ui.onNode(cancel).performClick()
             ui.waitUntil(3000) { !repo.state.value.busy }
             assertEquals(before + 1, requests())
@@ -1371,6 +1375,15 @@ class AndroidUIE2E {
             ui.waitUntil(3000) { !repo.state.value.busy }
             assertEquals(before + 1, requests())
             ui.waitUntil(3000) { ui.onAllNodes(strip).fetchSemanticsNodes().isEmpty() }
+
+            // A Connect from elsewhere (the tile, an automation) interrupts the download in progress as it always
+            // did; only the update's own Cancel ends the update, which would skip the other subscriptions unseen.
+            before = requests()
+            val interrupted = ui.activity.refreshAll(ids)
+            ui.waitUntil(5000) { requests() == before + 1 }
+            repo.cancel()
+            runBlocking { interrupted.join() }
+            assertEquals(before + 2, requests())
         } }
     }
     @Test fun subscriptionsAndRoutingUseIPhoneSections() {

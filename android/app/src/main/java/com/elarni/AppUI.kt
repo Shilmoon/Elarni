@@ -414,7 +414,7 @@ private val LocalReselect = compositionLocalOf { 0 }
                             val updateLine = detail.isEmpty() && catalog.sources.any { it.has("url") } && (page == "sources" || page == "home" && catalog.nodes.isNotEmpty())
                             if (state.busy && !(state.refreshing && updateLine)) Surface(Modifier.align(Alignment.BottomCenter).fillMaxWidth().testTag("busy-strip"), color = MaterialTheme.colorScheme.surfaceContainer) {
                                 Row(Modifier.padding(horizontal = 12.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                                    LinearProgressIndicator(Modifier.weight(1f)); TextButton({ activity.repository.cancel() }) { Text(tr(R.string.cancel)) }
+                                    LinearProgressIndicator(Modifier.weight(1f)); TextButton({ activity.repository.cancelUpdate() }) { Text(tr(R.string.cancel)) }
                                 }
                             }
                         }
@@ -672,7 +672,7 @@ fun updatedAgo(seconds: Double): String = when {
             if (remote.isNotEmpty() && catalog.nodes.isNotEmpty()) {
                 val (fetched, failed) = Catalog.freshness(remote)
                 // A subscription's own list keeps the strip at the bottom: its narrow layout has no line.
-                FreshnessLine(fetched, failed, clock, refreshing, hint = !pulled, enabled = !state.busy, modifier = modifier, cancel = if (sourceId.isEmpty()) {{ activity.repository.cancel() }} else null, refresh = refresh)
+                FreshnessLine(fetched, failed, clock, refreshing, hint = !pulled, enabled = !state.busy, modifier = modifier, cancel = if (sourceId.isEmpty()) {{ activity.repository.cancelUpdate() }} else null, refresh = refresh)
             }
         }
         if (expanded) Box(Modifier.widthIn(max = 360.dp).weight(0.38f).verticalScroll(rememberScrollState())) { ConnectionPanel(catalog, state, activity, scrollServers) { freshness(Modifier) } }
@@ -923,7 +923,7 @@ private fun protocolParts(node: JSONObject): List<String> {
             Text(tr(R.string.import_a_provider_link_or_local), color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
         } }
         // The update's progress and Cancel, as on Home.
-        if (refreshing) item(key = "updating") { FreshnessLine(null, 0, 0.0, true, hint = false, enabled = false, modifier = Modifier.fillMaxWidth().animateItem(), cancel = { activity.repository.cancel() }) {} }
+        if (refreshing) item(key = "updating") { FreshnessLine(null, 0, 0.0, true, hint = false, enabled = false, modifier = Modifier.fillMaxWidth().animateItem(), cancel = { activity.repository.cancelUpdate() }) {} }
         itemsIndexed(sources, key = { _, source -> source.string("id") }) { index, source ->
             var menu by remember { mutableStateOf(false) }
             Box {
