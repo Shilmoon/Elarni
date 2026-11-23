@@ -4,6 +4,22 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
 
 ## Unreleased
 
+### Fixed
+
+- **A routing profile with FakeDNS: Windows showed "No internet", and names of the local network
+  went to the server.** FakeDNS answered every name with an address from 198.18.0.0/15. Windows
+  compares the answer for `dns.msftncsi.com` with a fixed address, so it reported no internet and
+  Office and Store sign-in failed. The Windows connectivity names, names of the user's own
+  machine and LAN (`.lan`, `.local`, `.home.arpa`, `.internal`, a name without a dot, a local
+  helper's `localhost.` name) and the carrier's Wi-Fi calling gateway now go to the profile's
+  resolver; a name it does not know is "not found", so the system can still ask the LAN.
+- **FakeDNS: an app that sends UDP from one socket to several names reached only the first**
+  (a STUN check of several servers, a game's region probes) on Android, Windows and Linux. The
+  later names' packets were sent to their 198.18.x.x address. Each name is now its own flow.
+- **Custom "Included routes" with FakeDNS sent every connection by name outside the tunnel**,
+  where nothing answers. A custom list now always carries 198.18.0.0/15 (and `fc00::/18` when
+  it routes IPv6), and on Android, iPhone and Mac the tunnel's own DNS address.
+
 ## 0.6.3 - 2026-11-22
 
 ### Added

@@ -906,6 +906,16 @@ pub(crate) fn compile_owned_config(
     }
 
     if routes.fake_dns {
+        // The first resolver again, for the names that keep their real address. It ends the query:
+        // a name it cannot find is not found, not given a fake address by the next server.
+        let mut real = match &dns_servers[0] {
+            Value::String(address) => json!({"address": address}),
+            server => server.clone(),
+        };
+        real["domains"] = json!(FAKE_DNS_REAL_NAMES);
+        real["skipFallback"] = json!(true);
+        real["finalQuery"] = json!(true);
+        dns_servers.push(real);
         dns_servers.insert(0, json!("fakedns"));
     }
     let domain_strategy = match routes.domain_strategy.unwrap_or(RouteDomainStrategy::AsIs) {
@@ -1385,6 +1395,31 @@ pub(crate) fn apply_per_app_routing(
         .push(json!({"tag":reentry, "protocol":"loopback", "settings":{"inboundTag":reentry}}));
     Ok(())
 }
+
+/// Names FakeDNS must not answer, because the address is what the asker needs:
+/// - Windows compares the answer for `dns.msftncsi.com` with a fixed address and reports
+///   "No internet" (and Office and Store sign-in fail) when it differs;
+/// - names that mean the user's own machine or LAN (a local helper's `localhost.` name, the
+///   special-use zones, a single-label name): with a fake address the connection goes to the server,
+///   and with "not found" the system can still ask the LAN by mDNS, LLMNR or NetBIOS;
+/// - the carrier's Wi-Fi calling gateway.
+const FAKE_DNS_REAL_NAMES: [&str; 15] = [
+    "full:dns.msftncsi.com",
+    "domain:msftncsi.com",
+    "domain:msftconnecttest.com",
+    "full:localhost.ptlogin2.qq.com",
+    "full:localhost.sec.qq.com",
+    "full:local.adguard.org",
+    "full:injections.adguard.org",
+    "domain:lan",
+    "domain:local",
+    "domain:localdomain",
+    "domain:localhost",
+    "domain:home.arpa",
+    "domain:internal",
+    "domain:pub.3gppnetwork.org",
+    "regexp:^[^.]+$",
+];
 
 pub(crate) fn validate_routing_model(
     routes: &crate::model::RouteModel,

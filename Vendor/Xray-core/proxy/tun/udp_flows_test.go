@@ -108,6 +108,49 @@ func testUDPStatsPreservePacketDestinations(t *testing.T, payload []byte) {
 	}
 }
 
+// One socket that talks to several FakeDNS addresses (a STUN check of a few servers, a game's
+// region probes): a flow keyed by the socket alone carried them all to the first name's
+// destination, where only the first address is turned back into its name.
+func TestUDPToEachFakeAddressIsItsOwnFlow(t *testing.T) {
+	started := make(chan net.Destination, 4)
+	handler := newUdpConnectionHandler(func(_ net.Conn, dst net.Destination) {
+		started <- dst
+	}, func([]byte, net.Destination, net.Destination) error { return nil })
+	pool := net.ParseAddress("198.18.0.0").IP()
+	handler.fake = func(address net.Address) bool {
+		ip := address.IP()
+		return len(ip) == 4 && ip[0] == pool[0] && ip[1]&0xfe == pool[1]
+	}
+	defer handler.Close()
+	src := net.UDPDestination(net.LocalHostIP, 40000)
+	first := net.UDPDestination(net.ParseAddress("198.18.0.5"), 3478)
+	second := net.UDPDestination(net.ParseAddress("198.18.0.6"), 3478)
+	real := net.UDPDestination(net.ParseAddress("203.0.113.7"), 3478)
+	other := net.UDPDestination(net.ParseAddress("203.0.113.8"), 3478)
+	for _, dst := range []net.Destination{first, second, first, real, other} {
+		handler.HandlePacket(src, dst, buf.FromBytes([]byte("x")))
+	}
+	// The two fake addresses and the first real one start a flow each, in any order; the second
+	// real address rides the socket's full-cone flow.
+	flows := map[net.Destination]int{}
+	for range 3 {
+		select {
+		case dst := <-started:
+			flows[dst]++
+		case <-time.After(time.Second):
+			t.Fatalf("flows %v, want one each for %v, %v and %v", flows, first, second, real)
+		}
+	}
+	if flows[first] != 1 || flows[second] != 1 || flows[real] != 1 {
+		t.Fatalf("flows %v, want one each for %v, %v and %v", flows, first, second, real)
+	}
+	select {
+	case dst := <-started:
+		t.Fatalf("an extra flow started for %v", dst)
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
 func TestUDPClosingOldSessionPreservesReusedSource(t *testing.T) {
 	connections := make(chan net.Conn, 3)
 	handler := newUdpConnectionHandler(func(conn net.Conn, _ net.Destination) {

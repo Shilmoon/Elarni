@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/netip"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -16,6 +17,7 @@ import (
 	"github.com/xtls/xray-core/common/protocol"
 	"github.com/xtls/xray-core/common/session"
 	"github.com/xtls/xray-core/core"
+	"github.com/xtls/xray-core/features/dns"
 	"github.com/xtls/xray-core/features/policy"
 	"github.com/xtls/xray-core/features/routing"
 	"github.com/xtls/xray-core/features/stats"
@@ -42,6 +44,14 @@ type Handler struct {
 	tcpAdmission, udpAdmission sessionAdmission
 	dnsAdmission               sessionAdmission // UDP port 53: lookups get through a full UDP table
 	dnsIdle, udpIdle           time.Duration
+	// Elarni: the FakeDNS pool, when the instance has one; set while the instance is built.
+	fakeDNS atomic.Pointer[dns.FakeDNSEngineRev0]
+}
+
+// fakeAddress reports an address FakeDNS gave out for a name.
+func (t *Handler) fakeAddress(address net.Address) bool {
+	engine := t.fakeDNS.Load()
+	return engine != nil && address.Family().IsIP() && (*engine).IsIPInIPPool(address)
 }
 
 type tunUDPStatsWriter struct {
@@ -398,6 +408,11 @@ func (t *Handler) Process(ctx context.Context, network net.Network, conn stat.Co
 func init() {
 	common.Must(common.RegisterConfig((*Config)(nil), func(ctx context.Context, config interface{}) (interface{}, error) {
 		t := &Handler{config: config.(*Config)}
+		core.OptionalFeatures(ctx, func(engine dns.FakeDNSEngine) {
+			if pool, ok := engine.(dns.FakeDNSEngineRev0); ok {
+				t.fakeDNS.Store(&pool)
+			}
+		})
 		err := core.RequireFeatures(ctx, func(pm policy.Manager, dispatcher routing.Dispatcher) error {
 			return t.Init(ctx, pm, dispatcher)
 		})

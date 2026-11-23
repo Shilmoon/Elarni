@@ -4,6 +4,7 @@ import (
 	"errors"
 	"go4.org/netipx"
 	"net/netip"
+	"slices"
 )
 
 type WindowsRoutePolicy struct {
@@ -46,6 +47,17 @@ func WindowsRoutes(policy *WindowsRoutePolicy) ([]netip.Prefix, error) {
 	}
 	if policy.IncludeAllNetworks || policy.BlockWithoutVPN {
 		included = append(included, netip.MustParsePrefix("0.0.0.0/0"), netip.MustParsePrefix("::/0"))
+	}
+	// Elarni: with FakeDNS every name resolves into these ranges, so a list without them sends every
+	// connection by name to the physical network. The IPv6 range joins a list that routes IPv6.
+	routesIPv6 := slices.ContainsFunc(included, func(p netip.Prefix) bool { return p.Addr().Is6() })
+	for _, pool := range fakeDNSPools {
+		if pool.Addr().Is6() && !routesIPv6 {
+			continue
+		}
+		if !slices.ContainsFunc(included, func(p netip.Prefix) bool { return p.Bits() <= pool.Bits() && p.Contains(pool.Addr()) }) {
+			included = append(included, pool)
+		}
 	}
 	excluded := append([]string{}, policy.ExcludedRoutes...)
 	if !policy.BlockWithoutVPN {
