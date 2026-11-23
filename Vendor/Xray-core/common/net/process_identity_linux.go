@@ -81,6 +81,9 @@ func AppImage(pid int, path string) string {
 // ProcessServices names Windows services; Linux has none.
 func ProcessServices(int, string) []string { return nil }
 
+// PackageFamily names a Microsoft Store package, which Windows has.
+func PackageFamily(int) string { return "" }
+
 // AppRule returns the rule for the app a process belongs to when its path does not name it:
 // its Flatpak app or its AppImage.
 func AppRule(pid int, _, path string) string {

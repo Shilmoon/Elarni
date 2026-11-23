@@ -1220,6 +1220,8 @@ pub(crate) fn apply_per_app_routing(
                 || name.strip_prefix("children:").is_some_and(|inner| {
                     inner.is_empty() || inner == "-1" || inner.starts_with("children:")
                 })
+                // "exact:" names a path.
+                || name.strip_prefix("children:").unwrap_or(name) == "exact:"
         })
     {
         return Err(CompileError::InvalidRoute);

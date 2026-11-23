@@ -2879,10 +2879,24 @@ fn per_app_children_rules_follow_the_direct_ones() {
     );
     assert_eq!(listed[0]["outboundTag"], listed[3]["outboundTag"]);
     assert_eq!(listed[1]["outboundTag"], "elarni-direct");
-    for invalid in ["children:", "children:-1", "children:children:/opt/x"] {
+    for invalid in [
+        "children:",
+        "children:-1",
+        "children:children:/opt/x",
+        "exact:",
+        "children:exact:",
+    ] {
         runtime.per_app_processes = vec![invalid.into()];
         runtime.per_app_targets.clear();
         assert!(compile_per_app(&runtime).is_err(), "{invalid}");
+    }
+    // "exact:<path>" names a path as written; the core compares it.
+    for valid in [
+        "exact:/opt/python/3.12/bin/python",
+        "children:exact:/opt/python/3.12/",
+    ] {
+        runtime.per_app_processes = vec![valid.into()];
+        assert!(compile_per_app(&runtime).is_ok(), "{valid}");
     }
 }
 

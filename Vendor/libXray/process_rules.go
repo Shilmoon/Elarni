@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"unicode"
 
@@ -20,38 +21,79 @@ import (
 
 type ProcessRuleCheckRequest struct {
 	Rules []string `json:"rules"`
+	// The rules the editor's app list gives its apps: the answer tells which of them a saved
+	// rule already is.
+	Apps []string `json:"apps,omitempty"`
 }
 
 type ProcessRuleWarning struct {
-	// missing, folder, notFolder, script, symlink, case, launcher or bundleName. Flatpak, AppImage
-	// and service rules can be missing; an AppImage rule's path can also need a fix.
+	// missing, moved, folder, notFolder, script, symlink, case, launcher or bundleName. Flatpak,
+	// AppImage and service rules can be missing; an AppImage or exact rule's path can also need
+	// a fix.
 	Code       string `json:"code"`
 	Suggestion string `json:"suggestion,omitempty"`
+}
+
+// ProcessRuleVersion is one of the paths a rule names on this computer: the rule's own, the
+// same in another build of its app, or in another version installed beside it.
+type ProcessRuleVersion struct {
+	// The program for a rule that names one, the folder for a folder rule.
+	Path string `json:"path"`
+	// The programs that run from it and that the rule's own path takes, not the ones they start.
+	Running int `json:"running"`
+	// The rule's own path.
+	Own bool `json:"own,omitempty"`
 }
 
 type ProcessRuleCheck struct {
 	Rule     string               `json:"rule"`
 	Running  int                  `json:"running"`
 	Warnings []ProcessRuleWarning `json:"warnings"`
+	// What the rule names here, when that is not its own path alone: its own first. The editor
+	// tells a rule that takes two versions at once, and offers it for one path ("exact:").
+	Versions []ProcessRuleVersion `json:"versions,omitempty"`
+	// The rule names a build, which routing reads it without: made exact, it stops following
+	// its app's updates. Any other rule is the same either way.
+	Follows bool `json:"follows,omitempty"`
 }
 
 type ProcessRuleCheckResponse struct {
 	Rules []ProcessRuleCheck `json:"rules"`
 	// False when the running programs could not be listed; the counts are then 0.
 	Listed bool `json:"listed"`
+	// For each of the request's apps that a saved rule names, that rule: the app's own rule, or
+	// one written for another version of it. The editor compares no rule text itself.
+	Same map[string]string `json:"same,omitempty"`
 }
 
 func invokeCheckProcessRules(payload json.RawMessage) string {
 	request, err := decodePayload[ProcessRuleCheckRequest](payload)
-	if err != nil || !validProcessRules(request.Rules) {
+	if err != nil || !validProcessRules(request.Rules, 256) || !validProcessRules(request.Apps, 4096) {
 		return encodeInvokeResponse(nil, errors.New("invalid_rules"))
 	}
-	return encodeInvokeResponse(checkProcessRules(request.Rules), nil)
+	response := checkProcessRules(request.Rules)
+	response.Same = sameProcessRules(request.Rules, request.Apps)
+	return encodeInvokeResponse(response, nil)
 }
 
-// The same bounds as per-app settings: 256 rules of 1024 bytes without control characters.
-func validProcessRules(rules []string) bool {
-	if len(rules) > 256 {
+// sameProcessRules maps each app's rule to the first saved rule that names the same thing.
+func sameProcessRules(rules, apps []string) map[string]string {
+	same := map[string]string{}
+	for _, app := range apps {
+		for _, rule := range rules {
+			if router.SameProcessRule(rule, app) {
+				same[app] = rule
+				break
+			}
+		}
+	}
+	return same
+}
+
+// The same bounds as per-app settings: 256 rules of 1024 bytes without control characters. An
+// app list is longer.
+func validProcessRules(rules []string, most int) bool {
+	if len(rules) > most {
 		return false
 	}
 	for _, rule := range rules {
@@ -63,22 +105,103 @@ func validProcessRules(rules []string) bool {
 	return true
 }
 
+// listProcesses is swapped by tests to name the running programs.
+var listProcesses = xnet.ListProcesses
+
 func checkProcessRules(rules []string) ProcessRuleCheckResponse {
-	processes, err := xnet.ListProcesses()
+	processes, err := listProcesses()
 	response := ProcessRuleCheckResponse{Rules: make([]ProcessRuleCheck, 0, len(rules)), Listed: err == nil}
 	for _, rule := range rules {
 		check := ProcessRuleCheck{Rule: rule, Warnings: processRuleWarnings(rule)}
 		if rule != "-1" {
 			matcher := router.NewProcessNameMatcher([]string{rule})
-			for _, process := range processes {
-				if matcher.MatchesProcess(process.PID, process.Name, process.Path) {
-					check.Running++
+			// The programs a "children:" rule's program starts are not versions of it.
+			own := matcher
+			if inner, ok := strings.CutPrefix(rule, "children:"); ok {
+				own = router.NewProcessNameMatcher([]string{inner})
+			}
+			versions := ruleVersions{rule: rule}
+			// The disk is asked only where the warnings ask it: not on a network drive.
+			if localRule(strings.TrimPrefix(rule, "children:")) {
+				for _, path := range router.RuleVersionsOnDisk(rule) {
+					versions.add(path, 0)
 				}
+			}
+			for _, process := range processes {
+				if !matcher.MatchesProcess(process.PID, process.Name, process.Path) {
+					continue
+				}
+				check.Running++
+				if own != matcher && !own.MatchesProcess(process.PID, process.Name, process.Path) {
+					continue
+				}
+				if version := router.RuleVersion(rule, process.Path); version != "" {
+					versions.add(version, 1)
+				}
+			}
+			check.Versions = versions.told()
+			check.Follows = router.RuleNamesBuild(rule)
+		}
+		if len(check.Warnings) == 1 && check.Warnings[0].Code == "missing" {
+			// What runs is here, wherever the rule's path points: routing compares paths without
+			// version numbers, and this check may not see every folder.
+			if check.Running > 0 {
+				check.Warnings = nil
+			} else if moved := movedProgram(rule, processes); moved != "" {
+				check.Warnings = []ProcessRuleWarning{{Code: "moved", Suggestion: moved}}
 			}
 		}
 		response.Rules = append(response.Rules, check)
 	}
 	return response
+}
+
+// localRule reports a rule's path that the check may look for on the disk (localRulePath). Tests
+// replace it.
+var localRule = localRulePath
+
+// ruleVersions collects the paths a rule names on this computer, in the order they were found.
+type ruleVersions struct {
+	rule  string
+	found []ProcessRuleVersion
+}
+
+// written is a path as paths compare on this system, whichever way its folders are separated.
+func (v *ruleVersions) written(path string) string {
+	if runtime.GOOS == "windows" {
+		return strings.ToLower(strings.ReplaceAll(path, "/", `\`))
+	}
+	return path
+}
+
+func (v *ruleVersions) add(path string, running int) {
+	written := v.written(path)
+	for i := range v.found {
+		if v.written(v.found[i].Path) == written {
+			v.found[i].Running += running
+			return
+		}
+	}
+	own := written == v.written(strings.TrimPrefix(v.rule, "children:"))
+	v.found = append(v.found, ProcessRuleVersion{Path: path, Running: running, Own: own})
+}
+
+// told returns the versions when they tell more than the rule does: nothing for a rule that
+// names its own path only. The rule's own path is first and the rest are in their paths' order.
+func (v *ruleVersions) told() []ProcessRuleVersion {
+	if len(v.found) == 0 || len(v.found) == 1 && v.found[0].Own {
+		return nil
+	}
+	slices.SortStableFunc(v.found, func(a, b ProcessRuleVersion) int {
+		if a.Own != b.Own {
+			if a.Own {
+				return -1
+			}
+			return 1
+		}
+		return strings.Compare(v.written(a.Path), v.written(b.Path))
+	})
+	return v.found
 }
 
 func processRuleWarnings(rule string) []ProcessRuleWarning {
@@ -127,6 +250,16 @@ func processRuleWarnings(rule string) []ProcessRuleWarning {
 		}
 		return warn("missing", "")
 	}
+	// "exact:" names its path alone, not what an update put beside it or in its place.
+	rule, exact := strings.CutPrefix(rule, "exact:")
+	if exact {
+		warn = func(code, suggestion string) []ProcessRuleWarning {
+			if suggestion != "" {
+				suggestion = "exact:" + suggestion
+			}
+			return []ProcessRuleWarning{{Code: code, Suggestion: suggestion}}
+		}
+	}
 	windows := runtime.GOOS == "windows"
 	slashed := rule
 	if windows {
@@ -142,7 +275,7 @@ func processRuleWarnings(rule string) []ProcessRuleWarning {
 		}
 		return nil
 	}
-	if !localRulePath(rule) {
+	if !localRule(rule) {
 		return nil
 	}
 	sep := string(filepath.Separator)
@@ -153,12 +286,18 @@ func processRuleWarnings(rule string) []ProcessRuleWarning {
 	}
 	path := filepath.FromSlash(strings.TrimSuffix(slashed, "/"))
 	info, err := ruleLstat(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		if real := realCase(path); real != "" && !windows {
+			return warn("case", real+suffix)
+		}
+		// The rule also names the app's other versions; the checks below are of the one on disk.
+		if !exact {
+			path, info, err = otherVersion(path, folder)
+		}
+	}
 	if err != nil {
 		if !errors.Is(err, fs.ErrNotExist) {
 			return nil // unreadable here, as from the App Sandbox
-		}
-		if real := realCase(path); real != "" && !windows {
-			return warn("case", real+suffix)
 		}
 		return warn("missing", "")
 	}
@@ -197,6 +336,155 @@ func processRuleWarnings(rule string) []ProcessRuleWarning {
 
 // ruleLstat is swapped by tests to see which paths a check opens.
 var ruleLstat = os.Lstat
+
+// otherVersion finds what a path that is not on disk names for routing: the same path through
+// the folders of another version, which routing compares without what names a build
+// (router.ProcessPathKey), and, when there is none, through one folder that replaced the rule's
+// own, with the same name but for its numbers (router.PathPartShape). Routing follows a renamed
+// folder only when no build of what the rule names is left, so that is looked for first, and a
+// search that could not finish is not followed by the other. The error is fs.ErrNotExist when
+// there is none, and another when a folder on the way could not be read, so the answer is
+// unknown.
+func otherVersion(path string, folder bool) (string, fs.FileInfo, error) {
+	sep := string(filepath.Separator)
+	volume := filepath.VolumeName(path)
+	parts := strings.FieldsFunc(path[len(volume):], func(r rune) bool { return r == filepath.Separator })
+	if len(parts) == 0 {
+		return "", nil, fs.ErrNotExist
+	}
+	const most = 32 // folders listed for one rule, as routing lists (rulePathListings)
+	listings := most
+	var unreadable error
+	shape := func(name string) string {
+		if runtime.GOOS == "windows" {
+			name = strings.ToLower(name)
+		}
+		return router.PathPartShape(name)
+	}
+	// replaced tells that a folder on the way already stands for one of the rule's.
+	var find func(dir string, parts []string, replaced bool) (string, fs.FileInfo)
+	find = func(dir string, parts []string, replaced bool) (string, fs.FileInfo) {
+		last := len(parts) == 1
+		follow := func(candidate string, replaced bool) (string, fs.FileInfo) {
+			info, err := ruleLstat(candidate)
+			switch {
+			case err != nil && !errors.Is(err, fs.ErrNotExist):
+				unreadable = err
+			case err == nil && last:
+				return candidate, info
+			case err == nil:
+				return find(candidate, parts[1:], replaced)
+			}
+			return "", nil
+		}
+		named := filepath.Join(dir, parts[0])
+		if found, info := follow(named, replaced); info != nil {
+			return found, info
+		}
+		if listings == 0 {
+			return "", nil
+		}
+		listings--
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			if !errors.Is(err, fs.ErrNotExist) {
+				unreadable = err
+			}
+			return "", nil
+		}
+		// A version number ends a folder's name, not a file's.
+		end := sep
+		if last && !folder {
+			end = ""
+		}
+		key := router.ProcessPathKey(named + end)
+		var others []string
+		for _, entry := range entries {
+			candidate := filepath.Join(dir, entry.Name())
+			if entry.Name() == parts[0] {
+				continue
+			}
+			if router.ProcessPathKey(candidate+end) != key {
+				if named := shape(parts[0]); !replaced && named != "" && named == shape(entry.Name()) {
+					others = append(others, candidate)
+				}
+				continue
+			}
+			if found, info := follow(candidate, replaced); info != nil {
+				return found, info
+			}
+		}
+		for _, candidate := range others {
+			if found, info := follow(candidate, true); info != nil {
+				return found, info
+			}
+		}
+		return "", nil
+	}
+	for _, replaced := range []bool{true, false} {
+		if found, info := find(volume+sep, parts, replaced); info != nil {
+			return found, info, nil
+		}
+		if unreadable != nil {
+			return "", nil, unreadable
+		}
+		if listings == 0 {
+			break
+		}
+		listings = most
+	}
+	return "", nil, fs.ErrNotExist
+}
+
+// movedProgram returns the running program that a rule's missing program seems to have become:
+// the only one with its file name in the same folders but one, such as a folder that an update
+// names by a build's hash. Empty for a folder rule or a rule that is not a path.
+func movedProgram(rule string, processes []xnet.Process) string {
+	kind := ""
+	if inner, ok := strings.CutPrefix(rule, "children:"); ok {
+		kind, rule = "children:", inner
+	}
+	windows := runtime.GOOS == "windows"
+	compared := func(path string) []string {
+		if windows {
+			path = strings.ToLower(strings.ReplaceAll(path, `\`, "/"))
+		}
+		return strings.Split(path, "/")
+	}
+	for _, typed := range []string{"flatpak:", "appimage:", "service:", "exact:"} {
+		if strings.HasPrefix(rule, typed) {
+			return ""
+		}
+	}
+	want := compared(rule)
+	if len(want) < 3 || want[len(want)-1] == "" {
+		return ""
+	}
+	moved := ""
+	for _, process := range processes {
+		got := compared(process.Path)
+		if len(got) != len(want) || got[len(got)-1] != want[len(want)-1] {
+			continue
+		}
+		renamed := 0
+		for i := range got {
+			if got[i] != want[i] {
+				renamed++
+			}
+		}
+		if renamed != 1 {
+			continue
+		}
+		if moved != "" && !slices.Equal(compared(moved), got) {
+			return "" // two programs could be it
+		}
+		moved = process.Path
+	}
+	if moved == "" {
+		return ""
+	}
+	return kind + filepath.FromSlash(moved)
+}
 
 // flatpakInstallations lists the Flatpak installations: the user's and the system's.
 var flatpakInstallations = func() []string {

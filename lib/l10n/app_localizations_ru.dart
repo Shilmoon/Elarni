@@ -3400,8 +3400,8 @@ class AppLocalizationsRu extends AppLocalizations {
       'Имя без пути соответствует файлу программы, а не пакету приложения. Выберите приложение из списка.';
 
   @override
-  String get perAppWarningVersioned =>
-      'Указывает одну версию приложения и перестанет срабатывать после следующего обновления.';
+  String get perAppWarningMoved =>
+      'Здесь не найдено. Та же программа теперь запускается из другой папки.';
 
   @override
   String get perAppWarningUnknown =>
@@ -3414,6 +3414,31 @@ class AppLocalizationsRu extends AppLocalizations {
 
   @override
   String get perAppUseSuggested => 'Использовать';
+
+  @override
+  String perAppAlsoMatches(String path) {
+    return 'Также соответствует $path';
+  }
+
+  @override
+  String perAppAlsoMatchesMore(String path, int count) {
+    return 'Также соответствует $path и ещё $count';
+  }
+
+  @override
+  String get perAppOnlyThisVersion => 'Только эта версия';
+
+  @override
+  String get perAppFollowUpdates => 'Следовать за обновлениями';
+
+  @override
+  String get perAppFollowUpdatesHelp =>
+      'Правило соответствует и другим версиям этого приложения. Выключено: только этот точный путь.';
+
+  @override
+  String perAppMatchesNow(String paths) {
+    return 'Сейчас соответствует: $paths';
+  }
 
   @override
   String get perAppConnections => 'Недавние подключения';

@@ -1,8 +1,8 @@
 part of 'desktop_proxy.dart';
 
 extension _ProxyCommands on DesktopProxy {
-  Future<CatalogMap> _stop({required bool release}) => _disconnecting ??=
-      () async {
+  Future<CatalogMap> _stop({required bool release}) =>
+      _disconnecting ??= () async {
         _automation.manualStop();
         await _disconnect(release: release);
         // Stop must clear persisted intent even as the first command. Loading
@@ -57,9 +57,13 @@ extension _ProxyCommands on DesktopProxy {
     if (method == 'checkProcessRules') {
       // Rule checks read this computer's programs, not the catalog.
       final rules = arguments?['rules'];
-      if (rules is! List || rules.any((rule) => rule is! String))
+      final apps = arguments?['apps'] ?? const <String>[];
+      if (rules is! List ||
+          rules.any((rule) => rule is! String) ||
+          apps is! List ||
+          apps.any((app) => app is! String))
         throw desktopError('invalid_rules');
-      return _native('checkProcessRules', {'rules': rules});
+      return _native('checkProcessRules', {'rules': rules, 'apps': apps});
     }
     final readOnly = {
       'state',

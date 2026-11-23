@@ -3339,8 +3339,8 @@ class AppLocalizationsEn extends AppLocalizations {
       'A bare name matches a program file, not an app bundle. Pick the app from the list.';
 
   @override
-  String get perAppWarningVersioned =>
-      'Names one version of the app, so it stops matching after the next update.';
+  String get perAppWarningMoved =>
+      'Not found here. The same program now runs from another folder.';
 
   @override
   String get perAppWarningUnknown => 'This rule may not match any program.';
@@ -3352,6 +3352,31 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get perAppUseSuggested => 'Use suggested rule';
+
+  @override
+  String perAppAlsoMatches(String path) {
+    return 'Also matches $path';
+  }
+
+  @override
+  String perAppAlsoMatchesMore(String path, int count) {
+    return 'Also matches $path and $count more';
+  }
+
+  @override
+  String get perAppOnlyThisVersion => 'Only this version';
+
+  @override
+  String get perAppFollowUpdates => 'Follow updates';
+
+  @override
+  String get perAppFollowUpdatesHelp =>
+      'Also match this app\'s other versions. Off: only this exact path.';
+
+  @override
+  String perAppMatchesNow(String paths) {
+    return 'Matches now: $paths';
+  }
 
   @override
   String get perAppConnections => 'Recent connections';

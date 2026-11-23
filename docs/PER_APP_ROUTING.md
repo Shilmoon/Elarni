@@ -32,6 +32,61 @@ This is routing, not a firewall or kill switch.
 A bare name matches in any folder, and a path ending in `/` matches everything
 below it.
 
+## Rules and app updates
+
+An update moves many apps to a new path, each installer in its own way, so a rule for a path
+would stop matching. On Windows, macOS and Linux, paths are compared without what names a
+build, in rules and in running programs alike:
+
+- numbers joined by dots, anywhere in the path: `app-1.0.9265` (Discord and other Squirrel
+  apps), `Application\131.0.2903.86` (Edge WebView2), `jdk-21.0.2`, `rufus-4.6.exe`;
+- a number of three or more digits that ends a folder's name after a dot, dash or underscore:
+  `Battle.net.15173`;
+- a build's hash that ends a folder's name or is the whole name, eight or more hexadecimal
+  characters: Roblox's `version-<hash>`, Visual Studio Code's `<commit>` folder;
+- a Microsoft Store app's package folder, compared as its package family (Windows), a Snap's
+  revision (Linux), the hash that starts a Nix store path, and the folder macOS runs a
+  quarantined app from (see below).
+
+So a rule saved for one version of an app matches every version, whichever way it was added:
+from the app list, a file, **Recent connections**, a preset or a pasted profile. A rule saved
+before an update needs no change. Two versions installed side by side, such as
+`Python\3.12\python.exe` and `Python\3.13\python.exe`, are one app to a rule for either. Bare
+names are compared as they are.
+
+A number that is part of a name tells nothing by itself: `jdk-21` and `jdk-22`, `Python312`
+and `Python313`, `Adobe Photoshop 2025` and `2026` are the next version, while `Anno 1800` and
+`Anno 2070` are two games. The disk tells them apart. While what a rule names is on this
+computer, in the rule's own build or another, the rule names only that. Once none is left,
+the rule matches a program that runs from the same folders but one, when that one folder's
+name differs only in its numbers, a pre-release's suffix (`-beta1`, `-rc.1`) or a build's
+hash. So the rule moves with an update that replaces the folder, and two products installed
+side by side stay two apps, also when each keeps its builds in folders of their own (two
+channels of one editor, two Store apps). A folder that an uninstaller left without the
+program does not hold the rule back. An update that keeps the old program beside the new
+one, in a layout not listed above, is not followed: pick the app again, or list the folder
+that holds its versions. A rule for a program on a network share is not followed.
+
+To name one path and nothing else, write `exact:` before it (**Add apps** › **Edit
+executable rules**):
+`exact:C:\Python\3.12\python.exe`, or `exact:C:\Python\3.12\` for a folder. Such a rule is
+compared as it is written (Windows still ignores the letter case) and follows no update.
+
+On desktop the list shows this choice. A rule's **Details** has **Follow updates** when the
+rule follows: its path names a build, or it took the folder that replaced its own. Turned
+off, the rule becomes the `exact:` rule of the path that is on this computer now; turned on,
+an `exact:` rule is its path again. Under the switch, "Matches now" lists what the rule names
+on this computer when that is more than its own path. When programs run from two versions
+at once, as with two Pythons, the rule's row says so ("Also matches
+`Python\3.13\python.exe`"), and **Only this version** makes it the `exact:` rule of its own
+path. A version with nothing running from it, such as the build an updater left on the disk,
+is in Details only.
+
+On macOS an app that is still quarantined, opened where it was downloaded or from its disk
+image, runs from a copy in `.../AppTranslocation/<random>/d/`, a new folder at each start. A
+rule for an app's bundle, such as `~/Downloads/Example.app/`, matches the copy by the bundle's
+name, and a rule saved from the copy's path matches its next start.
+
 The app list shows running programs and installed apps: on Windows the Start menu's
 programs and installed Microsoft Store apps, such as Claude, on macOS the Applications
 folders, and on Linux the apps with a desktop entry. **Choose app file** adds any other program.
@@ -43,14 +98,22 @@ Snap, so each gets the same rule as when picked from the list; an app it does no
 shown as not found. Apps that show web pages through WebView2 on Windows run
 `msedgewebview2.exe`, which the browsers preset does not include.
 
-Apps picked from the list get a rule that still matches after the app updates. On
+Apps picked from the list get the rule that names the whole app where the list knows its
+layout, so the app's other programs match too. On
 desktop platforms an app that keeps each version in its own folder beside the
 previous one matches that folder of versions, when it holds nothing else. Claude
 Code, which the Claude app installs as `claude-code/<version>/<build>/`, is one; on
 Linux, so is `~/.local/share/claude/versions/`. On Windows, a Microsoft Store app's
 folder `WindowsApps\<name>_<version>_<arch>_<resource>_<publisher>\` matches as
 `WindowsApps\<name>_<publisher>\`, its package family, so rules saved for an earlier
-version match too.
+version match too. That rule also takes the app's processes that run from Windows's own
+folder, found by the package Windows runs them as: `WWAHost.exe`, which hosts some Store
+apps, and `backgroundTaskHost.exe`, which runs their background tasks. **Recent connections**
+names such a process by its app.
+
+The app list marks an app as listed when a saved rule is that app's rule: the same rule, one
+saved for another version, or one with the programs the app starts. The core that routes
+tells the editor so; the editor compares no paths itself.
 
 ## Apps a path does not name
 
@@ -148,16 +211,24 @@ app's user ID and changes nothing.
 On desktop, each listed rule shows how many running programs it matches now, counted
 with the same matcher routing uses, and warns when it may match nothing:
 
-- the file or folder is not on this computer;
+- the file or folder is not on this computer, in any version, nor in a folder that replaced
+  the rule's own (see Rules and app updates). A rule that matches a running program is never
+  reported as not found, and neither is one in a folder the check may not list, such as
+  `WindowsApps`. An `exact:` rule is checked as the one path it names;
+- the program is gone, and the only running program with its file name runs from the same
+  folders but one that routing does not follow by itself, such as a folder with another name:
+  the rule is offered that path;
 - a folder rule lacks its trailing separator, or names a file;
 - the file is a script, a link or a launcher (`.lnk`, `.bat`, a Squirrel app's root
   `.exe`), so another program makes the connections;
 - the letter case differs from the disk (macOS and Linux compare it);
 - a bare `Example.app` on macOS, which names no program;
-- the rule names one version of an app that keeps each version in its own folder;
 - a Flatpak app or Windows service that is not installed, or an AppImage file that is gone.
 
 Where a better rule exists, **Use suggested rule** replaces it, keeping its target.
+The check also answers which paths a rule names on this computer, each with the programs
+running from it, and whether its path names a build: the row's "Also matches" line and
+**Follow updates** in Details come from it (see Rules and app updates).
 On Windows only rules on local fixed drives are checked, so a network path in an
 imported profile is never opened. On Android, a listed app that is not installed is
 shown as such. With **Only listed** and none of the listed apps installed, Connect fails

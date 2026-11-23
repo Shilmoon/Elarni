@@ -5666,11 +5666,11 @@ abstract class AppLocalizations {
   /// **'A bare name matches a program file, not an app bundle. Pick the app from the list.'**
   String get perAppWarningBundleName;
 
-  /// No description provided for @perAppWarningVersioned.
+  /// No description provided for @perAppWarningMoved.
   ///
   /// In en, this message translates to:
-  /// **'Names one version of the app, so it stops matching after the next update.'**
-  String get perAppWarningVersioned;
+  /// **'Not found here. The same program now runs from another folder.'**
+  String get perAppWarningMoved;
 
   /// No description provided for @perAppWarningUnknown.
   ///
@@ -5689,6 +5689,42 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Use suggested rule'**
   String get perAppUseSuggested;
+
+  /// No description provided for @perAppAlsoMatches.
+  ///
+  /// In en, this message translates to:
+  /// **'Also matches {path}'**
+  String perAppAlsoMatches(String path);
+
+  /// No description provided for @perAppAlsoMatchesMore.
+  ///
+  /// In en, this message translates to:
+  /// **'Also matches {path} and {count} more'**
+  String perAppAlsoMatchesMore(String path, int count);
+
+  /// No description provided for @perAppOnlyThisVersion.
+  ///
+  /// In en, this message translates to:
+  /// **'Only this version'**
+  String get perAppOnlyThisVersion;
+
+  /// No description provided for @perAppFollowUpdates.
+  ///
+  /// In en, this message translates to:
+  /// **'Follow updates'**
+  String get perAppFollowUpdates;
+
+  /// No description provided for @perAppFollowUpdatesHelp.
+  ///
+  /// In en, this message translates to:
+  /// **'Also match this app\'s other versions. Off: only this exact path.'**
+  String get perAppFollowUpdatesHelp;
+
+  /// No description provided for @perAppMatchesNow.
+  ///
+  /// In en, this message translates to:
+  /// **'Matches now: {paths}'**
+  String perAppMatchesNow(String paths);
 
   /// No description provided for @perAppConnections.
   ///
