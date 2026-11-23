@@ -707,6 +707,66 @@ fn routing_accepts_doh_without_a_bootstrap_ip() {
     assert_eq!(route_model.dns_servers[0], "https://dns.example/dns-query");
 }
 
+// Happ's default profile "fills in missing or incorrect parameters". A value in another letter
+// case, or a DNS type another client defines, failed the whole import as invalid JSON.
+#[test]
+fn routing_profiles_accept_values_in_any_case_and_other_dns_types() {
+    use crate::routing::{DnsType, DomainStrategy, RouteOrder, RoutingError};
+    let decode = |value: Value| {
+        let RoutingImport::Add {
+            profile,
+            route_model,
+            ..
+        } = decode_routing(&value.to_string()).unwrap()
+        else {
+            panic!("expected routing profile")
+        };
+        (profile, route_model)
+    };
+    let (profile, _) = decode(json!({
+        "Name": "Case", "RouteOrder": "BLOCK_DIRECT_PROXY", "DomainStrategy": "ipifnonmatch",
+        "RemoteDNSType": "doh", "RemoteDNSDomain": "https://dns.example/dns-query",
+        "DomesticDNSType": "UDP", "DomesticDNSIP": "9.9.9.9"
+    }));
+    assert_eq!(profile.route_order, RouteOrder::BlockDirectProxy);
+    assert_eq!(profile.domain_strategy, DomainStrategy::IPIfNonMatch);
+    assert_eq!(profile.remote_dns_type, DnsType::DoH);
+    assert_eq!(profile.domestic_dns_type, DnsType::DoU);
+    // The stored profile carries the names this client writes.
+    let stored = serde_json::to_value(&profile).unwrap();
+    assert_eq!(stored["RouteOrder"], "block-direct-proxy");
+    assert_eq!(stored["DomesticDNSType"], "DoU");
+
+    // A type this client cannot speak takes the default resolver of its side, not plain DNS to
+    // the same address; the other side keeps what the profile says.
+    let (profile, route_model) = decode(json!({
+        "Name": "DoT", "RemoteDNSType": "DoT", "RemoteDNSDomain": "dns.example",
+        "RemoteDNSIP": "9.9.9.9", "RemoteDns": "9.9.9.9",
+        "DomesticDNSType": "DoU", "DomesticDNSIP": "77.88.8.8"
+    }));
+    assert_eq!(profile.remote_dns_type, DnsType::DoH);
+    assert_eq!(
+        route_model.dns_servers,
+        ["https://cloudflare-dns.com/dns-query", "77.88.8.8"]
+    );
+
+    // An order that is not one of the six, and a value of the wrong type, still fail.
+    for value in [
+        json!({"Name": "Order", "RouteOrder": "proxy-first"}),
+        json!({"Name": "Order", "RouteOrder": 1}),
+        json!({"Name": "Type", "RemoteDNSType": true}),
+        json!({"Name": "Strategy", "DomainStrategy": "UseIP"}),
+    ] {
+        assert!(
+            matches!(
+                decode_routing(&value.to_string()),
+                Err(RoutingError::InvalidJson)
+            ),
+            "{value}"
+        );
+    }
+}
+
 // Happ fills missing or empty DNS settings from its default profile; its documented header
 // example and its routing builders leave them out, and a name may be empty.
 #[test]

@@ -4,6 +4,14 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
 
 ## Unreleased
 
+### Fixed
+
+- **A routing profile with a value in another letter case, or with a DNS type Elarni does not
+  have, was refused as invalid.** `RouteOrder`, `DomainStrategy` and the DNS types are read in
+  any case (`BLOCK_DIRECT_PROXY`, `doh`), and `udp` means DoU. A side whose DNS type is
+  something else (DoT, DoQ, TCP) uses the default resolver of that side, as a profile without
+  DNS settings does.
+
 ## 0.6.3 - 2026-11-22
 
 ### Added

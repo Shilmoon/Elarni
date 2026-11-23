@@ -423,14 +423,15 @@ pub fn decode_routing(input: &str) -> Result<RoutingImport, RoutingError> {
     // Defaults fill missing fields and other fields are ignored, so JSON without one of the
     // profile's own fields (a server config, `{}`) would pass; every app tries pasted text as
     // routing first.
-    let keys: BTreeMap<String, serde::de::IgnoredAny> =
+    let mut fields: serde_json::Map<String, serde_json::Value> =
         serde_json::from_slice(&payload).map_err(|_| RoutingError::InvalidJson)?;
     let own = profile_field_names();
-    if !keys.keys().any(|key| own.contains(&key.as_str())) {
+    if !fields.keys().any(|key| own.contains(&key.as_str())) {
         return Err(RoutingError::InvalidJson);
     }
+    canonical_values(&mut fields);
     let mut profile: HappRoutingProfile =
-        serde_json::from_slice(&payload).map_err(|_| RoutingError::InvalidJson)?;
+        serde_json::from_value(fields.into()).map_err(|_| RoutingError::InvalidJson)?;
     profile.fill_happ_defaults();
     let route_model = profile.to_route_model()?;
     crate::compiler::validate_routing_model(&route_model)
@@ -440,6 +441,60 @@ pub fn decode_routing(input: &str) -> Result<RoutingImport, RoutingError> {
         profile,
         route_model,
     })
+}
+
+/// Rewrites the profile's fixed-choice values to the spelling this client stores. Happ's default
+/// profile "fills in missing or incorrect parameters", and other clients and builders write the
+/// same choices in another letter case (`BLOCK_DIRECT_PROXY`, `doh`, `udp`). A DNS type this
+/// client cannot speak (DoT, DoQ, TCP) gives its side the default resolver: plain DNS to the same
+/// address would send the queries unencrypted.
+fn canonical_values(fields: &mut serde_json::Map<String, serde_json::Value>) {
+    use serde_json::Value;
+    let text = |fields: &serde_json::Map<String, Value>, key: &str| {
+        fields.get(key).and_then(Value::as_str).map(str::to_owned)
+    };
+    if let Some(order) = text(fields, "RouteOrder") {
+        fields.insert(
+            "RouteOrder".to_owned(),
+            Value::String(order.to_ascii_lowercase().replace('_', "-")),
+        );
+    }
+    if let Some(strategy) = text(fields, "DomainStrategy")
+        && let Some(known) = ["AsIs", "IPIfNonMatch", "IPOnDemand"]
+            .into_iter()
+            .find(|known| known.eq_ignore_ascii_case(&strategy))
+    {
+        fields.insert("DomainStrategy".to_owned(), Value::String(known.to_owned()));
+    }
+    for (kind, own) in [
+        (
+            "RemoteDNSType",
+            ["RemoteDNSDomain", "RemoteDNSIP", "RemoteDNSIp", "RemoteDns"],
+        ),
+        (
+            "DomesticDNSType",
+            [
+                "DomesticDNSDomain",
+                "DomesticDNSIP",
+                "DomesticDNSIp",
+                "DomesticDns",
+            ],
+        ),
+    ] {
+        let Some(written) = text(fields, kind) else {
+            continue;
+        };
+        match written.to_ascii_lowercase().as_str() {
+            "doh" => fields.insert(kind.to_owned(), Value::String("DoH".to_owned())),
+            "dou" | "udp" => fields.insert(kind.to_owned(), Value::String("DoU".to_owned())),
+            _ => {
+                for key in own {
+                    fields.remove(key);
+                }
+                fields.remove(kind)
+            }
+        };
+    }
 }
 
 impl HappRoutingProfile {
