@@ -72,6 +72,16 @@ executable rules**):
 `exact:C:\Python\3.12\python.exe`, or `exact:C:\Python\3.12\` for a folder. Such a rule is
 compared as it is written (Windows still ignores the letter case) and follows no update.
 
+On desktop the list shows this choice. A rule's **Details** has **Follow updates** when the
+rule follows: its path names a build, or it took the folder that replaced its own. Turned
+off, the rule becomes the `exact:` rule of the path that is on this computer now; turned on,
+an `exact:` rule is its path again. Under the switch, "Matches now" lists what the rule names
+on this computer when that is more than its own path. When programs run from two versions
+at once, as with two Pythons, the rule's row says so ("Also matches
+`Python\3.13\python.exe`"), and **Only this version** makes it the `exact:` rule of its own
+path. A version with nothing running from it, such as the build an updater left on the disk,
+is in Details only.
+
 On macOS an app that is still quarantined, opened where it was downloaded or from its disk
 image, runs from a copy in `.../AppTranslocation/<random>/d/`, a new folder at each start. A
 rule for an app's bundle, such as `~/Downloads/Example.app/`, matches the copy by the bundle's
@@ -216,6 +226,9 @@ with the same matcher routing uses, and warns when it may match nothing:
 - a Flatpak app or Windows service that is not installed, or an AppImage file that is gone.
 
 Where a better rule exists, **Use suggested rule** replaces it, keeping its target.
+The check also answers which paths a rule names on this computer, each with the programs
+running from it, and whether its path names a build: the row's "Also matches" line and
+**Follow updates** in Details come from it (see Rules and app updates).
 On Windows only rules on local fixed drives are checked, so a network path in an
 imported profile is never opened. On Android, a listed app that is not installed is
 shown as such. With **Only listed** and none of the listed apps installed, Connect fails

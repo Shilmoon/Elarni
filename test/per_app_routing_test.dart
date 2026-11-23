@@ -1977,4 +1977,279 @@ void main() {
       );
     }
   });
+
+  // A rule for one version of an app takes the others. The row says so when
+  // programs run from two of them at once, and offers the rule for its own
+  // path only; a build that an updater left on the disk is no second app.
+  testWidgets(
+    'a rule that takes two running versions says so and can keep to its own',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1000, 1600));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final messenger = tester.binding.defaultBinaryMessenger;
+      messenger.setMockMethodCallHandler(
+        DesktopIntegration.channel,
+        (call) async => call.method == 'routingApplications' ? [] : null,
+      );
+      addTearDown(
+        () => messenger.setMockMethodCallHandler(
+          DesktopIntegration.channel,
+          null,
+        ),
+      );
+      const own = r'C:\Python\3.12\python.exe';
+      const quiet = r'C:\Tools\app-1.0.2\tool.exe';
+      const gone = r'C:\Java\jdk-21.0.1\bin\java.exe';
+      TunnelSettings? saved;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SingleChildScrollView(
+              child: PerAppRoutingEditor(
+                settings: const TunnelSettings(
+                  xrayTunEnabled: true,
+                  perAppMode: 'bypass',
+                  perAppProcesses: [own, quiet, gone],
+                  perAppTargets: {own: 'direct'},
+                ),
+                windows: true,
+                linux: false,
+                checkRules: (rules, {apps = const []}) async =>
+                    const ProcessRuleChecks({
+                      own: ProcessRuleCheck(
+                        own,
+                        2,
+                        [],
+                        versions: [
+                          ProcessRuleVersion(own, 1, own: true),
+                          ProcessRuleVersion(r'C:\Python\3.13\python.exe', 1),
+                        ],
+                        follows: true,
+                      ),
+                      // The earlier build is still on the disk; nothing runs
+                      // from it.
+                      quiet: ProcessRuleCheck(
+                        quiet,
+                        1,
+                        [],
+                        versions: [
+                          ProcessRuleVersion(quiet, 1, own: true),
+                          ProcessRuleVersion(r'C:\Tools\app-1.0.1\tool.exe', 0),
+                        ],
+                        follows: true,
+                      ),
+                      // The rule's own build is gone; three others run.
+                      gone: ProcessRuleCheck(
+                        gone,
+                        3,
+                        [],
+                        versions: [
+                          ProcessRuleVersion(
+                            r'C:\Java\jdk-21.0.2\bin\java.exe',
+                            1,
+                          ),
+                          ProcessRuleVersion(
+                            r'C:\Java\jdk-22.0.1\bin\java.exe',
+                            1,
+                          ),
+                          ProcessRuleVersion(
+                            r'C:\Java\jdk-23.0.1\bin\java.exe',
+                            1,
+                          ),
+                        ],
+                        follows: true,
+                      ),
+                      'exact:$own': ProcessRuleCheck(
+                        'exact:$own',
+                        1,
+                        [],
+                        follows: true,
+                      ),
+                    }),
+                onSave: (value) async => saved = value,
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(
+        tester.widget<Text>(find.byKey(const Key('per-app-also:$own'))).data,
+        r'Also matches Python\3.13\python.exe',
+      );
+      expect(find.byKey(const Key('per-app-also:$quiet')), findsNothing);
+      // Without the rule's own path there is no "this version" to keep.
+      expect(
+        tester.widget<Text>(find.byKey(const Key('per-app-also:$gone'))).data,
+        r'Also matches Java\jdk-22.0.1\bin\java.exe and 1 more',
+      );
+      expect(find.byKey(const Key('per-app-only-this:$gone')), findsNothing);
+      expect(find.byKey(const Key('per-app-only-this:$quiet')), findsNothing);
+
+      await tester.tap(find.byKey(const Key('per-app-only-this:$own')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('per-app-also:$own')), findsNothing);
+      expect(find.byKey(const Key('per-app-also:exact:$own')), findsNothing);
+      await tester.tap(find.text('Save changes'));
+      await tester.pumpAndSettle();
+      expect(saved!.perAppProcesses, ['exact:$own', quiet, gone]);
+      expect(saved!.perAppTargets, {'exact:$own': 'direct'});
+    },
+  );
+
+  // Details has the same choice as a switch, for a rule that names a build:
+  // off, the rule is the one path that is there now.
+  testWidgets('a rule that names a build can stop following updates', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1000, 1600));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final messenger = tester.binding.defaultBinaryMessenger;
+    messenger.setMockMethodCallHandler(
+      DesktopIntegration.channel,
+      (call) async => call.method == 'routingApplications' ? [] : null,
+    );
+    addTearDown(
+      () =>
+          messenger.setMockMethodCallHandler(DesktopIntegration.channel, null),
+    );
+    const python = '/opt/Python/3.12/bin/python';
+    const updated = '/opt/java/jdk-21/bin/java';
+    const plain = '/usr/bin/curl';
+    TunnelSettings? saved;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SingleChildScrollView(
+            child: PerAppRoutingEditor(
+              settings: const TunnelSettings(
+                xrayTunEnabled: true,
+                perAppMode: 'bypass',
+                perAppProcesses: [python, updated, plain],
+                perAppTargets: {python: 'block'},
+              ),
+              windows: false,
+              linux: true,
+              checkRules: (rules, {apps = const []}) async =>
+                  const ProcessRuleChecks({
+                    python: ProcessRuleCheck(
+                      python,
+                      0,
+                      [],
+                      versions: [
+                        ProcessRuleVersion(python, 0, own: true),
+                        ProcessRuleVersion('/opt/Python/3.13/bin/python', 0),
+                      ],
+                      follows: true,
+                    ),
+                    // An update replaced the rule's folder, whose name tells
+                    // no build: the rule follows it since.
+                    updated: ProcessRuleCheck(
+                      updated,
+                      3,
+                      [],
+                      versions: [
+                        ProcessRuleVersion('/opt/java/jdk-22/bin/java', 3),
+                      ],
+                    ),
+                    plain: ProcessRuleCheck(plain, 1, []),
+                  }),
+              onSave: (value) async => saved = value,
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    // Nothing runs from two versions: the rows say nothing.
+    expect(find.byKey(const Key('per-app-also:$python')), findsNothing);
+    const follow = Key('per-app-follow-updates');
+    bool on() => tester.widget<SwitchListTile>(find.byKey(follow)).value;
+
+    // The rows are in their names' order: curl, java, python.
+    await tester.tap(find.text('Details').first);
+    await tester.pumpAndSettle();
+    expect(find.byKey(follow), findsNothing);
+    await tester.tap(find.text('Done').last);
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Details').at(2));
+    await tester.pumpAndSettle();
+    expect(on(), isTrue);
+    expect(
+      find.text('Matches now: Python/3.12/bin/python, Python/3.13/bin/python'),
+      findsOneWidget,
+    );
+    await tester.tap(find.byKey(follow));
+    await tester.pumpAndSettle();
+    expect(on(), isFalse);
+    expect(find.text('exact:$python'), findsOneWidget);
+    // With the programs it starts, it is still that one path.
+    await tester.tap(find.byKey(const Key('per-app-include-children')));
+    await tester.pumpAndSettle();
+    expect(on(), isFalse);
+    expect(find.text('children:exact:$python'), findsOneWidget);
+    await tester.tap(find.text('Done').last);
+    await tester.pumpAndSettle();
+
+    // The path that is there now, not the one the update removed.
+    await tester.tap(find.text('Details').at(1));
+    await tester.pumpAndSettle();
+    expect(on(), isTrue);
+    expect(find.text('Matches now: java/jdk-22/bin/java'), findsOneWidget);
+    await tester.tap(find.byKey(follow));
+    await tester.pumpAndSettle();
+    expect(find.text('exact:/opt/java/jdk-22/bin/java'), findsOneWidget);
+    await tester.tap(find.text('Done').last);
+    await tester.pumpAndSettle();
+
+    // And back.
+    await tester.tap(find.text('Details').at(2));
+    await tester.pumpAndSettle();
+    expect(on(), isFalse);
+    await tester.tap(find.byKey(follow));
+    await tester.pumpAndSettle();
+    expect(on(), isTrue);
+    expect(find.text('children:$python'), findsOneWidget);
+    await tester.tap(find.text('Done').last);
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Save changes'));
+    await tester.pumpAndSettle();
+    expect(saved!.perAppProcesses, [
+      'children:$python',
+      'exact:/opt/java/jdk-22/bin/java',
+      plain,
+    ]);
+    expect(saved!.perAppTargets, {'children:$python': 'block'});
+  });
+
+  test('a rule check carries the versions a rule takes', () {
+    final checks = ProcessRuleChecks.fromMap({
+      'listed': true,
+      'rules': [
+        {
+          'rule': '/opt/a-1.0/a',
+          'running': 3,
+          'warnings': <Object?>[],
+          'follows': true,
+          'versions': [
+            {'path': '/opt/a-1.0/a', 'running': 1, 'own': true},
+            {'path': '/opt/a-1.1/a', 'running': 2},
+            {'path': 7, 'running': 1},
+            'x',
+          ],
+        },
+        {'rule': '/opt/b', 'running': 0, 'warnings': <Object?>[]},
+      ],
+    });
+    final check = checks.rules['/opt/a-1.0/a']!;
+    expect(check.follows, isTrue);
+    expect(
+      [for (final v in check.versions) (v.path, v.running, v.own)],
+      [('/opt/a-1.0/a', 1, true), ('/opt/a-1.1/a', 2, false)],
+    );
+    expect(checks.rules['/opt/b']!.follows, isFalse);
+    expect(checks.rules['/opt/b']!.versions, isEmpty);
+  });
 }

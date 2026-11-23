@@ -40,37 +40,42 @@ const rulePathListings = 32
 // would take the channel installed beside it. A path that could not be read, or that took too
 // many folders to look for, is not gone. Tests replace it.
 var rulePathGone = func(path string, folder bool) bool {
-	root, rest, _ := strings.Cut(path, "/")
-	if rest == "" {
-		return false
+	parts := strings.Split(path, "/")
+	found, whole := rulePaths(parts, parts, "/", folder, 1)
+	return whole && len(found) == 0
+}
+
+// rulePaths looks on this computer for what a rule's path names as rules compare paths: the path
+// itself, then the same through the folders of another build. parts are the path's folders as
+// normalPath spelled them and shown the same as the rule wrote them; found has at most `most`
+// paths, written as the rule's with sep between folders, but for the folders that had to be
+// listed, which are as the disk has them. whole is false when a folder could not be read or too
+// many had to be listed: there may be more.
+func rulePaths(parts, shown []string, sep string, folder bool, most int) (found []string, whole bool) {
+	if len(parts) < 2 || len(parts) != len(shown) {
+		return nil, false
 	}
-	listings, unknown := rulePathListings, false
-	var found func(dir string, parts []string) bool
-	found = func(dir string, parts []string) bool {
-		last := len(parts) == 1
-		at := func(candidate string) bool {
+	whole = true
+	listings := rulePathListings
+	var look func(dir, as string, at int)
+	look = func(dir, as string, at int) {
+		last := at == len(parts)-1
+		try := func(candidate, written string) bool {
 			_, err := os.Lstat(candidate)
 			switch {
+			case err == nil && last:
+				found = append(found, written)
 			case err == nil:
-				return last || found(candidate+"/", parts[1:])
+				look(candidate+"/", written+sep, at+1)
 			case !os.IsNotExist(err):
-				unknown = true
+				whole = false
 			}
-			return false
+			return err == nil
 		}
-		named := dir + parts[0]
-		if at(named) || unknown {
-			return !unknown
-		}
-		if listings == 0 {
-			unknown = true
-			return false
-		}
-		listings--
-		entries, err := os.ReadDir(dir)
-		if err != nil {
-			unknown = !os.IsNotExist(err)
-			return false
+		named := dir + parts[at]
+		there := try(named, as+shown[at])
+		if len(found) >= most || !whole {
+			return
 		}
 		// A version number ends a folder's name, not a file's.
 		end := "/"
@@ -78,18 +83,31 @@ var rulePathGone = func(path string, folder bool) bool {
 			end = ""
 		}
 		key := normalPathKey(named+end, runtime.GOOS)
+		if there && key == named+end {
+			return // a name that names no build: nothing beside it has its key
+		}
+		if listings == 0 {
+			whole = false
+			return
+		}
+		listings--
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			whole = whole && os.IsNotExist(err)
+			return
+		}
 		for _, entry := range entries {
 			candidate := dir + normalPath(entry.Name(), runtime.GOOS)
 			if candidate == named || normalPathKey(candidate+end, runtime.GOOS) != key {
 				continue
 			}
-			if at(candidate) || unknown {
-				return !unknown
+			if try(candidate, as+entry.Name()); len(found) >= most || !whole {
+				return
 			}
 		}
-		return false
 	}
-	return !found(root+"/", strings.Split(rest, "/")) && !unknown
+	look(parts[0]+"/", shown[0]+sep, 1)
+	return found, whole
 }
 
 // newPathRule takes a rule's path as normalPath spelled it and its key; nil for a path that is
@@ -272,23 +290,130 @@ func bundleTail(rule string) string {
 	return ""
 }
 
-// packageFamilyFolder returns the Microsoft Store package family that a folder rule's key names,
-// "<name>_<publisher>" of .../windowsapps/<name>_<publisher>/, or "".
-func packageFamilyFolder(key string) string {
+// packageFamilyIn returns the Microsoft Store package family that names a key's folder in
+// .../windowsapps/, "<name>_<publisher>", and whether the key is that folder. Empty for any
+// other key.
+func packageFamilyIn(key string) (family string, whole bool) {
 	const parent = "/windowsapps/"
 	at := strings.Index(key, parent)
 	if at < 0 {
-		return ""
+		return "", false
 	}
-	family, folder := strings.CutSuffix(key[at+len(parent):], "/")
-	if !folder {
-		return ""
-	}
+	family, rest, inside := strings.Cut(key[at+len(parent):], "/")
 	name, publisher, ok := strings.Cut(family, "_")
 	if !ok || !packageName(name) || len(publisher) != 13 || strings.Trim(publisher, "abcdefghijklmnopqrstuvwxyz0123456789") != "" {
+		return "", false
+	}
+	return family, inside && rest == ""
+}
+
+// packageFamilyFolder returns the Microsoft Store package family that a folder rule's key names,
+// "<name>_<publisher>" of .../windowsapps/<name>_<publisher>/, or "".
+func packageFamilyFolder(key string) string {
+	if family, whole := packageFamilyIn(key); whole {
+		return family
+	}
+	return ""
+}
+
+// versionedRule returns a rule that can name more than one path on this computer: an absolute
+// path, not exact and not a Microsoft Store app's, which is its package in any version.
+func versionedRule(rule, goos string) *pathRule {
+	rule = strings.TrimPrefix(rule, "children:")
+	if strings.HasPrefix(rule, "exact:") {
+		return nil
+	}
+	written := normalPath(rule, goos)
+	key := normalPathKey(written, goos)
+	if family, _ := packageFamilyIn(key); family != "" {
+		return nil
+	}
+	return newPathRule(written, key)
+}
+
+// RuleNamesBuild reports a path rule that names a build, which routing reads the rule without:
+// made exact, such a rule stops taking the app's other versions. Any other rule is the same
+// either way.
+func RuleNamesBuild(rule string) bool {
+	return ruleNamesBuild(rule, runtime.GOOS)
+}
+
+func ruleNamesBuild(rule, goos string) bool {
+	rule = strings.TrimPrefix(rule, "children:")
+	r := versionedRule(strings.TrimPrefix(rule, "exact:"), goos)
+	return r != nil && strings.Join(r.keys, "/") != strings.Join(r.parts, "/")
+}
+
+// RuleVersion returns a program's version of a rule: what stands in its path where the rule's
+// own path stands, when that is the rule's path as rules compare paths, also through one
+// renamed folder. It is the program for a rule that names one and the folder for a folder rule,
+// as the program's path is written. Two programs with two answers run from two builds of an
+// app, or from two versions installed side by side. Empty for a program that is not at the
+// rule's path, and for a rule that names no version.
+func RuleVersion(rule, program string) string {
+	return ruleVersion(rule, program, runtime.GOOS)
+}
+
+func ruleVersion(rule, program, goos string) string {
+	r := versionedRule(rule, goos)
+	if r == nil {
 		return ""
 	}
-	return family
+	path := normalPath(program, goos)
+	keys, parts := strings.Split(normalPathKey(path, goos), "/"), strings.Split(path, "/")
+	n := len(r.keys)
+	if len(keys) != len(parts) || len(keys) < n || (len(keys) == n) == r.folder {
+		return ""
+	}
+	renamed := -1
+	for i := range n {
+		if r.keys[i] != keys[i] {
+			if renamed >= 0 {
+				return ""
+			}
+			renamed = i
+		}
+	}
+	if renamed >= 0 {
+		if shape := PathPartShape(r.parts[renamed]); shape == "" || shape != PathPartShape(parts[renamed]) {
+			return ""
+		}
+	}
+	if !r.folder {
+		return program
+	}
+	folders := 0
+	for i := range len(program) {
+		if program[i] == '/' || goos == "windows" && program[i] == '\\' {
+			if folders++; folders == n {
+				return program[:i+1]
+			}
+		}
+	}
+	return ""
+}
+
+// RuleVersionsOnDisk returns the paths on this computer that a rule names, at most eight: its
+// own first, then the same through the folders of another build, as the disk has them. Empty
+// for a rule that names no version, and for one that is nowhere here.
+func RuleVersionsOnDisk(rule string) []string {
+	r := versionedRule(rule, runtime.GOOS)
+	if r == nil {
+		return nil
+	}
+	rule = strings.TrimPrefix(rule, "children:")
+	sep := "/"
+	if runtime.GOOS == "windows" && strings.Contains(rule, `\`) {
+		sep = `\`
+	}
+	shown := strings.Split(strings.TrimSuffix(strings.ReplaceAll(rule, sep, "/"), "/"), "/")
+	found, _ := rulePaths(r.parts, shown, sep, r.folder, 8)
+	if r.folder {
+		for i := range found {
+			found[i] += sep
+		}
+	}
+	return found
 }
 
 // SameProcessRule reports whether a saved rule and a rule the app list gives an app name the

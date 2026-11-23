@@ -4,6 +4,15 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
 
 ## Unreleased
 
+### Added
+
+- **Desktop: a per-app rule shows what else it matches, and can keep to one version.** A rule
+  follows its app through updates, so with two versions in use at once, such as Python 3.12
+  and 3.13, one rule takes both. Its row now says "Also matches `Python\3.13\python.exe`"
+  while programs run from both, with **Only this version** beside it. **Details** has
+  **Follow updates** for a rule that follows, with the paths it matches now: turned off, the
+  rule is the one path that is there (`exact:<path>`).
+
 ### Fixed
 
 - **Windows, macOS, Linux: per-app rules follow an app through its updates, whatever

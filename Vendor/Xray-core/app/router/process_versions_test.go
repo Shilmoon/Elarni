@@ -5,6 +5,7 @@ import (
 	"path"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"testing"
 )
 
@@ -269,6 +270,104 @@ func TestRuleStaysWithItsAppWhileABuildOfItIsThere(t *testing.T) {
 	next := install("Left", "build-7", "bin", "example")
 	if !matches(at("Left", "build-6", "bin", "example"), next) {
 		t.Fatal("a rule did not follow past the folder an uninstaller left")
+	}
+}
+
+// The editor shows which versions a rule takes now. A program's version of a rule is what
+// stands in its path where the rule's own path stands.
+func TestRuleVersionOfAProgram(t *testing.T) {
+	for _, tc := range []struct{ goos, rule, program, want string }{
+		{"linux", "/opt/Python/3.12/bin/python", "/opt/Python/3.13/bin/python", "/opt/Python/3.13/bin/python"},
+		{"linux", "/opt/Python/3.12/bin/python", "/opt/Python/3.12/bin/python", "/opt/Python/3.12/bin/python"},
+		{"linux", "/opt/Python/3.12/", "/opt/Python/3.13/bin/python", "/opt/Python/3.13/"},
+		{"linux", "children:/opt/Python/3.12/", "/opt/Python/3.13/lib/x/helper", "/opt/Python/3.13/"},
+		{"linux", "/opt/java/jdk-21/bin/java", "/opt/java/jdk-22/bin/java", "/opt/java/jdk-22/bin/java"},
+		{"linux", "/opt/java/jdk-21/", "/opt/java/jdk-22/bin/java", "/opt/java/jdk-22/"},
+		{"windows", `C:\Python\3.12\python.exe`, `C:\Python\3.13\python.exe`, `C:\Python\3.13\python.exe`},
+		{"windows", `C:\Python\3.12\`, `c:/python/3.13/Scripts/pip.exe`, `c:/python/3.13/`},
+		// Not the rule's path in another version.
+		{"linux", "/opt/Python/3.12/bin/python", "/opt/Ruby/3.13/bin/python", ""},
+		{"linux", "/opt/Python/3.12/bin/python", "/opt/Python/3.13/bin/pip", ""},
+		{"linux", "/opt/Python/3.12/", "/opt/Python/3.13", ""},
+		{"linux", "/opt/a1/b1/example", "/opt/a2/b2/example", ""},
+		// Rules that name no version: one path, a name, an app by what installed it.
+		{"linux", "exact:/opt/Python/3.12/bin/python", "/opt/Python/3.12/bin/python", ""},
+		{"linux", "python", "/opt/Python/3.13/bin/python", ""},
+		{"linux", "flatpak:org.example.App", "/app/bin/example", ""},
+		// A Store app is its package, in any version.
+		{"windows", `C:\Program Files\WindowsApps\OpenAI.ChatGPT_2p2nqsd0c76g0\`, `C:\Program Files\WindowsApps\OpenAI.ChatGPT_1.2025.1.0_x64__2p2nqsd0c76g0\ChatGPT.exe`, ""},
+	} {
+		if got := ruleVersion(tc.rule, tc.program, tc.goos); got != tc.want {
+			t.Errorf("%s: rule %q, program %q: version %q, want %q", tc.goos, tc.rule, tc.program, got, tc.want)
+		}
+	}
+}
+
+// A rule that names a build is one that routing reads without it: only such a rule changes when
+// it is made exact.
+func TestRulesThatNameABuild(t *testing.T) {
+	for _, tc := range []struct {
+		goos, rule string
+		want       bool
+	}{
+		{"linux", "/opt/Python/3.12/bin/python", true},
+		{"linux", "/opt/Example/app-1.0.9265/", true},
+		{"linux", "children:/opt/Example/app-1.0.9265/example", true},
+		{"linux", "exact:/opt/Python/3.12/bin/python", true},
+		{"linux", "/snap/example/41/bin/example", true},
+		{"windows", `C:\Program Files (x86)\Battle.net\Battle.net.15173\Battle.net.exe`, true},
+		{"linux", "/opt/java/jdk-21/bin/java", false},
+		{"windows", `C:\Program Files (x86)\Steam\steam.exe`, false},
+		{"darwin", "/Applications/Example.app/", false},
+		{"linux", "python3.12", false},
+		{"linux", "flatpak:org.example.App", false},
+		{"windows", "service:Dnscache", false},
+		{"linux", "-1", false},
+		{"windows", `C:\Program Files\WindowsApps\OpenAI.ChatGPT_2p2nqsd0c76g0\`, false},
+		{"windows", `C:\Program Files\WindowsApps\OpenAI.ChatGPT_1.2025.1.0_x64__2p2nqsd0c76g0\ChatGPT.exe`, false},
+	} {
+		if got := ruleNamesBuild(tc.rule, tc.goos); got != tc.want {
+			t.Errorf("%s: rule %q names a build: %v, want %v", tc.goos, tc.rule, got, tc.want)
+		}
+	}
+}
+
+// The versions of a rule's path on this computer: itself first, then what routing reads as the
+// same, spelled as the disk has them.
+func TestRuleVersionsOnDisk(t *testing.T) {
+	root := t.TempDir()
+	if real, err := filepath.EvalSymlinks(root); err == nil {
+		root = real
+	}
+	at := func(parts ...string) string { return filepath.Join(append([]string{root}, parts...)...) }
+	for _, version := range []string{"3.12", "3.13"} {
+		if err := os.MkdirAll(at("Python", version, "bin"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(at("Python", version, "bin", "python"), []byte("x"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.MkdirAll(at("Python", "3.14", "docs"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sep := string(filepath.Separator)
+	for _, tc := range []struct {
+		name, rule string
+		want       []string
+	}{
+		{"its own first", at("Python", "3.13", "bin", "python"), []string{at("Python", "3.13", "bin", "python"), at("Python", "3.12", "bin", "python")}},
+		{"a version that is gone", at("Python", "3.11", "bin", "python"), []string{at("Python", "3.12", "bin", "python"), at("Python", "3.13", "bin", "python")}},
+		{"a folder", at("Python", "3.12") + sep, []string{at("Python", "3.12") + sep, at("Python", "3.13") + sep, at("Python", "3.14") + sep}},
+		{"with the programs it starts", "children:" + at("Python", "3.12", "bin", "python"), []string{at("Python", "3.12", "bin", "python"), at("Python", "3.13", "bin", "python")}},
+		{"exact", "exact:" + at("Python", "3.12", "bin", "python"), nil},
+		{"a path without a version", at("Python"), []string{at("Python")}},
+		{"nothing there", at("Ruby", "3.3", "bin", "ruby"), nil},
+		{"a name", "python", nil},
+	} {
+		if got := RuleVersionsOnDisk(tc.rule); !slices.Equal(got, tc.want) {
+			t.Errorf("%s: rule %q is on disk as %q, want %q", tc.name, tc.rule, got, tc.want)
+		}
 	}
 }
 

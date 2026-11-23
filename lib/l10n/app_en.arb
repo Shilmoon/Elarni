@@ -1801,6 +1801,36 @@
     }
   },
   "perAppUseSuggested": "Use suggested rule",
+  "perAppAlsoMatches": "Also matches {path}",
+  "@perAppAlsoMatches": {
+    "placeholders": {
+      "path": {
+        "type": "String"
+      }
+    }
+  },
+  "perAppAlsoMatchesMore": "Also matches {path} and {count} more",
+  "@perAppAlsoMatchesMore": {
+    "placeholders": {
+      "path": {
+        "type": "String"
+      },
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "perAppOnlyThisVersion": "Only this version",
+  "perAppFollowUpdates": "Follow updates",
+  "perAppFollowUpdatesHelp": "Also match this app's other versions. Off: only this exact path.",
+  "perAppMatchesNow": "Matches now: {paths}",
+  "@perAppMatchesNow": {
+    "placeholders": {
+      "paths": {
+        "type": "String"
+      }
+    }
+  },
   "perAppConnections": "Recent connections",
   "perAppConnectionsHelp": "Connections apps opened while Elarni is connected, newest first, with where each one went. It names the program behind an app's traffic, such as a helper or updater, so you can add it. Kept in memory until you disconnect.",
   "perAppConnectionsDisconnected": "Connect to see which apps open connections and where they go.",

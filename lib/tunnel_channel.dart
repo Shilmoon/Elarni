@@ -850,10 +850,33 @@ final class NativeTunnelControl implements TunnelControl {
 /// code (missing, folder, notFolder, script, symlink, case, launcher,
 /// bundleName) with an optional suggested rule.
 final class ProcessRuleCheck {
-  const ProcessRuleCheck(this.rule, this.running, this.warnings);
+  const ProcessRuleCheck(
+    this.rule,
+    this.running,
+    this.warnings, {
+    this.versions = const [],
+    this.follows = false,
+  });
   final String rule;
   final int running;
   final List<(String code, String? suggestion)> warnings;
+
+  /// What the rule names on this computer when that is not its own path
+  /// alone: its own first, then its app's other versions.
+  final List<ProcessRuleVersion> versions;
+
+  /// The rule names a build, which routing reads it without, so it matches
+  /// its app's every version; an "exact:" rule of it does not.
+  final bool follows;
+}
+
+/// One of the paths a rule names on this computer, with the programs that
+/// run from it: the rule's own path, or the same in another version.
+final class ProcessRuleVersion {
+  const ProcessRuleVersion(this.path, this.running, {this.own = false});
+  final String path;
+  final int running;
+  final bool own;
 }
 
 final class ProcessRuleChecks {
@@ -883,6 +906,19 @@ final class ProcessRuleChecks {
         rule,
         item['running'] is int ? item['running'] as int : 0,
         warnings,
+        versions: [
+          for (final version
+              in item['versions'] is List
+                  ? item['versions'] as List
+                  : const <Object?>[])
+            if (version is Map && version['path'] is String)
+              ProcessRuleVersion(
+                version['path'] as String,
+                version['running'] is int ? version['running'] as int : 0,
+                own: version['own'] == true,
+              ),
+        ],
+        follows: item['follows'] == true,
       );
     }
     final same = value['same'];

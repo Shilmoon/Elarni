@@ -34,10 +34,27 @@ type ProcessRuleWarning struct {
 	Suggestion string `json:"suggestion,omitempty"`
 }
 
+// ProcessRuleVersion is one of the paths a rule names on this computer: the rule's own, the
+// same in another build of its app, or in another version installed beside it.
+type ProcessRuleVersion struct {
+	// The program for a rule that names one, the folder for a folder rule.
+	Path string `json:"path"`
+	// The programs that run from it and that the rule's own path takes, not the ones they start.
+	Running int `json:"running"`
+	// The rule's own path.
+	Own bool `json:"own,omitempty"`
+}
+
 type ProcessRuleCheck struct {
 	Rule     string               `json:"rule"`
 	Running  int                  `json:"running"`
 	Warnings []ProcessRuleWarning `json:"warnings"`
+	// What the rule names here, when that is not its own path alone: its own first. The editor
+	// tells a rule that takes two versions at once, and offers it for one path ("exact:").
+	Versions []ProcessRuleVersion `json:"versions,omitempty"`
+	// The rule names a build, which routing reads it without: made exact, it stops following
+	// its app's updates. Any other rule is the same either way.
+	Follows bool `json:"follows,omitempty"`
 }
 
 type ProcessRuleCheckResponse struct {
@@ -98,11 +115,32 @@ func checkProcessRules(rules []string) ProcessRuleCheckResponse {
 		check := ProcessRuleCheck{Rule: rule, Warnings: processRuleWarnings(rule)}
 		if rule != "-1" {
 			matcher := router.NewProcessNameMatcher([]string{rule})
-			for _, process := range processes {
-				if matcher.MatchesProcess(process.PID, process.Name, process.Path) {
-					check.Running++
+			// The programs a "children:" rule's program starts are not versions of it.
+			own := matcher
+			if inner, ok := strings.CutPrefix(rule, "children:"); ok {
+				own = router.NewProcessNameMatcher([]string{inner})
+			}
+			versions := ruleVersions{rule: rule}
+			// The disk is asked only where the warnings ask it: not on a network drive.
+			if localRule(strings.TrimPrefix(rule, "children:")) {
+				for _, path := range router.RuleVersionsOnDisk(rule) {
+					versions.add(path, 0)
 				}
 			}
+			for _, process := range processes {
+				if !matcher.MatchesProcess(process.PID, process.Name, process.Path) {
+					continue
+				}
+				check.Running++
+				if own != matcher && !own.MatchesProcess(process.PID, process.Name, process.Path) {
+					continue
+				}
+				if version := router.RuleVersion(rule, process.Path); version != "" {
+					versions.add(version, 1)
+				}
+			}
+			check.Versions = versions.told()
+			check.Follows = router.RuleNamesBuild(rule)
 		}
 		if len(check.Warnings) == 1 && check.Warnings[0].Code == "missing" {
 			// What runs is here, wherever the rule's path points: routing compares paths without
@@ -116,6 +154,54 @@ func checkProcessRules(rules []string) ProcessRuleCheckResponse {
 		response.Rules = append(response.Rules, check)
 	}
 	return response
+}
+
+// localRule reports a rule's path that the check may look for on the disk (localRulePath). Tests
+// replace it.
+var localRule = localRulePath
+
+// ruleVersions collects the paths a rule names on this computer, in the order they were found.
+type ruleVersions struct {
+	rule  string
+	found []ProcessRuleVersion
+}
+
+// written is a path as paths compare on this system, whichever way its folders are separated.
+func (v *ruleVersions) written(path string) string {
+	if runtime.GOOS == "windows" {
+		return strings.ToLower(strings.ReplaceAll(path, "/", `\`))
+	}
+	return path
+}
+
+func (v *ruleVersions) add(path string, running int) {
+	written := v.written(path)
+	for i := range v.found {
+		if v.written(v.found[i].Path) == written {
+			v.found[i].Running += running
+			return
+		}
+	}
+	own := written == v.written(strings.TrimPrefix(v.rule, "children:"))
+	v.found = append(v.found, ProcessRuleVersion{Path: path, Running: running, Own: own})
+}
+
+// told returns the versions when they tell more than the rule does: nothing for a rule that
+// names its own path only. The rule's own path is first and the rest are in their paths' order.
+func (v *ruleVersions) told() []ProcessRuleVersion {
+	if len(v.found) == 0 || len(v.found) == 1 && v.found[0].Own {
+		return nil
+	}
+	slices.SortStableFunc(v.found, func(a, b ProcessRuleVersion) int {
+		if a.Own != b.Own {
+			if a.Own {
+				return -1
+			}
+			return 1
+		}
+		return strings.Compare(v.written(a.Path), v.written(b.Path))
+	})
+	return v.found
 }
 
 func processRuleWarnings(rule string) []ProcessRuleWarning {
@@ -189,7 +275,7 @@ func processRuleWarnings(rule string) []ProcessRuleWarning {
 		}
 		return nil
 	}
-	if !localRulePath(rule) {
+	if !localRule(rule) {
 		return nil
 	}
 	sep := string(filepath.Separator)

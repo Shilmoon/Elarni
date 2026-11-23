@@ -3416,6 +3416,31 @@ class AppLocalizationsRu extends AppLocalizations {
   String get perAppUseSuggested => 'Использовать';
 
   @override
+  String perAppAlsoMatches(String path) {
+    return 'Также соответствует $path';
+  }
+
+  @override
+  String perAppAlsoMatchesMore(String path, int count) {
+    return 'Также соответствует $path и ещё $count';
+  }
+
+  @override
+  String get perAppOnlyThisVersion => 'Только эта версия';
+
+  @override
+  String get perAppFollowUpdates => 'Следовать за обновлениями';
+
+  @override
+  String get perAppFollowUpdatesHelp =>
+      'Правило соответствует и другим версиям этого приложения. Выключено: только этот точный путь.';
+
+  @override
+  String perAppMatchesNow(String paths) {
+    return 'Сейчас соответствует: $paths';
+  }
+
+  @override
   String get perAppConnections => 'Недавние подключения';
 
   @override

@@ -386,6 +386,85 @@ func TestProcessRuleChecksOfProgramsRunningFromAnotherPath(t *testing.T) {
 	}
 }
 
+// A rule for one version of an app takes the others. The check tells the versions a rule names
+// on this computer and how many programs run from each, so the editor can say so and offer the
+// rule for its own path only; and whether the rule names a build at all.
+func TestProcessRuleChecksTellTheVersionsARuleTakes(t *testing.T) {
+	root := t.TempDir()
+	if resolved, err := filepath.EvalSymlinks(root); err == nil {
+		root = resolved
+	}
+	name := "python"
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	at := func(parts ...string) string { return filepath.Join(append([]string{root}, parts...)...) }
+	for _, version := range []string{"3.12", "3.13"} {
+		if err := os.MkdirAll(at("Python", version), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(at("Python", version, name), []byte("\x7fELF"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.MkdirAll(at("Plain"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(at("Plain", name), []byte("\x7fELF"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	previous := listProcesses
+	listProcesses = func() ([]xnet.Process, error) {
+		return []xnet.Process{
+			{PID: 100, Name: name, Path: at("Python", "3.12", name)},
+			{PID: 101, Name: name, Path: at("Python", "3.13", name)},
+			{PID: 102, Name: name, Path: at("Python", "3.13", name)},
+			{PID: 103, Name: name, Path: at("Python", "3.14", name)}, // not on disk anymore
+			{PID: 104, Name: name, Path: at("Plain", name)},
+		}, nil
+	}
+	t.Cleanup(func() { listProcesses = previous })
+	sep := string(filepath.Separator)
+	type version = ProcessRuleVersion
+	for _, tc := range []struct {
+		name, rule string
+		versions   []version
+		follows    bool
+	}{
+		{"its own first, then the others", at("Python", "3.12", name), []version{
+			{Path: at("Python", "3.12", name), Running: 1, Own: true},
+			{Path: at("Python", "3.13", name), Running: 2},
+			{Path: at("Python", "3.14", name), Running: 1},
+		}, true},
+		{"a folder", at("Python", "3.13") + sep, []version{
+			{Path: at("Python", "3.13") + sep, Running: 2, Own: true},
+			{Path: at("Python", "3.12") + sep, Running: 1},
+			{Path: at("Python", "3.14") + sep, Running: 1},
+		}, true},
+		{"a version that is gone", at("Python", "3.11", name), []version{
+			{Path: at("Python", "3.12", name), Running: 1},
+			{Path: at("Python", "3.13", name), Running: 2},
+			{Path: at("Python", "3.14", name), Running: 1},
+		}, true},
+		{"with the programs it starts", "children:" + at("Python", "3.12", name), []version{
+			{Path: at("Python", "3.12", name), Running: 1, Own: true},
+			{Path: at("Python", "3.13", name), Running: 2},
+			{Path: at("Python", "3.14", name), Running: 1},
+		}, true},
+		{"exact", "exact:" + at("Python", "3.12", name), nil, true},
+		{"a path without a version", at("Plain", name), nil, false},
+		{"a name", name, nil, false},
+	} {
+		check := checkProcessRules([]string{tc.rule}).Rules[0]
+		if !slices.Equal(check.Versions, tc.versions) {
+			t.Errorf("%s: rule %q takes %+v, want %+v", tc.name, tc.rule, check.Versions, tc.versions)
+		}
+		if check.Follows != tc.follows {
+			t.Errorf("%s: rule %q names a build: %v, want %v", tc.name, tc.rule, check.Follows, tc.follows)
+		}
+	}
+}
+
 // Routing follows a renamed folder only when no build of what a rule names is left, so the
 // check looks for the rule's program in another build before it looks through a renamed folder.
 func TestProcessRuleChecksPreferAnotherBuildToARenamedFolder(t *testing.T) {
@@ -536,6 +615,40 @@ func TestProcessRuleChecksTellWhichRuleAnAppIs(t *testing.T) {
 		request := mustJSON(t, map[string]any{"apiVersion": 1, "method": "checkProcessRules", "payload": map[string]any{"rules": rules, "apps": apps}})
 		if err := json.Unmarshal([]byte(Invoke(request)), &response); err != nil || response.Success || response.Error != "invalid_rules" {
 			t.Errorf("apps %.20q: accepted (%v, %q)", apps, err, response.Error)
+		}
+	}
+}
+
+// A rule in a profile from elsewhere may name a path on a network drive. The check opens none,
+// for a rule's other builds either: it tells the ones that run.
+func TestProcessRuleChecksOpenNoPathOffThisComputer(t *testing.T) {
+	root := t.TempDir()
+	if resolved, err := filepath.EvalSymlinks(root); err == nil {
+		root = resolved
+	}
+	at := func(parts ...string) string { return filepath.Join(append([]string{root}, parts...)...) }
+	for _, version := range []string{"3.12", "3.13"} {
+		if err := os.MkdirAll(at("Python", version), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(at("Python", version, "python"), []byte("\x7fELF"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rule := at("Python", "3.12", "python")
+	previous, local := listProcesses, localRule
+	t.Cleanup(func() { listProcesses, localRule = previous, local })
+	listProcesses = func() ([]xnet.Process, error) {
+		return []xnet.Process{{PID: 100, Name: "python", Path: rule}}, nil
+	}
+	if versions := checkProcessRules([]string{rule}).Rules[0].Versions; len(versions) != 2 {
+		t.Fatalf("on this computer the rule takes %+v, want its own build and the one beside it", versions)
+	}
+	localRule = func(string) bool { return false }
+	check := checkProcessRules([]string{rule, "children:" + rule})
+	for _, rule := range check.Rules {
+		if rule.Running != 1 || len(rule.Versions) != 0 || len(rule.Warnings) != 0 {
+			t.Errorf("rule %q off this computer: %+v, want its running program and nothing from the disk", rule.Rule, rule)
 		}
 	}
 }

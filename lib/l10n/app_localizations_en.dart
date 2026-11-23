@@ -3354,6 +3354,31 @@ class AppLocalizationsEn extends AppLocalizations {
   String get perAppUseSuggested => 'Use suggested rule';
 
   @override
+  String perAppAlsoMatches(String path) {
+    return 'Also matches $path';
+  }
+
+  @override
+  String perAppAlsoMatchesMore(String path, int count) {
+    return 'Also matches $path and $count more';
+  }
+
+  @override
+  String get perAppOnlyThisVersion => 'Only this version';
+
+  @override
+  String get perAppFollowUpdates => 'Follow updates';
+
+  @override
+  String get perAppFollowUpdatesHelp =>
+      'Also match this app\'s other versions. Off: only this exact path.';
+
+  @override
+  String perAppMatchesNow(String paths) {
+    return 'Matches now: $paths';
+  }
+
+  @override
   String get perAppConnections => 'Recent connections';
 
   @override
