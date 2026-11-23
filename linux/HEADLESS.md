@@ -31,8 +31,10 @@ sudo elarni-cli settings /tmp/inbound.json
 
 With it, a connection that reaches the server from outside (SSH, a web server, a
 published container port, a UDP service) is answered through the network it came
-from, also under Block traffic without VPN, and sessions that were open before
-the tunnel keep working. Everything the server opens itself still goes through
+from, and sessions that were open before the tunnel keep working. Under Block
+traffic without VPN the server's own services still answer, but ports forwarded
+to containers and virtual machines stay blocked, as all forwarded traffic outside
+the tunnel is. Everything the server opens itself still goes through
 the VPN. It is off by default: on a desktop it would let a program that accepts
 connections, such as a torrent client, answer them outside the VPN. It needs the
 kernel's reverse-path filter in loose mode or off (`rp_filter` 2 or 0, the

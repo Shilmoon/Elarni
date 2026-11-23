@@ -375,7 +375,8 @@ func TestLinuxAnswersInboundConnectionsOutsideTheTunnel(t *testing.T) {
 	if err := nft("add table ip published\nadd chain ip published forward { type nat hook prerouting priority dstnat; }\n" +
 		"add rule ip published forward iifname \"wan0\" tcp dport 8080 dnat to 10.9.0.2:8080\n" +
 		// A rewrite of what the container sends out, as a transparent proxy rule does.
-		"add rule ip published forward iifname \"br0\" tcp dport 2223 dnat to 203.0.113.1:2222\n"); errors.Is(err, errLinuxFirewallUnavailable) {
+		"add rule ip published forward iifname \"br0\" tcp dport 2223 dnat to 203.0.113.1:2222\n" +
+		"add rule ip published forward iifname \"br0\" ip daddr 10.9.0.1 tcp dport 2224 dnat to 203.0.113.1:2222\n"); errors.Is(err, errLinuxFirewallUnavailable) {
 		t.Skip("nftables is not installed")
 	} else if err != nil {
 		t.Fatal(err)
@@ -456,28 +457,33 @@ func TestLinuxAnswersInboundConnectionsOutsideTheTunnel(t *testing.T) {
 		if err := answers(early); err != nil {
 			t.Errorf("%+v: the session opened before the tunnel stopped: %v", policy, err)
 		}
-		for _, target := range []string{"203.0.113.2:2222", "203.0.113.2:8080"} {
+		// The host's own service answers; a forwarded port does too, except under the kill
+		// switch, whose guard lets no forwarded traffic leave outside the tunnel.
+		for target, answered := range map[string]bool{"203.0.113.2:2222": true, "203.0.113.2:8080": !policy.BlockWithoutVPN} {
 			connection, err := dial(target)
-			if err != nil {
-				t.Errorf("%+v: %s was not answered: %v", policy, target, err)
-				continue
+			if err == nil {
+				err = answers(connection)
+				connection.Close()
 			}
-			if err := answers(connection); err != nil {
-				t.Errorf("%+v: %s: %v", policy, target, err)
+			if (err == nil) != answered {
+				t.Errorf("%+v: %s answered: %v, want %v (%v)", policy, target, err == nil, answered, err)
 			}
-			connection.Close()
 		}
 		// What a container opens itself is not an inbound connection, whatever rewrites its
 		// destination: it leaves by the longer physical route, and not at all under the kill switch.
+		// The same for the host's own address on a port that is forwarded outside.
 		enter(container)
 		dialer := net.Dialer{Timeout: 500 * time.Millisecond}
-		connection, err := dialer.Dial("tcp4", "203.0.113.1:2223")
-		enter(host)
-		if err == nil {
-			connection.Close()
-		}
-		if (err == nil) == policy.BlockWithoutVPN {
-			t.Errorf("%+v: a container's own connection past the tunnel: %v", policy, err)
+		for _, target := range []string{"203.0.113.1:2223", "10.9.0.1:2224"} {
+			enter(container)
+			connection, err := dialer.Dial("tcp4", target)
+			enter(host)
+			if err == nil {
+				connection.Close()
+			}
+			if (err == nil) == policy.BlockWithoutVPN {
+				t.Errorf("%+v: a container's own connection to %s past the tunnel: %v", policy, target, err)
+			}
 		}
 		// What the host itself opens still enters the tunnel.
 		if routes, err := netlink.RouteGet(net.ParseIP("8.8.8.8")); err != nil || routes[0].LinkIndex != index {

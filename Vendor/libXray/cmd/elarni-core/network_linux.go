@@ -462,6 +462,8 @@ func (network linuxNetwork) firewall(protected []netip.Prefix, answerInbound boo
 		fmt.Fprintf(&script, "add chain inet %s inbound_reply { type route hook output priority mangle; policy accept; }\n", name)
 		fmt.Fprintf(&script, "add rule inet %s inbound_reply meta mark 0 ct direction reply meta mark set %d\n", name, network.Mark)
 		// The replies of a container or a VM behind a forwarded port are routed after prerouting.
+		// Under Block traffic without VPN the forward guard below still rejects forwarded traffic
+		// outside the tunnel, so there only this host's own services answer.
 		fmt.Fprintf(&script, "add chain inet %s inbound { type filter hook prerouting priority mangle; policy accept; }\n", name)
 		fmt.Fprintf(&script, "add rule inet %s inbound iifname != { \"lo\", %q } meta mark 0 ct direction reply meta mark set %d\n", name, name, network.Mark)
 	}
@@ -486,13 +488,6 @@ func (network linuxNetwork) firewall(protected []netip.Prefix, answerInbound boo
 		// too when it would leave outside the tunnel.
 		fmt.Fprintf(&script, "add chain inet %s forward_guard { type filter hook forward priority 0; policy accept; }\n", name)
 		fmt.Fprintf(&script, "add rule inet %s forward_guard oifname %q return\n", name, name)
-		if answerInbound {
-			// A forwarded port stays reachable, and nothing else: only a connection that came in
-			// from outside to one of this host's addresses is remembered, before DNAT rewrites it,
-			// and only that connection passes. What a container opens itself is still rejected.
-			fmt.Fprintf(&script, "add rule inet %s inbound iifname != { \"lo\", %q } fib daddr type local ct direction original ct mark 0 ct mark set %d\n", name, name, network.Mark)
-			fmt.Fprintf(&script, "add rule inet %s forward_guard ct mark %d return\n", name, network.Mark)
-		}
 		for _, ipv4 := range []bool{true, false} {
 			prefixes := []string{}
 			for _, prefix := range protected {
