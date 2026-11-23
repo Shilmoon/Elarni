@@ -36,27 +36,34 @@ func (p *silentPeer) Dispatch(context.Context, net.Destination) (*transport.Link
 func (*silentPeer) DispatchLink(context.Context, net.Destination, *transport.Link) error { return nil }
 
 // A flow that only sends stays one flow while it sends, and ends after the idle time without it.
+// A caller whose datagrams each ask for an answer (the DNS client) keeps its flow by replies only:
+// queries to a relay that went silent move to a new flow after the idle time.
 func TestSendingKeepsAFlowWithoutReplies(t *testing.T) {
 	defer func(previous time.Duration) { idleTimeout = previous }(idleTimeout)
-	idleTimeout = 200 * time.Millisecond
-	peer := &silentPeer{}
-	dispatcher := NewDispatcher(peer, func(context.Context, *udp.Packet) {})
+	idleTimeout = 600 * time.Millisecond
 	dest := net.UDPDestination(net.LocalHostIP, 9)
-	send := func() {
+	sender, asker := &silentPeer{}, &silentPeer{}
+	sending := NewDispatcher(sender, func(context.Context, *udp.Packet) {})
+	asking := NewDispatcher(asker, func(context.Context, *udp.Packet) {}).KeptByReplies()
+	send := func(dispatcher *Dispatcher) {
 		payload := buf.New()
 		payload.WriteString("x")
 		dispatcher.Dispatch(context.Background(), dest, payload)
 	}
-	for sent := 0; sent < 12; sent++ {
-		send()
-		time.Sleep(50 * time.Millisecond)
+	// Twice the idle time of sending, with most of the idle time to spare between two sends.
+	for start := time.Now(); time.Since(start) < 2*idleTimeout; time.Sleep(40 * time.Millisecond) {
+		send(sending)
+		send(asking)
 	}
-	if flows := peer.flows.Load(); flows != 1 {
-		t.Fatalf("600 ms of sending with a 200 ms idle time used %d flows, want 1", flows)
+	if flows := sender.flows.Load(); flows != 1 {
+		t.Fatalf("sending for twice the idle time used %d flows, want 1", flows)
 	}
-	time.Sleep(500 * time.Millisecond)
-	send()
-	if flows := peer.flows.Load(); flows != 2 {
+	if flows := asker.flows.Load(); flows < 2 {
+		t.Fatalf("asking without an answer for twice the idle time stayed on %d flow, want a new one", flows)
+	}
+	time.Sleep(2 * idleTimeout)
+	send(sending)
+	if flows := sender.flows.Load(); flows != 2 {
 		t.Fatalf("a send after the idle time used flow %d, want a new one", flows)
 	}
 }
