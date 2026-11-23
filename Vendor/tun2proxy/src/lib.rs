@@ -274,6 +274,11 @@ fn echo_reply(protocol: u8, from: IpAddr, to: IpAddr, request: &[u8]) -> Option<
     if request.len() < 8 || request[0] != echo || request[1] != 0 {
         return None;
     }
+    // A group or broadcast address is nobody's source address: such a ping gets no reply here.
+    if from.is_multicast() || from.is_unspecified() || matches!(from, IpAddr::V4(v4) if v4.is_broadcast()) {
+        return None;
+    }
+    // A group or broadcast address is nobody's source address: such a ping gets no reply here.
     let mut reply = request.to_vec();
     (reply[0], reply[2], reply[3]) = (answer, 0, 0);
     let mut sum = 0_u32;
@@ -667,6 +672,14 @@ mod tests {
         assert!(super::echo_reply(1, v4("8.8.8.8"), v4("10.0.0.2"), &[0, 0, 0, 0, 0, 0, 0, 0]).is_none());
         assert!(super::echo_reply(1, v4("8.8.8.8"), v4("10.0.0.2"), &[3, 1, 0, 0, 0, 0, 0, 0]).is_none());
         assert!(super::echo_reply(47, v4("8.8.8.8"), v4("10.0.0.2"), &request).is_none());
+        for group in ["224.0.0.1", "255.255.255.255", "0.0.0.0"] {
+            assert!(
+                super::echo_reply(1, v4(group), v4("10.0.0.2"), &[8, 0, 0, 0, 0, 1, 0, 1]).is_none(),
+                "{group}"
+            );
+        }
+        let all_nodes: std::net::Ipv6Addr = "ff02::1".parse().unwrap();
+        assert!(super::echo_reply(58, all_nodes.into(), to.into(), &[128, 0, 0, 0, 0, 1, 0, 1]).is_none());
         assert!(super::echo_reply(1, v4("8.8.8.8"), v4("10.0.0.2"), &[8, 0, 0]).is_none());
     }
 
