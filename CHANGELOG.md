@@ -4,6 +4,11 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
 
 ## Unreleased
 
+### Security
+
+- **`url` 2.5.9.** 2.5.8 overflowed the stack in `Url::origin()` on nested `blob:` URLs
+  (RUSTSEC-2026-0592). Elarni's own code does not call it; the update clears the advisory check.
+
 ## 0.6.3 - 2026-11-22
 
 ### Added
