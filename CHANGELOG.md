@@ -19,6 +19,28 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
   Android's Private DNS, a program that resolves names itself before it uses the proxy port,
   and for a while any app after the core restarts. Behind a server without IPv6 the IPv6
   connections of those fail, as before 0.5.0. All platforms.
+- **A site was routed by the addresses of the name in its first bytes, not by where it
+  connects.** With the "IP if no domain matched" strategy (Happ's default), a VPN-mode connection
+  that matched no rule had that name looked up and the answers tried against the IP lists. A
+  connection disguised as TLS to another site (a Telegram proxy with a Russian cover name) then
+  took that site's route, for example Direct by `geoip:ru`. The address the app dialed is used
+  now and the name is not looked up, which also removes one DNS query per such connection.
+- **A domain list now wins over an IP list of another action under "IP if no domain matched".**
+  In VPN mode the lists were read in the route order, each action's sites and then its
+  addresses, so an address list of an earlier action took a site listed for a later one: a
+  Russian service on an address inside a "blocked" range was proxied, and a video cache on a
+  Russian address went direct although its site was listed for the proxy. Sites are matched
+  first and addresses second, as with FakeDNS and in proxy mode. A connection to a private
+  address keeps the written order. "As is" and "IP on demand" are unchanged.
+- **Sites with a long TLS hello missed their domain rule.** A hello with post-quantum keys
+  that arrived in three or more pieces was not read, so the connection was routed by address.
+  It is waited for within the same 200 ms.
+- **HTTP/3 stalled after a pause on a site proxied by name.** A QUIC connection idle for longer
+  than the UDP flow (2 minutes) continued in a new flow that carries no name, so it left
+  through the route of its address. The flow keeps the name of the connection between the
+  same two ports for 10 minutes. Android, Windows, Linux.
+- **Proxy mode: a request was routed by the name inside it instead of the host it asked the
+  proxy for.** The CONNECT or SOCKS host decides now.
 
 ## 0.6.3 - 2026-11-22
 

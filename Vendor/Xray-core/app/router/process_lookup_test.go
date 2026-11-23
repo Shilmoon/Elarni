@@ -55,6 +55,33 @@ func TestProcessRulesOfOneRoutingDecisionShareOneLookup(t *testing.T) {
 	}
 }
 
+// The first pass of a sniffed connection hides the dialed address from the IP rules. A process rule
+// in that pass still needs the socket's own tuple, and the one lookup of the connection.
+func TestProcessRulesSeeTheSocketInTheNameFirstPass(t *testing.T) {
+	calls, seen := 0, ""
+	previous := lookupProcess
+	lookupProcess = func(network, srcIP string, srcPort uint16, dstIP string, dstPort uint16) (int, string, string, error) {
+		calls++
+		seen = fmt.Sprint(dstIP, ":", dstPort)
+		return 4242, "browser", "c:/apps/browser.exe", nil
+	}
+	t.Cleanup(func() { lookupProcess = previous })
+
+	destination := net.TCPDestination(net.ParseAddress("1.2.3.10"), 443)
+	ctx := &routingsession.Context{
+		Inbound: &session.Inbound{Source: net.TCPDestination(net.LocalHostIP, 50000)},
+		Outbound: &session.Outbound{Target: destination, OriginalTarget: destination,
+			RouteTarget: net.TCPDestination(net.DomainAddress("site.test"), 443)},
+	}
+	matcher := NewProcessNameMatcher([]string{"browser"})
+	if !matcher.Apply(nameOnlyContext{ctx}) || !matcher.Apply(ctx) {
+		t.Fatal("the process rule did not match in both passes")
+	}
+	if calls != 1 || seen != "1.2.3.10:443" {
+		t.Fatalf("%d lookups, the last for %s; want 1 for 1.2.3.10:443", calls, seen)
+	}
+}
+
 type quietHandler struct{}
 
 func (quietHandler) Handle(log.Message)     {}

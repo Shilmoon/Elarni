@@ -477,6 +477,9 @@ func (m *ProcessNameMatcher) Apply(ctx routing.Context) (matched bool) {
 	if resolvable, ok := ctx.(*dns.ResolvableContext); ok {
 		lookupContext = resolvable.Context
 	}
+	if named, ok := ctx.(nameOnlyContext); ok {
+		lookupContext = named.Context
+	}
 	if original, ok := lookupContext.(*routingsession.Context); ok && original.Outbound != nil && original.Outbound.OriginalTarget.IsValid() && original.Outbound.OriginalTarget.Address.Family().IsIP() {
 		dstIP = original.Outbound.OriginalTarget.Address.IP().String()
 		dstPort = uint16(original.Outbound.OriginalTarget.Port)

@@ -234,15 +234,32 @@ func (r *Router) pickRouteInternal(ctx routing.Context) (*Rule, routing.Context,
 	rules := *r.rules.Load()
 
 	secondPass := r.domainStrategy == Config_IpIfNonMatch && len(ctx.GetTargetDomain()) != 0 && !skipDNSResolve
+	first := ctx
+	second := func() routing.Context { return routing_dns.ContextWithDNSClient(ctx, r.dns) }
+
+	// Elarni: a connection from the TUN has the address the app dialed and, after sniffing, a name
+	// that is used for routing only. IPIfNonMatch means "by name first, by address if no name
+	// matched", so the first pass reads the name alone and the second the dialed address. The name
+	// is not looked up: its addresses are not where this connection goes, and a decoy name's
+	// addresses would pick the route. A private address keeps one pass in the written order: no
+	// name makes it reachable through another outbound.
+	if dialed := ctx.GetTargetIPs(); len(dialed) != 0 {
+		secondPass = false
+		if r.domainStrategy == Config_IpIfNonMatch && len(ctx.GetTargetDomain()) != 0 && routedByNameFirst(dialed) {
+			secondPass = true
+			first = nameOnlyContext{ctx}
+			second = func() routing.Context { return ctx }
+		}
+	}
 
 	for index, rule := range rules {
-		if rule.Apply(ctx) {
+		if rule.Apply(first) {
 			if !rule.fallback || !secondPass {
 				return rule, ctx, nil
 			}
 			// Elarni: a generated catch-all would end the first pass for every connection, so IP rules
 			// would never see a name's addresses. The rules ahead of it take their second pass first.
-			resolved := routing_dns.ContextWithDNSClient(ctx, r.dns)
+			resolved := second()
 			for _, earlier := range rules[:index] {
 				if earlier.Apply(resolved) {
 					return earlier, resolved, nil
@@ -256,7 +273,7 @@ func (r *Router) pickRouteInternal(ctx routing.Context) (*Rule, routing.Context,
 		return nil, ctx, common.ErrNoClue
 	}
 
-	ctx = routing_dns.ContextWithDNSClient(ctx, r.dns)
+	ctx = second()
 
 	// Try applying rules again if we have IPs.
 	for _, rule := range rules {
@@ -266,6 +283,24 @@ func (r *Router) pickRouteInternal(ctx routing.Context) (*Rule, routing.Context,
 	}
 
 	return nil, ctx, common.ErrNoClue
+}
+
+// nameOnlyContext hides the dialed address from the rules of the first pass.
+type nameOnlyContext struct{ routing.Context }
+
+func (nameOnlyContext) GetTargetIPs() []net.IP { return nil }
+
+// routedByNameFirst reports whether every dialed address is a public one.
+func routedByNameFirst(ips []net.IP) bool {
+	for _, ip := range ips {
+		if ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsMulticast() || ip.IsUnspecified() {
+			return false
+		}
+		if v4 := ip.To4(); v4 != nil && (v4[0] == 100 && v4[1]&0xc0 == 64 || v4[0] >= 240) {
+			return false
+		}
+	}
+	return true
 }
 
 // Start implements common.Runnable.
