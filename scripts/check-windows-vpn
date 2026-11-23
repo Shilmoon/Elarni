@@ -403,6 +403,16 @@ try:
                 adapter + "' | ForEach-Object {$_.ServerAddresses}) | ConvertTo-Json -Compress")
             assert '127.0.0.1' in remaining and '198.51.100.253' not in remaining and 'fd76:6f75:7465::1' not in remaining, 'Admission fixture still owns OS DNS queries: ' + remaining
         routes = json.loads(powershell("@(Get-NetRoute -InterfaceAlias '" + adapter + "' | Select-Object -ExpandProperty DestinationPrefix) | ConvertTo-Json -Compress"))
+        # The capture routes go to a next hop inside the adapter's own subnet. Without one a route is
+        # on-link, which WSL in mirrored mode shows Linux as "scope link", and Docker gives no network
+        # a subnet inside such a route: under the tunnel's wide routes it had none left in its pools.
+        hops = json.loads(powershell("@(Get-NetRoute -InterfaceAlias '" + adapter + "' -AddressFamily IPv4 | Select-Object DestinationPrefix,NextHop) | ConvertTo-Json -Compress"))
+        adapter_subnet = ipaddress.ip_network('198.51.100.252/30')
+        on_link = [row['DestinationPrefix'] for row in hops if row['NextHop'] != '198.51.100.253'
+                   and not ipaddress.ip_network(row['DestinationPrefix']).subnet_of(adapter_subnet)
+                   and not ipaddress.ip_network(row['DestinationPrefix']).network_address.is_multicast
+                   and row['DestinationPrefix'] != '255.255.255.255/32']
+        assert hops and not on_link, 'Capture routes without a next hop: ' + str(on_link or hops)
         if mode == 'route-enforcement':
             prefixes = [ipaddress.ip_network(value) for value in routes]
             assert any(ipaddress.ip_address('198.18.0.1') in p for p in prefixes)

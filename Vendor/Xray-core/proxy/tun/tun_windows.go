@@ -346,11 +346,11 @@ func (t *WindowsTun) Start() (err error) {
 		}
 		if prefix.Addr().Is4() {
 			route4 = true
-			route.NextHop = netip.IPv4Unspecified()
 		} else {
 			route6 = true
-			route.NextHop = netip.IPv6Unspecified()
 		}
+		// Elarni: a gateway route where it can be one; see routeNextHop.
+		route.NextHop = routeNextHop(addresses, route.Destination)
 		routesMap[route] = struct{}{}
 	}
 	// Elarni: discovery the routes take gets the TUN's own routes, and the TUN's routes to discovery

@@ -4,6 +4,15 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
 
 ## Unreleased
 
+### Fixed
+
+- **Windows: Docker in WSL can create networks while Elarni is connected.** With WSL in mirrored
+  networking mode, `docker network create` and `docker compose up` failed with "all predefined
+  address pools have been fully subnetted". The tunnel's routes had no next hop, WSL showed them
+  to Linux as directly connected networks, and Docker gives no network a subnet inside one. The
+  routes now go through an address of the tunnel adapter's own subnet, which routes the same
+  traffic and leaves Docker's address pools free.
+
 ## 0.6.3 - 2026-11-22
 
 ### Added
