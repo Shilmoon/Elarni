@@ -32,7 +32,8 @@ type HostsLookup interface {
 
 // AnswerLookup is implemented by a Client that remembers what it answered (Elarni).
 type AnswerLookup interface {
-	// Answered reports whether the client gave ip as an address of domain within the last hour.
+	// Answered reports whether the client gave ip as an address of domain within that answer's
+	// lifetime, and at least within the last hour.
 	Answered(domain string, ip net.IP) bool
 	// PinsHost reports whether the static hosts record domain at all: an address, another name or a refusal.
 	PinsHost(domain string) bool

@@ -44,7 +44,11 @@ func TestAnswersAreKnownAsLongAsTheAnswerLives(t *testing.T) {
 	now := time.Unix(1000, 0)
 	given := &answers{now: func() time.Time { return now }}
 	given.record("day.example", []net.IP{net.ParseIP("2001:db8::1")}, 86400)
-	now = now.Add(23 * time.Hour)
+	// The same address again with a short lifetime, for another app: the first app still holds
+	// its answer for the day.
+	now = now.Add(2 * time.Hour)
+	given.record("day.example", []net.IP{net.ParseIP("2001:db8::1")}, 300)
+	now = now.Add(21 * time.Hour)
 	if !given.gave("day.example", net.ParseIP("2001:db8::1")) {
 		t.Fatal("an answer that lives a day is forgotten within it")
 	}

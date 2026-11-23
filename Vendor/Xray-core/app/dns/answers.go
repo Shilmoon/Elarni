@@ -21,6 +21,11 @@ type answers struct {
 	now           func() time.Time
 }
 
+// given is what every DNS of this process answered. A core that restarts in its process (a
+// network change, another server) starts a new DNS, while the system's cache and the apps keep
+// the addresses the last one gave them.
+var given = new(answers)
+
 type answer struct {
 	name string
 	ip   netip.Addr
@@ -54,13 +59,22 @@ func (a *answers) record(name string, ips []net.IP, ttl uint32) {
 		if !ok {
 			continue
 		}
-		if _, known := a.recent[key]; !known && len(a.recent) >= answerLimit {
-			a.older, a.recent = a.recent, nil
+		// A later answer does not unsay an earlier one: the app may still hold the one that
+		// lives longer.
+		kept, known := a.recent[key]
+		if !known {
+			kept = a.older[key]
+			if len(a.recent) >= answerLimit {
+				a.older, a.recent = a.recent, nil
+			}
 		}
 		if a.recent == nil {
 			a.recent = make(map[answer]time.Time)
 		}
-		a.recent[key] = until
+		if kept.Before(until) {
+			kept = until
+		}
+		a.recent[key] = kept
 	}
 }
 
