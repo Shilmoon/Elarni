@@ -68,11 +68,16 @@ type ProcessRuleCheckResponse struct {
 
 func invokeCheckProcessRules(payload json.RawMessage) string {
 	request, err := decodePayload[ProcessRuleCheckRequest](payload)
-	if err != nil || !validProcessRules(request.Rules, 256) || !validProcessRules(request.Apps, 4096) {
+	if err != nil || !validProcessRules(request.Rules, 256) || len(request.Apps) > 4096 {
 		return encodeInvokeResponse(nil, errors.New("invalid_rules"))
 	}
 	response := checkProcessRules(request.Rules)
-	response.Same = sameProcessRules(request.Rules, request.Apps)
+	// The apps are what the computer lists, not what the user saved: a path no rule may hold (a
+	// control character, a trailing space, over 1024 bytes) is no rule's app, and the other apps
+	// keep their answers.
+	response.Same = sameProcessRules(request.Rules, slices.DeleteFunc(slices.Clone(request.Apps), func(app string) bool {
+		return !validProcessRule(app)
+	}))
 	return encodeInvokeResponse(response, nil)
 }
 
@@ -97,12 +102,16 @@ func validProcessRules(rules []string, most int) bool {
 		return false
 	}
 	for _, rule := range rules {
-		if rule == "" || len(rule) > 1024 || strings.TrimSpace(rule) != rule ||
-			strings.IndexFunc(rule, unicode.IsControl) >= 0 {
+		if !validProcessRule(rule) {
 			return false
 		}
 	}
 	return true
+}
+
+func validProcessRule(rule string) bool {
+	return rule != "" && len(rule) <= 1024 && strings.TrimSpace(rule) == rule &&
+		strings.IndexFunc(rule, unicode.IsControl) < 0
 }
 
 // listProcesses is swapped by tests to name the running programs.
@@ -428,13 +437,16 @@ func otherVersion(path string, folder bool) (string, fs.FileInfo, error) {
 		if unreadable != nil {
 			return "", nil, unreadable
 		}
+		// Out of folders to list: the search did not finish, so nothing is known, as for routing.
 		if listings == 0 {
-			break
+			return "", nil, errRuleSearchUnfinished
 		}
 		listings = most
 	}
 	return "", nil, fs.ErrNotExist
 }
+
+var errRuleSearchUnfinished = errors.New("the search for the rule's path took too many folders")
 
 // movedProgram returns the running program that a rule's missing program seems to have become:
 // the only one with its file name in the same folders but one, such as a folder that an update

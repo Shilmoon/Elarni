@@ -2130,30 +2130,38 @@ void main() {
               ),
               windows: false,
               linux: true,
-              checkRules: (rules, {apps = const []}) async =>
-                  const ProcessRuleChecks({
-                    python: ProcessRuleCheck(
-                      python,
-                      0,
-                      [],
-                      versions: [
-                        ProcessRuleVersion(python, 0, own: true),
-                        ProcessRuleVersion('/opt/Python/3.13/bin/python', 0),
-                      ],
-                      follows: true,
-                    ),
-                    // An update replaced the rule's folder, whose name tells
-                    // no build: the rule follows it since.
-                    updated: ProcessRuleCheck(
-                      updated,
-                      3,
-                      [],
-                      versions: [
-                        ProcessRuleVersion('/opt/java/jdk-22/bin/java', 3),
-                      ],
-                    ),
-                    plain: ProcessRuleCheck(plain, 1, []),
-                  }),
+              checkRules: (rules, {apps = const []}) async => ProcessRuleChecks(
+                const {
+                  python: ProcessRuleCheck(
+                    python,
+                    0,
+                    [],
+                    versions: [
+                      ProcessRuleVersion(python, 0, own: true),
+                      ProcessRuleVersion('/opt/Python/3.13/bin/python', 0),
+                    ],
+                    follows: true,
+                  ),
+                  // An update replaced the rule's folder, whose name tells
+                  // no build: the rule follows it since.
+                  updated: ProcessRuleCheck(
+                    updated,
+                    3,
+                    [],
+                    versions: [
+                      ProcessRuleVersion('/opt/java/jdk-22/bin/java', 3),
+                    ],
+                  ),
+                  plain: ProcessRuleCheck(plain, 1, []),
+                },
+                // As the core answers: the app list's path is the app of
+                // the rule for that one path.
+                same: {
+                  for (final rule in rules)
+                    if (innerRule(rule) == 'exact:$python')
+                      python: innerRule(rule),
+                },
+              ),
               onSave: (value) async => saved = value,
             ),
           ),

@@ -121,3 +121,21 @@ func TestPackageFamilyOfProcesses(t *testing.T) {
 	}
 	t.Logf("checked %d Store app processes and %d packaged parts of Windows", checked, parts)
 }
+
+// The process list names a program with forward slashes, the Windows directory comes with
+// backslashes: a program of Windows is one either way, and nothing beside the directory is.
+func TestProgramOfWindowsTakesEitherSeparator(t *testing.T) {
+	for path, want := range map[string]bool{
+		`C:/Windows/System32/WWAHost.exe`:   true,
+		`C:\Windows\System32\WWAHost.exe`:   true,
+		`c:/windows/system32/wwahost.exe`:   true,
+		`C:/WindowsApps/WWAHost.exe`:        false,
+		`C:/Windows`:                        false,
+		`D:/Windows/System32/WWAHost.exe`:   false,
+		`C:/Users/me/Windows/x/WWAHost.exe`: false,
+	} {
+		if got := programOfWindows(`C:\Windows`, path); got != want {
+			t.Errorf("%s: %v, want %v", path, got, want)
+		}
+	}
+}

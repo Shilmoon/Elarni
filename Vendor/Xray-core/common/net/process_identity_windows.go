@@ -3,6 +3,7 @@
 package net
 
 import (
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -95,11 +96,19 @@ func AppRule(pid int, name, path string) string {
 		}
 		return ""
 	}
-	root, err := windows.GetWindowsDirectory()
-	if err != nil || len(path) <= len(root) || !strings.EqualFold(path[:len(root)], root) || path[len(root)] != '\\' {
+	// The shared directory: GetWindowsDirectory answers with a user's own on a terminal server.
+	root, err := windows.GetSystemWindowsDirectory()
+	if err != nil || !programOfWindows(root, path) {
 		return ""
 	}
 	return packageRule(pid)
+}
+
+// programOfWindows reports whether a path is inside the Windows directory. A process's path comes
+// with either separator: the process list gives it with forward slashes.
+func programOfWindows(root, path string) bool {
+	root, path = filepath.ToSlash(root), filepath.ToSlash(path)
+	return len(path) > len(root) && strings.EqualFold(path[:len(root)], root) && path[len(root)] == '/'
 }
 
 var (

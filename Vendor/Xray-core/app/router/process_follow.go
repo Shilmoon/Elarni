@@ -5,6 +5,7 @@ import (
 	"regexp"
 	"runtime"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -25,6 +26,9 @@ type pathRule struct {
 
 	asked atomic.Int64 // when the disk was last asked, in Unix nanoseconds
 	gone  atomic.Bool
+	// asking is held by the one caller that asks the disk. The first answer is waited for; later,
+	// the others take the answer that stands, so a burst of connections lists the folders once.
+	asking sync.Mutex
 }
 
 // rulePathFresh is how long an answer of the disk about a rule's path stands.
@@ -150,10 +154,17 @@ func (r *pathRule) follows(keys, parts []string, same bool) bool {
 	if shape := PathPartShape(r.parts[at]); shape == "" || shape != PathPartShape(parts[at]) {
 		return false
 	}
-	now := time.Now().UnixNano()
-	if asked := r.asked.Load(); asked == 0 || now-asked > int64(rulePathFresh) {
-		r.gone.Store(rulePathGone(r.path, r.folder))
-		r.asked.Store(now)
+	if asked := r.asked.Load(); asked == 0 || time.Now().UnixNano()-asked > int64(rulePathFresh) {
+		if asked == 0 {
+			r.asking.Lock()
+		} else if !r.asking.TryLock() {
+			return r.gone.Load()
+		}
+		if r.asked.Load() == asked {
+			r.gone.Store(rulePathGone(r.path, r.folder))
+			r.asked.Store(time.Now().UnixNano())
+		}
+		r.asking.Unlock()
 	}
 	return r.gone.Load()
 }

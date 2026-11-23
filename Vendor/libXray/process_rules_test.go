@@ -2,6 +2,7 @@ package libXray
 
 import (
 	"encoding/json"
+	"fmt"
 	"maps"
 	"os"
 	"path/filepath"
@@ -611,10 +612,52 @@ func TestProcessRuleChecksTellWhichRuleAnAppIs(t *testing.T) {
 	if !maps.Equal(response.Data.Same, want) {
 		t.Errorf("the check's same rules %v, want %v", response.Data.Same, want)
 	}
-	for _, apps := range [][]string{{""}, {" padded"}, {"line\nbreak"}, make([]string, 4097)} {
-		request := mustJSON(t, map[string]any{"apiVersion": 1, "method": "checkProcessRules", "payload": map[string]any{"rules": rules, "apps": apps}})
-		if err := json.Unmarshal([]byte(Invoke(request)), &response); err != nil || response.Success || response.Error != "invalid_rules" {
-			t.Errorf("apps %.20q: accepted (%v, %q)", apps, err, response.Error)
+	// The computer lists the apps, and a path may be one no rule can hold: it is no rule's app, and
+	// the others keep their answers.
+	for _, odd := range []string{"", " padded", "line\nbreak", "/" + strings.Repeat("a", 1024)} {
+		request := mustJSON(t, map[string]any{"apiVersion": 1, "method": "checkProcessRules", "payload": map[string]any{"rules": rules, "apps": append([]string{odd}, apps...)}})
+		response.Data = ProcessRuleCheckResponse{}
+		if err := json.Unmarshal([]byte(Invoke(request)), &response); err != nil || !response.Success || !maps.Equal(response.Data.Same, want) {
+			t.Errorf("with the app %.20q: %v %q, same rules %v, want %v", odd, err, response.Error, response.Data.Same, want)
+		}
+	}
+	request = mustJSON(t, map[string]any{"apiVersion": 1, "method": "checkProcessRules", "payload": map[string]any{"rules": rules, "apps": make([]string, 4097)}})
+	if err := json.Unmarshal([]byte(Invoke(request)), &response); err != nil || response.Success || response.Error != "invalid_rules" {
+		t.Errorf("4097 apps: accepted (%v, %q)", err, response.Error)
+	}
+}
+
+// The search for a rule's other versions lists a bounded number of folders. One that runs out
+// has not found that the rule's path is gone: routing keeps such a rule, and the check gives no
+// warning for it.
+func TestProcessRuleChecksGiveNoWarningForASearchThatDidNotFinish(t *testing.T) {
+	root := t.TempDir()
+	if resolved, err := filepath.EvalSymlinks(root); err == nil {
+		root = resolved
+	}
+	for _, layout := range []struct {
+		name   string
+		builds int
+	}{{"Few", 4}, {"Many", 40}} {
+		for build := 1; build <= layout.builds; build++ {
+			// Builds left behind, none with the program.
+			if err := os.MkdirAll(filepath.Join(root, layout.name, fmt.Sprintf("app-1.0.%d", build)), 0o755); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	want := map[string][]string{
+		filepath.Join(root, "Few", "app-1.0.0", "bin", "tool"):  {"missing="},
+		filepath.Join(root, "Many", "app-1.0.0", "bin", "tool"): nil,
+	}
+	var rules []string
+	for rule := range want {
+		rules = append(rules, rule)
+	}
+	slices.Sort(rules)
+	for _, check := range checkProcessRules(rules).Rules {
+		if got := warningCodes(check); !slices.Equal(got, want[check.Rule]) {
+			t.Errorf("%q: warnings %v, want %v", check.Rule, got, want[check.Rule])
 		}
 	}
 }

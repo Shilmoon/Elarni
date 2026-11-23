@@ -713,9 +713,12 @@ class _PerAppRoutingEditorState extends State<PerAppRoutingEditor> {
       );
     }
     if (index < 0) return;
-    final present = selections.any(
-      (value) => identity(value) == identity(rule),
-    );
+    // Another rule for the same app, not the one being replaced: the core
+    // answers that a path's rule and its "exact:" rule name one app.
+    final present = [
+      for (var i = 0; i < selections.length; i++)
+        if (i != index) selections[i],
+    ].any((value) => identity(value) == identity(rule));
     setState(() {
       final next = List.of(selections);
       if (present) {

@@ -476,6 +476,12 @@ func normalPathKey(path, goos string) string {
 	switch goos {
 	case "windows":
 		path = windowsPackageFamilyPath(path)
+		// A package family is the package's whole name: a number in it is no build's, and
+		// Python.3.12 and Python.3.13 are two packages.
+		if family, _ := packageFamilyIn(path); family != "" {
+			start := strings.Index(path, "/windowsapps/") + len("/windowsapps/")
+			return versionlessPath(path[:start]) + family + versionlessPath(path[start+len(family):])
+		}
 	case "linux":
 		path = nixStorePath(snapPath(path))
 	case "darwin":

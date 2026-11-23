@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
+	"sync"
+	"sync/atomic"
 	"testing"
 )
 
@@ -45,6 +47,11 @@ func TestPathsCompareWithoutVersionNumbers(t *testing.T) {
 		// A Store package still compares as its family, whatever its version and architecture.
 		{"windows", `C:\Program Files\WindowsApps\OpenAI.ChatGPT-Desktop_1.2025.112.0_x64__2p2nqsd0c76g0\app\ChatGPT.exe`,
 			"c:/program files/windowsapps/openai.chatgpt-desktop_2p2nqsd0c76g0/app/chatgpt.exe"},
+		// A family's name keeps its numbers: Python 3.12 and 3.13 are two packages.
+		{"windows", `C:\Program Files\WindowsApps\PythonSoftwareFoundation.Python.3.12_3.12.2800.0_x64__qbz5n2kfra8p0\python3.12.exe`,
+			"c:/program files/windowsapps/pythonsoftwarefoundation.python.3.12_qbz5n2kfra8p0/python*.exe"},
+		{"windows", `C:\Program Files\WindowsApps\PythonSoftwareFoundation.Python.3.12_qbz5n2kfra8p0\`,
+			"c:/program files/windowsapps/pythonsoftwarefoundation.python.3.12_qbz5n2kfra8p0/"},
 		// Numbers that are no version stay: short ones, and those inside a name or a file's name.
 		{"windows", "c:/windows/system32/svchost.exe", "c:/windows/system32/svchost.exe"},
 		{"windows", "c:/program files (x86)/steam/steamapps/common/portal 2/portal2.exe", "c:/program files (x86)/steam/steamapps/common/portal 2/portal2.exe"},
@@ -519,5 +526,59 @@ func TestStoreAppsMatchByTheirProcessPackage(t *testing.T) {
 	asked = 0
 	if (&ProcessNameMatcher{ProcessNames: []string{"example"}}).MatchesProcess(77, "other", "/opt/other"); asked != 0 {
 		t.Error("Windows was asked for a package without a package rule")
+	}
+}
+
+// A burst of connections of a program the rule may follow asks the disk once: the first answer is
+// waited for, and while a later one is being fetched the others take the answer that stands.
+func TestABurstOfConnectionsAsksTheDiskOnce(t *testing.T) {
+	var asked atomic.Int32
+	release := make(chan struct{})
+	previous := rulePathGone
+	rulePathGone = func(string, bool) bool { asked.Add(1); <-release; return true }
+	t.Cleanup(func() { rulePathGone = previous })
+
+	matcher := NewProcessNameMatcher([]string{"/opt/java/jdk-21/bin/java"})
+	var followed atomic.Int32
+	burst := func() *sync.WaitGroup {
+		var group sync.WaitGroup
+		for range 16 {
+			group.Add(1)
+			go func() {
+				defer group.Done()
+				if matcher.MatchesProcess(77, "java", "/opt/java/jdk-22/bin/java") {
+					followed.Add(1)
+				}
+			}()
+		}
+		return &group
+	}
+	first := burst()
+	for asked.Load() == 0 {
+		runtime.Gosched()
+	}
+	close(release)
+	first.Wait()
+	if asked.Load() != 1 || followed.Load() != 16 {
+		t.Fatalf("the first burst asked the disk %d times and followed %d of 16", asked.Load(), followed.Load())
+	}
+
+	// The answer is stale: one caller asks again, the others do not wait for it.
+	for _, rule := range matcher.followers {
+		rule.asked.Store(1)
+	}
+	release = make(chan struct{})
+	followed.Store(0)
+	second := burst()
+	for asked.Load() == 1 {
+		runtime.Gosched()
+	}
+	for followed.Load() != 15 {
+		runtime.Gosched()
+	}
+	close(release)
+	second.Wait()
+	if asked.Load() != 2 || followed.Load() != 16 {
+		t.Errorf("the second burst asked the disk %d times in all and followed %d of 16", asked.Load(), followed.Load())
 	}
 }
