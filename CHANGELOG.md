@@ -4,6 +4,17 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
 
 ## Unreleased
 
+### Fixed
+
+- **Android: no progress line and Cancel at the bottom while subscriptions update.** A line
+  with Cancel came up over the last servers on Home and Subscriptions, once for each
+  subscription, while the spinner at the top showed the same update. The update now shows
+  at the top alone: "Updating subscriptions…" with its Cancel, on Home and on Subscriptions.
+  Cancel ends the whole update; it used to end only the download it interrupted and go on to
+  the next subscription. While an update runs, Connect waits for it instead of turning into
+  Stop. For other operations the line at the bottom has its own background, so the page under
+  it no longer shows through.
+
 ## 0.6.3 - 2026-11-22
 
 ### Added
