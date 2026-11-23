@@ -58,7 +58,7 @@ func NewClassicNameServer(address net.Destination, dispatcher routing.Dispatcher
 		Interval: time.Minute,
 		Execute:  s.RequestsCleanup,
 	}
-	s.udpServer.Store(udp.NewDispatcher(dispatcher, s.HandleResponse))
+	s.udpServer.Store(udp.NewDispatcher(dispatcher, s.HandleResponse).KeptByReplies())
 
 	errors.LogInfo(context.Background(), "DNS: created UDP client initialized for ", address.NetAddr())
 	return s
@@ -72,7 +72,7 @@ func (s *ClassicNameServer) Name() string {
 // retire sends new queries on a fresh flow after a socket path change (contract C1); the old flow
 // still delivers the answers to the queries it carries until it closes.
 func (s *ClassicNameServer) retire(grace time.Duration) {
-	old := s.udpServer.Swap(udp.NewDispatcher(s.dispatcher, s.HandleResponse))
+	old := s.udpServer.Swap(udp.NewDispatcher(s.dispatcher, s.HandleResponse).KeptByReplies())
 	time.AfterFunc(grace, old.RemoveRay)
 }
 

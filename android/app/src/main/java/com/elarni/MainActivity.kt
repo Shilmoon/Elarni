@@ -212,9 +212,9 @@ class MainActivity : ComponentActivity() {
             interaction.importing = true
             interaction.importSources = current.sources.map { it.string("id") + ":" + it.optDouble("lastSuccessfulFetch", 0.0) } + current.nodes.map { it.string("configurationRevision", it.string("id")) }
         }
-        repository.scope.launch {
+        val work: suspend (ended: () -> Boolean) -> Unit = { ended ->
             try {
-                val result = if (command == "ping") repository.ping(args) else repository.execute(command, args)
+                val result = if (command == "ping") repository.ping(args) else repository.execute(command, args, ended)
                 withContext(Dispatchers.Main) {
                     if (command == "reject") { interaction.reviewingEditor = false; interaction.leaveAfterSave = null; interaction.importing = false }
                     if (interaction.importing && result.optBoolean("saved")) {
@@ -242,14 +242,16 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+        if (command == "refresh") repository.subscriptionUpdate(work) else repository.scope.launch { work { false } }
     }
-    /** Refreshes in turn and stops at a review, which a later refresh would clear or replace before the user sees it. */
+    /** Refreshes in turn as one update. It stops at a review, which a later refresh would clear or replace before the
+     *  user sees it, and at a Cancel, which ends the update and not only the download it interrupted. */
     fun refreshAll(ids: List<String>) =
-        repository.scope.launch {
+        repository.subscriptionUpdate { ended ->
             for (id in ids) {
-                if (repository.state.value.approval != null) break
+                if (ended() || repository.state.value.approval != null) break
                 try {
-                    if (repository.execute("refresh", obj("id" to id)).optBoolean("selectedServerReplaced"))
+                    if (repository.execute("refresh", obj("id" to id), ended).optBoolean("selectedServerReplaced"))
                         withContext(Dispatchers.Main) { interaction.notice = tr(R.string.selected_server_replaced) }
                 } catch (_: AppFailure) { }
             }

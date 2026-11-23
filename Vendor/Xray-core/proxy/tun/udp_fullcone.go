@@ -15,8 +15,10 @@ import (
 
 // udpFlowKey binds a flow to its app socket, so replies from any peer reach the app (full cone). A DNS
 // datagram's flow also keys on its server (Elarni): routing hijacks port 53 to the DNS outbound, which drops
-// anything else, so one socket's DNS and other traffic must not follow whichever came first.
-type udpFlowKey struct{ src, dns net.Destination }
+// anything else, so one socket's DNS and other traffic must not follow whichever came first. So does a
+// datagram to a FakeDNS address: the flow is routed by that address's name and only that address is turned
+// back into the name, so a second fake address on the same flow would reach the server as 198.18.x.x.
+type udpFlowKey struct{ src, dst net.Destination }
 
 func flowKey(src, dst net.Destination) udpFlowKey {
 	if dst.Port == 53 {
@@ -34,6 +36,8 @@ type udpConnectionHandler struct {
 
 	handleConnection func(conn net.Conn, dest net.Destination)
 	writePacket      func(data []byte, src net.Destination, dst net.Destination) error
+	// fake reports a FakeDNS address; nil without FakeDNS.
+	fake func(net.Address) bool
 }
 
 func newUdpConnectionHandler(handleConnection func(conn net.Conn, dest net.Destination), writePacket func(data []byte, src net.Destination, dst net.Destination) error) *udpConnectionHandler {
@@ -51,6 +55,9 @@ func newUdpConnectionHandler(handleConnection func(conn net.Conn, dest net.Desti
 func (u *udpConnectionHandler) HandlePacket(src net.Destination, dst net.Destination, data *buf.Buffer) {
 	data.UDP = &dst
 	key := flowKey(src, dst)
+	if u.fake != nil && u.fake(dst.Address) {
+		key.dst = dst
+	}
 	u.RLock()
 	if u.closed {
 		u.RUnlock()

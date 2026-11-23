@@ -2,12 +2,16 @@ package libXray
 
 import (
 	"encoding/json"
+	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"runtime"
 	"slices"
 	"strings"
 	"testing"
+
+	xnet "github.com/xtls/xray-core/common/net"
 )
 
 func warningCodes(check ProcessRuleCheck) []string {
@@ -271,4 +275,423 @@ func mustJSON(t *testing.T, value any) string {
 		t.Fatal(err)
 	}
 	return string(data)
+}
+
+// Routing compares paths without version numbers, so a rule saved for one version still matches
+// after an update removed that version's files. The check looks for the version on disk as
+// routing would, and says nothing about a folder it may not list, such as WindowsApps.
+func TestProcessRuleChecksFollowTheVersionOnDisk(t *testing.T) {
+	root := t.TempDir()
+	if resolved, err := filepath.EvalSymlinks(root); err == nil {
+		root = resolved
+	}
+	name := "example"
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	installed := filepath.Join(root, "Example", "app-1.0.2")
+	if err := os.MkdirAll(installed, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(installed, name), []byte("\x7fELF"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	saved := filepath.Join(root, "Example", "app-1.0.1")
+	sep := string(filepath.Separator)
+	want := map[string][]string{
+		filepath.Join(saved, name):       nil,
+		saved + sep:                      nil,
+		saved:                            {"folder=" + installed + sep},
+		filepath.Join(saved, name) + sep: {"notFolder=" + filepath.Join(installed, name)},
+		filepath.Join(saved, "gone"):     {"missing="},
+		filepath.Join(root, "Example", "other-1.0.1", name): {"missing="},
+		// A pre-release that is gone is followed to the release that replaced it.
+		filepath.Join(root, "Example", "app-1.0.1-beta") + sep:   nil,
+		filepath.Join(root, "Example", "app-1.0.1-custom") + sep: {"missing="},
+		filepath.Join(root, "Absent", "app-1.0.1", name):         {"missing="},
+		"children:" + filepath.Join(saved, name):                 nil,
+		"children:" + filepath.Join(root, "Absent", "1.2", name): {"missing="},
+	}
+	if runtime.GOOS != "windows" && os.Geteuid() != 0 {
+		// Entries can be opened by name but not listed, as in WindowsApps.
+		locked := filepath.Join(root, "Locked")
+		if err := os.MkdirAll(filepath.Join(locked, "2.0"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(locked, 0o111); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { os.Chmod(locked, 0o755) })
+		want[filepath.Join(locked, "1.0", name)] = nil
+	}
+	var rules []string
+	for rule := range want {
+		rules = append(rules, rule)
+	}
+	slices.Sort(rules)
+	for _, check := range checkProcessRules(rules).Rules {
+		if got := warningCodes(check); !slices.Equal(got, want[check.Rule]) {
+			t.Errorf("%q: warnings %v, want %v", check.Rule, got, want[check.Rule])
+		}
+	}
+}
+
+// A rule that matches a running program is not missing, whatever the disk says: a Store app's
+// earlier version was reported as not found while it matched every program of the app. A program
+// that is gone while the same one runs from a sibling folder, such as one named by a build's
+// hash, is offered that path.
+func TestProcessRuleChecksOfProgramsRunningFromAnotherPath(t *testing.T) {
+	root := t.TempDir()
+	if resolved, err := filepath.EvalSymlinks(root); err == nil {
+		root = resolved
+	}
+	at := func(parts ...string) string { return filepath.Join(append([]string{root}, parts...)...) }
+	running := []string{
+		at("Store", "app-2.0.0", "chat"),
+		at("Hashed", "d4e5f6", "bin", "tool"),
+		at("Two", "x1y", "tool"), at("Two", "z2w", "tool"), at("Two", "z2w", "tool"),
+		at("Deep", "one", "two", "far"),
+	}
+	previous := listProcesses
+	listProcesses = func() ([]xnet.Process, error) {
+		var processes []xnet.Process
+		for i, path := range running {
+			// The core reports paths with forward slashes.
+			processes = append(processes, xnet.Process{PID: 100 + i, Name: filepath.Base(path), Path: filepath.ToSlash(path)})
+		}
+		return processes, nil
+	}
+	t.Cleanup(func() { listProcesses = previous })
+	sep := string(filepath.Separator)
+	for _, tc := range []struct {
+		rule     string
+		running  int
+		warnings []string
+	}{
+		{at("Store", "app-1.0.0", "chat"), 1, nil},
+		{"children:" + at("Store", "app-1.0.0", "chat"), 1, nil},
+		{at("Hashed", "a1b2c3", "bin", "tool"), 0, []string{"moved=" + at("Hashed", "d4e5f6", "bin", "tool")}},
+		{"children:" + at("Hashed", "a1b2c3", "bin", "tool"), 0, []string{"moved=children:" + at("Hashed", "d4e5f6", "bin", "tool")}},
+		// Not the same program: two candidates, another name, another depth, two folders renamed.
+		{at("Two", "aaa", "tool"), 0, []string{"missing="}},
+		{at("Hashed", "a1b2c3", "bin", "other"), 0, []string{"missing="}},
+		{at("Hashed", "a1b2c3", "tool"), 0, []string{"missing="}},
+		{at("Deep", "uno", "dos", "far"), 0, []string{"missing="}},
+		// A folder names no single program.
+		{at("Hashed", "a1b2c3") + sep, 0, []string{"missing="}},
+	} {
+		check := checkProcessRules([]string{tc.rule}).Rules[0]
+		if got := warningCodes(check); check.Running != tc.running || !slices.Equal(got, tc.warnings) {
+			t.Errorf("%q: %d running, warnings %v; want %d, %v", tc.rule, check.Running, got, tc.running, tc.warnings)
+		}
+	}
+}
+
+// A rule for one version of an app takes the others. The check tells the versions a rule names
+// on this computer and how many programs run from each, so the editor can say so and offer the
+// rule for its own path only; and whether the rule names a build at all.
+func TestProcessRuleChecksTellTheVersionsARuleTakes(t *testing.T) {
+	root := t.TempDir()
+	if resolved, err := filepath.EvalSymlinks(root); err == nil {
+		root = resolved
+	}
+	name := "python"
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	at := func(parts ...string) string { return filepath.Join(append([]string{root}, parts...)...) }
+	for _, version := range []string{"3.12", "3.13"} {
+		if err := os.MkdirAll(at("Python", version), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(at("Python", version, name), []byte("\x7fELF"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.MkdirAll(at("Plain"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(at("Plain", name), []byte("\x7fELF"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	previous := listProcesses
+	listProcesses = func() ([]xnet.Process, error) {
+		return []xnet.Process{
+			{PID: 100, Name: name, Path: at("Python", "3.12", name)},
+			{PID: 101, Name: name, Path: at("Python", "3.13", name)},
+			{PID: 102, Name: name, Path: at("Python", "3.13", name)},
+			{PID: 103, Name: name, Path: at("Python", "3.14", name)}, // not on disk anymore
+			{PID: 104, Name: name, Path: at("Plain", name)},
+		}, nil
+	}
+	t.Cleanup(func() { listProcesses = previous })
+	sep := string(filepath.Separator)
+	type version = ProcessRuleVersion
+	for _, tc := range []struct {
+		name, rule string
+		versions   []version
+		follows    bool
+	}{
+		{"its own first, then the others", at("Python", "3.12", name), []version{
+			{Path: at("Python", "3.12", name), Running: 1, Own: true},
+			{Path: at("Python", "3.13", name), Running: 2},
+			{Path: at("Python", "3.14", name), Running: 1},
+		}, true},
+		{"a folder", at("Python", "3.13") + sep, []version{
+			{Path: at("Python", "3.13") + sep, Running: 2, Own: true},
+			{Path: at("Python", "3.12") + sep, Running: 1},
+			{Path: at("Python", "3.14") + sep, Running: 1},
+		}, true},
+		{"a version that is gone", at("Python", "3.11", name), []version{
+			{Path: at("Python", "3.12", name), Running: 1},
+			{Path: at("Python", "3.13", name), Running: 2},
+			{Path: at("Python", "3.14", name), Running: 1},
+		}, true},
+		{"with the programs it starts", "children:" + at("Python", "3.12", name), []version{
+			{Path: at("Python", "3.12", name), Running: 1, Own: true},
+			{Path: at("Python", "3.13", name), Running: 2},
+			{Path: at("Python", "3.14", name), Running: 1},
+		}, true},
+		{"exact", "exact:" + at("Python", "3.12", name), nil, true},
+		{"a path without a version", at("Plain", name), nil, false},
+		{"a name", name, nil, false},
+	} {
+		check := checkProcessRules([]string{tc.rule}).Rules[0]
+		if !slices.Equal(check.Versions, tc.versions) {
+			t.Errorf("%s: rule %q takes %+v, want %+v", tc.name, tc.rule, check.Versions, tc.versions)
+		}
+		if check.Follows != tc.follows {
+			t.Errorf("%s: rule %q names a build: %v, want %v", tc.name, tc.rule, check.Follows, tc.follows)
+		}
+	}
+}
+
+// Routing follows a renamed folder only when no build of what a rule names is left, so the
+// check looks for the rule's program in another build before it looks through a renamed folder.
+func TestProcessRuleChecksPreferAnotherBuildToARenamedFolder(t *testing.T) {
+	root := t.TempDir()
+	if resolved, err := filepath.EvalSymlinks(root); err == nil {
+		root = resolved
+	}
+	name := "example"
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	at := func(parts ...string) string { return filepath.Join(append([]string{root}, parts...)...) }
+	// The rule's version holds a renamed folder where a folder stands in the program's place;
+	// the next version holds the program.
+	if err := os.MkdirAll(at("Tool", "app-1.0.1", "jre-22", name), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(at("Tool", "app-1.0.2", "jre-21"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(at("Tool", "app-1.0.2", "jre-21", name), []byte("\x7fELF"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	rule := at("Tool", "app-1.0.1", "jre-21", name)
+	if got := warningCodes(checkProcessRules([]string{rule}).Rules[0]); len(got) != 0 {
+		t.Fatalf("%q: warnings %v, want none: its program is in the next version", rule, got)
+	}
+}
+
+// A rule whose folder an update replaced is checked as what replaced it, as routing follows it:
+// jdk-21 to jdk-22, "Photoshop 2025" to "Photoshop 2026". An "exact:" rule names its path alone.
+func TestProcessRuleChecksFollowAReplacedFolder(t *testing.T) {
+	root := t.TempDir()
+	if resolved, err := filepath.EvalSymlinks(root); err == nil {
+		root = resolved
+	}
+	name := "example"
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	at := func(parts ...string) string { return filepath.Join(append([]string{root}, parts...)...) }
+	for _, folder := range []string{at("java", "jdk-22"), at("Adobe", "Photoshop 2026"), at("Squirrel", "app-1.0.2"), at("Two", "v1", "w2")} {
+		if err := os.MkdirAll(folder, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(folder, name), []byte("\x7fELF"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sep := string(filepath.Separator)
+	want := map[string][]string{
+		at("java", "jdk-21", name):                     nil,
+		at("java", "jdk-21") + sep:                     nil,
+		at("java", "jdk-21"):                           {"folder=" + at("java", "jdk-22") + sep},
+		at("Adobe", "Photoshop 2025", name):            nil,
+		at("java", "jre-21", name):                     {"missing="},
+		at("java", "jdk-21", "other"):                  {"missing="},
+		at("Two", "v3", "w4", name):                    {"missing="}, // two folders were replaced
+		at("Squirrel", "app-1.0.1", name):              nil,
+		"exact:" + at("java", "jdk-22", name):          nil,
+		"exact:" + at("java", "jdk-21", name):          {"missing="},
+		"exact:" + at("Squirrel", "app-1.0.1", name):   {"missing="},
+		"exact:" + at("java", "jdk-22"):                {"folder=exact:" + at("java", "jdk-22") + sep},
+		"children:exact:" + at("java", "jdk-21") + sep: {"missing="},
+	}
+	var rules []string
+	for rule := range want {
+		rules = append(rules, rule)
+	}
+	slices.Sort(rules)
+	for _, check := range checkProcessRules(rules).Rules {
+		if got := warningCodes(check); !slices.Equal(got, want[check.Rule]) {
+			t.Errorf("%q: warnings %v, want %v", check.Rule, got, want[check.Rule])
+		}
+	}
+
+	// The running program counts for the rule it replaced, and no other path is offered.
+	previous := listProcesses
+	listProcesses = func() ([]xnet.Process, error) {
+		return []xnet.Process{{PID: 100, Name: name, Path: filepath.ToSlash(at("java", "jdk-22", name))}}, nil
+	}
+	t.Cleanup(func() { listProcesses = previous })
+	for rule, running := range map[string]int{
+		at("java", "jdk-21", name):            1,
+		at("java", "jdk-21") + sep:            1,
+		"exact:" + at("java", "jdk-21", name): 0,
+		"exact:" + at("java", "jdk-22", name): 1,
+	} {
+		check := checkProcessRules([]string{rule}).Rules[0]
+		if check.Running != running {
+			t.Errorf("%q: %d running, want %d", rule, check.Running, running)
+		}
+		if strings.HasPrefix(rule, "exact:") && running == 0 && !slices.Equal(warningCodes(check), []string{"missing="}) {
+			t.Errorf("%q: warnings %v, want it missing without an offer", rule, warningCodes(check))
+		}
+	}
+}
+
+// The editor shows an app as listed when a saved rule is that app's rule, also one written for
+// another version. It compared the rules' text, so after an update the app showed as not listed,
+// and ticking it added a second rule that the first one overruled.
+func TestProcessRuleChecksTellWhichRuleAnAppIs(t *testing.T) {
+	root := t.TempDir()
+	if resolved, err := filepath.EvalSymlinks(root); err == nil {
+		root = resolved
+	}
+	at := func(parts ...string) string { return filepath.Join(append([]string{root}, parts...)...) }
+	sep := string(filepath.Separator)
+	for _, folder := range []string{at("Example", "app-1.0.2"), at("java", "jdk-22", "bin"), at("Games", "Anno 1800"), at("Games", "Anno 2070")} {
+		if err := os.MkdirAll(folder, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rules := []string{
+		at("Example", "app-1.0.1", "example"),
+		"children:" + at("java", "jdk-21", "bin", "java"),
+		at("Games", "Anno 1800") + sep,
+		"flatpak:org.example.App",
+	}
+	apps := []string{
+		at("Example", "app-1.0.2", "example"),
+		at("java", "jdk-22", "bin", "java"),
+		at("Games", "Anno 1800") + sep,
+		"flatpak:org.example.App",
+		at("Games", "Anno 2070") + sep,
+		"flatpak:org.example.Other",
+		at("Example", "app-1.0.2", "other"),
+		at("Example") + sep,
+	}
+	want := map[string]string{apps[0]: rules[0], apps[1]: rules[1], apps[2]: rules[2], apps[3]: rules[3]}
+	if got := sameProcessRules(rules, apps); !maps.Equal(got, want) {
+		t.Errorf("same rules %v, want %v", got, want)
+	}
+
+	var response struct {
+		Success bool
+		Data    ProcessRuleCheckResponse
+		Error   string
+	}
+	request := mustJSON(t, map[string]any{"apiVersion": 1, "method": "checkProcessRules", "payload": map[string]any{"rules": rules, "apps": apps}})
+	if err := json.Unmarshal([]byte(Invoke(request)), &response); err != nil || !response.Success {
+		t.Fatalf("check failed: %v %q", err, response.Error)
+	}
+	if !maps.Equal(response.Data.Same, want) {
+		t.Errorf("the check's same rules %v, want %v", response.Data.Same, want)
+	}
+	// The computer lists the apps, and a path may be one no rule can hold: it is no rule's app, and
+	// the others keep their answers.
+	for _, odd := range []string{"", " padded", "line\nbreak", "/" + strings.Repeat("a", 1024)} {
+		request := mustJSON(t, map[string]any{"apiVersion": 1, "method": "checkProcessRules", "payload": map[string]any{"rules": rules, "apps": append([]string{odd}, apps...)}})
+		response.Data = ProcessRuleCheckResponse{}
+		if err := json.Unmarshal([]byte(Invoke(request)), &response); err != nil || !response.Success || !maps.Equal(response.Data.Same, want) {
+			t.Errorf("with the app %.20q: %v %q, same rules %v, want %v", odd, err, response.Error, response.Data.Same, want)
+		}
+	}
+	request = mustJSON(t, map[string]any{"apiVersion": 1, "method": "checkProcessRules", "payload": map[string]any{"rules": rules, "apps": make([]string, 4097)}})
+	if err := json.Unmarshal([]byte(Invoke(request)), &response); err != nil || response.Success || response.Error != "invalid_rules" {
+		t.Errorf("4097 apps: accepted (%v, %q)", err, response.Error)
+	}
+}
+
+// The search for a rule's other versions lists a bounded number of folders. One that runs out
+// has not found that the rule's path is gone: routing keeps such a rule, and the check gives no
+// warning for it.
+func TestProcessRuleChecksGiveNoWarningForASearchThatDidNotFinish(t *testing.T) {
+	root := t.TempDir()
+	if resolved, err := filepath.EvalSymlinks(root); err == nil {
+		root = resolved
+	}
+	for _, layout := range []struct {
+		name   string
+		builds int
+	}{{"Few", 4}, {"Many", 40}} {
+		for build := 1; build <= layout.builds; build++ {
+			// Builds left behind, none with the program.
+			if err := os.MkdirAll(filepath.Join(root, layout.name, fmt.Sprintf("app-1.0.%d", build)), 0o755); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	want := map[string][]string{
+		filepath.Join(root, "Few", "app-1.0.0", "bin", "tool"):  {"missing="},
+		filepath.Join(root, "Many", "app-1.0.0", "bin", "tool"): nil,
+	}
+	var rules []string
+	for rule := range want {
+		rules = append(rules, rule)
+	}
+	slices.Sort(rules)
+	for _, check := range checkProcessRules(rules).Rules {
+		if got := warningCodes(check); !slices.Equal(got, want[check.Rule]) {
+			t.Errorf("%q: warnings %v, want %v", check.Rule, got, want[check.Rule])
+		}
+	}
+}
+
+// A rule in a profile from elsewhere may name a path on a network drive. The check opens none,
+// for a rule's other builds either: it tells the ones that run.
+func TestProcessRuleChecksOpenNoPathOffThisComputer(t *testing.T) {
+	root := t.TempDir()
+	if resolved, err := filepath.EvalSymlinks(root); err == nil {
+		root = resolved
+	}
+	at := func(parts ...string) string { return filepath.Join(append([]string{root}, parts...)...) }
+	for _, version := range []string{"3.12", "3.13"} {
+		if err := os.MkdirAll(at("Python", version), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(at("Python", version, "python"), []byte("\x7fELF"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rule := at("Python", "3.12", "python")
+	previous, local := listProcesses, localRule
+	t.Cleanup(func() { listProcesses, localRule = previous, local })
+	listProcesses = func() ([]xnet.Process, error) {
+		return []xnet.Process{{PID: 100, Name: "python", Path: rule}}, nil
+	}
+	if versions := checkProcessRules([]string{rule}).Rules[0].Versions; len(versions) != 2 {
+		t.Fatalf("on this computer the rule takes %+v, want its own build and the one beside it", versions)
+	}
+	localRule = func(string) bool { return false }
+	check := checkProcessRules([]string{rule, "children:" + rule})
+	for _, rule := range check.Rules {
+		if rule.Running != 1 || len(rule.Versions) != 0 || len(rule.Warnings) != 0 {
+			t.Errorf("rule %q off this computer: %+v, want its running program and nothing from the disk", rule.Rule, rule)
+		}
+	}
 }

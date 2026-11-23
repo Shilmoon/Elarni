@@ -7041,12 +7041,12 @@
         }
       }
     },
-    "iOS keeps all traffic inside the tunnel, including while it reconnects." : {
+    "iOS keeps traffic inside the tunnel, including while it reconnects. iOS itself leaves outside it push notifications and iMessage, carrier services such as Wi-Fi Calling and MMS, and devices on your local network such as AirPlay and CarPlay." : {
       "localizations" : {
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "iOS держит весь трафик внутри туннеля, в том числе во время переподключения."
+            "value" : "iOS держит трафик внутри туннеля, в том числе во время переподключения. Сама iOS оставляет вне туннеля push-уведомления и iMessage, услуги оператора (звонки по Wi-Fi, MMS) и устройства в локальной сети (AirPlay, CarPlay)."
           }
         }
       }

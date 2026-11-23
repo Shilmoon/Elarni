@@ -230,7 +230,7 @@ struct ConnectionEditor: View {
   @ViewBuilder private var routeSections: some View {
     Section {
       Toggle("Kill switch", isOn: $value.includeAllNetworks)
-    } header: { Text("Protection") } footer: { Text("iOS keeps all traffic inside the tunnel, including while it reconnects.") }
+    } header: { Text("Protection") } footer: { Text("iOS keeps traffic inside the tunnel, including while it reconnects. iOS itself leaves outside it push notifications and iMessage, carrier services such as Wi-Fi Calling and MMS, and devices on your local network such as AirPlay and CarPlay.") }
     Section {
       DisclosureGroup("Advanced network routes") {
       Toggle("Enforce tunnel routes", isOn: $value.enforceRoutes)

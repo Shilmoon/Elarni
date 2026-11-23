@@ -59,11 +59,21 @@ func (r *loopbackResolver) LookupIP(domain string, option dns.IPOption) ([]net.I
 	if domain == "dual.example" && option.IPv4Enable {
 		return []net.IP{net.IP{127, 0, 0, 1}}, 60, nil
 	}
+	if domain == "decoy.example" && option.IPv4Enable {
+		return []net.IP{net.IP{127, 0, 0, 1}}, 60, nil
+	}
 	return nil, 0, dns.ErrEmptyResponse
 }
 
+// The app got 2001:db8::10 from this resolver as the address of dual.example, and of no other name.
+func (*loopbackResolver) Answered(domain string, ip net.IP) bool {
+	return domain == "dual.example" && ip.Equal(gonet.ParseIP("2001:db8::10"))
+}
+func (*loopbackResolver) PinsHost(string) bool { return false }
+
 // A TUN flow keeps its IPv6 destination when sniffing is route-only. On a host
-// without IPv6 the direct dial must reach the sniffed domain over IPv4.
+// without IPv6 the direct dial must reach the sniffed domain over IPv4, when the
+// domain is a name of that destination.
 func TestDirectIPv6DialFallsBackToSniffedDomainOverIPv4(t *testing.T) {
 	// A timed-out or refused attempt ends the retries, but not before the IPv4 one.
 	for _, ipv6Err := range []error{nil, context.DeadlineExceeded, syscall.ECONNREFUSED} {
@@ -132,6 +142,42 @@ func testDirectIPv6DialFallsBack(t *testing.T, ipv6Err error) {
 	}
 	if len(resolver.asked) != 1 || !resolver.asked[0].IPv4Enable || resolver.asked[0].IPv6Enable {
 		t.Fatalf("resolver options %v, want one IPv4-only lookup", resolver.asked)
+	}
+}
+
+// The sniffed domain can be another host's name: an app that disguises a connection to its own
+// IPv6 server as TLS to a decoy site names the decoy. The failed dial must then stay failed, so
+// the app moves on to its next address, instead of reaching the decoy over IPv4.
+func TestDirectIPv6DialDoesNotReachANameOfAnotherHost(t *testing.T) {
+	for _, name := range []string{"decoy.example", "unknown.example"} {
+		t.Run(name, func(t *testing.T) {
+			h := new(Handler)
+			if err := h.Init(&Config{}, policy.DefaultManager{}); err != nil {
+				t.Fatal(err)
+			}
+			resolver := &loopbackResolver{}
+			ctx := internet.ContextWithSystemDialerFeatures(context.Background(), func() (dns.Client, outbound.Manager) { return resolver, nil })
+			ctx = session.ContextWithOutbounds(ctx, []*session.Outbound{{
+				Target:      net.TCPDestination(net.ParseAddress("2001:db8::10"), 443),
+				RouteTarget: net.TCPDestination(net.DomainAddress(name), 443),
+			}})
+			upReader, upWriter := pipe.New()
+			downReader, downWriter := pipe.New()
+			defer downReader.Interrupt()
+			upWriter.Close()
+			// Refused: an error the dial is not repeated after, so the test does not wait out the retries.
+			dialer := &ipv4OnlyDialer{ipv6Err: syscall.ECONNREFUSED}
+			if err := h.Process(ctx, &transport.Link{Reader: upReader, Writer: downWriter}, dialer); err == nil {
+				t.Fatal("Process succeeded although the app's address is unreachable")
+			}
+			dialer.mu.Lock()
+			defer dialer.mu.Unlock()
+			for _, dial := range dialer.dials {
+				if !dial.Address.Family().IsIPv6() {
+					t.Fatalf("dials %v, want only the app's IPv6 address", dialer.dials)
+				}
+			}
+		})
 	}
 }
 

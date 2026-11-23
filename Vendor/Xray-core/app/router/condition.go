@@ -311,6 +311,17 @@ type ProcessNameMatcher struct {
 	// Elarni: "children:<rule>" also matches the programs that a program matching <rule> started,
 	// and theirs: Claude starts Claude Code, Discord its updater.
 	Ancestors *ProcessNameMatcher
+	// Elarni: "exact:<path>" names a path or a folder as it is written, version numbers and all.
+	ExactPaths   []string
+	ExactFolders []string
+	// Elarni: the Microsoft Store package families that folder rules name (Windows). Their
+	// processes match wherever they run from: a hosted app runs System32's WWAHost.exe, a
+	// background task backgroundTaskHost.exe.
+	Packages []string
+	// Elarni: the path rules as written, which follow a folder that replaced their own
+	// (process_follow.go), and the app bundles they name, for an app macOS runs from elsewhere.
+	followers []*pathRule
+	bundles   []string
 }
 
 // maxProcessAncestors bounds the walk from a program to the programs that started it.
@@ -322,13 +333,15 @@ var (
 	processAppImage   = net.AppImage
 	processServices   = net.ProcessServices
 	parentProcess     = net.ParentProcess
+	processPackage    = net.PackageFamily
 )
 
 func NewProcessNameMatcher(names []string) *ProcessNameMatcher {
 	processNames := []string{}
 	folders := []string{}
 	absPaths := []string{}
-	var flatpakApps, appImages, services, ancestors []string
+	var flatpakApps, appImages, services, ancestors, exactPaths, exactFolders, packages, bundles []string
+	var followers []*pathRule
 	matchXraySelf := false
 	for _, name := range names {
 		if rule, ok := strings.CutPrefix(name, "children:"); ok {
@@ -360,18 +373,42 @@ func NewProcessNameMatcher(names []string) *ProcessNameMatcher {
 			}
 			name = xrayPath
 		}
-		name := filepath.ToSlash(name)
-		if runtime.GOOS == "windows" {
-			name = windowsPackageFamilyPath(strings.ToLower(name))
+		exact := false
+		if path, ok := strings.CutPrefix(name, "exact:"); ok {
+			if path == "" {
+				continue
+			}
+			name, exact = path, true
 		}
-		// /usr/bin/
-		if strings.HasSuffix(name, "/") {
-			folders = append(folders, name)
+		name := normalPath(name, runtime.GOOS)
+		if exact && strings.Contains(name, "/") {
+			if strings.HasSuffix(name, "/") {
+				exactFolders = append(exactFolders, name)
+			} else {
+				exactPaths = append(exactPaths, name)
+			}
 			continue
 		}
-		// /usr/bin/curl
 		if strings.Contains(name, "/") {
-			absPaths = append(absPaths, name)
+			key := normalPathKey(name, runtime.GOOS)
+			if rule := newPathRule(name, key); rule != nil {
+				followers = append(followers, rule)
+			}
+			if runtime.GOOS == "darwin" {
+				if bundle := bundleTail(name); bundle != "" {
+					bundles = append(bundles, bundle)
+				}
+			}
+			// /usr/bin/
+			if strings.HasSuffix(name, "/") {
+				folders = append(folders, key)
+				if family := packageFamilyFolder(key); family != "" && runtime.GOOS == "windows" {
+					packages = append(packages, family)
+				}
+				continue
+			}
+			// /usr/bin/curl
+			absPaths = append(absPaths, key)
 			continue
 		}
 		// curl.exe or curl
@@ -393,7 +430,141 @@ func NewProcessNameMatcher(names []string) *ProcessNameMatcher {
 		FlatpakApps:   flatpakApps,
 		AppImages:     appImages,
 		Services:      services,
+		ExactPaths:    exactPaths,
+		ExactFolders:  exactFolders,
+		Packages:      packages,
+		followers:     followers,
+		bundles:       bundles,
 	}
+}
+
+// ProcessPathKey returns a path as rules and process paths compare it.
+// Elarni: an update moves many apps to a new path, and a rule saved for one version must match the
+// next, whatever installed the app. So paths compare without what names a build:
+//   - numbers joined by dots, anywhere: app-1.0.9265 (Squirrel), Application\131.0.2903.86
+//     (Edge WebView2), jdk-21.0.2, rufus-4.6.exe;
+//   - a number of three or more digits that ends a folder's name after a dot, dash or underscore:
+//     Battle.net.15173;
+//   - a build's hash that ends a folder's name or is that name: Roblox's version-<hash>, Visual
+//     Studio Code's <commit>;
+//   - a Microsoft Store package's folder, compared as its family (Windows), a Snap's revision
+//     (Linux), a Nix store path's hash, and the folder macOS runs a quarantined app from.
+//
+// The other version sits beside the one the rule names, in the same folder. Windows also ignores
+// the letter case. Bare names are compared as they are. A number that is part of a name ("Anno
+// 1800", "Photoshop 2025", jdk-21, a user's or a process's number) stays: two such folders can be
+// two products. A rule follows such a folder only once its own is gone (process_follow.go).
+func ProcessPathKey(path string) string {
+	return pathKey(filepath.ToSlash(path), runtime.GOOS)
+}
+
+func pathKey(path, goos string) string {
+	return normalPathKey(normalPath(path, goos), goos)
+}
+
+// normalPath spells a path with forward slashes as rules compare it: Windows ignores the case.
+func normalPath(path, goos string) string {
+	if goos == "windows" {
+		return strings.ToLower(strings.ReplaceAll(path, `\`, "/"))
+	}
+	return path
+}
+
+// normalPathKey is the key of a path that normalPath spelled. It changes names within folders
+// only, so a key has its path's folders one for one.
+func normalPathKey(path, goos string) string {
+	switch goos {
+	case "windows":
+		path = windowsPackageFamilyPath(path)
+		// A package family is the package's whole name: a number in it is no build's, and
+		// Python.3.12 and Python.3.13 are two packages.
+		if family, _ := packageFamilyIn(path); family != "" {
+			start := strings.Index(path, "/windowsapps/") + len("/windowsapps/")
+			return versionlessPath(path[:start]) + family + versionlessPath(path[start+len(family):])
+		}
+	case "linux":
+		path = nixStorePath(snapPath(path))
+	case "darwin":
+		path = nixStorePath(translocationPath(path))
+	}
+	return versionlessPath(path)
+}
+
+// snapPath replaces the revision in /snap/<name>/<revision>/, which each refresh changes: a
+// number, or x and a number for a locally installed Snap.
+func snapPath(path string) string {
+	const parent = "/snap/"
+	if !strings.HasPrefix(path, parent) {
+		return path
+	}
+	name := strings.IndexByte(path[len(parent):], '/')
+	if name <= 0 {
+		return path
+	}
+	start := len(parent) + name + 1
+	end := strings.IndexByte(path[start:], '/')
+	if end < 0 {
+		return path
+	}
+	end += start
+	revision := strings.TrimPrefix(path[start:end], "x")
+	if revision == "" || strings.Trim(revision, "0123456789") != "" {
+		return path
+	}
+	return path[:start] + "*" + path[end:]
+}
+
+// versionlessPath replaces what names a build in a path with forward slashes by "*".
+func versionlessPath(path string) string {
+	digit := func(i int) bool { return i < len(path) && path[i] >= '0' && path[i] <= '9' }
+	var key strings.Builder
+	copied := 0
+	replace := func(start, end int) {
+		if copied == 0 {
+			key.Grow(len(path))
+		}
+		key.WriteString(path[copied:start])
+		key.WriteByte('*')
+		copied = end
+	}
+	for i := 0; i < len(path); {
+		if i == 0 || strings.IndexByte("/.-_", path[i-1]) >= 0 {
+			// A build's hash that ends a folder's name.
+			if end := i + buildHash(path[i:]); end > i && end < len(path) && path[end] == '/' {
+				replace(i, end)
+				i = end
+				continue
+			}
+		}
+		if !digit(i) {
+			i++
+			continue
+		}
+		start := i
+		for digit(i) {
+			i++
+		}
+		version := false
+		for i < len(path) && path[i] == '.' && digit(i+1) {
+			version = true
+			for i++; digit(i); i++ {
+			}
+		}
+		if !version {
+			// A build number that ends a folder's name. After a space, or as the whole name, a
+			// number is part of the name.
+			version = i-start >= 3 && i < len(path) && path[i] == '/' &&
+				start > 0 && strings.IndexByte(".-_", path[start-1]) >= 0
+		}
+		if version {
+			replace(start, i)
+		}
+	}
+	if copied == 0 {
+		return path
+	}
+	key.WriteString(path[copied:])
+	return key.String()
 }
 
 // Elarni: Microsoft Store (MSIX) apps run from <volume>\WindowsApps\<name>_<version>_<arch>_<resource>_<publisher>\,
@@ -476,6 +647,9 @@ func (m *ProcessNameMatcher) Apply(ctx routing.Context) (matched bool) {
 	lookupContext := ctx
 	if resolvable, ok := ctx.(*dns.ResolvableContext); ok {
 		lookupContext = resolvable.Context
+	}
+	if named, ok := ctx.(nameOnlyContext); ok {
+		lookupContext = named.Context
 	}
 	if original, ok := lookupContext.(*routingsession.Context); ok && original.Outbound != nil && original.Outbound.OriginalTarget.IsValid() && original.Outbound.OriginalTarget.Address.Family().IsIP() {
 		dstIP = original.Outbound.OriginalTarget.Address.IP().String()
@@ -564,12 +738,13 @@ func (m *ProcessNameMatcher) matchesSelf(pid int, name, absPath string) bool {
 	reportedName, reportedPath := name, absPath
 	if runtime.GOOS == "windows" {
 		name = strings.TrimSuffix(strings.ToLower(name), ".exe")
-		absPath = windowsPackageFamilyPath(strings.ToLower(absPath))
 	}
+	written := normalPath(absPath, runtime.GOOS)
+	absPath = normalPathKey(written, runtime.GOOS)
 	if slices.Contains(m.ProcessNames, name) {
 		return true
 	}
-	if slices.Contains(m.AbsPaths, absPath) {
+	if slices.Contains(m.AbsPaths, absPath) || slices.Contains(m.ExactPaths, written) {
 		return true
 	}
 	for _, f := range m.Folders {
@@ -577,8 +752,35 @@ func (m *ProcessNameMatcher) matchesSelf(pid int, name, absPath string) bool {
 			return true
 		}
 	}
+	for _, f := range m.ExactFolders {
+		if strings.HasPrefix(written, f) {
+			return true
+		}
+	}
+	if len(m.bundles) > 0 {
+		if run := translocatedPath(written); run != "" {
+			for _, bundle := range m.bundles {
+				if run == bundle || strings.HasSuffix(bundle, "/") && strings.HasPrefix(run, bundle) {
+					return true
+				}
+			}
+		}
+	}
+	if len(m.followers) > 0 && written != "" {
+		keys, parts := strings.Split(absPath, "/"), strings.Split(written, "/")
+		for _, rule := range m.followers {
+			if rule.follows(keys, parts, false) {
+				return true
+			}
+		}
+	}
 	if pid <= 0 {
 		return false
+	}
+	if len(m.Packages) > 0 {
+		if family := processPackage(pid); family != "" && slices.Contains(m.Packages, strings.ToLower(family)) {
+			return true
+		}
 	}
 	if len(m.FlatpakApps) > 0 {
 		if id := processFlatpakApp(pid); id != "" && slices.Contains(m.FlatpakApps, id) {

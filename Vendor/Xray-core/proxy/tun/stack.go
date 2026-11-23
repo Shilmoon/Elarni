@@ -122,6 +122,9 @@ func NewStack(ctx context.Context, options StackOptions, handler ConnectionHandl
 			s.admit = h.admitTCP
 		}
 		s.udp = newUdpConnectionHandler(s.handle, s.writeUDP)
+		if h, ok := handler.(*Handler); ok {
+			s.udp.fake = h.fakeAddress
+		}
 	}
 	return s, nil
 }

@@ -329,6 +329,17 @@ class AndroidE2E {
         assertTrue(discovery.none { address -> open.any { address in it } } && unicast.all { address -> open.any { address in it } })
         val locked = Cidr.routes(snapshot().settings, keepDiscovery = true)
         assertTrue((discovery + unicast).all { address -> locked.any { address in it } })
+        // A custom list always carries the tunnel's DNS address and the FakeDNS range; the IPv6 ones join a list that routes IPv6.
+        val custom = { list: List<String> -> Cidr.routes(snapshot().settings.put("includedRoutes", JSONArray(list)).put("excludedRoutes", JSONArray())) }
+        val has = { list: List<Cidr>, ip: String -> list.any { java.net.InetAddress.getByName(ip) in it } }
+        val narrow = custom(listOf("10.0.0.0/8"))
+        assertTrue(narrow.size == 3 && has(narrow, "198.51.100.254") && has(narrow, "198.18.9.9") && !has(narrow, "fc00::5"))
+        val wide = custom(listOf("198.0.0.0/8", "2001:db8::/32"))
+        assertTrue(wide.size == 4 && has(wide, "fdfe:dcba:9876::2") && has(wide, "fc00::5"))
+        // A list whose every route is excluded is refused, whatever a custom list always carries.
+        assertEquals("invalid_settings", expectFailure {
+            Cidr.routes(snapshot().settings.put("includedRoutes", JSONArray(listOf("10.0.0.0/8"))).put("excludedRoutes", JSONArray(listOf("10.0.0.0/8"))))
+        })
         val diagnostic = call("diagnostics").getString("text")
         assertFalse(diagnostic.contains("127.0.0.1")); assertFalse(diagnostic.contains("00000000-0000-4000-8000-000000000001")); assertFalse(diagnostic.contains(selected))
         call("settings", obj("settings" to obj("perAppMode" to "off")))

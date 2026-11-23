@@ -2,6 +2,7 @@ package dispatcher
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -100,6 +101,7 @@ type DefaultDispatcher struct {
 	stats  stats.Manager
 	fdns   dns.FakeDNSEngine
 	recent recentConnections
+	quic   quicNames
 }
 
 func init() {
@@ -134,6 +136,7 @@ func (*DefaultDispatcher) Type() interface{} {
 // Start implements common.Runnable.
 func (d *DefaultDispatcher) Start() error {
 	d.recent.reset()
+	d.quic.reset()
 	return nil
 }
 
@@ -240,6 +243,11 @@ func (d *DefaultDispatcher) shouldOverride(ctx context.Context, result SniffResu
 	if domain == "" {
 		return false
 	}
+	// Elarni: a target that already is a name (an HTTP CONNECT host, a SOCKS domain) is where the
+	// connection goes. A different name in its first bytes does not route it.
+	if request.RouteOnly && destination.Address.Family().IsDomain() {
+		return false
+	}
 	if request.ExcludeForDomain != nil && request.ExcludeForDomain.MatchAny(strings.ToLower(domain)) {
 		return false
 	}
@@ -267,6 +275,29 @@ func (d *DefaultDispatcher) shouldOverride(ctx context.Context, result SniffResu
 	}
 
 	return false
+}
+
+func sourceOf(ctx context.Context) net.Destination {
+	if inbound := session.InboundFromContext(ctx); inbound != nil {
+		return inbound.Source
+	}
+	return net.Destination{}
+}
+
+// resumedQUIC gives a UDP flow with no readable first packet the name its two sockets used for a
+// QUIC connection before the flow idled out, for routing only.
+func (d *DefaultDispatcher) resumedQUIC(ctx context.Context, ob *session.Outbound, request session.SniffingRequest, destination net.Destination) net.Destination {
+	if !request.RouteOnly || !destination.Address.Family().IsIP() || !slices.Contains(request.OverrideDestinationForProtocol, "quic") {
+		return destination
+	}
+	domain := d.quic.recall(sourceOf(ctx), destination)
+	if domain == "" {
+		return destination
+	}
+	errors.LogInfo(ctx, "resumed QUIC connection of ", domain)
+	destination.Address = net.ParseAddress(domain)
+	ob.RouteTarget = destination
+	return destination
 }
 
 // Dispatch implements routing.Dispatcher.
@@ -316,9 +347,14 @@ func (d *DefaultDispatcher) Dispatch(ctx context.Context, destination net.Destin
 				}
 				if sniffingRequest.RouteOnly && protocol != "fakedns" && protocol != "fakedns+others" && !isFakeIP {
 					ob.RouteTarget = destination
+					if protocol == "quic" {
+						d.quic.remember(sourceOf(ctx), ob.Target, domain)
+					}
 				} else {
 					ob.Target = destination
 				}
+			} else if err != nil {
+				destination = d.resumedQUIC(ctx, ob, sniffingRequest, destination)
 			}
 			d.routedDispatch(ctx, outbound, destination)
 		}()
@@ -371,9 +407,14 @@ func (d *DefaultDispatcher) DispatchLink(ctx context.Context, destination net.De
 			}
 			if sniffingRequest.RouteOnly && protocol != "fakedns" && protocol != "fakedns+others" && !isFakeIP {
 				ob.RouteTarget = destination
+				if protocol == "quic" {
+					d.quic.remember(sourceOf(ctx), ob.Target, domain)
+				}
 			} else {
 				ob.Target = destination
 			}
+		} else if err != nil {
+			destination = d.resumedQUIC(ctx, ob, sniffingRequest, destination)
 		}
 		d.routedDispatch(ctx, outbound, destination)
 	}

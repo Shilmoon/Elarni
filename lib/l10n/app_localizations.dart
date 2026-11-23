@@ -1139,13 +1139,13 @@ abstract class AppLocalizations {
   /// No description provided for @connectionModeHelp.
   ///
   /// In en, this message translates to:
-  /// **'System-wide VPN connects all apps; administrator approval is requested on the first VPN connection in this app session. System proxy points this computer\'s proxy setting at Elarni without administrator approval; only apps that follow it, such as browsers, use it. Local proxy only opens the ports below for apps you set up yourself.'**
+  /// **'System-wide VPN connects all apps; administrator approval is requested on the first VPN connection in this app session. System proxy points this computer\'s proxy setting at Elarni without administrator approval; only apps that follow it, such as browsers, go through Elarni; games, calls and other UDP traffic connect directly. Local proxy only opens the ports below for apps you set up yourself.'**
   String get connectionModeHelp;
 
   /// No description provided for @connectionModeServiceHelp.
   ///
   /// In en, this message translates to:
-  /// **'System-wide VPN connects all apps; administrator approval is requested on the first VPN connection in this app session, unless Connect without administrator approval is on. System proxy points this computer\'s proxy setting at Elarni without administrator approval; only apps that follow it, such as browsers, use it. Local proxy only opens the ports below for apps you set up yourself.'**
+  /// **'System-wide VPN connects all apps; administrator approval is requested on the first VPN connection in this app session, unless Connect without administrator approval is on. System proxy points this computer\'s proxy setting at Elarni without administrator approval; only apps that follow it, such as browsers, go through Elarni; games, calls and other UDP traffic connect directly. Local proxy only opens the ports below for apps you set up yourself.'**
   String get connectionModeServiceHelp;
 
   /// No description provided for @systemProxy.
@@ -2933,7 +2933,7 @@ abstract class AppLocalizations {
   /// No description provided for @killSwitchMacHelp.
   ///
   /// In en, this message translates to:
-  /// **'macOS keeps all traffic inside the tunnel, including while it reconnects. Route exclusions do not apply.'**
+  /// **'macOS keeps traffic inside the tunnel, including while it reconnects. Route exclusions do not apply, and devices on your local network (printers, AirPlay, file shares) may not be found or reached. From macOS 13.3, macOS itself leaves push notifications and iMessage outside the tunnel.'**
   String get killSwitchMacHelp;
 
   /// No description provided for @killSwitchDesktopHelp.
@@ -3311,7 +3311,7 @@ abstract class AppLocalizations {
   /// No description provided for @enforceRoutesMacHelp.
   ///
   /// In en, this message translates to:
-  /// **'Enforcement requires specific included routes; default routes such as 0.0.0.0/0 and ::/0 are unsupported. For a full tunnel, turn enforcement off and use the kill switch in Connection settings.'**
+  /// **'Enforcement requires specific included routes; default routes such as 0.0.0.0/0 and ::/0 are unsupported. For a full tunnel, turn enforcement off and use the kill switch in Connection settings. An included route that contains your local network takes its devices into the tunnel too.'**
   String get enforceRoutesMacHelp;
 
   /// No description provided for @enforceRoutesDesktopHelp.
@@ -5666,11 +5666,11 @@ abstract class AppLocalizations {
   /// **'A bare name matches a program file, not an app bundle. Pick the app from the list.'**
   String get perAppWarningBundleName;
 
-  /// No description provided for @perAppWarningVersioned.
+  /// No description provided for @perAppWarningMoved.
   ///
   /// In en, this message translates to:
-  /// **'Names one version of the app, so it stops matching after the next update.'**
-  String get perAppWarningVersioned;
+  /// **'Not found here. The same program now runs from another folder.'**
+  String get perAppWarningMoved;
 
   /// No description provided for @perAppWarningUnknown.
   ///
@@ -5689,6 +5689,42 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Use suggested rule'**
   String get perAppUseSuggested;
+
+  /// No description provided for @perAppAlsoMatches.
+  ///
+  /// In en, this message translates to:
+  /// **'Also matches {path}'**
+  String perAppAlsoMatches(String path);
+
+  /// No description provided for @perAppAlsoMatchesMore.
+  ///
+  /// In en, this message translates to:
+  /// **'Also matches {path} and {count} more'**
+  String perAppAlsoMatchesMore(String path, int count);
+
+  /// No description provided for @perAppOnlyThisVersion.
+  ///
+  /// In en, this message translates to:
+  /// **'Only this version'**
+  String get perAppOnlyThisVersion;
+
+  /// No description provided for @perAppFollowUpdates.
+  ///
+  /// In en, this message translates to:
+  /// **'Follow updates'**
+  String get perAppFollowUpdates;
+
+  /// No description provided for @perAppFollowUpdatesHelp.
+  ///
+  /// In en, this message translates to:
+  /// **'Also match this app\'s other versions. Off: only this exact path.'**
+  String get perAppFollowUpdatesHelp;
+
+  /// No description provided for @perAppMatchesNow.
+  ///
+  /// In en, this message translates to:
+  /// **'Matches now: {paths}'**
+  String perAppMatchesNow(String paths);
 
   /// No description provided for @perAppConnections.
   ///

@@ -404,12 +404,24 @@ fn checksum(parts: &[&[u8]]) -> [u8; 2] {
 }
 
 fn tcp_syn(source: [u8; 4], destination: [u8; 4], source_port: u16, port: u16) -> Vec<u8> {
+    tcp_segment(source, destination, source_port, port, (1, 0), 0x02)
+}
+
+fn tcp_segment(
+    source: [u8; 4],
+    destination: [u8; 4],
+    source_port: u16,
+    port: u16,
+    (sequence, acknowledged): (u32, u32),
+    flags: u8,
+) -> Vec<u8> {
     let mut tcp = vec![0; 20];
     tcp[0..2].copy_from_slice(&source_port.to_be_bytes());
     tcp[2..4].copy_from_slice(&port.to_be_bytes());
-    tcp[4..8].copy_from_slice(&1u32.to_be_bytes());
+    tcp[4..8].copy_from_slice(&sequence.to_be_bytes());
+    tcp[8..12].copy_from_slice(&acknowledged.to_be_bytes());
     tcp[12] = 5 << 4;
-    tcp[13] = 0x02;
+    tcp[13] = flags;
     tcp[14..16].copy_from_slice(&65_535u16.to_be_bytes());
     let pseudo = [&source[..], &destination[..], &[0, 6, 0, 20]].concat();
     let sum = checksum(&[&pseudo, &tcp]);
@@ -420,6 +432,85 @@ fn tcp_syn(source: [u8; 4], destination: [u8; 4], source_port: u16, port: u16) -
     let sum = checksum(&[&ip]);
     ip[10..12].copy_from_slice(&sum);
     [ip, tcp].concat()
+}
+
+// A server that speaks first (SSH, SMTP, FTP) may have its greeting arrive with the SOCKS reply, in
+// one read. The handshake kept those bytes and the client waited for a greeting that never came.
+#[test]
+fn bytes_that_arrive_with_the_socks_reply_reach_the_client() {
+    use std::io::{Read, Write};
+    const GREETING: &[u8] = b"SSH-2.0-server\r\n";
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let (release, wait) = std::sync::mpsc::channel::<()>();
+    let server = thread::spawn(move || {
+        let (mut stream, _) = accept_within(&listener, Duration::from_secs(10)).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        let mut header = [0; 2];
+        stream.read_exact(&mut header).unwrap();
+        stream
+            .read_exact(&mut vec![0; usize::from(header[1])])
+            .unwrap();
+        stream.write_all(&[5, 0]).unwrap();
+        // CONNECT to an IPv4 address.
+        stream.read_exact(&mut [0; 10]).unwrap();
+        // One write, so one read returns the reply and the greeting together.
+        stream
+            .write_all(&[&[5, 0, 0, 1, 0, 0, 0, 0, 0, 0][..], GREETING].concat())
+            .unwrap();
+        let _ = wait.recv_timeout(Duration::from_secs(10));
+    });
+    let bridge = elarni_packet_bridge_new(port, 1500, 4, 4, 8, 1500);
+    assert!(!bridge.is_null());
+    let (client, target) = ([10, 0, 0, 2], [192, 0, 2, 10]);
+    let mut data = Vec::new();
+    unsafe {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while elarni_packet_bridge_state(bridge) == ElarniPacketState::Starting
+            && Instant::now() < deadline
+        {
+            thread::sleep(Duration::from_millis(1));
+        }
+        let syn = tcp_syn(client, target, 40_000, 22);
+        assert_eq!(
+            elarni_packet_bridge_submit(bridge, syn.as_ptr(), syn.len()),
+            ElarniPacketStatus::Ok
+        );
+        let mut packet = vec![0; 1500];
+        while data.is_empty() && Instant::now() < deadline {
+            let mut written = 0;
+            if elarni_packet_bridge_receive(bridge, packet.as_mut_ptr(), packet.len(), &mut written)
+                != ElarniPacketStatus::Ok
+            {
+                thread::sleep(Duration::from_millis(1));
+                continue;
+            }
+            let segment = &packet[20..written];
+            if segment[13] & 0x12 == 0x12 {
+                // The SYN-ACK: finish the handshake so the stack may send data.
+                let theirs = u32::from_be_bytes(segment[4..8].try_into().unwrap());
+                let ack = tcp_segment(
+                    client,
+                    target,
+                    40_000,
+                    22,
+                    (2, theirs.wrapping_add(1)),
+                    0x10,
+                );
+                assert_eq!(
+                    elarni_packet_bridge_submit(bridge, ack.as_ptr(), ack.len()),
+                    ElarniPacketStatus::Ok
+                );
+            }
+            data.extend_from_slice(&segment[usize::from(segment[12] >> 4) * 4..]);
+        }
+        elarni_packet_bridge_free(bridge);
+    }
+    release.send(()).unwrap();
+    server.join().unwrap();
+    assert_eq!(data, GREETING);
 }
 
 #[test]
@@ -615,6 +706,60 @@ fn udp_datagram_with(
     let sum = checksum(&[&ip]);
     ip[10..12].copy_from_slice(&sum);
     [ip, udp].concat()
+}
+
+// SOCKS carries no ICMP, so the bridge answers a ping itself, as the Xray TUN does on the other
+// platforms: a dropped ping made apps that check the network with one report it offline.
+#[test]
+fn a_ping_is_answered() {
+    let bridge = elarni_packet_bridge_new(1, 1500, 1, 1, 8, 1500);
+    assert!(!bridge.is_null());
+    let mut icmp = [&[8, 0, 0, 0, 0x12, 0x34, 0, 7][..], b"elarni"].concat();
+    let sum = checksum(&[&icmp]);
+    icmp[2..4].copy_from_slice(&sum);
+    let mut request = vec![0x45, 0, 0, 0, 0, 1, 0x40, 0, 64, 1, 0, 0];
+    request[2..4].copy_from_slice(&((20 + icmp.len()) as u16).to_be_bytes());
+    request.extend_from_slice(&[10, 0, 0, 2]);
+    request.extend_from_slice(&[192, 0, 2, 10]);
+    let sum = checksum(&[&request]);
+    request[10..12].copy_from_slice(&sum);
+    request.extend_from_slice(&icmp);
+    let mut reply = vec![0; 1500];
+    let mut written = 0;
+    unsafe {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while elarni_packet_bridge_state(bridge) == ElarniPacketState::Starting
+            && Instant::now() < deadline
+        {
+            thread::sleep(Duration::from_millis(1));
+        }
+        assert_eq!(
+            elarni_packet_bridge_submit(bridge, request.as_ptr(), request.len()),
+            ElarniPacketStatus::Ok
+        );
+        let mut status = ElarniPacketStatus::Empty;
+        while status == ElarniPacketStatus::Empty && Instant::now() < deadline {
+            status =
+                elarni_packet_bridge_receive(bridge, reply.as_mut_ptr(), reply.len(), &mut written);
+            thread::sleep(Duration::from_millis(1));
+        }
+        elarni_packet_bridge_free(bridge);
+        assert_eq!(status, ElarniPacketStatus::Ok, "the ping got no reply");
+    }
+    let reply = &reply[..written];
+    assert_eq!(reply.len(), request.len());
+    assert_eq!(reply[9], 1);
+    assert_eq!(
+        (&reply[12..16], &reply[16..20]),
+        (&[192, 0, 2, 10][..], &[10, 0, 0, 2][..])
+    );
+    assert_eq!(&reply[20..22], &[0, 0], "not an echo reply");
+    assert_eq!(checksum(&[&reply[20..]]), [0, 0], "wrong ICMP checksum");
+    assert_eq!(
+        &reply[24..],
+        &request[24..],
+        "the identifier, sequence and data come back"
+    );
 }
 
 // A session over the limit is dropped; the counters say so instead of only a log line.
