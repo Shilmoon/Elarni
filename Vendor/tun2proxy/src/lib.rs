@@ -264,6 +264,9 @@ where
     Ok(remaining)
 }
 
+/// The longest echo message answered: what fits a 1280-byte packet, the smallest MTU of IPv6, after its header.
+const ECHO_LIMIT: usize = 1240;
+
 /// The echo reply to an ICMP or ICMPv6 echo request, sent from `from` (the pinged address) to `to`.
 fn echo_reply(protocol: u8, from: IpAddr, to: IpAddr, request: &[u8]) -> Option<Vec<u8>> {
     let (echo, answer) = match protocol {
@@ -271,7 +274,9 @@ fn echo_reply(protocol: u8, from: IpAddr, to: IpAddr, request: &[u8]) -> Option<
         58 => (128, 129),
         _ => return None,
     };
-    if request.len() < 8 || request[0] != echo || request[1] != 0 {
+    // A request that came in pieces is put together before it gets here, and its reply would be
+    // sent as whole packets that are no fragments: only one that fits any tunnel's packet is answered.
+    if request.len() < 8 || request.len() > ECHO_LIMIT || request[0] != echo || request[1] != 0 {
         return None;
     }
     // A group or broadcast address is nobody's source address: such a ping gets no reply here.
@@ -672,6 +677,10 @@ mod tests {
         assert!(super::echo_reply(1, v4("8.8.8.8"), v4("10.0.0.2"), &[0, 0, 0, 0, 0, 0, 0, 0]).is_none());
         assert!(super::echo_reply(1, v4("8.8.8.8"), v4("10.0.0.2"), &[3, 1, 0, 0, 0, 0, 0, 0]).is_none());
         assert!(super::echo_reply(47, v4("8.8.8.8"), v4("10.0.0.2"), &request).is_none());
+        let mut long = vec![0_u8; super::ECHO_LIMIT + 1];
+        long[0] = 8;
+        assert!(super::echo_reply(1, v4("8.8.8.8"), v4("10.0.0.2"), &long).is_none());
+        assert!(super::echo_reply(1, v4("8.8.8.8"), v4("10.0.0.2"), &long[..super::ECHO_LIMIT]).is_some());
         for group in ["224.0.0.1", "255.255.255.255", "0.0.0.0"] {
             assert!(
                 super::echo_reply(1, v4(group), v4("10.0.0.2"), &[8, 0, 0, 0, 0, 1, 0, 1]).is_none(),
