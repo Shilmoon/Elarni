@@ -10,12 +10,32 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
   installed it.** An update moves many apps to a new path, and a rule for the old path stopped
   matching, one installer layout after another: Elarni knew Squirrel apps, Store apps and
   folders of versions, and only for apps picked from the app list. Paths are now compared
-  without the numbers that name a version, in every rule and every running program: numbers
-  joined by dots (`app-1.0.9265`, `Application\131.0.2903.86`, `jdk-21.0.2`), a number of
-  three or more digits that ends a folder's name (`Battle.net.15173`, `Adobe Photoshop 2025`),
-  a Store app's package folder and a Snap's revision. Rules saved earlier match again without
-  a change, however they were added. See "Rules and app updates" in
+  without what names a build, in every rule and every running program: numbers joined by dots
+  (`app-1.0.9265`, `Application\131.0.2903.86`, `jdk-21.0.2`), a build number that ends a
+  folder's name after a dot, dash or underscore (`Battle.net.15173`), a folder named by a
+  build's hash (Roblox, Visual Studio Code), a Store app's package folder, a Snap's revision
+  and a Nix store path's hash. A number that is part of a name (`Photoshop 2025`, `jdk-21`,
+  `Python312`) is followed another way, so that two products installed side by side, such as
+  `Anno 1800` and `Anno 2070`, stay two apps: a rule that names nothing on the disk anymore,
+  in any build, matches the program in the folder that replaced its own. Rules saved earlier
+  match again without a change, however they were added, and `exact:<path>` names one path as
+  it is written. See "Rules and app updates" in
   [docs/PER_APP_ROUTING.md](docs/PER_APP_ROUTING.md).
+- **Desktop: the per-app app list shows an app as listed when a rule saved for another
+  version of it routes it.** The editor compared the rules' text while routing compared apps,
+  so after an update a routed app showed as not listed, ticking it added a second rule that
+  the first one overruled, and the saved rule lost the app's name and icon. An app listed with
+  the programs it starts showed as not listed too. The core now tells the editor which saved
+  rule each app is.
+- **Windows: a Microsoft Store app's rule takes the app's processes that run from Windows's
+  own folder.** Some Store apps run inside `WWAHost.exe`, and their background tasks inside
+  `backgroundTaskHost.exe`; a rule for the app's package did not match them. Windows is now
+  asked which package a process runs as, and **Recent connections** names such a process by
+  its app, and adds the app's rule, not the host's path.
+- **macOS: a rule for an app that macOS runs from a temporary copy matches it.** An app
+  opened where it was downloaded, or from its disk image, runs from a folder with a new name
+  at each start (App Translocation); its rule, and one saved from **Recent connections**,
+  stopped matching.
 - **Desktop: a per-app rule that matches running programs is no longer shown as "Not found
   on this computer".** The rule check looked for the exact path on disk while routing
   compared Store apps by package, so a Store app saved by the path of one version, as "Add to
@@ -23,7 +43,7 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
   "13 programs running". The check now looks for the app as
   routing compares it, reports nothing for a folder it may not list, and no longer warns that
   a rule "names one version". When a program is gone and the same one runs from a sibling
-  folder, the rule is offered that path.
+  folder that routing does not follow by itself, the rule is offered that path.
 - **Windows: "Add to list" in Recent connections gives a Microsoft Store app the same package
   rule as the app list**, not the path of its current version.
 

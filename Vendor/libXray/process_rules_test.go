@@ -2,6 +2,7 @@ package libXray
 
 import (
 	"encoding/json"
+	"maps"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -302,8 +303,10 @@ func TestProcessRuleChecksFollowTheVersionOnDisk(t *testing.T) {
 		saved:                            {"folder=" + installed + sep},
 		filepath.Join(saved, name) + sep: {"notFolder=" + filepath.Join(installed, name)},
 		filepath.Join(saved, "gone"):     {"missing="},
-		filepath.Join(root, "Example", "other-1.0.1", name):      {"missing="},
-		filepath.Join(root, "Example", "app-1.0.1-beta") + sep:   {"missing="},
+		filepath.Join(root, "Example", "other-1.0.1", name): {"missing="},
+		// A pre-release that is gone is followed to the release that replaced it.
+		filepath.Join(root, "Example", "app-1.0.1-beta") + sep:   nil,
+		filepath.Join(root, "Example", "app-1.0.1-custom") + sep: {"missing="},
 		filepath.Join(root, "Absent", "app-1.0.1", name):         {"missing="},
 		"children:" + filepath.Join(saved, name):                 nil,
 		"children:" + filepath.Join(root, "Absent", "1.2", name): {"missing="},
@@ -379,6 +382,160 @@ func TestProcessRuleChecksOfProgramsRunningFromAnotherPath(t *testing.T) {
 		check := checkProcessRules([]string{tc.rule}).Rules[0]
 		if got := warningCodes(check); check.Running != tc.running || !slices.Equal(got, tc.warnings) {
 			t.Errorf("%q: %d running, warnings %v; want %d, %v", tc.rule, check.Running, got, tc.running, tc.warnings)
+		}
+	}
+}
+
+// Routing follows a renamed folder only when no build of what a rule names is left, so the
+// check looks for the rule's program in another build before it looks through a renamed folder.
+func TestProcessRuleChecksPreferAnotherBuildToARenamedFolder(t *testing.T) {
+	root := t.TempDir()
+	if resolved, err := filepath.EvalSymlinks(root); err == nil {
+		root = resolved
+	}
+	name := "example"
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	at := func(parts ...string) string { return filepath.Join(append([]string{root}, parts...)...) }
+	// The rule's version holds a renamed folder where a folder stands in the program's place;
+	// the next version holds the program.
+	if err := os.MkdirAll(at("Tool", "app-1.0.1", "jre-22", name), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(at("Tool", "app-1.0.2", "jre-21"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(at("Tool", "app-1.0.2", "jre-21", name), []byte("\x7fELF"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	rule := at("Tool", "app-1.0.1", "jre-21", name)
+	if got := warningCodes(checkProcessRules([]string{rule}).Rules[0]); len(got) != 0 {
+		t.Fatalf("%q: warnings %v, want none: its program is in the next version", rule, got)
+	}
+}
+
+// A rule whose folder an update replaced is checked as what replaced it, as routing follows it:
+// jdk-21 to jdk-22, "Photoshop 2025" to "Photoshop 2026". An "exact:" rule names its path alone.
+func TestProcessRuleChecksFollowAReplacedFolder(t *testing.T) {
+	root := t.TempDir()
+	if resolved, err := filepath.EvalSymlinks(root); err == nil {
+		root = resolved
+	}
+	name := "example"
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	at := func(parts ...string) string { return filepath.Join(append([]string{root}, parts...)...) }
+	for _, folder := range []string{at("java", "jdk-22"), at("Adobe", "Photoshop 2026"), at("Squirrel", "app-1.0.2"), at("Two", "v1", "w2")} {
+		if err := os.MkdirAll(folder, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(folder, name), []byte("\x7fELF"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sep := string(filepath.Separator)
+	want := map[string][]string{
+		at("java", "jdk-21", name):                     nil,
+		at("java", "jdk-21") + sep:                     nil,
+		at("java", "jdk-21"):                           {"folder=" + at("java", "jdk-22") + sep},
+		at("Adobe", "Photoshop 2025", name):            nil,
+		at("java", "jre-21", name):                     {"missing="},
+		at("java", "jdk-21", "other"):                  {"missing="},
+		at("Two", "v3", "w4", name):                    {"missing="}, // two folders were replaced
+		at("Squirrel", "app-1.0.1", name):              nil,
+		"exact:" + at("java", "jdk-22", name):          nil,
+		"exact:" + at("java", "jdk-21", name):          {"missing="},
+		"exact:" + at("Squirrel", "app-1.0.1", name):   {"missing="},
+		"exact:" + at("java", "jdk-22"):                {"folder=exact:" + at("java", "jdk-22") + sep},
+		"children:exact:" + at("java", "jdk-21") + sep: {"missing="},
+	}
+	var rules []string
+	for rule := range want {
+		rules = append(rules, rule)
+	}
+	slices.Sort(rules)
+	for _, check := range checkProcessRules(rules).Rules {
+		if got := warningCodes(check); !slices.Equal(got, want[check.Rule]) {
+			t.Errorf("%q: warnings %v, want %v", check.Rule, got, want[check.Rule])
+		}
+	}
+
+	// The running program counts for the rule it replaced, and no other path is offered.
+	previous := listProcesses
+	listProcesses = func() ([]xnet.Process, error) {
+		return []xnet.Process{{PID: 100, Name: name, Path: filepath.ToSlash(at("java", "jdk-22", name))}}, nil
+	}
+	t.Cleanup(func() { listProcesses = previous })
+	for rule, running := range map[string]int{
+		at("java", "jdk-21", name):            1,
+		at("java", "jdk-21") + sep:            1,
+		"exact:" + at("java", "jdk-21", name): 0,
+		"exact:" + at("java", "jdk-22", name): 1,
+	} {
+		check := checkProcessRules([]string{rule}).Rules[0]
+		if check.Running != running {
+			t.Errorf("%q: %d running, want %d", rule, check.Running, running)
+		}
+		if strings.HasPrefix(rule, "exact:") && running == 0 && !slices.Equal(warningCodes(check), []string{"missing="}) {
+			t.Errorf("%q: warnings %v, want it missing without an offer", rule, warningCodes(check))
+		}
+	}
+}
+
+// The editor shows an app as listed when a saved rule is that app's rule, also one written for
+// another version. It compared the rules' text, so after an update the app showed as not listed,
+// and ticking it added a second rule that the first one overruled.
+func TestProcessRuleChecksTellWhichRuleAnAppIs(t *testing.T) {
+	root := t.TempDir()
+	if resolved, err := filepath.EvalSymlinks(root); err == nil {
+		root = resolved
+	}
+	at := func(parts ...string) string { return filepath.Join(append([]string{root}, parts...)...) }
+	sep := string(filepath.Separator)
+	for _, folder := range []string{at("Example", "app-1.0.2"), at("java", "jdk-22", "bin"), at("Games", "Anno 1800"), at("Games", "Anno 2070")} {
+		if err := os.MkdirAll(folder, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rules := []string{
+		at("Example", "app-1.0.1", "example"),
+		"children:" + at("java", "jdk-21", "bin", "java"),
+		at("Games", "Anno 1800") + sep,
+		"flatpak:org.example.App",
+	}
+	apps := []string{
+		at("Example", "app-1.0.2", "example"),
+		at("java", "jdk-22", "bin", "java"),
+		at("Games", "Anno 1800") + sep,
+		"flatpak:org.example.App",
+		at("Games", "Anno 2070") + sep,
+		"flatpak:org.example.Other",
+		at("Example", "app-1.0.2", "other"),
+		at("Example") + sep,
+	}
+	want := map[string]string{apps[0]: rules[0], apps[1]: rules[1], apps[2]: rules[2], apps[3]: rules[3]}
+	if got := sameProcessRules(rules, apps); !maps.Equal(got, want) {
+		t.Errorf("same rules %v, want %v", got, want)
+	}
+
+	var response struct {
+		Success bool
+		Data    ProcessRuleCheckResponse
+		Error   string
+	}
+	request := mustJSON(t, map[string]any{"apiVersion": 1, "method": "checkProcessRules", "payload": map[string]any{"rules": rules, "apps": apps}})
+	if err := json.Unmarshal([]byte(Invoke(request)), &response); err != nil || !response.Success {
+		t.Fatalf("check failed: %v %q", err, response.Error)
+	}
+	if !maps.Equal(response.Data.Same, want) {
+		t.Errorf("the check's same rules %v, want %v", response.Data.Same, want)
+	}
+	for _, apps := range [][]string{{""}, {" padded"}, {"line\nbreak"}, make([]string, 4097)} {
+		request := mustJSON(t, map[string]any{"apiVersion": 1, "method": "checkProcessRules", "payload": map[string]any{"rules": rules, "apps": apps}})
+		if err := json.Unmarshal([]byte(Invoke(request)), &response); err != nil || response.Success || response.Error != "invalid_rules" {
+			t.Errorf("apps %.20q: accepted (%v, %q)", apps, err, response.Error)
 		}
 	}
 }

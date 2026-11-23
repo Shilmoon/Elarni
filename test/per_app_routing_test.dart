@@ -857,7 +857,7 @@ void main() {
               ),
               windows: false,
               linux: true,
-              checkRules: (rules) async {
+              checkRules: (rules, {apps = const []}) async {
                 asked.add(rules);
                 return ProcessRuleChecks({
                   '/usr/bin/curl': const ProcessRuleCheck(
@@ -1755,5 +1755,226 @@ void main() {
       tester.getTopLeft(target).dx,
       greaterThan(tester.getTopRight(name).dx),
     );
+  });
+
+  // An update moves an app to a new path, and the core matches the saved rule
+  // to it. The editor compared the rules' text: the app showed as not listed,
+  // ticking it added a second rule, and the saved row lost its name and icon.
+  // The core now tells which saved rule an app in the list is.
+  testWidgets('an app listed by another version\'s rule shows as listed, once', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1000, 1800));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    const saved = r'C:\Users\me\AppData\Local\Discord\app-1.0.9265\Discord.exe';
+    const current =
+        r'C:\Users\me\AppData\Local\Discord\app-1.0.9270\Discord.exe';
+    final icon = base64Decode(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==',
+    );
+    final messenger = tester.binding.defaultBinaryMessenger;
+    messenger.setMockMethodCallHandler(
+      DesktopIntegration.channel,
+      (call) async => call.method == 'routingApplications'
+          ? [
+              // Hosts list a saved rule too, by its file's name.
+              {'name': 'Discord.exe', 'process': saved},
+              {'name': 'Discord', 'process': current, 'iconPng': icon},
+              {'name': 'Notes', 'process': r'C:\Apps\Notes.exe'},
+            ]
+          : null,
+    );
+    addTearDown(
+      () =>
+          messenger.setMockMethodCallHandler(DesktopIntegration.channel, null),
+    );
+    final askedApps = <List<String>>[];
+    TunnelSettings? result;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SingleChildScrollView(
+            child: PerAppRoutingEditor(
+              settings: const TunnelSettings(
+                xrayTunEnabled: true,
+                perAppMode: 'bypass',
+                perAppProcesses: [saved],
+                perAppTargets: {saved: 'block'},
+              ),
+              windows: true,
+              checkRules: (rules, {apps = const []}) async {
+                askedApps.add(apps);
+                return ProcessRuleChecks(
+                  {
+                    for (final rule in rules)
+                      rule: ProcessRuleCheck(rule, rule == saved ? 3 : 0, []),
+                  },
+                  // The core's answer, for the rules that are still saved.
+                  same: {
+                    for (final app in [saved, current])
+                      if (rules.contains(saved)) app: saved,
+                  },
+                );
+              },
+              onSave: (value) async => result = value,
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    // The core is asked about the list's apps.
+    expect(askedApps.last, containsAll([saved, current, r'C:\Apps\Notes.exe']));
+    // The saved rule's row is the app, with the list's name for it.
+    expect(find.text('Discord'), findsOneWidget);
+    expect(find.text('Discord.exe'), findsNothing);
+    expect(find.textContaining('3 programs running'), findsOneWidget);
+
+    await tester.tap(find.text('Add apps'));
+    await tester.pumpAndSettle();
+    // One row for the app, and it is listed.
+    expect(find.widgetWithText(CheckboxListTile, 'Discord'), findsOneWidget);
+    expect(find.widgetWithText(CheckboxListTile, 'Discord.exe'), findsNothing);
+    expect(
+      tester
+          .widget<CheckboxListTile>(
+            find.widgetWithText(CheckboxListTile, 'Discord'),
+          )
+          .value,
+      isTrue,
+    );
+    expect(
+      tester
+          .widget<CheckboxListTile>(
+            find.widgetWithText(CheckboxListTile, 'Notes'),
+          )
+          .value,
+      isFalse,
+    );
+    // Unticking removes the saved rule; ticking adds the app's rule of today.
+    await tester.tap(find.widgetWithText(CheckboxListTile, 'Discord'));
+    await tester.pumpAndSettle();
+    expect(
+      tester
+          .widget<CheckboxListTile>(
+            find.widgetWithText(CheckboxListTile, 'Discord'),
+          )
+          .value,
+      isFalse,
+    );
+    await tester.tap(find.widgetWithText(CheckboxListTile, 'Discord'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Done'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Save changes'));
+    await tester.pumpAndSettle();
+    expect(result!.perAppProcesses, [current]);
+  });
+
+  // A rule with the programs its app starts is that app's rule too: the app
+  // list showed the app as not listed beside it.
+  testWidgets('an app listed with the programs it starts shows as listed', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1000, 1800));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final messenger = tester.binding.defaultBinaryMessenger;
+    messenger.setMockMethodCallHandler(
+      DesktopIntegration.channel,
+      (call) async => call.method == 'routingApplications'
+          ? [
+              {'name': 'Claude', 'process': '/opt/Claude/claude'},
+            ]
+          : null,
+    );
+    addTearDown(
+      () =>
+          messenger.setMockMethodCallHandler(DesktopIntegration.channel, null),
+    );
+    TunnelSettings? result;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SingleChildScrollView(
+            child: PerAppRoutingEditor(
+              settings: const TunnelSettings(
+                xrayTunEnabled: true,
+                perAppMode: 'bypass',
+                perAppProcesses: [
+                  'children:/opt/Claude/claude',
+                  '/usr/bin/curl',
+                ],
+              ),
+              windows: false,
+              linux: true,
+              onSave: (value) async => result = value,
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Add apps'));
+    await tester.pumpAndSettle();
+    expect(find.widgetWithText(CheckboxListTile, 'Claude'), findsOneWidget);
+    expect(
+      tester
+          .widget<CheckboxListTile>(
+            find.widgetWithText(CheckboxListTile, 'Claude'),
+          )
+          .value,
+      isTrue,
+    );
+    await tester.tap(find.widgetWithText(CheckboxListTile, 'Claude'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Done'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Save changes'));
+    await tester.pumpAndSettle();
+    expect(result!.perAppProcesses, ['/usr/bin/curl']);
+  });
+
+  test('a rule check carries which saved rule each app is', () {
+    final checks = ProcessRuleChecks.fromMap({
+      'listed': true,
+      'rules': [
+        {'rule': '/opt/a-1.0/a', 'running': 1, 'warnings': <Object?>[]},
+      ],
+      'same': {'/opt/a-1.1/a': '/opt/a-1.0/a', '/opt/b': 7, 3: '/opt/c'},
+    });
+    expect(checks.same, {'/opt/a-1.1/a': '/opt/a-1.0/a'});
+    expect(ProcessRuleChecks.fromMap({'rules': <Object?>[]}).same, isEmpty);
+  });
+
+  // "exact:<path>" names a path as written, for an app that must not share its
+  // rule with the version beside it.
+  test('exact rules are path rules of their platform', () {
+    for (final (platform, rule) in [
+      ('windows', r'exact:C:\Python\3.12\python.exe'),
+      ('windows', r'children:exact:C:\Python\3.12\'),
+      ('linux', 'exact:/opt/python/3.12/bin/python'),
+      ('macos', 'exact:/Applications/Xcode-15.app/'),
+    ]) {
+      expect(
+        PerAppProfile(platform, 'bypass', [rule]).validationError,
+        isNull,
+        reason: '$platform $rule',
+      );
+    }
+    for (final (platform, rule) in [
+      ('macos', r'exact:C:\Apps\Browser.exe'),
+      ('linux', r'children:exact:C:\Apps\Browser.exe'),
+      ('windows', 'exact:/usr/bin/curl'),
+      ('linux', 'exact:/Applications/Browser.app/'),
+      ('linux', 'exact:'),
+      ('linux', 'children:exact:'),
+      ('android', 'exact:com.example.app'),
+    ]) {
+      expect(
+        PerAppProfile(platform, 'bypass', [rule]).validationError,
+        isNotNull,
+        reason: '$platform $rule',
+      );
+    }
   });
 }

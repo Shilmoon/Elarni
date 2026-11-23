@@ -17,6 +17,13 @@ import 'strings.dart';
 String innerRule(String rule) =>
     rule.startsWith('children:') ? rule.substring(9) : rule;
 
+/// The path or name a rule holds: without "children:", and without "exact:",
+/// which names a path as written, not the versions beside it.
+String rulePath(String rule) {
+  final inner = innerRule(rule);
+  return inner.startsWith('exact:') ? inner.substring(6) : inner;
+}
+
 /// A routing-only exchange format. Runtime settings and credentials never enter it.
 final class PerAppProfile {
   const PerAppProfile(
@@ -81,21 +88,22 @@ final class PerAppProfile {
       return l10n.perAppAndroidPackages;
     }
     // Names can be shared deliberately; absolute paths belong to their OS.
+    final paths = processes.map(rulePath).toList();
     final windowsPath = RegExp(r'^[A-Za-z]:[\\/]');
     if (platform != 'windows' &&
-        rules.any(
+        paths.any(
           (path) => windowsPath.hasMatch(path) || path.startsWith(r'\\'),
         )) {
       return l10n.perAppWindowsPathsElsewhere(platformName);
     }
     if (platform == 'linux' &&
-        rules.any(
+        paths.any(
           (path) => path.split('/').any((part) => part.endsWith('.app')),
         )) {
       return l10n.perAppMacBundlesOnLinux;
     }
     if (platform == 'windows' &&
-        rules.any((path) => path.startsWith('/') && !path.startsWith('//'))) {
+        paths.any((path) => path.startsWith('/') && !path.startsWith('//'))) {
       return l10n.perAppUnixPathsOnWindows;
     }
     return null;
@@ -364,8 +372,13 @@ class PerAppRoutingEditor extends StatefulWidget {
   final PerAppRoutingDraft? draft;
   final VoidCallback? onCancel;
 
-  /// Counts running programs per rule and explains rules that match nothing.
-  final Future<ProcessRuleChecks> Function(List<String>)? checkRules;
+  /// Counts running programs per rule, explains rules that match nothing and
+  /// tells which saved rule each of the app list's rules is.
+  final Future<ProcessRuleChecks> Function(
+    List<String> rules, {
+    List<String> apps,
+  })?
+  checkRules;
 
   /// The running core's recent connections, for the connections view.
   final Future<RecentConnections> Function({int epoch, int after})?
@@ -394,6 +407,9 @@ class _PerAppRoutingEditorState extends State<PerAppRoutingEditor> {
   String? notice;
   bool loading = true, working = false, appListFailed = false;
   ProcessRuleChecks? checks;
+  // The saved rule that the core says an app-list rule is, both as written
+  // without "children:".
+  Map<String, String> _same = const {};
   List<String>? _checkedRules;
   bool _checking = false;
   // The connections view's list by key, in the order of their last change.
@@ -415,8 +431,20 @@ class _PerAppRoutingEditorState extends State<PerAppRoutingEditor> {
       : 'macos';
   String get platformName => PerAppProfile.platformLabel(platform);
   bool get enabled => widget.enabled && !working;
-  String identity(String process) =>
+  String _written(String process) =>
       widget.windows ? process.toLowerCase() : process;
+
+  /// A rule as rules compare. The core decides which rules name the same app,
+  /// as it decides routing: a rule saved for one version of an app is the
+  /// app list's rule for its next. Before the core answered, the text
+  /// compares. "children:" stays: it is another rule of that app.
+  String identity(String process) {
+    final inner = innerRule(process);
+    final written = _written(inner);
+    final same = _same[written] ?? written;
+    return inner == process ? same : 'children:$same';
+  }
+
   PerAppProfile get profile => PerAppProfile(platform, mode, selections, {
     for (final MapEntry(:key, :value) in targets.entries)
       if (selections.contains(key)) key: value,
@@ -475,26 +503,38 @@ class _PerAppRoutingEditorState extends State<PerAppRoutingEditor> {
             (a.process == unknownOwnerRule ? 1 : 0)
       : a.name.toLowerCase().compareTo(b.name.toLowerCase());
 
-  // A "children:" rule is its program's app, with that app's name and icon.
+  // A rule's app in the app list, with that app's name and icon: the app a
+  // "children:" or "exact:" rule holds, and the app that a rule written for
+  // another version names now.
   _RoutingApp _app(String process) {
     final inner = innerRule(process);
-    final hosted = apps
-        .where((app) => identity(app.process) == identity(inner))
-        .firstOrNull;
+    final named = identity(inner), path = _written(rulePath(process));
+    _RoutingApp? hosted;
+    for (final app in apps) {
+      if (identity(app.process) != named && _written(app.process) != path) {
+        continue;
+      }
+      // Hosts list a saved rule by its file's name; the app has the icon.
+      if (hosted == null || hosted.icon == null && app.icon != null) {
+        hosted = app;
+      }
+    }
     if (hosted == null) return _RoutingApp(_name(process), process);
-    if (inner == process) return hosted;
-    final suggested = hosted.suggested;
+    if (hosted.process == process) return hosted;
+    final suggested = _written(hosted.process) == _written(inner)
+        ? hosted.suggested
+        : null;
     return _RoutingApp(
       hosted.name,
       process,
       hosted.icon,
-      suggested == null ? null : 'children:$suggested',
+      suggested == null || inner == process ? suggested : 'children:$suggested',
     );
   }
 
   String _name(String process) {
     if (process == unknownOwnerRule) return l10n.perAppUnknownOwner;
-    if (process != innerRule(process)) return _name(innerRule(process));
+    if (process != rulePath(process)) return _name(rulePath(process));
     for (final kind in ['flatpak:', 'service:']) {
       if (process.startsWith(kind)) return process.substring(kind.length);
     }
@@ -556,7 +596,7 @@ class _PerAppRoutingEditorState extends State<PerAppRoutingEditor> {
           // Hosts know programs: a "children:" rule is asked as its program's.
           ? {
               'processes':
-                  processes ?? selections.map(innerRule).toSet().toList(),
+                  processes ?? selections.map(rulePath).toSet().toList(),
             }
           : null,
     );
@@ -599,7 +639,12 @@ class _PerAppRoutingEditorState extends State<PerAppRoutingEditor> {
         'routingApplications',
       )).where((app) => app.process != unknownOwnerRule).toList();
       values.sort(_byName);
-      if (mounted) setState(() => apps = [unknown, ...values]);
+      if (mounted) {
+        setState(() {
+          apps = [unknown, ...values];
+          _checkedRules = null; // the core is asked about these apps
+        });
+      }
     } on Object {
       if (mounted) {
         setState(() {
@@ -630,14 +675,29 @@ class _PerAppRoutingEditorState extends State<PerAppRoutingEditor> {
     _checkedRules = rules;
     try {
       final asked = rules.where((rule) => rule != unknownOwnerRule).toList();
+      final listed = {
+        for (final app in apps)
+          if (app.process != unknownOwnerRule) innerRule(app.process),
+      }.take(4096).toList();
       final result = asked.isEmpty
           ? const ProcessRuleChecks({})
-          : await check(asked);
+          : await check(asked, apps: listed);
       if (mounted && listEquals(rules, _checkedRules)) {
-        setState(() => checks = result);
+        setState(() {
+          checks = result;
+          _same = {
+            for (final MapEntry(key: app, value: rule) in result.same.entries)
+              _written(innerRule(app)): _written(innerRule(rule)),
+          };
+        });
       }
     } on Object {
-      if (mounted) setState(() => checks = null);
+      if (mounted) {
+        setState(() {
+          checks = null;
+          _same = const {};
+        });
+      }
     } finally {
       _checking = false;
       if (mounted) _ensureChecks();
@@ -646,9 +706,12 @@ class _PerAppRoutingEditorState extends State<PerAppRoutingEditor> {
 
   /// Replaces a rule in place; its target moves with it.
   void _replaceRule(String old, String rule) {
-    final index = selections.indexWhere(
-      (value) => identity(value) == identity(old),
-    );
+    var index = selections.indexOf(old);
+    if (index < 0) {
+      index = selections.indexWhere(
+        (value) => identity(value) == identity(old),
+      );
+    }
     if (index < 0) return;
     final present = selections.any(
       (value) => identity(value) == identity(rule),
@@ -926,8 +989,8 @@ class _PerAppRoutingEditorState extends State<PerAppRoutingEditor> {
     if (path.isEmpty) return false;
     final windows = widget.windows;
     String normal(String value) =>
-        identity(windows ? value.replaceAll('/', r'\') : value);
-    final program = normal(path), named = normal(rule);
+        _written(windows ? value.replaceAll('/', r'\') : value);
+    final program = normal(path), named = normal(rulePath(rule));
     if (named == program) return true;
     if (named.endsWith('/') || named.endsWith(r'\')) {
       return program.startsWith(named);
@@ -1382,12 +1445,14 @@ class _PerAppRoutingEditorState extends State<PerAppRoutingEditor> {
                 const SizedBox(height: 12),
                 StatefulBuilder(
                   builder: (context, update) {
-                    final current = selections.firstWhere(
-                      (rule) =>
-                          identity(innerRule(rule)) ==
-                          identity(innerRule(app.process)),
-                      orElse: () => app.process,
-                    );
+                    final current = selections.contains(app.process)
+                        ? app.process
+                        : selections.firstWhere(
+                            (rule) =>
+                                identity(innerRule(rule)) ==
+                                identity(innerRule(app.process)),
+                            orElse: () => app.process,
+                          );
                     final included = current != innerRule(current);
                     return SwitchListTile(
                       key: const Key('per-app-include-children'),
@@ -1670,16 +1735,31 @@ class _PerAppRoutingEditorState extends State<PerAppRoutingEditor> {
   }
 
   Widget _picker() {
+    _ensureChecks();
     final query = search.text.trim().toLowerCase();
-    final catalog = [...apps];
-    final known = catalog.map((app) => identity(app.process)).toSet();
-    catalog.addAll(selections.where((p) => known.add(identity(p))).map(_app));
+    // One row for an app: the list's entry and a saved rule for it, also one
+    // with the programs it starts or of another version, are that app.
+    String row(String rule) => identity(innerRule(rule));
+    final catalog = <_RoutingApp>[];
+    final rows = <String, int>{};
+    for (final app in [...apps, ...selections.map(_app)]) {
+      final at = rows[row(app.process)];
+      if (at == null) {
+        rows[row(app.process)] = catalog.length;
+        catalog.add(app);
+      } else if (catalog[at].icon == null &&
+          app.icon != null &&
+          apps.contains(app)) {
+        // Hosts list a saved rule by its file's name; the app has the icon.
+        catalog[at] = app;
+      }
+    }
     final visible = catalog
         .where(
           (app) => '${app.name} ${app.process}'.toLowerCase().contains(query),
         )
         .toList();
-    final selected = selections.map(identity).toSet();
+    final selected = selections.map(row).toSet();
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -1735,11 +1815,11 @@ class _PerAppRoutingEditorState extends State<PerAppRoutingEditor> {
                       title: Text(app.name),
                       subtitle: kind == null ? null : Text(kind),
                       controlAffinity: ListTileControlAffinity.trailing,
-                      value: selected.contains(identity(app.process)),
+                      value: selected.contains(row(app.process)),
                       onChanged: enabled
                           ? (checked) => setState(() {
                               selections.removeWhere(
-                                (p) => identity(p) == identity(app.process),
+                                (p) => row(p) == row(app.process),
                               );
                               if (checked == true) selections.add(app.process);
                             })
