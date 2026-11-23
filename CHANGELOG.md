@@ -4,10 +4,32 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
 
 ## Unreleased
 
-### Security
+## 0.6.4 - 2026-11-23
 
-- **`url` 2.5.9.** 2.5.8 overflowed the stack in `Url::origin()` on nested `blob:` URLs
-  (RUSTSEC-2026-0592). Elarni's own code does not call it; the update clears the advisory check.
+### Added
+
+- **Desktop: a per-app rule shows what else it matches, and can keep to one version.** A rule
+  follows its app through updates, so with two versions in use at once, such as Python 3.12
+  and 3.13, one rule takes both. Its row now says "Also matches `Python\3.13\python.exe`"
+  while programs run from both, with **Only this version** beside it. **Details** has
+  **Follow updates** for a rule that follows, with the paths it matches now: turned off, the
+  rule is the one path that is there (`exact:<path>`).
+
+### Changed
+
+- **A quiet connection is kept for 30 minutes instead of 5 on a new installation.** Elarni ended
+  a connection with no data for the idle timeout, 300 seconds by default, so an idle SSH
+  session dropped and push, mail and messenger connections reconnected every five minutes.
+  The default is 1800 seconds; an installation that already saved its settings keeps its value
+  (Settings, Advanced, "Connection idle timeout"). On iPhone and Mac a connection without data
+  still ends after 10 minutes.
+- **Help texts say what a mode does not cover.** System proxy mode: only the apps that follow
+  the system proxy go through Elarni; games, calls and other UDP traffic connect directly.
+  iPhone kill switch: iOS itself leaves push notifications and iMessage, carrier
+  services (Wi-Fi Calling, MMS) and local-network devices (AirPlay, CarPlay) outside the tunnel.
+  Mac kill switch: devices on the local network may not be found or reached, and macOS (from
+  13.3) leaves push notifications and iMessage outside. Mac "Enforce tunnel routes": an included route that
+  contains the local network takes its devices into the tunnel.
 
 ### Fixed
 
@@ -22,7 +44,7 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
   one, or a request to an app's own HTTP proxy) reaches the address the app dialed. A name that
   did not come through Elarni's DNS is not handed over: an app with its own DNS over HTTPS,
   Android's Private DNS, a program that resolves names itself before it uses the proxy port,
-  and for a while any app after the core restarts. Behind a server without IPv6 the IPv6
+  and for a while any app after Elarni's core process restarts. Behind a server without IPv6 the IPv6
   connections of those fail, as before 0.5.0. All platforms.
 - **A site was routed by the addresses of the name in its first bytes, not by where it
   connects.** With the "IP if no domain matched" strategy (Happ's default), a VPN-mode connection
@@ -36,7 +58,11 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
   Russian service on an address inside a "blocked" range was proxied, and a video cache on a
   Russian address went direct although its site was listed for the proxy. Sites are matched
   first and addresses second, as with FakeDNS and in proxy mode. A connection to a private
-  address keeps the written order. "As is" and "IP on demand" are unchanged.
+  address keeps the written order, and a rule that reads no name (a catch-all, a port or an
+  app rule) still waits for the address rules above it. The name is the one in the
+  connection's first bytes, so an address list that blocks does not stop a connection that
+  names a site listed for another action, as it does not in proxy mode. "As is" and "IP on
+  demand" are unchanged.
 - **Sites with a long TLS hello missed their domain rule.** A hello with post-quantum keys
   that arrived in three or more pieces was not read, so the connection was routed by address.
   It is waited for within the same 200 ms.
@@ -46,9 +72,6 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
   same two ports for 10 minutes. Android, Windows, Linux.
 - **Proxy mode: a request was routed by the name inside it instead of the host it asked the
   proxy for.** The CONNECT or SOCKS host decides now.
-
-### Fixed
-
 - **Android: no progress line and Cancel at the bottom while subscriptions update.** A line
   with Cancel came up over the last servers on Home and Subscriptions, once for each
   subscription, while the spinner at the top showed the same update. The update now shows
@@ -57,18 +80,6 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
   the next subscription. While an update runs, Connect waits for it instead of turning into
   Stop. For other operations the line at the bottom has its own background, so the page under
   it no longer shows through.
-
-### Changed
-
-- **A quiet connection is kept for 30 minutes instead of 5 on a new installation.** Elarni ended
-  a connection with no data for the idle timeout, 300 seconds by default, so an idle SSH
-  session dropped and push, mail and messenger connections reconnected every five minutes.
-  The default is 1800 seconds; an installation that already saved its settings keeps its value
-  (Settings, Advanced, "Connection idle timeout"). On iPhone and Mac a connection without data
-  still ends after 10 minutes.
-
-### Fixed
-
 - **ShadowQUIC: every open connection dropped after 30 seconds of silence.** The client sent no
   keep-alive, so the server connection timed out as soon as nothing was talking, and a quiet SSH
   session or push connection went with it. It now pings the server every 20 seconds, as the
@@ -79,17 +90,11 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
 - **UDP that only sends was cut every minute** on iPhone, Mac and in proxy mode: a flow was kept
   alive by replies only, so an upload or a log stream with no answers continued from a new
   port each minute.
-
-### Fixed
-
 - **A routing profile with a value in another letter case, or with a DNS type Elarni does not
   have, was refused as invalid.** `RouteOrder`, `DomainStrategy` and the DNS types are read in
   any case (`BLOCK_DIRECT_PROXY`, `doh`), and `udp` means DoU. A side whose DNS type is
   something else (DoT, DoQ, TCP) uses the default resolver of that side, as a profile without
   DNS settings does.
-
-### Fixed
-
 - **A routing profile with FakeDNS: Windows showed "No internet", and names of the local network
   went to the server.** FakeDNS answered every name with an address from 198.18.0.0/15. Windows
   compares the answer for `dns.msftncsi.com` with a fixed address, so it reported no internet and
@@ -103,37 +108,12 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
 - **Custom "Included routes" with FakeDNS sent every connection by name outside the tunnel**,
   where nothing answers. A custom list now always carries 198.18.0.0/15 (and `fc00::/18` when
   it routes IPv6), and on Android, iPhone and Mac the tunnel's own DNS address.
-
-### Fixed
-
 - **iPhone, Mac: a server that speaks first no longer hangs now and then.** When the first bytes
   of a connection (the greeting of SSH, SMTP, FTP or a database) arrived together with the local
   proxy's reply, they were dropped and the app waited for a greeting that never came.
 - **iPhone, Mac: ping is answered.** A ping through the VPN got no reply, so network tools and
   apps that check the connection with one reported "offline". It is answered by Elarni itself
   for every address, as on Android, Windows and Linux; it still does not measure the remote host.
-
-### Changed
-
-- **Help texts say what a mode does not cover.** System proxy mode: only the apps that follow
-  the system proxy go through Elarni; games, calls and other UDP traffic connect directly.
-  iPhone kill switch: iOS itself leaves push notifications and iMessage, carrier
-  services (Wi-Fi Calling, MMS) and local-network devices (AirPlay, CarPlay) outside the tunnel.
-  Mac kill switch: devices on the local network may not be found or reached, and macOS (from
-  13.3) leaves push notifications and iMessage outside. Mac "Enforce tunnel routes": an included route that
-  contains the local network takes its devices into the tunnel.
-
-### Added
-
-- **Desktop: a per-app rule shows what else it matches, and can keep to one version.** A rule
-  follows its app through updates, so with two versions in use at once, such as Python 3.12
-  and 3.13, one rule takes both. Its row now says "Also matches `Python\3.13\python.exe`"
-  while programs run from both, with **Only this version** beside it. **Details** has
-  **Follow updates** for a rule that follows, with the paths it matches now: turned off, the
-  rule is the one path that is there (`exact:<path>`).
-
-### Fixed
-
 - **Windows, macOS, Linux: per-app rules follow an app through its updates, whatever
   installed it.** An update moves many apps to a new path, and a rule for the old path stopped
   matching, one installer layout after another: Elarni knew Squirrel apps, Store apps and
@@ -174,6 +154,11 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
   folder that routing does not follow by itself, the rule is offered that path.
 - **Windows: "Add to list" in Recent connections gives a Microsoft Store app the same package
   rule as the app list**, not the path of its current version.
+
+### Security
+
+- **`url` 2.5.9.** 2.5.8 overflowed the stack in `Url::origin()` on nested `blob:` URLs
+  (RUSTSEC-2026-0592). Elarni's own code does not call it; the update clears the advisory check.
 
 ## 0.6.3 - 2026-11-22
 
