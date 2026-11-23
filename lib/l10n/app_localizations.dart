@@ -1139,13 +1139,13 @@ abstract class AppLocalizations {
   /// No description provided for @connectionModeHelp.
   ///
   /// In en, this message translates to:
-  /// **'System-wide VPN connects all apps; administrator approval is requested on the first VPN connection in this app session. System proxy points this computer\'s proxy setting at Elarni without administrator approval; only apps that follow it, such as browsers, use it, and only for web traffic: games, calls and other UDP traffic stay outside the VPN. Local proxy only opens the ports below for apps you set up yourself.'**
+  /// **'System-wide VPN connects all apps; administrator approval is requested on the first VPN connection in this app session. System proxy points this computer\'s proxy setting at Elarni without administrator approval; only apps that follow it, such as browsers, go through Elarni; games, calls and other UDP traffic connect directly. Local proxy only opens the ports below for apps you set up yourself.'**
   String get connectionModeHelp;
 
   /// No description provided for @connectionModeServiceHelp.
   ///
   /// In en, this message translates to:
-  /// **'System-wide VPN connects all apps; administrator approval is requested on the first VPN connection in this app session, unless Connect without administrator approval is on. System proxy points this computer\'s proxy setting at Elarni without administrator approval; only apps that follow it, such as browsers, use it, and only for web traffic: games, calls and other UDP traffic stay outside the VPN. Local proxy only opens the ports below for apps you set up yourself.'**
+  /// **'System-wide VPN connects all apps; administrator approval is requested on the first VPN connection in this app session, unless Connect without administrator approval is on. System proxy points this computer\'s proxy setting at Elarni without administrator approval; only apps that follow it, such as browsers, go through Elarni; games, calls and other UDP traffic connect directly. Local proxy only opens the ports below for apps you set up yourself.'**
   String get connectionModeServiceHelp;
 
   /// No description provided for @systemProxy.
@@ -2933,7 +2933,7 @@ abstract class AppLocalizations {
   /// No description provided for @killSwitchMacHelp.
   ///
   /// In en, this message translates to:
-  /// **'macOS keeps traffic inside the tunnel, including while it reconnects. Route exclusions do not apply, and devices on your local network (printers, AirPlay, file shares) may not be found or reached. macOS itself leaves push notifications and iMessage outside the tunnel.'**
+  /// **'macOS keeps traffic inside the tunnel, including while it reconnects. Route exclusions do not apply, and devices on your local network (printers, AirPlay, file shares) may not be found or reached. From macOS 13.3, macOS itself leaves push notifications and iMessage outside the tunnel.'**
   String get killSwitchMacHelp;
 
   /// No description provided for @killSwitchDesktopHelp.

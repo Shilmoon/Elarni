@@ -115,12 +115,12 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
 
 ### Changed
 
-- **Help texts say what a mode does not cover.** System proxy mode: only web traffic of the
-  apps that follow the system proxy goes through Elarni; games, calls and other UDP traffic stay
-  outside the VPN. iPhone kill switch: iOS itself leaves push notifications and iMessage, carrier
+- **Help texts say what a mode does not cover.** System proxy mode: only the apps that follow
+  the system proxy go through Elarni; games, calls and other UDP traffic connect directly.
+  iPhone kill switch: iOS itself leaves push notifications and iMessage, carrier
   services (Wi-Fi Calling, MMS) and local-network devices (AirPlay, CarPlay) outside the tunnel.
-  Mac kill switch: devices on the local network may not be found or reached, and macOS leaves
-  push notifications and iMessage outside. Mac "Enforce tunnel routes": an included route that
+  Mac kill switch: devices on the local network may not be found or reached, and macOS (from
+  13.3) leaves push notifications and iMessage outside. Mac "Enforce tunnel routes": an included route that
   contains the local network takes its devices into the tunnel.
 
 ### Added
