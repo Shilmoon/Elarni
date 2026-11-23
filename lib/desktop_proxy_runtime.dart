@@ -328,6 +328,7 @@ extension _ProxyRuntime on DesktopProxy {
         'blockWithoutVPN': catalog.settings.blockWithoutVPN,
         'enforceRoutes': catalog.settings.enforceRoutes,
         'hideVPNIcon': catalog.settings.hideVPNIcon,
+        'answerInbound': catalog.settings.answerInbound,
       },
     },
     ...DesktopProxy._runtimeAssets(catalog),
@@ -825,11 +826,9 @@ extension _ProxyRuntime on DesktopProxy {
     if (!release || reachable) _guardKept = _guardHeld = false;
     if (!reachable) return;
     try {
-      await _native(
-        'stopVPN',
-        {if (release) 'release': true},
-        timeout: _disposed ? _helperExitGrace : null,
-      );
+      await _native('stopVPN', {
+        if (release) 'release': true,
+      }, timeout: _disposed ? _helperExitGrace : null);
     } on Object {
       await _reap(session);
       if (_vpnSession == session) _vpnSession = null;
@@ -857,10 +856,7 @@ extension _ProxyRuntime on DesktopProxy {
     // No helper took the stop: one that crashed or was reaped leaves its kill
     // switch until a helper clears it. Disconnect still ends when that fails,
     // and the notice points at Repair VPN setup. Quitting asks for no consent.
-    if (release &&
-        !_disposed &&
-        _vpnSession == null &&
-        (_guardKept || stale)) {
+    if (release && !_disposed && _vpnSession == null && (_guardKept || stale)) {
       try {
         await _clearStaleGuard();
         _guardKept = _guardHeld = false;

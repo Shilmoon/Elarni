@@ -4,6 +4,15 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
 
 ## Unreleased
 
+### Added
+
+- **Linux: a server keeps answering incoming connections while the VPN is on.** With the new
+  `answerInbound` setting (`elarni-cli settings`, off by default), a connection that reaches the
+  machine from outside (SSH, a web server, a published container port, a UDP service) is
+  answered through the network it came from instead of the tunnel, also under the kill switch,
+  and sessions opened before the tunnel keep working. What the machine opens itself still goes
+  through the VPN. `linux/HEADLESS.md` has the command.
+
 ## 0.6.3 - 2026-11-22
 
 ### Added

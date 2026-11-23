@@ -14,6 +14,10 @@ type WindowsRoutePolicy struct {
 	HideVPNIcon        bool     `json:"hideVPNIcon"`
 	// BlockWithoutVPN captures every route and keeps the guard after an unexpected exit.
 	BlockWithoutVPN bool `json:"blockWithoutVPN"`
+	// AnswerInbound (Linux) sends the replies of connections that arrive from outside back
+	// outside the tunnel. A server sets it: without it SSH and published ports stop answering
+	// when the tunnel takes the default route.
+	AnswerInbound bool `json:"answerInbound"`
 }
 
 // DiscoveryPrefixes are the destinations of LAN discovery: IPv4 multicast (mDNS, SSDP,

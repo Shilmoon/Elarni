@@ -3441,7 +3441,11 @@ for line in sys.stdin:
     final settings = await backend.control.tunnelSettings();
     for (final block in [false, true]) {
       await backend.control.updateTunnelSettings(
-        settings.copyWith(xrayTunEnabled: true, blockWithoutVPN: block),
+        settings.copyWith(
+          xrayTunEnabled: true,
+          blockWithoutVPN: block,
+          answerInbound: block,
+        ),
       );
       expect(await backend.control.connect(), 'connected');
       lastProcess!.kill();
@@ -3449,12 +3453,14 @@ for line in sys.stdin:
       await Future<void>.delayed(Duration.zero);
       expect(await backend.control.state(), 'failed');
     }
-    expect(
-      (await policies.readAsLines()).map(
-        (line) => (jsonDecode(line) as Map)['blockWithoutVPN'],
-      ),
-      [false, true],
-    );
+    // The helper also gets the Linux setting that answers inbound connections.
+    for (final key in ['blockWithoutVPN', 'answerInbound'])
+      expect(
+        (await policies.readAsLines()).map(
+          (line) => (jsonDecode(line) as Map)[key],
+        ),
+        [false, true],
+      );
     expect(messages, [
       'connection_stopped_repair',
       'connection_stopped_blocked',
@@ -3632,10 +3638,7 @@ if tunnel: note('closed')
     // The user's stop of a running tunnel says so too.
     expect(await backend.control.connect(), 'connected');
     expect(await backend.control.disconnect(), 'disconnected');
-    expect((await events.readAsLines()).skip(2), [
-      'runVPN',
-      'stopVPN release',
-    ]);
+    expect((await events.readAsLines()).skip(2), ['runVPN', 'stopVPN release']);
     expect(messages, ['connection_stopped_blocked']);
   });
 
@@ -3661,10 +3664,7 @@ if tunnel: note('closed')
     expect(await backend.control.disconnect(), 'disconnected');
     expect(await backend.control.state(), 'disconnected');
     expect((await events.readAsLines()).skip(2), ['runVPN', 'clearVPNGuard']);
-    expect(messages.skip(1), [
-      'connection_stopped_blocked',
-      'vpn_guard_stale',
-    ]);
+    expect(messages.skip(1), ['connection_stopped_blocked', 'vpn_guard_stale']);
   });
 
   // The helper takes a closed input for a lost tunnel and keeps its block, so

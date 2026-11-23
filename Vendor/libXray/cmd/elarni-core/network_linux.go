@@ -401,7 +401,7 @@ func (network linuxNetwork) install(policy *share.WindowsRoutePolicy) error {
 			return errors.New("vpn_routes_failed")
 		}
 	}
-	if err := nft(network.firewall(protected)); err != nil {
+	if err := nft(network.firewall(protected, policy != nil && policy.AnswerInbound)); err != nil {
 		return err
 	}
 	for _, family := range network.families() {
@@ -449,9 +449,22 @@ func linuxGuardedRoutes(network linuxNetwork, policy *share.WindowsRoutePolicy) 
 	return append(guarded, ipv6...), err
 }
 
-func (network linuxNetwork) firewall(protected []netip.Prefix) string {
+func (network linuxNetwork) firewall(protected []netip.Prefix, answerInbound bool) string {
 	name := network.Name
 	var script strings.Builder
+	if answerInbound {
+		// The policy rule sends every unmarked packet into the tunnel, the replies of connections
+		// that came in from outside too: SSH, a published container port and any UDP server stop
+		// answering. A reply-direction packet this host sends answers a connection somebody else
+		// opened, and nothing opens one through the tunnel, so it takes the core's mark and with
+		// it the main table. Conntrack already knows the sessions that were open before the tunnel.
+		// The host's replies are routed before the output hook; a route chain looks again.
+		fmt.Fprintf(&script, "add chain inet %s inbound_reply { type route hook output priority mangle; policy accept; }\n", name)
+		fmt.Fprintf(&script, "add rule inet %s inbound_reply meta mark 0 ct direction reply meta mark set %d\n", name, network.Mark)
+		// The replies of a container or a VM behind a forwarded port are routed after prerouting.
+		fmt.Fprintf(&script, "add chain inet %s inbound { type filter hook prerouting priority mangle; policy accept; }\n", name)
+		fmt.Fprintf(&script, "add rule inet %s inbound iifname != { \"lo\", %q } meta mark 0 ct direction reply meta mark set %d\n", name, name, network.Mark)
+	}
 	fmt.Fprintf(&script, "add chain inet %s dns { type nat hook output priority -100; policy accept; }\n", name)
 	fmt.Fprintf(&script, "add rule inet %s dns meta mark %d return\n", name, network.Mark)
 	// Marked bootstrap lookups can use the OS stub. Its upstream requests must
@@ -473,6 +486,11 @@ func (network linuxNetwork) firewall(protected []netip.Prefix) string {
 		// too when it would leave outside the tunnel.
 		fmt.Fprintf(&script, "add chain inet %s forward_guard { type filter hook forward priority 0; policy accept; }\n", name)
 		fmt.Fprintf(&script, "add rule inet %s forward_guard oifname %q return\n", name, name)
+		if answerInbound {
+			// A forwarded port stays reachable: its requests are the ones DNAT rewrote.
+			fmt.Fprintf(&script, "add rule inet %s forward_guard meta mark %d return\n", name, network.Mark)
+			fmt.Fprintf(&script, "add rule inet %s forward_guard ct direction original ct status dnat return\n", name)
+		}
 		for _, ipv4 := range []bool{true, false} {
 			prefixes := []string{}
 			for _, prefix := range protected {

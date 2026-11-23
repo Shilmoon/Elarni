@@ -16,6 +16,7 @@ import (
 	"reflect"
 	"runtime"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -101,7 +102,7 @@ func TestLinuxWithoutIPv6RejectsTunnelledIPv6InsteadOfLeaking(t *testing.T) {
 // their traffic leave on the physical link when the tunnel route is missing.
 func TestLinuxGuardCoversForwardedTraffic(t *testing.T) {
 	network := linuxNetwork{Name: "rv0123456789ab", Mark: 0x52562ee1, DNSPort: 35123}
-	script := network.firewall([]netip.Prefix{netip.MustParsePrefix("0.0.0.0/1"), netip.MustParsePrefix("2001:db8::/32")})
+	script := network.firewall([]netip.Prefix{netip.MustParsePrefix("0.0.0.0/1"), netip.MustParsePrefix("2001:db8::/32")}, false)
 	for _, want := range []string{
 		"add chain inet rv0123456789ab forward_guard { type filter hook forward priority 0; policy accept; }",
 		`add rule inet rv0123456789ab forward_guard oifname "rv0123456789ab" return`,
@@ -112,8 +113,12 @@ func TestLinuxGuardCoversForwardedTraffic(t *testing.T) {
 			t.Fatalf("missing %q in:\n%s", want, script)
 		}
 	}
-	if unguarded := network.firewall(nil); bytes.Contains([]byte(unguarded), []byte("forward_guard")) {
+	if unguarded := network.firewall(nil, false); bytes.Contains([]byte(unguarded), []byte("forward_guard")) {
 		t.Fatal("forward guard installed without enforced routes")
+	}
+	// Replies are marked only where the setting asks for it.
+	if bytes.Contains([]byte(script), []byte("inbound")) || !bytes.Contains([]byte(network.firewall(nil, true)), []byte("inbound_reply")) {
+		t.Fatal("inbound replies are marked without the setting, or not with it")
 	}
 }
 
@@ -279,6 +284,186 @@ func TestLinuxLongerPhysicalRoutesOutrankTheTunnel(t *testing.T) {
 		if err := netlink.LinkDel(&netlink.Dummy{LinkAttrs: netlink.LinkAttrs{Index: index}}); err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+// A server answers the connections that reach it from outside: without the mark their replies
+// follow the policy rule into the tunnel. Three private namespaces stand for the host, a remote
+// client beyond its gateway and a container behind a forwarded port; root is needed, as above.
+func TestLinuxAnswersInboundConnectionsOutsideTheTunnel(t *testing.T) {
+	runtime.LockOSThread()
+	namespace := func() int {
+		if err := unix.Unshare(unix.CLONE_NEWNET); err != nil {
+			t.Skip("a private network namespace needs root:", err)
+		}
+		fd, err := unix.Open("/proc/thread-self/ns/net", unix.O_RDONLY|unix.O_CLOEXEC, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { unix.Close(fd) })
+		return fd
+	}
+	enter := func(fd int) {
+		if err := unix.Setns(fd, unix.CLONE_NEWNET); err != nil {
+			t.Fatal(err)
+		}
+	}
+	address := func(name string, addresses ...string) int {
+		link, err := netlink.LinkByName(name)
+		if err != nil {
+			t.Fatal(name, err)
+		}
+		for _, address := range addresses {
+			parsed, err := netlink.ParseAddr(address)
+			if err != nil || netlink.AddrAdd(link, parsed) != nil {
+				t.Fatal(name, address, err)
+			}
+		}
+		if err := netlink.LinkSetUp(link); err != nil {
+			t.Fatal(name, err)
+		}
+		return link.Attrs().Index
+	}
+	gateway := func(link int, via string) {
+		_, all, _ := net.ParseCIDR("0.0.0.0/0")
+		if err := netlink.RouteAdd(&netlink.Route{LinkIndex: link, Dst: all, Gw: net.ParseIP(via)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	echo := func(listen string) {
+		listener, err := net.Listen("tcp4", listen)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { listener.Close() })
+		go func() {
+			for {
+				connection, err := listener.Accept()
+				if err != nil {
+					return
+				}
+				go func() {
+					defer connection.Close()
+					io.Copy(connection, connection)
+				}()
+			}
+		}()
+	}
+	client, container, host := namespace(), namespace(), namespace()
+	for _, peer := range []struct {
+		name, peer string
+		namespace  int
+	}{{"wan0", "peer0", client}, {"br0", "eth0", container}} {
+		attrs := netlink.NewLinkAttrs()
+		attrs.Name = peer.name
+		if err := netlink.LinkAdd(&netlink.Veth{LinkAttrs: attrs, PeerName: peer.peer, PeerNamespace: netlink.NsFd(peer.namespace)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// The reverse-path filter is the host's own setting, copied into a new namespace.
+	for _, setting := range []string{"ip_forward=1", "conf/all/rp_filter=0", "conf/wan0/rp_filter=0", "conf/br0/rp_filter=0"} {
+		name, value, _ := strings.Cut(setting, "=")
+		if err := os.WriteFile("/proc/sys/net/ipv4/"+name, []byte(value), 0); err != nil {
+			t.Fatal(err)
+		}
+	}
+	address("lo")
+	gateway(address("wan0", "203.0.113.2/24"), "203.0.113.1")
+	address("br0", "10.9.0.1/24")
+	echo("203.0.113.2:2222")
+	// As a published container port: the host's port 8080 is the container's.
+	if err := nft("add table ip published\nadd chain ip published forward { type nat hook prerouting priority dstnat; }\n" +
+		"add rule ip published forward iifname \"wan0\" tcp dport 8080 dnat to 10.9.0.2:8080\n"); errors.Is(err, errLinuxFirewallUnavailable) {
+		t.Skip("nftables is not installed")
+	} else if err != nil {
+		t.Fatal(err)
+	}
+	enter(container)
+	address("lo")
+	gateway(address("eth0", "10.9.0.2/24"), "10.9.0.1")
+	echo("10.9.0.2:8080")
+	// The client's address is not on the host's link, so only a default route leads back to it.
+	enter(client)
+	address("lo", "192.0.2.10/32")
+	address("peer0", "203.0.113.1/24")
+	enter(host)
+
+	dial := func(target string) (net.Conn, error) {
+		enter(client)
+		defer enter(host)
+		dialer := net.Dialer{LocalAddr: &net.TCPAddr{IP: net.ParseIP("192.0.2.10")}, Timeout: 500 * time.Millisecond}
+		return dialer.Dial("tcp4", target)
+	}
+	answers := func(connection net.Conn) error {
+		connection.SetDeadline(time.Now().Add(2 * time.Second))
+		if _, err := connection.Write([]byte("ping")); err != nil {
+			return err
+		}
+		_, err := io.ReadFull(connection, make([]byte, 4))
+		return err
+	}
+	tunnel := func(policy *share.WindowsRoutePolicy) (linuxNetwork, int) {
+		network, err := reserveLinuxNetwork()
+		if err != nil {
+			t.Fatal(err)
+		}
+		attrs := netlink.NewLinkAttrs()
+		attrs.Name = network.Name
+		if err := netlink.LinkAdd(&netlink.Dummy{LinkAttrs: attrs}); err != nil {
+			t.Fatal(err)
+		}
+		index := address(network.Name, share.TunGateway4)
+		if err := network.install(policy); err != nil {
+			t.Fatal(err)
+		}
+		return network, index
+	}
+	remove := func(network linuxNetwork, index int) {
+		if err := network.cleanup(); err != nil {
+			t.Fatal(err)
+		}
+		if err := netlink.LinkDel(&netlink.Dummy{LinkAttrs: netlink.LinkAttrs{Index: index}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// A session opened before the tunnel, as the SSH session that starts it.
+	early, err := dial("203.0.113.2:2222")
+	if err != nil || answers(early) != nil {
+		t.Fatal("the namespaces do not reach each other:", err)
+	}
+	defer early.Close()
+	routes := []string{"0.0.0.0/0", "::/0"}
+	network, index := tunnel(&share.WindowsRoutePolicy{IncludedRoutes: routes})
+	if connection, err := dial("203.0.113.2:2222"); err == nil {
+		connection.Close()
+		t.Fatal("the tunnel did not take the replies, so the cases below prove nothing")
+	}
+	remove(network, index)
+	for _, policy := range []*share.WindowsRoutePolicy{
+		{IncludedRoutes: routes, AnswerInbound: true},
+		{IncludedRoutes: routes, AnswerInbound: true, BlockWithoutVPN: true},
+	} {
+		network, index := tunnel(policy)
+		if err := answers(early); err != nil {
+			t.Errorf("%+v: the session opened before the tunnel stopped: %v", policy, err)
+		}
+		for _, target := range []string{"203.0.113.2:2222", "203.0.113.2:8080"} {
+			connection, err := dial(target)
+			if err != nil {
+				t.Errorf("%+v: %s was not answered: %v", policy, target, err)
+				continue
+			}
+			if err := answers(connection); err != nil {
+				t.Errorf("%+v: %s: %v", policy, target, err)
+			}
+			connection.Close()
+		}
+		// What the host itself opens still enters the tunnel.
+		if routes, err := netlink.RouteGet(net.ParseIP("8.8.8.8")); err != nil || routes[0].LinkIndex != index {
+			t.Errorf("%+v: the host's own traffic left through %v (%v)", policy, routes, err)
+		}
+		remove(network, index)
 	}
 }
 
