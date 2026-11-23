@@ -58,6 +58,28 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
   Stop. For other operations the line at the bottom has its own background, so the page under
   it no longer shows through.
 
+### Changed
+
+- **A quiet connection is kept for 30 minutes instead of 5 on a new installation.** Elarni ended
+  a connection with no data for the idle timeout, 300 seconds by default, so an idle SSH
+  session dropped and push, mail and messenger connections reconnected every five minutes.
+  The default is 1800 seconds; an installation that already saved its settings keeps its value
+  (Settings, Advanced, "Connection idle timeout"). On iPhone and Mac a connection without data
+  still ends after 10 minutes.
+
+### Fixed
+
+- **ShadowQUIC: every open connection dropped after 30 seconds of silence.** The client sent no
+  keep-alive, so the server connection timed out as soon as nothing was talking, and a quiet SSH
+  session or push connection went with it. It now pings the server every 20 seconds, as the
+  Hysteria2 and TUIC clients do.
+- **AmneziaWG: large transfers hung while small requests worked** with a profile that sets `S4`
+  and no `MTU`. The padding in front of every packet did not fit beside a full-size packet;
+  the tunnel's default MTU is now 1420 minus `S4`, not below 1280.
+- **UDP that only sends was cut every minute** on iPhone, Mac and in proxy mode: a flow was kept
+  alive by replies only, so an upload or a log stream with no answers continued from a new
+  port each minute.
+
 ## 0.6.3 - 2026-11-22
 
 ### Added

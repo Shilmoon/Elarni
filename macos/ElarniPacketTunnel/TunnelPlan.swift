@@ -132,7 +132,7 @@ struct TunnelRuntimeSettings: Codable, Sendable, Equatable {
     httpInboundEnabled: false,
     xrayTunEnabled: false,
     memoryLimitMB: 0,
-    idleTimeoutSeconds: 300,
+    idleTimeoutSeconds: 1800,
     tcpMaxConnections: 256,
     udpMaxConnections: 128,
     sniffingEnabled: true,

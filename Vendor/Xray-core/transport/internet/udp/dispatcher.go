@@ -18,6 +18,9 @@ import (
 	"github.com/xtls/xray-core/transport"
 )
 
+// idleTimeout ends a flow with no datagram in either direction.
+var idleTimeout = time.Minute
+
 type ResponseCallback func(ctx context.Context, packet *udp.Packet)
 
 type connEntry struct {
@@ -99,7 +102,7 @@ func (v *Dispatcher) getInboundRay(ctx context.Context, dest net.Destination) (*
 		cancel: cancel,
 	}
 
-	entry.timer = signal.CancelAfterInactivity(ctx, entry.terminate, time.Minute)
+	entry.timer = signal.CancelAfterInactivity(ctx, entry.terminate, idleTimeout)
 	v.conn = entry
 	go handleInput(ctx, entry, dest, v.callback, v.callClose)
 	return entry, nil
@@ -121,6 +124,9 @@ func (v *Dispatcher) Dispatch(ctx context.Context, destination net.Destination, 
 			conn.Close()
 			return
 		}
+		// Elarni: only replies kept the flow, so one that sends without an answer for a minute (an
+		// upload, a telemetry or log stream) was ended under the sender and went on from a new port.
+		conn.timer.Update()
 	}
 }
 

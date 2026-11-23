@@ -154,7 +154,7 @@ struct AppTunnelSettings: Codable, Equatable {
   /// A listed app's own target: direct, routing, block, node:<server ID> or proxy:<URL>. Apps without one take the mode's.
   var perAppTargets: [String: String] = [:]
   var memoryLimitMB = 0
-  var idleTimeoutSeconds = 300
+  var idleTimeoutSeconds = 1800
   var tcpMaxConnections = 2_048
   var udpMaxConnections = 1_024
   var sniffingEnabled = true

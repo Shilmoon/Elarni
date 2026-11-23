@@ -230,6 +230,8 @@
         "Vendor/Xray-core/transport/internet/tls/config.proto",
         "Vendor/Xray-core/transport/internet/tls/fingerprint_mlkem_test.go",
         "Vendor/Xray-core/transport/internet/tls/tls.go",
+        "Vendor/Xray-core/transport/internet/udp/dispatcher.go",
+        "Vendor/Xray-core/transport/internet/udp/dispatcher_idle_test.go",
         "Vendor/Xray-core/transport/internet/websocket/connection_test.go",
         "Vendor/Xray-core/transport/internet/xdrive/client.go"
       ],
