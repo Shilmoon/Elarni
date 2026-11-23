@@ -241,6 +241,14 @@ where
                 }
             }
             IpStackStream::UnknownTransport(u) => {
+                // Elarni: a ping is answered here for every address, as the Xray TUN does on the
+                // other platforms; SOCKS carries no ICMP, and a dropped ping reads as "offline".
+                if let Some(reply) = echo_reply(u.ip_protocol().0, u.dst_addr(), u.src_addr(), u.payload()) {
+                    if let Err(err) = u.send(reply) {
+                        log::info!("#0 echo reply not sent: {err}");
+                    }
+                    continue;
+                }
                 let len = u.payload().len();
                 log::info!("#0 unhandled transport - Ip Protocol {:?}, length {}", u.ip_protocol(), len);
                 continue;
@@ -254,6 +262,39 @@ where
     let remaining = session_metrics.active_tcp.load(Relaxed) + session_metrics.active_udp.load(Relaxed);
     shutdown_sessions(&mut session_tasks).await;
     Ok(remaining)
+}
+
+/// The echo reply to an ICMP or ICMPv6 echo request, sent from `from` (the pinged address) to `to`.
+fn echo_reply(protocol: u8, from: IpAddr, to: IpAddr, request: &[u8]) -> Option<Vec<u8>> {
+    let (echo, answer) = match protocol {
+        1 => (8, 0),
+        58 => (128, 129),
+        _ => return None,
+    };
+    if request.len() < 8 || request[0] != echo || request[1] != 0 {
+        return None;
+    }
+    let mut reply = request.to_vec();
+    (reply[0], reply[2], reply[3]) = (answer, 0, 0);
+    let mut sum = 0_u32;
+    let mut add = |bytes: &[u8]| {
+        for pair in bytes.chunks(2) {
+            sum += u32::from(pair[0]) << 8 | u32::from(*pair.get(1).unwrap_or(&0));
+        }
+    };
+    // ICMPv6 also covers the addresses, the length and the protocol.
+    if let (IpAddr::V6(from), IpAddr::V6(to)) = (from, to) {
+        add(&from.octets());
+        add(&to.octets());
+        add(&u32::try_from(reply.len()).ok()?.to_be_bytes());
+        add(&[0, 0, 0, protocol]);
+    }
+    add(&reply);
+    while sum > 0xffff {
+        sum = (sum & 0xffff) + (sum >> 16);
+    }
+    reply[2..4].copy_from_slice(&(!(sum as u16)).to_be_bytes());
+    Some(reply)
 }
 
 async fn shutdown_sessions(session_tasks: &mut JoinSet<()>) {
@@ -302,10 +343,18 @@ async fn handle_tcp_session(mut tcp_stack: IpStackTcpStream, proxy_handler: Arc<
 
     log::info!("Beginning {session_info}");
 
-    if let Err(e) = handle_proxy_session(&mut server, proxy_handler).await {
+    if let Err(e) = handle_proxy_session(&mut server, proxy_handler.clone()).await {
         tcp_stack.shutdown().await?;
         return Err(e);
     }
+    // Elarni: the handshake may have read the first bytes of the connection with the last reply.
+    let early = {
+        let mut handler = proxy_handler.lock().await;
+        let data = handler.peek_data(OutgoingDirection::ToClient).buffer.to_vec();
+        handler.consume_data(OutgoingDirection::ToClient, data.len());
+        data
+    };
+    tcp_stack.write_all(&early).await?;
 
     let (mut t_rx, mut t_tx) = tokio::io::split(tcp_stack);
     let (mut s_rx, mut s_tx) = tokio::io::split(server);
@@ -582,6 +631,45 @@ async fn handle_proxy_session(server: &mut TcpStream, proxy_handler: Arc<Mutex<d
 
 #[cfg(test)]
 mod tests {
+    // Elarni: the replies a real stack gives; the checksums are those of the packets below.
+    #[test]
+    fn echo_requests_are_answered() {
+        use std::net::IpAddr;
+        let v4 = |text: &str| text.parse::<IpAddr>().unwrap();
+        // id 0x1234, sequence 1, payload "ping!" (odd length)
+        let request = [8, 0, 0, 0, 0x12, 0x34, 0, 1, b'p', b'i', b'n', b'g', b'!'];
+        let reply = super::echo_reply(1, v4("8.8.8.8"), v4("10.0.0.2"), &request).unwrap();
+        assert_eq!(reply[..2], [0, 0]);
+        assert_eq!(reply[4..], request[4..]);
+        // A message with a right checksum sums to 0xffff.
+        let sum = |parts: &[&[u8]]| {
+            let mut sum = 0_u32;
+            for part in parts {
+                for pair in part.chunks(2) {
+                    sum += u32::from(pair[0]) << 8 | u32::from(*pair.get(1).unwrap_or(&0));
+                }
+            }
+            while sum > 0xffff {
+                sum = (sum & 0xffff) + (sum >> 16);
+            }
+            sum
+        };
+        assert_eq!(sum(&[&reply]), 0xffff);
+        let (from, to) = (
+            "2001:db8::1".parse::<std::net::Ipv6Addr>().unwrap(),
+            "fd00::2".parse::<std::net::Ipv6Addr>().unwrap(),
+        );
+        let request = [128, 0, 0, 0, 0x12, 0x34, 0, 1, 1, 2, 3, 4];
+        let reply = super::echo_reply(58, from.into(), to.into(), &request).unwrap();
+        assert_eq!(reply[..2], [129, 0]);
+        assert_eq!(sum(&[&from.octets(), &to.octets(), &[0, 0, 0, 12, 0, 0, 0, 58], &reply]), 0xffff);
+        // Anything else is not answered: a reply, an error, another protocol, a short message.
+        assert!(super::echo_reply(1, v4("8.8.8.8"), v4("10.0.0.2"), &[0, 0, 0, 0, 0, 0, 0, 0]).is_none());
+        assert!(super::echo_reply(1, v4("8.8.8.8"), v4("10.0.0.2"), &[3, 1, 0, 0, 0, 0, 0, 0]).is_none());
+        assert!(super::echo_reply(47, v4("8.8.8.8"), v4("10.0.0.2"), &request).is_none());
+        assert!(super::echo_reply(1, v4("8.8.8.8"), v4("10.0.0.2"), &[8, 0, 0]).is_none());
+    }
+
     // The std checks answer like tproxy-config's regexes for every kind of address a DNS query can target.
     #[test]
     fn private_ip_matches_tproxy_config() {

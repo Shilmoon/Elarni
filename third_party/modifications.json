@@ -345,7 +345,7 @@
         "Vendor/tun2proxy/src/proxy_handler.rs",
         "Vendor/tun2proxy/src/socks.rs"
       ],
-      "purpose": "joined session shutdown, preservation of fragmented DNS-over-TCP responses, and unconnected SOCKS UDP relay sockets compatible with Darwin send_to, and TCP_NODELAY on the proxy connection; session limits and counters per protocol with sessions reserved for DNS, DNS sessions that end with their answer, and DNS answers forwarded as received; only the library the Apple packet bridge runs is kept (SOCKS5 sessions and DNS over TCP): the command-line programs, the HTTP and SOCKS4 proxies, virtual DNS, the UDP gateway, socket transfer between namespaces, the Android and Windows service entry points, the C API and the build script are removed"
+      "purpose": "joined session shutdown, preservation of fragmented DNS-over-TCP responses, and unconnected SOCKS UDP relay sockets compatible with Darwin send_to, and TCP_NODELAY on the proxy connection; session limits and counters per protocol with sessions reserved for DNS, DNS sessions that end with their answer, and DNS answers forwarded as received; bytes read with the last SOCKS reply delivered to the client, and ICMP echo requests answered; only the library the Apple packet bridge runs is kept (SOCKS5 sessions and DNS over TCP): the command-line programs, the HTTP and SOCKS4 proxies, virtual DNS, the UDP gateway, socket transfer between namespaces, the Android and Windows service entry points, the C API and the build script are removed"
     },
     {
       "name": "quic-go",
