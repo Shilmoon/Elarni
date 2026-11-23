@@ -4,6 +4,22 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
 
 ## Unreleased
 
+### Fixed
+
+- **Telegram stuck on "Connecting" or "Updating", media that never loads.** Telegram disguises
+  some connections to its data centers and to MTProto proxies as TLS to an unrelated site.
+  Since 0.5.0 Elarni handed the server the site name it saw in such a connection instead of
+  the address Telegram dialed, so the server connected to that site and Telegram kept
+  retrying. The server now gets the name only when Elarni's DNS gave the app that very address
+  for that name, for as long as that answer lives and at least an hour; otherwise it gets the
+  address the app dialed. The same rule now guards a direct IPv6 connection that fails and is
+  retried over IPv4 by name. So a connection whose first bytes name another host (a disguised
+  one, or a request to an app's own HTTP proxy) reaches the address the app dialed. A name that
+  did not come through Elarni's DNS is not handed over: an app with its own DNS over HTTPS,
+  Android's Private DNS, a program that resolves names itself before it uses the proxy port,
+  and for a while any app after the core restarts. Behind a server without IPv6 the IPv6
+  connections of those fail, as before 0.5.0. All platforms.
+
 ## 0.6.3 - 2026-11-22
 
 ### Added
