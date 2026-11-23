@@ -311,11 +311,23 @@ mod tests {
         let mut read = vec![5, 0, 5, 0, 0, 1, 0, 0, 0, 0, 0, 0];
         read.extend_from_slice(b"SSH-2.0-server\r\n");
         let buffer = &read[..2];
-        handler.push_data(IncomingDataEvent { direction: IncomingDirection::FromServer, buffer }).await.unwrap();
+        handler
+            .push_data(IncomingDataEvent {
+                direction: IncomingDirection::FromServer,
+                buffer,
+            })
+            .await
+            .unwrap();
         let request = handler.data_len(OutgoingDirection::ToServer);
         handler.consume_data(OutgoingDirection::ToServer, request);
         let buffer = &read[2..];
-        handler.push_data(IncomingDataEvent { direction: IncomingDirection::FromServer, buffer }).await.unwrap();
+        handler
+            .push_data(IncomingDataEvent {
+                direction: IncomingDirection::FromServer,
+                buffer,
+            })
+            .await
+            .unwrap();
         assert!(handler.connection_established());
         assert_eq!(handler.peek_data(OutgoingDirection::ToClient).buffer, b"SSH-2.0-server\r\n");
     }

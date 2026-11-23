@@ -655,7 +655,10 @@ mod tests {
             sum
         };
         assert_eq!(sum(&[&reply]), 0xffff);
-        let (from, to) = ("2001:db8::1".parse::<std::net::Ipv6Addr>().unwrap(), "fd00::2".parse::<std::net::Ipv6Addr>().unwrap());
+        let (from, to) = (
+            "2001:db8::1".parse::<std::net::Ipv6Addr>().unwrap(),
+            "fd00::2".parse::<std::net::Ipv6Addr>().unwrap(),
+        );
         let request = [128, 0, 0, 0, 0x12, 0x34, 0, 1, 1, 2, 3, 4];
         let reply = super::echo_reply(58, from.into(), to.into(), &request).unwrap();
         assert_eq!(reply[..2], [129, 0]);
