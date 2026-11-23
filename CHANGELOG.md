@@ -116,6 +116,16 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
   stale connections after a network change compared only IPv4 addresses, so on networks without
   IPv4 the connections of the old network were kept until they timed out.
 
+### Changed
+
+- **Help texts say what a mode does not cover.** System proxy mode: only web traffic of the
+  apps that follow the system proxy goes through Elarni; games, calls and other UDP traffic stay
+  outside the VPN. iPhone kill switch: iOS itself leaves push notifications and iMessage, carrier
+  services (Wi-Fi Calling, MMS) and local-network devices (AirPlay, CarPlay) outside the tunnel.
+  Mac kill switch: devices on the local network may not be found or reached, and macOS leaves
+  push notifications and iMessage outside. Mac "Enforce tunnel routes": an included route that
+  contains the local network takes its devices into the tunnel.
+
 ## 0.6.3 - 2026-11-22
 
 ### Added
