@@ -10,6 +10,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -29,7 +30,10 @@ import java.util.concurrent.TimeUnit
 data class AppState(
     val catalog: JSONObject = Catalog.empty().data,
     val loading: Boolean = true,
-    val busy: Boolean = false,
+    /** A command is running. */
+    val working: Boolean = false,
+    /** Subscription updates the user started that have not ended; one runs a command for each subscription. */
+    val updates: Int = 0,
     val connection: String = "disconnected",
     val error: String? = null,
     /** The subscription whose refresh failed with this error, if one did. */
@@ -50,7 +54,11 @@ data class AppState(
     val noTrafficSince: Long? = null,
     /** The speed while connected, from the last two readings of the counters; null before the second. */
     val rate: TrafficRate? = null,
-)
+) {
+    /** A subscription update is running, between its commands too. */
+    val refreshing get() = updates > 0
+    val busy get() = working || refreshing
+}
 
 // Up to two probes share an SNI, so a part takes at most four probe timeouts.
 private const val CONNECTED_TEST_BATCH = 8
@@ -222,6 +230,13 @@ class Repository(private val app: ElarniApplication) {
         return dead
     }
     fun cancel(): Long { val generation = epoch.incrementAndGet(); Native.cancelOperations(); return generation }
+    /** Runs [work] as one subscription update, which the state shows from this call until [work] ends. [work] gets a
+     *  check that says whether a Cancel, a Stop or a Connect has ended the update since. */
+    fun subscriptionUpdate(work: suspend (ended: () -> Boolean) -> Unit): Job {
+        val generation = epoch.get()
+        mutable.update { it.copy(updates = it.updates + 1) }
+        return scope.launch { work { generation != epoch.get() } }.also { job -> job.invokeOnCompletion { mutable.update { it.copy(updates = it.updates - 1) } } }
+    }
     fun beginConnectionRequest(): Long { stopRequested.set(false); return cancel() }
     fun isCurrentRequest(generation: Long) = generation == epoch.get() && !stopRequested.get()
     fun requestStop() {
@@ -409,10 +424,10 @@ class Repository(private val app: ElarniApplication) {
         ready.await(); mutex.withLock {
             storageFailure?.let { throw AppFailure(it) }
             val generation = epoch.get()
-            mutable.update { it.copy(busy = true) }
+            mutable.update { it.copy(working = true) }
             try { dispatch(command, args, generation) }
             catch (error: Exception) { report(error, args.string("id").takeIf { command == "refresh" && it.isNotEmpty() }); throw AppFailure(code(error)) }
-            finally { mutable.update { it.copy(busy = false) }; publish() }
+            finally { mutable.update { it.copy(working = false) }; publish() }
         }
     }
     /** A test batch holds the lock until it ends, so while connected it runs [CONNECTED_TEST_BATCH] servers
