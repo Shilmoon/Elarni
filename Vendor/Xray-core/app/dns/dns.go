@@ -36,6 +36,8 @@ type DNS struct {
 	checkSystem            bool
 	script                 *scriptEngine
 	stopRetiring           func()
+	// Elarni: the addresses given for each name, see answers.
+	answers answers
 }
 
 // DomainMatcherInfo contains information attached to index returned by Server.domainMatcher.
@@ -280,6 +282,12 @@ func (s *DNS) LookupIP(domain string, option dns.IPOption) (result []net.IP, ttl
 	}
 	// Normalize the FQDN form query
 	domain = strings.TrimSuffix(domain, ".")
+	// Elarni: under the name as asked, also when the hosts replace it with another name.
+	defer func(asked string) {
+		if lookupErr == nil {
+			s.answers.record(asked, result, ttl)
+		}
+	}(domain)
 	target := probe.IsTarget(s.ctx, domain)
 	if target {
 		probe.Emit(s.ctx, "target_dns_start", nil, 0)
@@ -347,6 +355,17 @@ func (s *DNS) LookupHosts(domain string) []net.IP {
 		return nil
 	}
 	return ips
+}
+
+// Answered implements dns.AnswerLookup.
+func (s *DNS) Answered(domain string, ip net.IP) bool {
+	return s.answers.gave(domain, ip)
+}
+
+// PinsHost implements dns.AnswerLookup.
+func (s *DNS) PinsHost(domain string) bool {
+	addrs, err := s.hosts.Lookup(strings.TrimSuffix(domain, "."), dns.IPOption{IPv4Enable: true, IPv6Enable: true})
+	return err != nil || addrs != nil
 }
 
 func (s *DNS) allowedFamilies(option dns.IPOption) dns.IPOption {

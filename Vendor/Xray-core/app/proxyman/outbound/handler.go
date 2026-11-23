@@ -192,13 +192,19 @@ func (h *Handler) Dispatch(ctx context.Context, link *transport.Link) {
 	outbounds := session.OutboundsFromContext(ctx)
 	ob := outbounds[len(outbounds)-1]
 	content := session.ContentFromContext(ctx)
-	// Elarni: a server routes by name, and its own path may not reach the IP the app picked
-	// (YouTube over IPv6 behind an IPv4-only exit), so it gets the sniffed name. Direct and other
-	// local outbounds keep the IP; UDP keeps it so replies still match the address the app sent to.
-	// A name the profile's DNS hosts pin keeps its IP too: the server would not know the pin.
+	// Elarni: a server routes by name, and its own path may not reach the address the app picked
+	// (YouTube over IPv6 behind an IPv4-only exit), so it gets the sniffed name, when that is a
+	// name of the address: the profile's DNS gave the app that address for it. A name the app
+	// sends can belong to another host (Telegram sends a TLS hello naming an unrelated site to
+	// its own data centers and MTProto proxies; a request to the app's own HTTP proxy names the
+	// site behind it), and a server given that name would connect to that host. Direct and other
+	// local outbounds keep the IP; UDP keeps it so replies still match the address the app sent
+	// to. A name the profile's DNS hosts record keeps its IP too: the server would not know the
+	// record.
 	if h.remote && ob.Target.Network == net.Network_TCP && ob.Target.Address != nil && ob.Target.Address.Family().IsIP() &&
 		ob.RouteTarget.Address != nil && ob.RouteTarget.Address.Family().IsDomain() &&
-		len(internet.LookupHostsContext(ctx, ob.RouteTarget.Address.Domain())) == 0 {
+		internet.SniffedNameIs(ctx, ob.RouteTarget.Address.Domain(), ob.Target.Address.IP()) &&
+		!internet.HostsRecordContext(ctx, ob.RouteTarget.Address.Domain()) {
 		ob.Target.Address = ob.RouteTarget.Address
 	}
 	if h.senderSettings != nil && h.senderSettings.TargetStrategy.HasStrategy() && ob.Target.Address.Family().IsDomain() && (content == nil || !content.SkipDNSResolve) {

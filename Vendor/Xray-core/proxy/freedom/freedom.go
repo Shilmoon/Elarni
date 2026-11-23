@@ -387,9 +387,13 @@ func (h *Handler) Process(ctx context.Context, link *transport.Link, dialer inte
 		if err != nil {
 			// A TUN flow keeps its IPv6 destination under route-only sniffing; on a
 			// host without IPv6 the app already has a connection, so retry the
-			// sniffed domain over IPv4 instead of resetting it. A redirect's address
-			// (UDPOverride's too) stays the only destination.
-			if dialDest.Network == net.Network_TCP && dialDest.Address.Family().IsIPv6() && UDPOverride.Address == nil && ob.RouteTarget.Address != nil && ob.RouteTarget.Address.Family().IsDomain() {
+			// sniffed domain over IPv4 instead of resetting it, when the domain is a
+			// name of that destination (this core's DNS gave the app the address for
+			// it): one an app sends can belong to another host (a TLS hello naming a
+			// decoy site), which the retry would then connect to.
+			// A redirect's address (UDPOverride's too) stays the only destination.
+			if dialDest.Network == net.Network_TCP && dialDest.Address.Family().IsIPv6() && UDPOverride.Address == nil && ob.RouteTarget.Address != nil && ob.RouteTarget.Address.Family().IsDomain() &&
+				internet.SniffedNameIs(ctx, ob.RouteTarget.Address.Domain(), dialDest.Address.IP()) {
 				if ips, lookupErr := internet.LookupForIPContext(ctx, ob.RouteTarget.Address.Domain(), internet.DomainStrategy_USE_IP4, outGateway); lookupErr == nil {
 					destination.Address = net.IPAddress(ips[dice.Roll(len(ips))])
 					errors.LogInfo(ctx, "IPv6 dial failed, retrying ", ob.RouteTarget.Address, " at ", destination.Address)
