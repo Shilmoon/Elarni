@@ -4,6 +4,18 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
 
 ## Unreleased
 
+### Fixed
+
+- **iPhone, Mac: a server that speaks first no longer hangs now and then.** When the first bytes
+  of a connection (the greeting of SSH, SMTP, FTP or a database) arrived together with the local
+  proxy's reply, they were dropped and the app waited for a greeting that never came.
+- **iPhone, Mac: ping is answered.** A ping through the VPN got no reply, so network tools and
+  apps that check the connection with one reported "offline". It is answered by Elarni itself
+  for every address, as on Android, Windows and Linux; it still does not measure the remote host.
+- **iPhone, Mac: a move between two IPv6-only networks is noticed.** The check that restarts
+  stale connections after a network change compared only IPv4 addresses, so on networks without
+  IPv4 the connections of the old network were kept until they timed out.
+
 ## 0.6.3 - 2026-11-22
 
 ### Added

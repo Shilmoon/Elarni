@@ -177,6 +177,9 @@ impl SocksProxyImpl {
         }
 
         self.state = SocksState::Established;
+        // Elarni: what the server sent behind its reply in the same read (an SSH or SMTP greeting)
+        // is the client's.
+        self.relay_traffic()?;
         Ok(())
     }
 
@@ -289,5 +292,31 @@ impl ProxyHandlerManager for SocksProxyManager {
 impl SocksProxyManager {
     pub(crate) fn new(server: SocketAddr, credentials: Option<UserKey>) -> Self {
         Self { server, credentials }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::session_info::IpProtocol;
+
+    // Elarni: a server that speaks first may have its greeting arrive with the SOCKS reply.
+    #[tokio::test]
+    async fn bytes_behind_the_connect_reply_reach_the_client() {
+        let info = SessionInfo::new("10.0.0.1:50000".parse().unwrap(), "192.0.2.1:22".parse().unwrap(), IpProtocol::Tcp);
+        let mut handler = SocksProxyImpl::new("127.0.0.1:1080".parse().unwrap(), info, None, protocol::Command::Connect).unwrap();
+        let hello = handler.data_len(OutgoingDirection::ToServer);
+        handler.consume_data(OutgoingDirection::ToServer, hello);
+        // The method choice, the reply to CONNECT and the greeting, as one read returns them.
+        let mut read = vec![5, 0, 5, 0, 0, 1, 0, 0, 0, 0, 0, 0];
+        read.extend_from_slice(b"SSH-2.0-server\r\n");
+        let buffer = &read[..2];
+        handler.push_data(IncomingDataEvent { direction: IncomingDirection::FromServer, buffer }).await.unwrap();
+        let request = handler.data_len(OutgoingDirection::ToServer);
+        handler.consume_data(OutgoingDirection::ToServer, request);
+        let buffer = &read[2..];
+        handler.push_data(IncomingDataEvent { direction: IncomingDirection::FromServer, buffer }).await.unwrap();
+        assert!(handler.connection_established());
+        assert_eq!(handler.peek_data(OutgoingDirection::ToClient).buffer, b"SSH-2.0-server\r\n");
     }
 }
