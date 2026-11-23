@@ -373,7 +373,9 @@ func TestLinuxAnswersInboundConnectionsOutsideTheTunnel(t *testing.T) {
 	echo("203.0.113.2:2222")
 	// As a published container port: the host's port 8080 is the container's.
 	if err := nft("add table ip published\nadd chain ip published forward { type nat hook prerouting priority dstnat; }\n" +
-		"add rule ip published forward iifname \"wan0\" tcp dport 8080 dnat to 10.9.0.2:8080\n"); errors.Is(err, errLinuxFirewallUnavailable) {
+		"add rule ip published forward iifname \"wan0\" tcp dport 8080 dnat to 10.9.0.2:8080\n" +
+		// A rewrite of what the container sends out, as a transparent proxy rule does.
+		"add rule ip published forward iifname \"br0\" tcp dport 2223 dnat to 203.0.113.1:2222\n"); errors.Is(err, errLinuxFirewallUnavailable) {
 		t.Skip("nftables is not installed")
 	} else if err != nil {
 		t.Fatal(err)
@@ -385,7 +387,13 @@ func TestLinuxAnswersInboundConnectionsOutsideTheTunnel(t *testing.T) {
 	// The client's address is not on the host's link, so only a default route leads back to it.
 	enter(client)
 	address("lo", "192.0.2.10/32")
-	address("peer0", "203.0.113.1/24")
+	peer := address("peer0", "203.0.113.1/24")
+	// What a container opens itself: a host on the physical link, which knows the way back.
+	echo("203.0.113.1:2222")
+	_, containers, _ := net.ParseCIDR("10.9.0.0/24")
+	if err := netlink.RouteAdd(&netlink.Route{LinkIndex: peer, Dst: containers, Gw: net.ParseIP("203.0.113.2")}); err != nil {
+		t.Fatal(err)
+	}
 	enter(host)
 
 	dial := func(target string) (net.Conn, error) {
@@ -458,6 +466,18 @@ func TestLinuxAnswersInboundConnectionsOutsideTheTunnel(t *testing.T) {
 				t.Errorf("%+v: %s: %v", policy, target, err)
 			}
 			connection.Close()
+		}
+		// What a container opens itself is not an inbound connection, whatever rewrites its
+		// destination: it leaves by the longer physical route, and not at all under the kill switch.
+		enter(container)
+		dialer := net.Dialer{Timeout: 500 * time.Millisecond}
+		connection, err := dialer.Dial("tcp4", "203.0.113.1:2223")
+		enter(host)
+		if err == nil {
+			connection.Close()
+		}
+		if (err == nil) == policy.BlockWithoutVPN {
+			t.Errorf("%+v: a container's own connection past the tunnel: %v", policy, err)
 		}
 		// What the host itself opens still enters the tunnel.
 		if routes, err := netlink.RouteGet(net.ParseIP("8.8.8.8")); err != nil || routes[0].LinkIndex != index {
