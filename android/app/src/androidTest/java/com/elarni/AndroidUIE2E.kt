@@ -18,6 +18,8 @@ import com.google.android.apps.common.testing.accessibility.framework.integratio
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.height
 import androidx.test.platform.app.InstrumentationRegistry
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.json.JSONArray
 import org.json.JSONObject
@@ -1298,6 +1300,91 @@ class AndroidUIE2E {
                 ui.onNode(line).assert(hasText("Updated just now", substring = true))
             }
         }
+    }
+    // A strip with Cancel used to come up at the bottom over the last servers, once for each subscription, while the
+    // spinner at the top showed the same update. The update line at the top of Home and Subscriptions carries the
+    // progress and the Cancel, Cancel ends the whole update, and a page without the line keeps the strip.
+    @Test fun subscriptionUpdateShowsItsCancelAtTheTopAndEndsWhole() {
+        HTTPFixture().use { first -> HTTPFixture().use { second ->
+            first.body = "socks://127.0.0.1:18100#Germany%20Demo"; first.headers = mapOf("profile-title" to "Northwind")
+            second.body = "socks://127.0.0.1:18101#Sweden%20Demo"; second.headers = mapOf("profile-title" to "Southwind")
+            for (feed in listOf(first, second)) call("approveSource", obj("token" to call("import", obj("text" to feed.url)).getJSONObject("warning").getString("token")))
+            call("select", obj("id" to snapshot().nodes.first().string("id")))
+            val ids = snapshot().sources.map { it.string("id") }
+            val requests = { first.requests.get() + second.requests.get() }
+            ui.onNode(hasText("Home") and hasClickAction()).performClick()
+            ui.waitForIdle()
+            // One update from the first subscription to the last, though each is its own command.
+            val seen = java.util.concurrent.CopyOnWriteArrayList<AppState>()
+            val watch = repo.scope.launch(Dispatchers.Unconfined) { repo.state.collect { seen += it } }
+            var before = requests()
+            runBlocking { ui.activity.refreshAll(ids).join() }
+            ui.waitUntil(5000) { !repo.state.value.busy }
+            watch.cancel()
+            assertEquals(before + 2, requests())
+            val update = seen.dropWhile { !it.refreshing }.dropLastWhile { !it.refreshing }
+            assertTrue("The update shows without a gap between its subscriptions: ${seen.map { it.working to it.updates }}", update.isNotEmpty() && update.all { it.refreshing && it.busy })
+            assertTrue("Each subscription is its own command", update.any { !it.working })
+
+            val strip = hasTestTag("busy-strip"); val cancel = hasTestTag("cancel-update")
+            val updating = hasTestTag("subscription-freshness") and hasText("Updating subscriptions…", substring = true)
+            val connect = hasText("Connect") and hasClickAction()
+            ui.onNode(connect).assertIsEnabled()
+            // Held downloads keep the update up while the test looks at it.
+            first.stall = 4000; second.stall = 4000
+            before = requests()
+            ui.onNode(hasScrollToIndexAction()).performTouchInput { swipeDown() }
+            ui.waitUntil(5000) { ui.onAllNodes(updating).fetchSemanticsNodes().isNotEmpty() }
+            ui.onNode(strip).assertDoesNotExist()
+            // Connect waits for the update; it used to turn into a second Stop.
+            ui.onNode(hasText("Stop") and hasClickAction()).assertDoesNotExist()
+            ui.onNode(connect).assertIsNotEnabled()
+            // The line shows before the first download is asked for; Cancel is for one that is held.
+            ui.waitUntil(5000) { requests() == before + 1 }
+            ui.onNode(cancel).performClick()
+            ui.waitUntil(3000) { !repo.state.value.busy }
+            assertEquals("Cancel ends the update, not only the download it interrupted", before + 1, requests())
+            ui.waitUntil(3000) { ui.onAllNodes(updating).fetchSemanticsNodes().isEmpty() }
+            ui.onNode(cancel).assertDoesNotExist()
+            ui.onNode(connect).assertIsEnabled()
+
+            ui.onNode(hasText("Subscriptions") and hasClickAction()).performClick()
+            ui.waitForIdle()
+            ui.onNode(updating).assertDoesNotExist()
+            before = requests()
+            ui.onNode(hasScrollToIndexAction()).performTouchInput { swipeDown() }
+            ui.waitUntil(5000) { ui.onAllNodes(updating).fetchSemanticsNodes().isNotEmpty() }
+            ui.onNode(strip).assertDoesNotExist()
+            // The line shows before the first download is asked for; Cancel is for one that is held.
+            ui.waitUntil(5000) { requests() == before + 1 }
+            ui.onNode(cancel).performClick()
+            ui.waitUntil(3000) { !repo.state.value.busy }
+            assertEquals(before + 1, requests())
+            ui.waitUntil(3000) { ui.onAllNodes(updating).fetchSemanticsNodes().isEmpty() }
+
+            // A subscription's own page has no update line, so the strip and its Cancel stay there. The notice of the
+            // cancelled update would cover Refresh at the foot of the page.
+            ui.onNodeWithContentDescription("Dismiss").performClick()
+            ui.waitUntil(3000) { ui.onAllNodesWithContentDescription("Dismiss").fetchSemanticsNodes().isEmpty() }
+            click("Northwind")
+            before = requests()
+            click("Refresh")
+            ui.waitUntil(5000) { ui.onAllNodes(strip).fetchSemanticsNodes().isNotEmpty() }
+            ui.onNode(cancel).assertDoesNotExist()
+            ui.onNode(hasText("Cancel") and hasClickAction() and hasAnyAncestor(strip)).performClick()
+            ui.waitUntil(3000) { !repo.state.value.busy }
+            assertEquals(before + 1, requests())
+            ui.waitUntil(3000) { ui.onAllNodes(strip).fetchSemanticsNodes().isEmpty() }
+
+            // A Connect from elsewhere (the tile, an automation) interrupts the download in progress as it always
+            // did; only the update's own Cancel ends the update, which would skip the other subscriptions unseen.
+            before = requests()
+            val interrupted = ui.activity.refreshAll(ids)
+            ui.waitUntil(5000) { requests() == before + 1 }
+            repo.cancel()
+            runBlocking { interrupted.join() }
+            assertEquals(before + 2, requests())
+        } }
     }
     @Test fun subscriptionsAndRoutingUseIPhoneSections() {
         HTTPFixture().use { feed ->

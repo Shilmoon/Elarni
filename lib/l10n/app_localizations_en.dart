@@ -633,11 +633,11 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get connectionModeHelp =>
-      'System-wide VPN connects all apps; administrator approval is requested on the first VPN connection in this app session. System proxy points this computer\'s proxy setting at Elarni without administrator approval; only apps that follow it, such as browsers, use it. Local proxy only opens the ports below for apps you set up yourself.';
+      'System-wide VPN connects all apps; administrator approval is requested on the first VPN connection in this app session. System proxy points this computer\'s proxy setting at Elarni without administrator approval; only apps that follow it, such as browsers, go through Elarni; games, calls and other UDP traffic connect directly. Local proxy only opens the ports below for apps you set up yourself.';
 
   @override
   String get connectionModeServiceHelp =>
-      'System-wide VPN connects all apps; administrator approval is requested on the first VPN connection in this app session, unless Connect without administrator approval is on. System proxy points this computer\'s proxy setting at Elarni without administrator approval; only apps that follow it, such as browsers, use it. Local proxy only opens the ports below for apps you set up yourself.';
+      'System-wide VPN connects all apps; administrator approval is requested on the first VPN connection in this app session, unless Connect without administrator approval is on. System proxy points this computer\'s proxy setting at Elarni without administrator approval; only apps that follow it, such as browsers, go through Elarni; games, calls and other UDP traffic connect directly. Local proxy only opens the ports below for apps you set up yourself.';
 
   @override
   String get systemProxy => 'System proxy';
@@ -1680,7 +1680,7 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get killSwitchMacHelp =>
-      'macOS keeps all traffic inside the tunnel, including while it reconnects. Route exclusions do not apply.';
+      'macOS keeps traffic inside the tunnel, including while it reconnects. Route exclusions do not apply, and devices on your local network (printers, AirPlay, file shares) may not be found or reached. From macOS 13.3, macOS itself leaves push notifications and iMessage outside the tunnel.';
 
   @override
   String get killSwitchDesktopHelp =>
@@ -1897,7 +1897,7 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get enforceRoutesMacHelp =>
-      'Enforcement requires specific included routes; default routes such as 0.0.0.0/0 and ::/0 are unsupported. For a full tunnel, turn enforcement off and use the kill switch in Connection settings.';
+      'Enforcement requires specific included routes; default routes such as 0.0.0.0/0 and ::/0 are unsupported. For a full tunnel, turn enforcement off and use the kill switch in Connection settings. An included route that contains your local network takes its devices into the tunnel too.';
 
   @override
   String get enforceRoutesDesktopHelp =>
@@ -3339,8 +3339,8 @@ class AppLocalizationsEn extends AppLocalizations {
       'A bare name matches a program file, not an app bundle. Pick the app from the list.';
 
   @override
-  String get perAppWarningVersioned =>
-      'Names one version of the app, so it stops matching after the next update.';
+  String get perAppWarningMoved =>
+      'Not found here. The same program now runs from another folder.';
 
   @override
   String get perAppWarningUnknown => 'This rule may not match any program.';
@@ -3352,6 +3352,31 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get perAppUseSuggested => 'Use suggested rule';
+
+  @override
+  String perAppAlsoMatches(String path) {
+    return 'Also matches $path';
+  }
+
+  @override
+  String perAppAlsoMatchesMore(String path, int count) {
+    return 'Also matches $path and $count more';
+  }
+
+  @override
+  String get perAppOnlyThisVersion => 'Only this version';
+
+  @override
+  String get perAppFollowUpdates => 'Follow updates';
+
+  @override
+  String get perAppFollowUpdatesHelp =>
+      'Also match this app\'s other versions. Off: only this exact path.';
+
+  @override
+  String perAppMatchesNow(String paths) {
+    return 'Matches now: $paths';
+  }
 
   @override
   String get perAppConnections => 'Recent connections';

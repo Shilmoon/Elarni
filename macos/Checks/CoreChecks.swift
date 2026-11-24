@@ -357,6 +357,13 @@ struct CoreChecks {
       try expect(blocked.ipv4Settings?.excludedRoutes?.map(\.destinationAddress) == ["203.0.113.1", "192.0.2.0"], "blocked IPv4 exclusions")
       try expect(blocked.ipv6Settings?.excludedRoutes?.map(\.destinationNetworkPrefixLength) == [128, 48], "blocked IPv6 exclusions")
       try rejects { _ = try TunnelSettingsFactory.make(plan: value, excludedEndpointAddresses: []) }
+      // A custom list always carries the tunnel's DNS address and the FakeDNS ranges: without them
+      // no name resolves. The IPv6 ones join a list that routes IPv6; a covered range is not repeated.
+      try expect(v6.includedRoutes?.map(\.destinationAddress) == ["2001:db8::", "fc00::", "2001:2::1"], "IPv6 list lost its DNS address or FakeDNS range")
+      try expect(v4.includedRoutes?.count == 1, "the default route got a second FakeDNS route")
+      let narrow = try TunnelSettingsFactory.make(plan: plan(settings: ["includedRoutes": ["10.0.0.0/8"]]), excludedEndpointAddresses: ["203.0.113.1"])
+      try expect(narrow.ipv4Settings?.includedRoutes?.map(\.destinationAddress) == ["10.0.0.0", "198.18.0.0"], "IPv4 list lost its DNS address and FakeDNS range")
+      try expect(narrow.ipv4Settings?.includedRoutes?.last?.destinationSubnetMask == "255.254.0.0" && narrow.ipv6Settings?.includedRoutes?.isEmpty == true, "IPv4-only list")
       for family in ["ipv4", "ipv6"] {
         let one = try TunnelSettingsFactory.make(plan: plan(settings: ["preferredIP": family]), excludedEndpointAddresses: ["203.0.113.1", "2001:db8::1"])
         try expect(one.ipv4Settings != nil && one.ipv6Settings != nil, "preferred family still routes both families")

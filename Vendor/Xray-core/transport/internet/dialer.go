@@ -172,6 +172,25 @@ func LookupHostsContext(ctx context.Context, domain string) []net.IP {
 	return nil
 }
 
+// SniffedNameIs reports whether name, sniffed from a connection's first bytes, is a name of the
+// address the connection dialed: the DNS of ctx's core gave ip as an address of name, to the app
+// that then dialed it. A name an app sends can belong to another host: a TLS hello naming a
+// decoy site, or a request to the app's own proxy naming the site behind it. An address the app
+// did not get from this DNS (its own DNS over HTTPS, a fixed address) cannot be told, and is not.
+func SniffedNameIs(ctx context.Context, name string, ip net.IP) bool {
+	dnsClient, _ := systemDialerFeatures(ctx)
+	answers, ok := dnsClient.(dns.AnswerLookup)
+	return ok && answers.Answered(name, ip)
+}
+
+// HostsRecordContext reports whether the static hosts of ctx's core record domain: an address,
+// another name or a refusal. A peer that looks the name up itself would miss that record.
+func HostsRecordContext(ctx context.Context, domain string) bool {
+	dnsClient, _ := systemDialerFeatures(ctx)
+	answers, ok := dnsClient.(dns.AnswerLookup)
+	return ok && answers.PinsHost(domain)
+}
+
 func redirect(ctx context.Context, dst net.Destination, obt string, h outbound.Handler) net.Conn {
 	errors.LogInfo(ctx, "redirecting request "+dst.String()+" to "+obt)
 	outbounds := session.OutboundsFromContext(ctx)

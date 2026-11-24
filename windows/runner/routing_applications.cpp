@@ -193,7 +193,7 @@ std::wstring ExecutableRule(const std::wstring& path) {
 }
 
 std::wstring UpdateProofRule(const std::wstring& path) {
-  if (!LocalApplicationPath(path) || !PackageRule(path).empty()) return {};
+  if (!LocalApplicationPath(path)) return {};
   const auto rule = ExecutableRule(path);
   return rule == path ? std::wstring{} : rule;
 }

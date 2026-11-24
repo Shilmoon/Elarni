@@ -17,6 +17,13 @@ import 'strings.dart';
 String innerRule(String rule) =>
     rule.startsWith('children:') ? rule.substring(9) : rule;
 
+/// The path or name a rule holds: without "children:", and without "exact:",
+/// which names a path as written, not the versions beside it.
+String rulePath(String rule) {
+  final inner = innerRule(rule);
+  return inner.startsWith('exact:') ? inner.substring(6) : inner;
+}
+
 /// A routing-only exchange format. Runtime settings and credentials never enter it.
 final class PerAppProfile {
   const PerAppProfile(
@@ -81,21 +88,22 @@ final class PerAppProfile {
       return l10n.perAppAndroidPackages;
     }
     // Names can be shared deliberately; absolute paths belong to their OS.
+    final paths = processes.map(rulePath).toList();
     final windowsPath = RegExp(r'^[A-Za-z]:[\\/]');
     if (platform != 'windows' &&
-        rules.any(
+        paths.any(
           (path) => windowsPath.hasMatch(path) || path.startsWith(r'\\'),
         )) {
       return l10n.perAppWindowsPathsElsewhere(platformName);
     }
     if (platform == 'linux' &&
-        rules.any(
+        paths.any(
           (path) => path.split('/').any((part) => part.endsWith('.app')),
         )) {
       return l10n.perAppMacBundlesOnLinux;
     }
     if (platform == 'windows' &&
-        rules.any((path) => path.startsWith('/') && !path.startsWith('//'))) {
+        paths.any((path) => path.startsWith('/') && !path.startsWith('//'))) {
       return l10n.perAppUnixPathsOnWindows;
     }
     return null;
@@ -244,7 +252,8 @@ final class _RoutingApp {
   final String name, process;
   final Uint8List? icon;
 
-  /// The host's update-proof rule for a saved rule that names one version.
+  /// The rule the host's app list gives this saved rule's program, when it is
+  /// another one, such as the app's folder: "Add to list" saves it.
   final String? suggested;
 }
 
@@ -363,8 +372,13 @@ class PerAppRoutingEditor extends StatefulWidget {
   final PerAppRoutingDraft? draft;
   final VoidCallback? onCancel;
 
-  /// Counts running programs per rule and explains rules that match nothing.
-  final Future<ProcessRuleChecks> Function(List<String>)? checkRules;
+  /// Counts running programs per rule, explains rules that match nothing and
+  /// tells which saved rule each of the app list's rules is.
+  final Future<ProcessRuleChecks> Function(
+    List<String> rules, {
+    List<String> apps,
+  })?
+  checkRules;
 
   /// The running core's recent connections, for the connections view.
   final Future<RecentConnections> Function({int epoch, int after})?
@@ -393,6 +407,9 @@ class _PerAppRoutingEditorState extends State<PerAppRoutingEditor> {
   String? notice;
   bool loading = true, working = false, appListFailed = false;
   ProcessRuleChecks? checks;
+  // The saved rule that the core says an app-list rule is, both as written
+  // without "children:".
+  Map<String, String> _same = const {};
   List<String>? _checkedRules;
   bool _checking = false;
   // The connections view's list by key, in the order of their last change.
@@ -414,8 +431,20 @@ class _PerAppRoutingEditorState extends State<PerAppRoutingEditor> {
       : 'macos';
   String get platformName => PerAppProfile.platformLabel(platform);
   bool get enabled => widget.enabled && !working;
-  String identity(String process) =>
+  String _written(String process) =>
       widget.windows ? process.toLowerCase() : process;
+
+  /// A rule as rules compare. The core decides which rules name the same app,
+  /// as it decides routing: a rule saved for one version of an app is the
+  /// app list's rule for its next. Before the core answered, the text
+  /// compares. "children:" stays: it is another rule of that app.
+  String identity(String process) {
+    final inner = innerRule(process);
+    final written = _written(inner);
+    final same = _same[written] ?? written;
+    return inner == process ? same : 'children:$same';
+  }
+
   PerAppProfile get profile => PerAppProfile(platform, mode, selections, {
     for (final MapEntry(:key, :value) in targets.entries)
       if (selections.contains(key)) key: value,
@@ -474,26 +503,38 @@ class _PerAppRoutingEditorState extends State<PerAppRoutingEditor> {
             (a.process == unknownOwnerRule ? 1 : 0)
       : a.name.toLowerCase().compareTo(b.name.toLowerCase());
 
-  // A "children:" rule is its program's app, with that app's name and icon.
+  // A rule's app in the app list, with that app's name and icon: the app a
+  // "children:" or "exact:" rule holds, and the app that a rule written for
+  // another version names now.
   _RoutingApp _app(String process) {
     final inner = innerRule(process);
-    final hosted = apps
-        .where((app) => identity(app.process) == identity(inner))
-        .firstOrNull;
+    final named = identity(inner), path = _written(rulePath(process));
+    _RoutingApp? hosted;
+    for (final app in apps) {
+      if (identity(app.process) != named && _written(app.process) != path) {
+        continue;
+      }
+      // Hosts list a saved rule by its file's name; the app has the icon.
+      if (hosted == null || hosted.icon == null && app.icon != null) {
+        hosted = app;
+      }
+    }
     if (hosted == null) return _RoutingApp(_name(process), process);
-    if (inner == process) return hosted;
-    final suggested = hosted.suggested;
+    if (hosted.process == process) return hosted;
+    final suggested = _written(hosted.process) == _written(inner)
+        ? hosted.suggested
+        : null;
     return _RoutingApp(
       hosted.name,
       process,
       hosted.icon,
-      suggested == null ? null : 'children:$suggested',
+      suggested == null || inner == process ? suggested : 'children:$suggested',
     );
   }
 
   String _name(String process) {
     if (process == unknownOwnerRule) return l10n.perAppUnknownOwner;
-    if (process != innerRule(process)) return _name(innerRule(process));
+    if (process != rulePath(process)) return _name(rulePath(process));
     for (final kind in ['flatpak:', 'service:']) {
       if (process.startsWith(kind)) return process.substring(kind.length);
     }
@@ -555,7 +596,7 @@ class _PerAppRoutingEditorState extends State<PerAppRoutingEditor> {
           // Hosts know programs: a "children:" rule is asked as its program's.
           ? {
               'processes':
-                  processes ?? selections.map(innerRule).toSet().toList(),
+                  processes ?? selections.map(rulePath).toSet().toList(),
             }
           : null,
     );
@@ -598,7 +639,12 @@ class _PerAppRoutingEditorState extends State<PerAppRoutingEditor> {
         'routingApplications',
       )).where((app) => app.process != unknownOwnerRule).toList();
       values.sort(_byName);
-      if (mounted) setState(() => apps = [unknown, ...values]);
+      if (mounted) {
+        setState(() {
+          apps = [unknown, ...values];
+          _checkedRules = null; // the core is asked about these apps
+        });
+      }
     } on Object {
       if (mounted) {
         setState(() {
@@ -629,14 +675,29 @@ class _PerAppRoutingEditorState extends State<PerAppRoutingEditor> {
     _checkedRules = rules;
     try {
       final asked = rules.where((rule) => rule != unknownOwnerRule).toList();
+      final listed = {
+        for (final app in apps)
+          if (app.process != unknownOwnerRule) innerRule(app.process),
+      }.take(4096).toList();
       final result = asked.isEmpty
           ? const ProcessRuleChecks({})
-          : await check(asked);
+          : await check(asked, apps: listed);
       if (mounted && listEquals(rules, _checkedRules)) {
-        setState(() => checks = result);
+        setState(() {
+          checks = result;
+          _same = {
+            for (final MapEntry(key: app, value: rule) in result.same.entries)
+              _written(innerRule(app)): _written(innerRule(rule)),
+          };
+        });
       }
     } on Object {
-      if (mounted) setState(() => checks = null);
+      if (mounted) {
+        setState(() {
+          checks = null;
+          _same = const {};
+        });
+      }
     } finally {
       _checking = false;
       if (mounted) _ensureChecks();
@@ -645,13 +706,19 @@ class _PerAppRoutingEditorState extends State<PerAppRoutingEditor> {
 
   /// Replaces a rule in place; its target moves with it.
   void _replaceRule(String old, String rule) {
-    final index = selections.indexWhere(
-      (value) => identity(value) == identity(old),
-    );
+    var index = selections.indexOf(old);
+    if (index < 0) {
+      index = selections.indexWhere(
+        (value) => identity(value) == identity(old),
+      );
+    }
     if (index < 0) return;
-    final present = selections.any(
-      (value) => identity(value) == identity(rule),
-    );
+    // Another rule for the same app, not the one being replaced: the core
+    // answers that a path's rule and its "exact:" rule name one app.
+    final present = [
+      for (var i = 0; i < selections.length; i++)
+        if (i != index) selections[i],
+    ].any((value) => identity(value) == identity(rule));
     setState(() {
       final next = List.of(selections);
       if (present) {
@@ -669,6 +736,42 @@ class _PerAppRoutingEditorState extends State<PerAppRoutingEditor> {
     });
   }
 
+  /// The rule for one path only ("exact:"): its own path when that is on this
+  /// computer, else the version that is, the one most programs run from.
+  String _exactRule(String rule) {
+    final inner = innerRule(rule);
+    if (inner.startsWith('exact:')) return rule;
+    final versions =
+        checks?.rules[rule]?.versions ?? const <ProcessRuleVersion>[];
+    final path = versions.isEmpty || versions.any((version) => version.own)
+        ? inner
+        : versions.reduce((a, b) => b.running > a.running ? b : a).path;
+    return '${inner == rule ? '' : 'children:'}exact:$path';
+  }
+
+  /// A rule's versions as they differ from the rule's own path: from the
+  /// folder before the first that differs, "Python\3.13\python.exe".
+  List<String> _versionLabels(String rule, List<String> paths) {
+    final separator = widget.windows ? RegExp(r'[\\/]') : RegExp('/');
+    final own = rule.split(separator);
+    var start = own.length;
+    for (final path in paths) {
+      final parts = path.split(separator);
+      if (parts.length != own.length) return paths;
+      final differs = [
+        for (var i = 0; i < own.length; i++)
+          if (_written(parts[i]) != _written(own[i])) i,
+      ];
+      if (differs.isNotEmpty && differs.first < start) start = differs.first;
+    }
+    if (start == own.length) return paths;
+    if (start > 0) start--;
+    return [
+      for (final path in paths)
+        path.split(separator).sublist(start).join(widget.windows ? r'\' : '/'),
+    ];
+  }
+
   String _warningText(String code) => switch (code) {
     'missing' => l10n.perAppWarningMissing,
     'folder' => l10n.perAppWarningFolder,
@@ -678,7 +781,7 @@ class _PerAppRoutingEditorState extends State<PerAppRoutingEditor> {
     'case' => l10n.perAppWarningCase,
     'launcher' => l10n.perAppWarningLauncher,
     'bundleName' => l10n.perAppWarningBundleName,
-    'versioned' => l10n.perAppWarningVersioned,
+    'moved' => l10n.perAppWarningMoved,
     _ => l10n.perAppWarningUnknown,
   };
 
@@ -695,10 +798,19 @@ class _PerAppRoutingEditorState extends State<PerAppRoutingEditor> {
               ? l10n.perAppRunningNow(check.running)
               : l10n.perAppNotRunning
         : null;
-    final warnings = <(String, String?)>[
-      if (app.suggested != null) ('versioned', app.suggested),
-      ...?check?.warnings,
-    ];
+    final warnings = check?.warnings ?? const <(String, String?)>[];
+    // Programs run from two of the rule's versions at once: it takes both. A
+    // build that an updater left on the disk, with nothing running from it,
+    // is no second app.
+    final versions = check?.versions ?? const <ProcessRuleVersion>[];
+    final hasOwn = versions.any((version) => version.own);
+    final used = versions.where((version) => version.running > 0);
+    final also = used.length < 2
+        ? const <String>[]
+        : _versionLabels(rulePath(app.process), [
+            for (final version in used.skip(hasOwn ? 0 : 1))
+              if (!version.own) version.path,
+          ]);
     final dark = Theme.of(context).brightness == Brightness.dark;
     final warningColor = dark
         ? const Color(0xFFF5D08A)
@@ -707,6 +819,51 @@ class _PerAppRoutingEditorState extends State<PerAppRoutingEditor> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text([_ruleKind(app.process), ?running].join(' · ')),
+        if (also.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.only(top: 4),
+            child: Wrap(
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.only(top: 2),
+                      child: Icon(
+                        CupertinoIcons.info,
+                        size: 14,
+                        color: muted.color,
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                    Flexible(
+                      child: Text(
+                        also.length == 1
+                            ? l10n.perAppAlsoMatches(also.first)
+                            : l10n.perAppAlsoMatchesMore(
+                                also.first,
+                                also.length - 1,
+                              ),
+                        key: Key('per-app-also:${app.process}'),
+                        style: muted,
+                      ),
+                    ),
+                  ],
+                ),
+                if (hasOwn)
+                  TextButton(
+                    key: Key('per-app-only-this:${app.process}'),
+                    onPressed: enabled
+                        ? () =>
+                              _replaceRule(app.process, _exactRule(app.process))
+                        : null,
+                    child: Text(l10n.perAppOnlyThisVersion),
+                  ),
+              ],
+            ),
+          ),
         for (final (code, suggestion) in warnings)
           Padding(
             padding: const EdgeInsets.only(top: 4),
@@ -928,8 +1085,8 @@ class _PerAppRoutingEditorState extends State<PerAppRoutingEditor> {
     if (path.isEmpty) return false;
     final windows = widget.windows;
     String normal(String value) =>
-        identity(windows ? value.replaceAll('/', r'\') : value);
-    final program = normal(path), named = normal(rule);
+        _written(windows ? value.replaceAll('/', r'\') : value);
+    final program = normal(path), named = normal(rulePath(rule));
     if (named == program) return true;
     if (named.endsWith('/') || named.endsWith(r'\')) {
       return program.startsWith(named);
@@ -1357,69 +1514,116 @@ class _PerAppRoutingEditorState extends State<PerAppRoutingEditor> {
   );
 
   void _details(_RoutingApp app) {
+    // The rule this row stands for; the switches below replace it.
+    var current = selections.contains(app.process)
+        ? app.process
+        : selections.firstWhere(
+            (rule) =>
+                identity(innerRule(rule)) == identity(innerRule(app.process)),
+            orElse: () => app.process,
+          );
+    // Shown once, the switch stays while its rule is checked again.
+    var followable = false;
     showDialog<void>(
       context: context,
-      builder: (context) => AlertDialog(
-        title: Text(app.name),
-        content: SizedBox(
-          width: 480,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(platformName, style: Theme.of(context).textTheme.labelLarge),
-              const SizedBox(height: 12),
-              SelectableText(app.process),
-              const SizedBox(height: 12),
-              Text(
-                widget.linux
-                    ? l10n.linuxRulesCaseSensitive
-                    : widget.windows
-                    ? l10n.windowsRulesCaseInsensitive
-                    : app.process.endsWith('.app/')
-                    ? l10n.macBundleRuleHelp
-                    : l10n.macRulesCaseSensitive,
-              ),
-              if (app.process != unknownOwnerRule) ...[
-                const SizedBox(height: 12),
-                StatefulBuilder(
-                  builder: (context, update) {
-                    final current = selections.firstWhere(
-                      (rule) =>
-                          identity(innerRule(rule)) ==
-                          identity(innerRule(app.process)),
-                      orElse: () => app.process,
-                    );
-                    final included = current != innerRule(current);
-                    return SwitchListTile(
+      builder: (context) => StatefulBuilder(
+        builder: (context, update) {
+          void replace(String rule) {
+            _replaceRule(current, rule);
+            update(() => current = rule);
+          }
+
+          final inner = innerRule(current);
+          final included = inner != current;
+          final exact = inner.startsWith('exact:');
+          final check = checks?.rules[current];
+          final versions = check?.versions ?? const <ProcessRuleVersion>[];
+          // A rule follows when it names a build, and since it took a folder
+          // that replaced its own.
+          followable =
+              followable ||
+              exact ||
+              check?.follows == true ||
+              versions.any((version) => !version.own);
+          return AlertDialog(
+            title: Text(app.name),
+            content: SizedBox(
+              width: 480,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    platformName,
+                    style: Theme.of(context).textTheme.labelLarge,
+                  ),
+                  const SizedBox(height: 12),
+                  SelectableText(current),
+                  const SizedBox(height: 12),
+                  Text(
+                    widget.linux
+                        ? l10n.linuxRulesCaseSensitive
+                        : widget.windows
+                        ? l10n.windowsRulesCaseInsensitive
+                        : current.endsWith('.app/')
+                        ? l10n.macBundleRuleHelp
+                        : l10n.macRulesCaseSensitive,
+                  ),
+                  if (current != unknownOwnerRule) ...[
+                    const SizedBox(height: 12),
+                    SwitchListTile(
                       key: const Key('per-app-include-children'),
                       contentPadding: EdgeInsets.zero,
                       title: Text(l10n.perAppIncludeChildren),
                       subtitle: Text(l10n.perAppIncludeChildrenHelp),
                       value: included,
                       onChanged: enabled
-                          ? (value) {
-                              final inner = innerRule(current);
-                              _replaceRule(
-                                current,
-                                value ? 'children:$inner' : inner,
-                              );
-                              update(() {});
-                            }
+                          ? (value) =>
+                                replace(value ? 'children:$inner' : inner)
                           : null,
-                    );
-                  },
-                ),
-              ],
+                    ),
+                    if (followable)
+                      SwitchListTile(
+                        key: const Key('per-app-follow-updates'),
+                        contentPadding: EdgeInsets.zero,
+                        title: Text(l10n.perAppFollowUpdates),
+                        subtitle: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(l10n.perAppFollowUpdatesHelp),
+                            if (!exact && versions.isNotEmpty)
+                              Text(
+                                l10n.perAppMatchesNow(
+                                  _versionLabels(rulePath(current), [
+                                    for (final version in versions)
+                                      version.path,
+                                  ]).join(', '),
+                                ),
+                              ),
+                          ],
+                        ),
+                        value: !exact,
+                        onChanged: enabled
+                            ? (value) => replace(
+                                value
+                                    ? '${included ? 'children:' : ''}'
+                                          '${rulePath(current)}'
+                                    : _exactRule(current),
+                              )
+                            : null,
+                      ),
+                  ],
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: Text(l10n.done),
+              ),
             ],
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: Text(l10n.done),
-          ),
-        ],
+          );
+        },
       ),
     );
   }
@@ -1672,16 +1876,31 @@ class _PerAppRoutingEditorState extends State<PerAppRoutingEditor> {
   }
 
   Widget _picker() {
+    _ensureChecks();
     final query = search.text.trim().toLowerCase();
-    final catalog = [...apps];
-    final known = catalog.map((app) => identity(app.process)).toSet();
-    catalog.addAll(selections.where((p) => known.add(identity(p))).map(_app));
+    // One row for an app: the list's entry and a saved rule for it, also one
+    // with the programs it starts or of another version, are that app.
+    String row(String rule) => identity(innerRule(rule));
+    final catalog = <_RoutingApp>[];
+    final rows = <String, int>{};
+    for (final app in [...apps, ...selections.map(_app)]) {
+      final at = rows[row(app.process)];
+      if (at == null) {
+        rows[row(app.process)] = catalog.length;
+        catalog.add(app);
+      } else if (catalog[at].icon == null &&
+          app.icon != null &&
+          apps.contains(app)) {
+        // Hosts list a saved rule by its file's name; the app has the icon.
+        catalog[at] = app;
+      }
+    }
     final visible = catalog
         .where(
           (app) => '${app.name} ${app.process}'.toLowerCase().contains(query),
         )
         .toList();
-    final selected = selections.map(identity).toSet();
+    final selected = selections.map(row).toSet();
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -1737,11 +1956,11 @@ class _PerAppRoutingEditorState extends State<PerAppRoutingEditor> {
                       title: Text(app.name),
                       subtitle: kind == null ? null : Text(kind),
                       controlAffinity: ListTileControlAffinity.trailing,
-                      value: selected.contains(identity(app.process)),
+                      value: selected.contains(row(app.process)),
                       onChanged: enabled
                           ? (checked) => setState(() {
                               selections.removeWhere(
-                                (p) => identity(p) == identity(app.process),
+                                (p) => row(p) == row(app.process),
                               );
                               if (checked == true) selections.add(app.process);
                             })

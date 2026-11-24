@@ -168,7 +168,7 @@ func (c *WireGuardConfig) Build() (proto.Message, error) {
 	}
 
 	if c.MTU == 0 {
-		config.Mtu = 1420
+		config.Mtu = defaultWireGuardMTU(c.Amnezia)
 	} else {
 		config.Mtu = c.MTU
 	}

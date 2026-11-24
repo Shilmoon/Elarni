@@ -105,3 +105,12 @@ func validateAmneziaPacketLength(spec string) error {
 		total += length
 	}
 }
+
+// defaultWireGuardMTU is the tunnel MTU of a profile that names none. WireGuard's 1420 leaves room
+// for its 32 bytes and an IPv6 header in a 1500-byte packet. AmneziaWG puts S4 more bytes ahead of
+// every data packet, so full-size packets no longer fit and large transfers hang while small
+// requests work. The tunnel gives those bytes up, down to IPv6's minimum.
+func defaultWireGuardMTU(amnezia map[string]string) int32 {
+	s4, _ := strconv.ParseUint(amnezia["s4"], 10, 16)
+	return int32(max(1420-int(s4), 1280))
+}

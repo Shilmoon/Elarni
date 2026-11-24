@@ -2,6 +2,7 @@ package share
 
 import (
 	"net/netip"
+	"slices"
 	"testing"
 )
 
@@ -78,6 +79,44 @@ func TestWindowsRoutesKeepEachIncludedPrefix(t *testing.T) {
 	}
 	if !got[netip.MustParsePrefix("198.18.77.2/32")] || !got[netip.MustParsePrefix("::/1")] {
 		t.Fatalf("routes %v lost an included prefix", routes)
+	}
+}
+
+// With FakeDNS every name resolves into 198.18.0.0/15 (and fc00::/18). A custom route list that
+// leaves the range out sends every connection by name to the physical network, where nothing answers.
+func TestWindowsRoutesAlwaysCarryTheFakeDNSRanges(t *testing.T) {
+	has := func(routes []netip.Prefix, ip string) bool {
+		for _, p := range routes {
+			if p.Contains(netip.MustParseAddr(ip)) {
+				return true
+			}
+		}
+		return false
+	}
+	for _, test := range []struct {
+		policy     *WindowsRoutePolicy
+		ipv4, ipv6 bool
+		count      int
+	}{
+		{&WindowsRoutePolicy{IncludedRoutes: []string{"10.0.0.0/8"}}, true, false, 2},
+		{&WindowsRoutePolicy{IncludedRoutes: []string{"10.0.0.0/8"}, EnforceRoutes: true}, true, false, 2},
+		// An IPv6 list gets the IPv6 range too.
+		{&WindowsRoutePolicy{IncludedRoutes: []string{"10.0.0.0/8", "2001:db8::/32"}}, true, true, 4},
+		// A list that covers a range already gets no second route for it.
+		{&WindowsRoutePolicy{IncludedRoutes: []string{"198.0.0.0/8"}}, true, false, 1},
+		// The default list covers both ranges and gets no extra route (0: the count is not compared).
+		{nil, true, true, 0},
+		// The user's exclusion still wins.
+		{&WindowsRoutePolicy{IncludedRoutes: []string{"10.0.0.0/8"}, ExcludedRoutes: []string{"198.18.0.0/15"}}, false, false, 1},
+	} {
+		routes, err := WindowsRoutes(test.policy)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if has(routes, "198.18.3.4") != test.ipv4 || has(routes, "fc00::5") != test.ipv6 || test.count != 0 && len(routes) != test.count ||
+			slices.Contains(routes, fakeDNSPools[0]) != (test.count == 2 || test.count == 4) {
+			t.Errorf("policy %+v: routes %v, want the IPv4 range %v, the IPv6 range %v, %d routes", test.policy, routes, test.ipv4, test.ipv6, test.count)
+		}
 	}
 }
 

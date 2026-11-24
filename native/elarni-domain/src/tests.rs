@@ -707,6 +707,66 @@ fn routing_accepts_doh_without_a_bootstrap_ip() {
     assert_eq!(route_model.dns_servers[0], "https://dns.example/dns-query");
 }
 
+// Happ's default profile "fills in missing or incorrect parameters". A value in another letter
+// case, or a DNS type another client defines, failed the whole import as invalid JSON.
+#[test]
+fn routing_profiles_accept_values_in_any_case_and_other_dns_types() {
+    use crate::routing::{DnsType, DomainStrategy, RouteOrder, RoutingError};
+    let decode = |value: Value| {
+        let RoutingImport::Add {
+            profile,
+            route_model,
+            ..
+        } = decode_routing(&value.to_string()).unwrap()
+        else {
+            panic!("expected routing profile")
+        };
+        (profile, route_model)
+    };
+    let (profile, _) = decode(json!({
+        "Name": "Case", "RouteOrder": "BLOCK_DIRECT_PROXY", "DomainStrategy": "ipifnonmatch",
+        "RemoteDNSType": "doh", "RemoteDNSDomain": "https://dns.example/dns-query",
+        "DomesticDNSType": "UDP", "DomesticDNSIP": "9.9.9.9"
+    }));
+    assert_eq!(profile.route_order, RouteOrder::BlockDirectProxy);
+    assert_eq!(profile.domain_strategy, DomainStrategy::IPIfNonMatch);
+    assert_eq!(profile.remote_dns_type, DnsType::DoH);
+    assert_eq!(profile.domestic_dns_type, DnsType::DoU);
+    // The stored profile carries the names this client writes.
+    let stored = serde_json::to_value(&profile).unwrap();
+    assert_eq!(stored["RouteOrder"], "block-direct-proxy");
+    assert_eq!(stored["DomesticDNSType"], "DoU");
+
+    // A type this client cannot speak takes the default resolver of its side, not plain DNS to
+    // the same address; the other side keeps what the profile says.
+    let (profile, route_model) = decode(json!({
+        "Name": "DoT", "RemoteDNSType": "DoT", "RemoteDNSDomain": "dns.example",
+        "RemoteDNSIP": "9.9.9.9", "RemoteDns": "9.9.9.9",
+        "DomesticDNSType": "DoU", "DomesticDNSIP": "77.88.8.8"
+    }));
+    assert_eq!(profile.remote_dns_type, DnsType::DoH);
+    assert_eq!(
+        route_model.dns_servers,
+        ["https://cloudflare-dns.com/dns-query", "77.88.8.8"]
+    );
+
+    // An order that is not one of the six, and a value of the wrong type, still fail.
+    for value in [
+        json!({"Name": "Order", "RouteOrder": "proxy-first"}),
+        json!({"Name": "Order", "RouteOrder": 1}),
+        json!({"Name": "Type", "RemoteDNSType": true}),
+        json!({"Name": "Strategy", "DomainStrategy": "UseIP"}),
+    ] {
+        assert!(
+            matches!(
+                decode_routing(&value.to_string()),
+                Err(RoutingError::InvalidJson)
+            ),
+            "{value}"
+        );
+    }
+}
+
 // Happ fills missing or empty DNS settings from its default profile; its documented header
 // example and its routing builders leave them out, and a name may be empty.
 #[test]
@@ -1121,6 +1181,27 @@ fn dns_compilation_uses_bootstrap_through_proxy_and_explicit_domestic_rules() {
     request.routes.fake_dns = true;
     let fake = compiled(&request);
     assert_eq!(fake["dns"]["servers"][0], "fakedns");
+    // Names whose address is the point keep it: Windows compares the answer for dns.msftncsi.com
+    // and shows "No internet", and a name of the user's own machine or LAN must not reach the server.
+    let servers = fake["dns"]["servers"].as_array().unwrap();
+    let real = servers.last().unwrap();
+    assert_eq!(real["address"], servers[1]["address"]);
+    assert_eq!(real["skipFallback"], true);
+    assert_eq!(real["finalQuery"], true);
+    let kept = real["domains"].as_array().unwrap();
+    for name in [
+        "full:dns.msftncsi.com",
+        "domain:msftconnecttest.com",
+        "full:localhost.ptlogin2.qq.com",
+        "domain:lan",
+        "domain:home.arpa",
+    ] {
+        assert!(kept.contains(&json!(name)), "{name}");
+    }
+    assert_eq!(
+        legacy["dns"]["servers"].as_array().unwrap().len() + 2,
+        servers.len()
+    );
     // Domestic and AAAA answers are real IPs; only sniffing gives them a domain to route by.
     assert_eq!(
         tagged(&fake, "inbounds", "elarni-socks")["sniffing"],

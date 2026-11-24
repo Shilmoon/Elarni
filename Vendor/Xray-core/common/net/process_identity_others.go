@@ -10,3 +10,6 @@ func AppImage(int, string) string { return "" }
 func ProcessServices(int, string) []string { return nil }
 
 func AppRule(int, string, string) string { return "" }
+
+// PackageFamily names a Microsoft Store package, which Windows has.
+func PackageFamily(int) string { return "" }

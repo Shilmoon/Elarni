@@ -111,7 +111,7 @@
     "policy": {
       "levels": {
         "0": {
-          "connIdle": 300,
+          "connIdle": 1800,
           "downlinkOnly": 0
         }
       },
@@ -139,6 +139,210 @@
             "full:pinned-direct.test"
           ],
           "outboundTag": "elarni-direct",
+          "type": "field"
+        },
+        {
+          "fallback": true,
+          "network": "tcp,udp",
+          "outboundTag": "elarni-proxy",
+          "type": "field"
+        }
+      ]
+    },
+    "stats": {}
+  },
+  "fake-dns": {
+    "dns": {
+      "disableFallbackIfMatch": false,
+      "hosts": {},
+      "queryStrategy": "UseIPv4",
+      "serveExpiredTTL": 3600,
+      "serveStale": true,
+      "servers": [
+        "fakedns",
+        "192.0.2.53",
+        {
+          "address": "192.0.2.53",
+          "domains": [
+            "full:dns.msftncsi.com",
+            "domain:msftncsi.com",
+            "domain:msftconnecttest.com",
+            "full:localhost.ptlogin2.qq.com",
+            "full:localhost.sec.qq.com",
+            "full:local.adguard.org",
+            "full:injections.adguard.org",
+            "domain:lan",
+            "domain:local",
+            "domain:localdomain",
+            "domain:localhost",
+            "domain:home.arpa",
+            "domain:internal",
+            "domain:pub.3gppnetwork.org",
+            "regexp:^[^.]+$"
+          ],
+          "finalQuery": true,
+          "skipFallback": true
+        }
+      ],
+      "tag": "elarni-dns-client",
+      "useSystemHosts": false
+    },
+    "fakeDns": [
+      {
+        "ipPool": "198.18.0.0/15",
+        "poolSize": 65535
+      }
+    ],
+    "inbounds": [
+      {
+        "port": 0,
+        "protocol": "tun",
+        "settings": {
+          "mtu": 1500,
+          "name": "elarni-tun"
+        },
+        "sniffing": {
+          "destOverride": [
+            "fakedns",
+            "http",
+            "tls",
+            "quic"
+          ],
+          "enabled": true,
+          "routeOnly": true
+        },
+        "tag": "elarni-tun"
+      },
+      {
+        "listen": "127.0.0.1",
+        "port": 10890,
+        "protocol": "socks",
+        "settings": {
+          "auth": "noauth",
+          "udp": true
+        },
+        "sniffing": {
+          "destOverride": [
+            "fakedns",
+            "http",
+            "tls",
+            "quic"
+          ],
+          "enabled": true,
+          "routeOnly": true
+        },
+        "tag": "elarni-socks"
+      }
+    ],
+    "log": {
+      "access": "none",
+      "error": "none",
+      "loglevel": "none"
+    },
+    "outbounds": [
+      {
+        "mux": {
+          "enabled": false
+        },
+        "protocol": "vless",
+        "settings": {
+          "address": "127.0.0.1",
+          "encryption": "none",
+          "id": "00000000-0000-4000-8000-000000000001",
+          "port": 1
+        },
+        "tag": "elarni-proxy"
+      },
+      {
+        "protocol": "freedom",
+        "settings": {
+          "domainStrategy": "ForceIPv4"
+        },
+        "tag": "elarni-direct",
+        "targetStrategy": "ForceIPv4"
+      },
+      {
+        "protocol": "blackhole",
+        "settings": {
+          "response": {
+            "type": "none"
+          }
+        },
+        "tag": "elarni-block"
+      },
+      {
+        "protocol": "loopback",
+        "settings": {
+          "inboundTag": "elarni-dns-client"
+        },
+        "tag": "elarni-dns-forward"
+      },
+      {
+        "protocol": "dns",
+        "settings": {
+          "address": "192.0.2.53",
+          "network": "",
+          "port": 53,
+          "rules": [
+            {
+              "action": "hijack",
+              "qType": "1,28"
+            },
+            {
+              "action": "return",
+              "qType": "64,65"
+            },
+            {
+              "action": "direct"
+            }
+          ]
+        },
+        "streamSettings": {
+          "sockopt": {
+            "dialerProxy": "elarni-dns-forward"
+          }
+        },
+        "tag": "elarni-dns"
+      }
+    ],
+    "policy": {
+      "levels": {
+        "0": {
+          "connIdle": 1800,
+          "downlinkOnly": 0
+        }
+      },
+      "system": {
+        "statsInboundDownlink": true,
+        "statsInboundUplink": true
+      }
+    },
+    "routing": {
+      "domainStrategy": "AsIs",
+      "rules": [
+        {
+          "inboundTag": [
+            "elarni-tun"
+          ],
+          "ip": [
+            "198.51.100.252/30",
+            "fdfe:dcba:9876::/126",
+            "fd76:6f75:7465::/126"
+          ],
+          "network": "tcp,udp",
+          "outboundTag": "elarni-block",
+          "port": "1-52,54-65535",
+          "type": "field"
+        },
+        {
+          "inboundTag": [
+            "elarni-socks",
+            "elarni-http",
+            "elarni-tun"
+          ],
+          "network": "tcp,udp",
+          "outboundTag": "elarni-dns",
+          "port": 53,
           "type": "field"
         },
         {
@@ -275,7 +479,7 @@
     "policy": {
       "levels": {
         "0": {
-          "connIdle": 300,
+          "connIdle": 1800,
           "downlinkOnly": 0
         }
       },
@@ -483,7 +687,7 @@
     "policy": {
       "levels": {
         "0": {
-          "connIdle": 300,
+          "connIdle": 1800,
           "downlinkOnly": 0
         }
       },
@@ -723,7 +927,7 @@
     "policy": {
       "levels": {
         "0": {
-          "connIdle": 300,
+          "connIdle": 1800,
           "downlinkOnly": 0
         }
       },
@@ -931,7 +1135,7 @@
     "policy": {
       "levels": {
         "0": {
-          "connIdle": 300,
+          "connIdle": 1800,
           "downlinkOnly": 0
         }
       },
@@ -1160,7 +1364,7 @@
     "policy": {
       "levels": {
         "0": {
-          "connIdle": 300,
+          "connIdle": 1800,
           "downlinkOnly": 0
         }
       },
@@ -1403,7 +1607,7 @@
     "policy": {
       "levels": {
         "0": {
-          "connIdle": 300,
+          "connIdle": 1800,
           "downlinkOnly": 0
         }
       },

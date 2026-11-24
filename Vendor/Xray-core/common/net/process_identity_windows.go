@@ -3,6 +3,8 @@
 package net
 
 import (
+	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 	"unsafe"
@@ -84,14 +86,85 @@ func listServices() (map[uint32][]string, error) {
 }
 
 // AppRule returns the rule for the app a process belongs to when its path does not name it: the
-// service a svchost process runs, when it runs one. A rule for one of several would take the
-// others' connections too.
-func AppRule(pid int, name, _ string) string {
-	if !svchostName(name) {
+// service a svchost process runs, when it runs one (a rule for one of several would take the
+// others' connections too), and the Microsoft Store app that a program of Windows runs for:
+// WWAHost.exe hosts some apps, backgroundTaskHost.exe their background tasks.
+func AppRule(pid int, name, path string) string {
+	if svchostName(name) {
+		if services := ProcessServices(pid, name); len(services) == 1 {
+			return "service:" + services[0]
+		}
 		return ""
 	}
-	if services := ProcessServices(pid, name); len(services) == 1 {
-		return "service:" + services[0]
+	// The shared directory: GetWindowsDirectory answers with a user's own on a terminal server.
+	root, err := windows.GetSystemWindowsDirectory()
+	if err != nil || !programOfWindows(root, path) {
+		return ""
 	}
-	return ""
+	return packageRule(pid)
+}
+
+// programOfWindows reports whether a path is inside the Windows directory. A process's path comes
+// with either separator: the process list gives it with forward slashes.
+func programOfWindows(root, path string) bool {
+	root, path = filepath.ToSlash(root), filepath.ToSlash(path)
+	return len(path) > len(root) && strings.EqualFold(path[:len(root)], root) && path[len(root)] == '/'
+}
+
+var (
+	kernel32                     = windows.NewLazySystemDLL("kernel32.dll")
+	procGetPackageFamilyName     = kernel32.NewProc("GetPackageFamilyName")
+	procGetPackageFullName       = kernel32.NewProc("GetPackageFullName")
+	procGetPackagePathByFullName = kernel32.NewProc("GetPackagePathByFullName")
+)
+
+// packageName asks Windows for a name of the package a process runs as, with
+// GetPackageFamilyName or GetPackageFullName. Empty for a process without a package, which most
+// are, and for one this process may not open.
+func packageName(pid int, proc *windows.LazyProc) string {
+	if pid <= 0 || proc.Find() != nil {
+		return ""
+	}
+	process, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION, false, uint32(pid))
+	if err != nil {
+		return ""
+	}
+	defer windows.CloseHandle(process)
+	var buffer [256]uint16
+	length := uint32(len(buffer))
+	if status, _, _ := proc.Call(uintptr(process), uintptr(unsafe.Pointer(&length)), uintptr(unsafe.Pointer(&buffer[0]))); status != 0 {
+		return ""
+	}
+	return windows.UTF16ToString(buffer[:])
+}
+
+// PackageFamily returns the Microsoft Store package family a process runs as,
+// "<name>_<publisher>", whatever file it runs from. Empty for a process without a package.
+func PackageFamily(pid int) string {
+	return packageName(pid, procGetPackageFamilyName)
+}
+
+// packageRule returns the folder rule of the package a process runs as, as the app list gives
+// it: <volume>\WindowsApps\<family>\. Empty without a package, or for one installed elsewhere.
+func packageRule(pid int) string {
+	family := PackageFamily(pid)
+	full := packageName(pid, procGetPackageFullName)
+	if family == "" || full == "" || procGetPackagePathByFullName.Find() != nil {
+		return ""
+	}
+	name, err := windows.UTF16PtrFromString(full)
+	if err != nil {
+		return ""
+	}
+	var buffer [windows.MAX_PATH + 1]uint16
+	length := uint32(len(buffer))
+	if status, _, _ := procGetPackagePathByFullName.Call(uintptr(unsafe.Pointer(name)), uintptr(unsafe.Pointer(&length)), uintptr(unsafe.Pointer(&buffer[0]))); status != 0 {
+		return ""
+	}
+	folder := windows.UTF16ToString(buffer[:])
+	parent := strings.LastIndexByte(folder, '\\')
+	if parent < 0 || !strings.HasSuffix(strings.ToLower(folder[:parent]), `\windowsapps`) {
+		return ""
+	}
+	return folder[:parent+1] + family + `\`
 }

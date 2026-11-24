@@ -80,7 +80,7 @@ object Settings {
         SettingField("tlsFingerprint", tr(R.string.tls_fingerprint), "server", "Advanced",
             listOf("server", "chrome", "firefox", "safari", "random", "randomized"), detail = tr(R.string.which_browser_a_connection_to_a)),
         SettingField("memoryLimitMB", tr(R.string.memory_budget_mb_0_automatic), 0, "Advanced"),
-        SettingField("idleTimeoutSeconds", tr(R.string.idle_timeout_seconds), 300, "Advanced"),
+        SettingField("idleTimeoutSeconds", tr(R.string.idle_timeout_seconds), 1800, "Advanced"),
         SettingField("tcpMaxConnections", tr(R.string.maximum_tcp_sessions), 2048, "Advanced"),
         SettingField("udpMaxConnections", tr(R.string.maximum_udp_sessions), 1024, "Advanced"),
         SettingField("monitoringEnabled", tr(R.string.live_traffic_monitoring), false, "Advanced"),
@@ -259,17 +259,30 @@ data class Cidr(val address: BigInteger, val bits: Int, val width: Int) {
             val value = BigInteger(1, address).shiftRight(width-bits).shiftLeft(width-bits)
             return Cidr(value, bits, width)
         }
+        /**
+         * What a custom route list always carries: the tunnel's own DNS addresses and the ranges FakeDNS answers from.
+         * Without them no name resolves, or every name resolves to an address that leaves by the physical network.
+         */
+        val required = listOf("198.51.100.252/30", "198.18.0.0/15", "fdfe:dcba:9876::/126", "fc00::/18")
         // keepDiscovery: Android's Block connections without VPN (lockdown) keeps everything inside the tunnel.
         fun routes(settings: JSONObject, keepDiscovery: Boolean = false): List<Cidr> {
-            var routes = (if (settings.optBoolean("includeAllNetworks")) listOf("0.0.0.0/0", "::/0") else settings.strings("includedRoutes")).map(::parse)
-            (settings.strings("excludedRoutes") + if (keepDiscovery) emptyList() else discovery).map(::parse).forEach { exclude ->
-                routes = routes.flatMap { it.subtract(exclude) }
-                if (routes.size > 4096) throw AppFailure("invalid_settings")
+            val listed = (if (settings.optBoolean("includeAllNetworks")) listOf("0.0.0.0/0", "::/0") else settings.strings("includedRoutes")).map(::parse)
+            val excluded = (settings.strings("excludedRoutes") + if (keepDiscovery) emptyList() else discovery).map(::parse)
+            fun left(from: List<Cidr>): List<Cidr> {
+                var routes = from
+                excluded.forEach { exclude ->
+                    routes = routes.flatMap { it.subtract(exclude) }
+                    if (routes.size > 4096) throw AppFailure("invalid_settings")
+                }
+                // VpnService rejects loopback and IPv4-mapped prefixes, and no traffic reaches the VPN through them.
+                return routes.filterNot { route -> route.inet().let { it.isLoopbackAddress || route.width == 128 && it is Inet4Address } }
             }
-            // VpnService rejects loopback and IPv4-mapped prefixes, and no traffic reaches the VPN through them.
-            routes = routes.filterNot { route -> route.inet().let { it.isLoopbackAddress || route.width == 128 && it is Inet4Address } }
-            if (routes.isEmpty()) throw AppFailure("invalid_settings")
-            return routes.distinct()
+            // A list whose every route is excluded is refused: what is added below would start a tunnel that carries none of it.
+            if (left(listed).isEmpty()) throw AppFailure("invalid_settings")
+            // The IPv6 ranges join a list that routes IPv6.
+            return left(listed + required.map(::parse).filter { needed ->
+                (needed.width == 32 || listed.any { it.width == 128 }) && listed.none { needed.subtract(it).isEmpty() }
+            }).distinct()
         }
     }
 }

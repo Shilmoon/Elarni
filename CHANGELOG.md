@@ -13,6 +13,162 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
   routes now go through an address of the tunnel adapter's own subnet, which routes the same
   traffic and leaves Docker's address pools free.
 
+## 0.6.4 - 2026-11-23
+
+### Added
+
+- **Desktop: a per-app rule shows what else it matches, and can keep to one version.** A rule
+  follows its app through updates, so with two versions in use at once, such as Python 3.12
+  and 3.13, one rule takes both. Its row now says "Also matches `Python\3.13\python.exe`"
+  while programs run from both, with **Only this version** beside it. **Details** has
+  **Follow updates** for a rule that follows, with the paths it matches now: turned off, the
+  rule is the one path that is there (`exact:<path>`).
+
+### Changed
+
+- **A quiet connection is kept for 30 minutes instead of 5 on a new installation.** Elarni ended
+  a connection with no data for the idle timeout, 300 seconds by default, so an idle SSH
+  session dropped and push, mail and messenger connections reconnected every five minutes.
+  The default is 1800 seconds; an installation that already saved its settings keeps its value
+  (Settings, Advanced, "Connection idle timeout"). On iPhone and Mac a connection without data
+  still ends after 10 minutes.
+- **Help texts say what a mode does not cover.** System proxy mode: only the apps that follow
+  the system proxy go through Elarni; games, calls and other UDP traffic connect directly.
+  iPhone kill switch: iOS itself leaves push notifications and iMessage, carrier
+  services (Wi-Fi Calling, MMS) and local-network devices (AirPlay, CarPlay) outside the tunnel.
+  Mac kill switch: devices on the local network may not be found or reached, and macOS (from
+  13.3) leaves push notifications and iMessage outside. Mac "Enforce tunnel routes": an included route that
+  contains the local network takes its devices into the tunnel.
+
+### Fixed
+
+- **Telegram stuck on "Connecting" or "Updating", media that never loads.** Telegram disguises
+  some connections to its data centers and to MTProto proxies as TLS to an unrelated site.
+  Since 0.5.0 Elarni handed the server the site name it saw in such a connection instead of
+  the address Telegram dialed, so the server connected to that site and Telegram kept
+  retrying. The server now gets the name only when Elarni's DNS gave the app that very address
+  for that name, for as long as that answer lives and at least an hour; otherwise it gets the
+  address the app dialed. The same rule now guards a direct IPv6 connection that fails and is
+  retried over IPv4 by name. So a connection whose first bytes name another host (a disguised
+  one, or a request to an app's own HTTP proxy) reaches the address the app dialed. A name that
+  did not come through Elarni's DNS is not handed over: an app with its own DNS over HTTPS,
+  Android's Private DNS, a program that resolves names itself before it uses the proxy port,
+  and for a while any app after Elarni's core process restarts. Behind a server without IPv6 the IPv6
+  connections of those fail, as before 0.5.0. All platforms.
+- **A site was routed by the addresses of the name in its first bytes, not by where it
+  connects.** With the "IP if no domain matched" strategy (Happ's default), a VPN-mode connection
+  that matched no rule had that name looked up and the answers tried against the IP lists. A
+  connection disguised as TLS to another site (a Telegram proxy with a Russian cover name) then
+  took that site's route, for example Direct by `geoip:ru`. The address the app dialed is used
+  now and the name is not looked up, which also removes one DNS query per such connection.
+- **A domain list now wins over an IP list of another action under "IP if no domain matched".**
+  In VPN mode the lists were read in the route order, each action's sites and then its
+  addresses, so an address list of an earlier action took a site listed for a later one: a
+  Russian service on an address inside a "blocked" range was proxied, and a video cache on a
+  Russian address went direct although its site was listed for the proxy. Sites are matched
+  first and addresses second, as with FakeDNS and in proxy mode. A connection to a private
+  address keeps the written order, and a rule that reads no name (a catch-all, a port or an
+  app rule) still waits for the address rules above it. The name is the one in the
+  connection's first bytes, so an address list that blocks does not stop a connection that
+  names a site listed for another action, as it does not in proxy mode. "As is" and "IP on
+  demand" are unchanged.
+- **Sites with a long TLS hello missed their domain rule.** A hello with post-quantum keys
+  that arrived in three or more pieces was not read, so the connection was routed by address.
+  It is waited for within the same 200 ms.
+- **HTTP/3 stalled after a pause on a site proxied by name.** A QUIC connection idle for longer
+  than the UDP flow (2 minutes) continued in a new flow that carries no name, so it left
+  through the route of its address. The flow keeps the name of the connection between the
+  same two ports for 10 minutes. Android, Windows, Linux.
+- **Proxy mode: a request was routed by the name inside it instead of the host it asked the
+  proxy for.** The CONNECT or SOCKS host decides now.
+- **Android: no progress line and Cancel at the bottom while subscriptions update.** A line
+  with Cancel came up over the last servers on Home and Subscriptions, once for each
+  subscription, while the spinner at the top showed the same update. The update now shows
+  at the top alone: "Updating subscriptions…" with its Cancel, on Home and on Subscriptions.
+  Cancel ends the whole update; it used to end only the download it interrupted and go on to
+  the next subscription. While an update runs, Connect waits for it instead of turning into
+  Stop. For other operations the line at the bottom has its own background, so the page under
+  it no longer shows through.
+- **ShadowQUIC: every open connection dropped after 30 seconds of silence.** The client sent no
+  keep-alive, so the server connection timed out as soon as nothing was talking, and a quiet SSH
+  session or push connection went with it. It now pings the server every 20 seconds, as the
+  Hysteria2 and TUIC clients do.
+- **AmneziaWG: large transfers hung while small requests worked** with a profile that sets `S4`
+  and no `MTU`. The padding in front of every packet did not fit beside a full-size packet;
+  the tunnel's default MTU is now 1420 minus `S4`, not below 1280.
+- **UDP that only sends was cut every minute** on iPhone, Mac and in proxy mode: a flow was kept
+  alive by replies only, so an upload or a log stream with no answers continued from a new
+  port each minute.
+- **A routing profile with a value in another letter case, or with a DNS type Elarni does not
+  have, was refused as invalid.** `RouteOrder`, `DomainStrategy` and the DNS types are read in
+  any case (`BLOCK_DIRECT_PROXY`, `doh`), and `udp` means DoU. A side whose DNS type is
+  something else (DoT, DoQ, TCP) uses the default resolver of that side, as a profile without
+  DNS settings does.
+- **A routing profile with FakeDNS: Windows showed "No internet", and names of the local network
+  went to the server.** FakeDNS answered every name with an address from 198.18.0.0/15. Windows
+  compares the answer for `dns.msftncsi.com` with a fixed address, so it reported no internet and
+  Office and Store sign-in failed. The Windows connectivity names, names of the user's own
+  machine and LAN (`.lan`, `.local`, `.home.arpa`, `.internal`, a name without a dot, a local
+  helper's `localhost.` name) and the carrier's Wi-Fi calling gateway now go to the profile's
+  resolver; a name it does not know is "not found", so the system can still ask the LAN.
+- **FakeDNS: an app that sends UDP from one socket to several names reached only the first**
+  (a STUN check of several servers, a game's region probes) on Android, Windows and Linux. The
+  later names' packets were sent to their 198.18.x.x address. Each name is now its own flow.
+- **Custom "Included routes" with FakeDNS sent every connection by name outside the tunnel**,
+  where nothing answers. A custom list now always carries 198.18.0.0/15 (and `fc00::/18` when
+  it routes IPv6), and on Android, iPhone and Mac the tunnel's own DNS address.
+- **iPhone, Mac: a server that speaks first no longer hangs now and then.** When the first bytes
+  of a connection (the greeting of SSH, SMTP, FTP or a database) arrived together with the local
+  proxy's reply, they were dropped and the app waited for a greeting that never came.
+- **iPhone, Mac: ping is answered.** A ping through the VPN got no reply, so network tools and
+  apps that check the connection with one reported "offline". It is answered by Elarni itself
+  for every address, as on Android, Windows and Linux; it still does not measure the remote host.
+- **Windows, macOS, Linux: per-app rules follow an app through its updates, whatever
+  installed it.** An update moves many apps to a new path, and a rule for the old path stopped
+  matching, one installer layout after another: Elarni knew Squirrel apps, Store apps and
+  folders of versions, and only for apps picked from the app list. Paths are now compared
+  without what names a build, in every rule and every running program: numbers joined by dots
+  (`app-1.0.9265`, `Application\131.0.2903.86`, `jdk-21.0.2`), a build number that ends a
+  folder's name after a dot, dash or underscore (`Battle.net.15173`), a folder named by a
+  build's hash (Roblox, Visual Studio Code), a Store app's package folder, a Snap's revision
+  and a Nix store path's hash. A number that is part of a name (`Photoshop 2025`, `jdk-21`,
+  `Python312`) is followed another way, so that two products installed side by side, such as
+  `Anno 1800` and `Anno 2070`, stay two apps: a rule that names nothing on the disk anymore,
+  in any build, matches the program in the folder that replaced its own. Rules saved earlier
+  match again without a change, however they were added, and `exact:<path>` names one path as
+  it is written. See "Rules and app updates" in
+  [docs/PER_APP_ROUTING.md](docs/PER_APP_ROUTING.md).
+- **Desktop: the per-app app list shows an app as listed when a rule saved for another
+  version of it routes it.** The editor compared the rules' text while routing compared apps,
+  so after an update a routed app showed as not listed, ticking it added a second rule that
+  the first one overruled, and the saved rule lost the app's name and icon. An app listed with
+  the programs it starts showed as not listed too. The core now tells the editor which saved
+  rule each app is.
+- **Windows: a Microsoft Store app's rule takes the app's processes that run from Windows's
+  own folder.** Some Store apps run inside `WWAHost.exe`, and their background tasks inside
+  `backgroundTaskHost.exe`; a rule for the app's package did not match them. Windows is now
+  asked which package a process runs as, and **Recent connections** names such a process by
+  its app, and adds the app's rule, not the host's path.
+- **macOS: a rule for an app that macOS runs from a temporary copy matches it.** An app
+  opened where it was downloaded, or from its disk image, runs from a folder with a new name
+  at each start (App Translocation); its rule, and one saved from **Recent connections**,
+  stopped matching.
+- **Desktop: a per-app rule that matches running programs is no longer shown as "Not found
+  on this computer".** The rule check looked for the exact path on disk while routing
+  compared Store apps by package, so a Store app saved by the path of one version, as "Add to
+  list" in Recent connections saved ChatGPT, showed the warning after its next update, beside
+  "13 programs running". The check now looks for the app as
+  routing compares it, reports nothing for a folder it may not list, and no longer warns that
+  a rule "names one version". When a program is gone and the same one runs from a sibling
+  folder that routing does not follow by itself, the rule is offered that path.
+- **Windows: "Add to list" in Recent connections gives a Microsoft Store app the same package
+  rule as the app list**, not the path of its current version.
+
+### Security
+
+- **`url` 2.5.9.** 2.5.8 overflowed the stack in `Url::origin()` on nested `blob:` URLs
+  (RUSTSEC-2026-0592). Elarni's own code does not call it; the update clears the advisory check.
+
 ## 0.6.3 - 2026-11-22
 
 ### Added

@@ -5,6 +5,7 @@ import (
 	goerrors "errors"
 	"io"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/xtls/xray-core/common"
@@ -18,13 +19,17 @@ import (
 	"github.com/xtls/xray-core/transport"
 )
 
+// idleTimeout ends a flow with no datagram in either direction.
+var idleTimeout = time.Minute
+
 type ResponseCallback func(ctx context.Context, packet *udp.Packet)
 
 type connEntry struct {
 	link   *transport.Link
 	timer  *signal.ActivityTimer
 	cancel context.CancelFunc
-	closed bool
+	// Elarni: written by the timer's goroutine, read under the dispatcher's lock.
+	closed atomic.Bool
 }
 
 func (c *connEntry) Close() error {
@@ -33,10 +38,9 @@ func (c *connEntry) Close() error {
 }
 
 func (c *connEntry) terminate() {
-	if c.closed {
+	if c.closed.Swap(true) {
 		panic("terminate called more than once")
 	}
-	c.closed = true
 	c.cancel()
 	common.Interrupt(c.link.Reader)
 	common.Interrupt(c.link.Writer)
@@ -49,6 +53,8 @@ type Dispatcher struct {
 	callback   ResponseCallback
 	callClose  func() error
 	closed     bool
+	// Elarni: see KeptByReplies.
+	repliesOnly bool
 }
 
 func NewDispatcher(dispatcher routing.Dispatcher, callback ResponseCallback) *Dispatcher {
@@ -56,6 +62,15 @@ func NewDispatcher(dispatcher routing.Dispatcher, callback ResponseCallback) *Di
 		dispatcher: dispatcher,
 		callback:   callback,
 	}
+}
+
+// KeptByReplies makes only replies keep the flow, for a caller whose every datagram asks for an
+// answer (Elarni). Its flow that gets none for the idle time is ended and the next datagram
+// starts a new one, so a relay that went silent is left behind; a flow kept by sending would
+// stay on it for as long as the caller asks.
+func (v *Dispatcher) KeptByReplies() *Dispatcher {
+	v.repliesOnly = true
+	return v
 }
 
 func (v *Dispatcher) RemoveRay() {
@@ -77,7 +92,7 @@ func (v *Dispatcher) getInboundRay(ctx context.Context, dest net.Destination) (*
 	}
 
 	if v.conn != nil {
-		if v.conn.closed {
+		if v.conn.closed.Load() {
 			v.conn = nil
 		} else {
 			return v.conn, nil
@@ -99,7 +114,7 @@ func (v *Dispatcher) getInboundRay(ctx context.Context, dest net.Destination) (*
 		cancel: cancel,
 	}
 
-	entry.timer = signal.CancelAfterInactivity(ctx, entry.terminate, time.Minute)
+	entry.timer = signal.CancelAfterInactivity(ctx, entry.terminate, idleTimeout)
 	v.conn = entry
 	go handleInput(ctx, entry, dest, v.callback, v.callClose)
 	return entry, nil
@@ -120,6 +135,11 @@ func (v *Dispatcher) Dispatch(ctx context.Context, destination net.Destination, 
 			errors.LogInfoInner(ctx, err, "failed to write first UDP payload")
 			conn.Close()
 			return
+		}
+		// Elarni: only replies kept the flow, so one that sends without an answer for a minute (an
+		// upload, a telemetry or log stream) was ended under the sender and went on from a new port.
+		if !v.repliesOnly {
+			conn.timer.Update()
 		}
 	}
 }

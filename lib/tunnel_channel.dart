@@ -125,7 +125,12 @@ abstract interface class TunnelControl {
 
   /// How many running programs each per-app rule matches, and why a rule may
   /// match nothing (desktop only).
-  Future<ProcessRuleChecks> checkProcessRules(List<String> rules);
+  /// Checks per-app rules; [apps] are the app list's rules, and the answer
+  /// tells which of them a saved rule already is.
+  Future<ProcessRuleChecks> checkProcessRules(
+    List<String> rules, {
+    List<String> apps = const [],
+  });
 
   /// Gives this subscription a new device ID; the others keep theirs.
   Future<SubscriptionSnapshot> resetSubscriptionDeviceID(String id);
@@ -205,6 +210,7 @@ abstract interface class TunnelControl {
     String id,
     Map<String, Object?> options,
   );
+
   /// Saves an encrypted backup and returns the subscriptions it left out.
   Future<List<BackupExclusion>> exportCatalogBackup(String password);
   Future<SubscriptionSnapshot> restoreCatalogBackup(String password);
@@ -339,10 +345,12 @@ final class NativeTunnelControl implements TunnelControl {
       );
 
   @override
-  Future<ProcessRuleChecks> checkProcessRules(List<String> rules) async =>
-      ProcessRuleChecks.fromMap(
-        await _mapResult('checkProcessRules', {'rules': rules}),
-      );
+  Future<ProcessRuleChecks> checkProcessRules(
+    List<String> rules, {
+    List<String> apps = const [],
+  }) async => ProcessRuleChecks.fromMap(
+    await _mapResult('checkProcessRules', {'rules': rules, 'apps': apps}),
+  );
 
   @override
   Future<String> subscriptionDeviceID(String id) async =>
@@ -408,10 +416,10 @@ final class NativeTunnelControl implements TunnelControl {
   Future<List<BackupExclusion>> exportCatalogBackup(String password) async => [
     for (final item
         in (await _mapResult('exportCatalogBackup', {
-              'password': password,
-            }))['excluded']
-            as List? ??
-        const [])
+                  'password': password,
+                }))['excluded']
+                as List? ??
+            const [])
       if (item case {'name': final String name, 'reason': final String reason})
         (name: name, reason: reason),
   ];
@@ -842,14 +850,41 @@ final class NativeTunnelControl implements TunnelControl {
 /// code (missing, folder, notFolder, script, symlink, case, launcher,
 /// bundleName) with an optional suggested rule.
 final class ProcessRuleCheck {
-  const ProcessRuleCheck(this.rule, this.running, this.warnings);
+  const ProcessRuleCheck(
+    this.rule,
+    this.running,
+    this.warnings, {
+    this.versions = const [],
+    this.follows = false,
+  });
   final String rule;
   final int running;
   final List<(String code, String? suggestion)> warnings;
+
+  /// What the rule names on this computer when that is not its own path
+  /// alone: its own first, then its app's other versions.
+  final List<ProcessRuleVersion> versions;
+
+  /// The rule names a build, which routing reads it without, so it matches
+  /// its app's every version; an "exact:" rule of it does not.
+  final bool follows;
+}
+
+/// One of the paths a rule names on this computer, with the programs that
+/// run from it: the rule's own path, or the same in another version.
+final class ProcessRuleVersion {
+  const ProcessRuleVersion(this.path, this.running, {this.own = false});
+  final String path;
+  final int running;
+  final bool own;
 }
 
 final class ProcessRuleChecks {
-  const ProcessRuleChecks(this.rules, {this.listed = true});
+  const ProcessRuleChecks(
+    this.rules, {
+    this.listed = true,
+    this.same = const {},
+  });
 
   factory ProcessRuleChecks.fromMap(Map<String, Object?> value) {
     final rules = <String, ProcessRuleCheck>{};
@@ -871,12 +906,39 @@ final class ProcessRuleChecks {
         rule,
         item['running'] is int ? item['running'] as int : 0,
         warnings,
+        versions: [
+          for (final version
+              in item['versions'] is List
+                  ? item['versions'] as List
+                  : const <Object?>[])
+            if (version is Map && version['path'] is String)
+              ProcessRuleVersion(
+                version['path'] as String,
+                version['running'] is int ? version['running'] as int : 0,
+                own: version['own'] == true,
+              ),
+        ],
+        follows: item['follows'] == true,
       );
     }
-    return ProcessRuleChecks(rules, listed: value['listed'] == true);
+    final same = value['same'];
+    return ProcessRuleChecks(
+      rules,
+      listed: value['listed'] == true,
+      same: {
+        if (same is Map)
+          for (final MapEntry(:key, value: rule) in same.entries)
+            if (key is String && rule is String) key: rule,
+      },
+    );
   }
 
   final Map<String, ProcessRuleCheck> rules;
+
+  /// For each app-list rule that a saved rule names, that saved rule: the
+  /// same rule, or one written for another version of the app. The core
+  /// decides it, as it decides routing.
+  final Map<String, String> same;
 
   /// False when the running programs could not be listed.
   final bool listed;
@@ -1060,7 +1122,7 @@ final class TunnelSettings {
     this.perAppProcesses = const <String>[],
     this.perAppTargets = const <String, String>{},
     this.memoryLimitMB = 0,
-    this.idleTimeoutSeconds = 300,
+    this.idleTimeoutSeconds = 1800,
     this.tcpMaxConnections = 2048,
     this.udpMaxConnections = 1024,
     this.sniffingEnabled = true,
@@ -1115,7 +1177,7 @@ final class TunnelSettings {
       value['perAppTargets'] as Map? ?? const <String, String>{},
     ),
     memoryLimitMB: value['memoryLimitMB'] as int? ?? 0,
-    idleTimeoutSeconds: value['idleTimeoutSeconds'] as int? ?? 300,
+    idleTimeoutSeconds: value['idleTimeoutSeconds'] as int? ?? 1800,
     tcpMaxConnections: value['tcpMaxConnections'] as int? ?? 2048,
     udpMaxConnections: value['udpMaxConnections'] as int? ?? 1024,
     sniffingEnabled: value['sniffingEnabled'] as bool? ?? true,
@@ -1233,7 +1295,10 @@ final class TunnelSettings {
             !(name.startsWith('children:') &&
                 (name.length == 9 ||
                     name == 'children:-1' ||
-                    name.startsWith('children:children:'))),
+                    name.startsWith('children:children:'))) &&
+            // "exact:" names a path.
+            name != 'exact:' &&
+            name != 'children:exact:',
       ) &&
       perAppTargets.entries.every(
         (entry) =>

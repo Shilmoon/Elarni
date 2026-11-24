@@ -260,8 +260,8 @@
   },
   "systemWideVpn": "System-wide VPN",
   "connectionMode": "Connection mode",
-  "connectionModeHelp": "System-wide VPN connects all apps; administrator approval is requested on the first VPN connection in this app session. System proxy points this computer's proxy setting at Elarni without administrator approval; only apps that follow it, such as browsers, use it. Local proxy only opens the ports below for apps you set up yourself.",
-  "connectionModeServiceHelp": "System-wide VPN connects all apps; administrator approval is requested on the first VPN connection in this app session, unless Connect without administrator approval is on. System proxy points this computer's proxy setting at Elarni without administrator approval; only apps that follow it, such as browsers, use it. Local proxy only opens the ports below for apps you set up yourself.",
+  "connectionModeHelp": "System-wide VPN connects all apps; administrator approval is requested on the first VPN connection in this app session. System proxy points this computer's proxy setting at Elarni without administrator approval; only apps that follow it, such as browsers, go through Elarni; games, calls and other UDP traffic connect directly. Local proxy only opens the ports below for apps you set up yourself.",
+  "connectionModeServiceHelp": "System-wide VPN connects all apps; administrator approval is requested on the first VPN connection in this app session, unless Connect without administrator approval is on. System proxy points this computer's proxy setting at Elarni without administrator approval; only apps that follow it, such as browsers, go through Elarni; games, calls and other UDP traffic connect directly. Local proxy only opens the ports below for apps you set up yourself.",
   "systemProxy": "System proxy",
   "localProxyOnly": "Local proxy only",
   "systemProxyMode": "System proxy mode",
@@ -763,7 +763,7 @@
   "defaultIpTypeHelp": "Used by servers without an override.",
   "defaultIpType": "Default IP type",
   "serverAddressing": "Server addressing",
-  "killSwitchMacHelp": "macOS keeps all traffic inside the tunnel, including while it reconnects. Route exclusions do not apply.",
+  "killSwitchMacHelp": "macOS keeps traffic inside the tunnel, including while it reconnects. Route exclusions do not apply, and devices on your local network (printers, AirPlay, file shares) may not be found or reached. From macOS 13.3, macOS itself leaves push notifications and iMessage outside the tunnel.",
   "killSwitchDesktopHelp": "If the VPN stops unexpectedly, nothing leaves this device outside it until you reconnect or use Repair VPN setup. Disconnecting lifts the block. In System proxy mode the system proxy stays on Elarni instead: apps that follow it get no connection until you reconnect or disconnect, and apps that ignore it are not covered. Not available with Local proxy only; cannot be combined with Enforce tunnel routes.",
   "killSwitch": "Kill switch",
   "connectWithoutAdminApprovalHelp": "The Elarni VPN service starts the VPN helper for this Windows account, so connecting asks for no approval. Turning this on or off asks for approval once.",
@@ -871,7 +871,7 @@
   "compatibilityRouteExclusions": "Compatibility route exclusions",
   "includeAllNetworksHelp": "VPN routes apply in System VPN mode. Include all networks captures both IP families and respects your exclusions.",
   "includeAllNetworks": "Include all networks",
-  "enforceRoutesMacHelp": "Enforcement requires specific included routes; default routes such as 0.0.0.0/0 and ::/0 are unsupported. For a full tunnel, turn enforcement off and use the kill switch in Connection settings.",
+  "enforceRoutesMacHelp": "Enforcement requires specific included routes; default routes such as 0.0.0.0/0 and ::/0 are unsupported. For a full tunnel, turn enforcement off and use the kill switch in Connection settings. An included route that contains your local network takes its devices into the tunnel too.",
   "enforceRoutesDesktopHelp": "VPN routes apply in System VPN mode. Enforcement blocks physical bypass of specific included routes while connected.",
   "enforceTunnelRoutes": "Enforce tunnel routes",
   "advancedNetworkRoutes": "Advanced network routes",
@@ -1790,7 +1790,7 @@
   "perAppWarningCase": "The letter case differs from the file on disk, and rules compare it.",
   "perAppWarningLauncher": "A launcher: it starts another program, which this rule does not match.",
   "perAppWarningBundleName": "A bare name matches a program file, not an app bundle. Pick the app from the list.",
-  "perAppWarningVersioned": "Names one version of the app, so it stops matching after the next update.",
+  "perAppWarningMoved": "Not found here. The same program now runs from another folder.",
   "perAppWarningUnknown": "This rule may not match any program.",
   "perAppSuggestedRule": "Suggested rule: {rule}",
   "@perAppSuggestedRule": {
@@ -1801,6 +1801,36 @@
     }
   },
   "perAppUseSuggested": "Use suggested rule",
+  "perAppAlsoMatches": "Also matches {path}",
+  "@perAppAlsoMatches": {
+    "placeholders": {
+      "path": {
+        "type": "String"
+      }
+    }
+  },
+  "perAppAlsoMatchesMore": "Also matches {path} and {count} more",
+  "@perAppAlsoMatchesMore": {
+    "placeholders": {
+      "path": {
+        "type": "String"
+      },
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "perAppOnlyThisVersion": "Only this version",
+  "perAppFollowUpdates": "Follow updates",
+  "perAppFollowUpdatesHelp": "Also match this app's other versions. Off: only this exact path.",
+  "perAppMatchesNow": "Matches now: {paths}",
+  "@perAppMatchesNow": {
+    "placeholders": {
+      "paths": {
+        "type": "String"
+      }
+    }
+  },
   "perAppConnections": "Recent connections",
   "perAppConnectionsHelp": "Connections apps opened while Elarni is connected, newest first, with where each one went. It names the program behind an app's traffic, such as a helper or updater, so you can add it. Kept in memory until you disconnect.",
   "perAppConnectionsDisconnected": "Connect to see which apps open connections and where they go.",

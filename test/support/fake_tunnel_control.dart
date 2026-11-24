@@ -82,7 +82,10 @@ class FakeTunnelControl implements TunnelControl {
   final checkedRules = <List<String>>[];
   ProcessRuleChecks ruleChecks = const ProcessRuleChecks({});
   @override
-  Future<ProcessRuleChecks> checkProcessRules(List<String> rules) async {
+  Future<ProcessRuleChecks> checkProcessRules(
+    List<String> rules, {
+    List<String> apps = const [],
+  }) async {
     checkedRules.add(rules);
     return ruleChecks;
   }

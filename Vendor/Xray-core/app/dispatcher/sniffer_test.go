@@ -2,6 +2,8 @@ package dispatcher
 
 import (
 	"context"
+	"crypto/tls"
+	gonet "net"
 	"testing"
 	"time"
 
@@ -96,5 +98,39 @@ func TestSilentClientsAreMarkedAfterTheSniffWait(t *testing.T) {
 		if content.ClientSilent != c.silent {
 			t.Errorf("%s: ClientSilent %v, want %v", c.name, content.ClientSilent, c.silent)
 		}
+	}
+}
+
+// A ClientHello with post-quantum key shares arrives in three or more segments on a small MSS. Two
+// reads ended sniffing, so its domain rule was skipped and the flow went by address.
+func TestClientHelloInSeveralSegmentsIsSniffed(t *testing.T) {
+	client, server := gonet.Pipe()
+	go tls.Client(client, &tls.Config{ServerName: "split.example.com", InsecureSkipVerify: true}).Handshake()
+	hello := make([]byte, 16384)
+	n, err := server.Read(hello)
+	common.Must(err)
+	hello = hello[:n]
+	client.Close()
+	server.Close()
+
+	instance, err := core.New(&core.Config{})
+	common.Must(err)
+	ctx := context.WithValue(context.Background(), core.XrayKey(1), instance)
+	reader, writer := pipe.New(pipe.WithoutSizeLimit())
+	go func() {
+		for _, part := range [][]byte{hello[:40], hello[40:300], hello[300:700], hello[700:]} {
+			common.Must(writer.WriteMultiBuffer(buf.MergeBytes(nil, part)))
+			time.Sleep(10 * time.Millisecond)
+		}
+	}()
+	result, err := sniffer(ctx, &cachedReader{reader: reader}, false, net.TCPDestination(net.LocalHostIP, 443))
+	writer.Close()
+	if err != nil || result.Domain() != "split.example.com" {
+		t.Fatalf("a %d-byte ClientHello in four segments sniffed as %v, %v", len(hello), result, err)
+	}
+
+	// A record that is not a ClientHello does not hold a connection for the whole window.
+	if _, err := (&Sniffer{sniffer: contentSniffers()}).Sniff(context.Background(), []byte("\x16\x03\x03\x40\x00\x02"), net.Network_TCP); err != common.ErrNoClue {
+		t.Errorf("a partial ServerHello: %v, want %v", err, common.ErrNoClue)
 	}
 }

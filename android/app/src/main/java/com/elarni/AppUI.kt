@@ -403,14 +403,19 @@ private val LocalReselect = compositionLocalOf { 0 }
                                 }
                                 else -> CompositionLocalProvider(LocalReselect provides reselect) { when (page) {
                                     "home" -> HomeScreen(catalog, state, splitHome, activity, ::navigate)
-                                    "sources" -> SourcesScreen(catalog, state.busy, activity, ::navigate)
+                                    "sources" -> SourcesScreen(catalog, state.busy, state.refreshing, activity, ::navigate)
                                     "routing" -> RoutingScreen(catalog, state.busy, activity, ::navigate)
                                     "settings" -> SettingsScreen(catalog, activity, ::navigate)
                                 } }
                             } }
                             }
-                            if (state.busy) Row(Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                                LinearProgressIndicator(Modifier.weight(1f)); TextButton({ activity.repository.cancel() }) { Text(tr(R.string.cancel)) }
+                            // A subscription update shows on the update line at the top of a page that has one; the strip is for
+                            // every other operation, on its own background so the page under it does not show through.
+                            val updateLine = detail.isEmpty() && catalog.sources.any { it.has("url") } && (page == "sources" || page == "home" && catalog.nodes.isNotEmpty())
+                            if (state.busy && !(state.refreshing && updateLine)) Surface(Modifier.align(Alignment.BottomCenter).fillMaxWidth().testTag("busy-strip"), color = MaterialTheme.colorScheme.surfaceContainer) {
+                                Row(Modifier.padding(horizontal = 12.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                                    LinearProgressIndicator(Modifier.weight(1f)); TextButton({ activity.repository.cancelUpdate() }) { Text(tr(R.string.cancel)) }
+                                }
                             }
                         }
                     }
@@ -493,8 +498,10 @@ private val LocalReselect = compositionLocalOf { 0 }
             Text(tr(R.string.the_server_passed_no_traffic_at, time), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
         }
         Text(selected?.string("name") ?: tr(R.string.no_server_selected), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold, textAlign = TextAlign.Center, modifier = Modifier.heightIn(min = 48.dp).clickable(enabled = selected != null, onClick = scrollServers).wrapContentHeight(), color = if (selected != null) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant)
-        Button(onClick = { if (active) activity.repository.requestStop() else if (state.busy) activity.repository.cancel() else activity.connect() }, enabled = active || state.busy || selected != null,
-            modifier = Modifier.widthIn(max = 320.dp).fillMaxWidth().heightIn(min = 48.dp)) { Text(if (active) { if (state.connection == "connected") tr(R.string.disconnect) else tr(R.string.stop) } else if (state.busy) tr(R.string.stop) else tr(R.string.connect), style = MaterialTheme.typography.titleMedium) }
+        // A subscription update has its Cancel on the update line; Connect waits for it instead of turning into Stop.
+        val stoppable = state.busy && !state.refreshing
+        Button(onClick = { if (active) activity.repository.requestStop() else if (stoppable) activity.repository.cancel() else activity.connect() }, enabled = active || stoppable || selected != null && !state.refreshing,
+            modifier = Modifier.widthIn(max = 320.dp).fillMaxWidth().heightIn(min = 48.dp)) { Text(if (active) { if (state.connection == "connected") tr(R.string.disconnect) else tr(R.string.stop) } else if (stoppable) tr(R.string.stop) else tr(R.string.connect), style = MaterialTheme.typography.titleMedium) }
         // As on the widget, whatever the monitoring setting.
         state.rate?.takeIf { state.connection == "connected" }?.let { Text(tr(R.string.traffic_rates, bytes(it.down), bytes(it.up)), Modifier.testTag("traffic-rates"), style = MaterialTheme.typography.bodyMedium) }
         if (!catalog.settings.optBoolean("xrayTunEnabled")) Text("SOCKS 127.0.0.1:${catalog.settings.optInt("socksPort")}", style = MaterialTheme.typography.bodySmall)
@@ -557,7 +564,8 @@ fun updatedAgo(seconds: Double): String = when {
 
 // How old the subscriptions' servers are and how many the last update left out, first on Home, where a pull shows its
 // spinner. Pulling is not shown anywhere else, and TalkBack cannot pull, so the line also refreshes when tapped.
-@Composable private fun FreshnessLine(fetched: Double?, failed: Int, clock: Double, refreshing: Boolean, hint: Boolean, enabled: Boolean, modifier: Modifier = Modifier, refresh: () -> Unit) {
+/** While [refreshing], the line is the update's progress; with [cancel] it also ends the update. */
+@Composable private fun FreshnessLine(fetched: Double?, failed: Int, clock: Double, refreshing: Boolean, hint: Boolean, enabled: Boolean, modifier: Modifier = Modifier, cancel: (() -> Unit)? = null, refresh: () -> Unit) {
     val primary = MaterialTheme.colorScheme.primary
     val error = MaterialTheme.colorScheme.error
     val age = buildAnnotatedString {
@@ -568,6 +576,7 @@ fun updatedAgo(seconds: Double): String = when {
         })
         // A list that was never fetched is "not updated yet" already.
         if (!refreshing && fetched != null && failed > 0) { append(" · "); withStyle(SpanStyle(color = error)) { append(trPlural(R.plurals.subscriptions_not_updated, failed)) } }
+        if (refreshing && cancel != null) append(" ·")
     }
     Column(modifier.clip(MaterialTheme.shapes.small)
         .clickable(enabled = enabled, onClickLabel = tr(R.string.update_subscriptions), role = Role.Button, onClick = refresh)
@@ -576,6 +585,9 @@ fun updatedAgo(seconds: Double): String = when {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             RouteIcon(if (hint) "pull" else "refresh", color = primary, iconSize = 16.dp)
             Text(age, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
+            // A text button is at least 58 dp wide, which left Cancel adrift of the line it belongs to.
+            if (refreshing && cancel != null) Text(tr(R.string.cancel), Modifier.clip(MaterialTheme.shapes.small).clickable(role = Role.Button, onClick = cancel)
+                .sizeIn(minWidth = 48.dp, minHeight = 48.dp).wrapContentSize().testTag("cancel-update"), style = MaterialTheme.typography.bodySmall, color = primary, fontWeight = FontWeight.Medium)
         }
         if (hint && !refreshing) Text(tr(R.string.pull_down_to_update), style = MaterialTheme.typography.bodySmall, color = primary, fontWeight = FontWeight.Medium)
     }
@@ -643,13 +655,11 @@ fun updatedAgo(seconds: Double): String = when {
     val listState = tabListState()
     val scope = rememberCoroutineScope()
     val scrollServers: () -> Unit = { scope.launch { listState.animateScrollToItem(if (!expanded && sourceId.isEmpty()) 1 else 0) } }
-    // Only a refresh started here shows the indicator; connecting or testing keeps their own progress bar.
-    var refreshing by remember { mutableStateOf(false) }
+    // Only a subscription update shows the indicator, wherever it was started; connecting or testing keep their own progress bar.
+    val refreshing = state.refreshing
     val remote = sources.filter { it.has("url") }
     val refreshable = remote.map { it.string("id") }
-    val refresh: () -> Unit = {
-        if (!state.busy && !refreshing && refreshable.isNotEmpty()) scope.launch { refreshing = true; try { activity.refreshAll(refreshable).join() } finally { refreshing = false } }
-    }
+    val refresh: () -> Unit = { if (!state.busy && refreshable.isNotEmpty()) activity.refreshAll(refreshable) }
     // The freshness line says "pull down" until the user has pulled once.
     var pulled by remember { mutableStateOf(prefs.getBoolean("pulledToRefresh", false)) }
     PullToRefreshBox(isRefreshing = refreshing, onRefresh = {
@@ -661,7 +671,8 @@ fun updatedAgo(seconds: Double): String = when {
         val freshness: @Composable (Modifier) -> Unit = { modifier ->
             if (remote.isNotEmpty() && catalog.nodes.isNotEmpty()) {
                 val (fetched, failed) = Catalog.freshness(remote)
-                FreshnessLine(fetched, failed, clock, refreshing, hint = !pulled, enabled = !state.busy && !refreshing, modifier = modifier, refresh = refresh)
+                // A subscription's own list keeps the strip at the bottom: its narrow layout has no line.
+                FreshnessLine(fetched, failed, clock, refreshing, hint = !pulled, enabled = !state.busy, modifier = modifier, cancel = if (sourceId.isEmpty()) {{ activity.repository.cancelUpdate() }} else null, refresh = refresh)
             }
         }
         if (expanded) Box(Modifier.widthIn(max = 360.dp).weight(0.38f).verticalScroll(rememberScrollState())) { ConnectionPanel(catalog, state, activity, scrollServers) { freshness(Modifier) } }
@@ -902,8 +913,8 @@ private fun protocolParts(node: JSONObject): List<String> {
     }
 }
 
-@Composable private fun SourcesScreen(catalog: Catalog, busy: Boolean, activity: MainActivity, navigate: (String, String) -> Unit) {
-    PullToRefreshBox(isRefreshing = busy, onRefresh = { if (!busy) activity.refreshAll(catalog.sources.filter { it.has("url") }.map { it.string("id") }) }) {
+@Composable private fun SourcesScreen(catalog: Catalog, busy: Boolean, refreshing: Boolean, activity: MainActivity, navigate: (String, String) -> Unit) {
+    PullToRefreshBox(isRefreshing = refreshing, onRefresh = { if (!busy) activity.refreshAll(catalog.sources.filter { it.has("url") }.map { it.string("id") }) }) {
     val sources = catalog.sources.sortedByDescending { it.optBoolean("pinned") }
     LazyColumn(state = tabListState(), contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 16.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
         if (catalog.sources.isEmpty()) item { Column(Modifier.fillMaxWidth().padding(24.dp), verticalArrangement = Arrangement.spacedBy(12.dp), horizontalAlignment = Alignment.CenterHorizontally) {
@@ -911,6 +922,8 @@ private fun protocolParts(node: JSONObject): List<String> {
             Text(tr(R.string.no_subscriptions), style = MaterialTheme.typography.titleLarge)
             Text(tr(R.string.import_a_provider_link_or_local), color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
         } }
+        // The update's progress and Cancel, as on Home.
+        if (refreshing) item(key = "updating") { FreshnessLine(null, 0, 0.0, true, hint = false, enabled = false, modifier = Modifier.fillMaxWidth().animateItem(), cancel = { activity.repository.cancelUpdate() }) {} }
         itemsIndexed(sources, key = { _, source -> source.string("id") }) { index, source ->
             var menu by remember { mutableStateOf(false) }
             Box {

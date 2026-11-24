@@ -268,8 +268,10 @@ fn default_fragment_interval() -> String {
     "0-1".into()
 }
 
+/// Long enough for a quiet SSH session or push connection: the TUN sees an app close its
+/// connection, so the timer only has to end the rare one whose app or server vanished.
 fn default_connection_idle() -> u32 {
-    300
+    1_800
 }
 
 fn default_true() -> bool {

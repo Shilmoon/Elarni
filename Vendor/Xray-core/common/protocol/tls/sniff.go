@@ -145,6 +145,12 @@ func SniffTLS(b []byte) (*SniffHeader, error) {
 	}
 	headerLen := int(binary.BigEndian.Uint16(b[3:5]))
 	if 5+headerLen > len(b) {
+		// Elarni: a ClientHello with post-quantum key shares spans several segments on a small MSS.
+		// A handshake record that starts as one is waited for until the sniffing deadline, not for
+		// two reads only, or its domain rule is silently skipped.
+		if len(b) > 5 && b[5] == 0x01 /* ClientHello */ {
+			return nil, protocol.ErrProtoNeedMoreData
+		}
 		return nil, common.ErrNoClue
 	}
 
