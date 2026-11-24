@@ -2775,6 +2775,8 @@ fn dns_outbound_forwards_other_query_types_to_the_inherited_resolver() {
     assert_eq!(dns["settings"]["address"], "9.9.9.9");
     assert_eq!(dns["settings"]["port"], 5353);
     assert_eq!(dns["settings"]["network"], "tcp");
+    // The provider's resolvers replace the settings; the IPv6 check of Automatic stays.
+    assert_eq!(dns["settings"]["checkIPv6"], true);
     let forward = outbounds
         .iter()
         .find(|outbound| outbound["tag"] == dns["streamSettings"]["sockopt"]["dialerProxy"])

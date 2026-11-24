@@ -84,6 +84,7 @@
         "protocol": "dns",
         "settings": {
           "address": "192.0.2.53",
+          "checkIPv6": true,
           "network": "",
           "port": 53,
           "rules": [
@@ -646,6 +647,7 @@
         "protocol": "dns",
         "settings": {
           "address": "1.1.1.1",
+          "checkIPv6": true,
           "network": "",
           "port": 53,
           "rules": [
@@ -893,6 +895,7 @@
         "protocol": "dns",
         "settings": {
           "address": "192.0.2.53",
+          "checkIPv6": true,
           "network": "",
           "port": 53,
           "rules": [
@@ -1573,6 +1576,7 @@
         "protocol": "dns",
         "settings": {
           "address": "192.0.2.53",
+          "checkIPv6": true,
           "network": "",
           "port": 53,
           "rules": [

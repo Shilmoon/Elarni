@@ -37,6 +37,9 @@ func init() {
 		}); err != nil {
 			return nil, err
 		}
+		if instance := core.FromContext(ctx); instance != nil && config.(*Config).CheckIpv6 {
+			h.ipv6 = newIPv6Check(instance)
+		}
 		return h, nil
 	}))
 }
@@ -78,6 +81,8 @@ type Handler struct {
 	rewriteServer   net.Destination
 	timeout         time.Duration
 	rules           []*DNSRule
+	// Elarni: set with checkIPv6, see ipv6_check.go
+	ipv6 *ipv6Check
 }
 
 func (h *Handler) Init(config *Config, dnsClient dns.Client, policyManager policy.Manager) error {
@@ -161,6 +166,10 @@ func (h *Handler) Process(ctx context.Context, link *transport.Link, d internet.
 	ob.Name = "dns"
 
 	srcNetwork := ob.Target.Network
+	inboundTag := ""
+	if inbound := session.InboundFromContext(ctx); inbound != nil {
+		inboundTag = inbound.Tag
+	}
 
 	dest := ob.Target
 	if h.rewriteServer.Network != net.Network_Unknown {
@@ -271,7 +280,7 @@ func (h *Handler) Process(ctx context.Context, link *transport.Link, d internet.
 						return err
 					}
 				} else {
-					go h.handleIPQuery(id, qType, domain, writer, timer)
+					go h.handleIPQuery(id, qType, domain, inboundTag, writer, timer)
 				}
 			case RuleAction_Direct:
 				if err := connWriter.WriteMessage(b); err != nil {
@@ -314,7 +323,7 @@ func (h *Handler) Process(ctx context.Context, link *transport.Link, d internet.
 	return nil
 }
 
-func (h *Handler) handleIPQuery(id uint16, qType dnsmessage.Type, domain string, writer dns_proto.MessageWriter, timer *signal.ActivityTimer) {
+func (h *Handler) handleIPQuery(id uint16, qType dnsmessage.Type, domain string, inboundTag string, writer dns_proto.MessageWriter, timer *signal.ActivityTimer) {
 	var ips []net.IP
 	var ttl uint32
 	var err error
@@ -332,6 +341,9 @@ func (h *Handler) handleIPQuery(id uint16, qType dnsmessage.Type, domain string,
 			IPv6Enable: true,
 			FakeEnable: true,
 		})
+		if h.ipv6 != nil {
+			ips = h.ipv6.reachable(inboundTag, ips)
+		}
 	}
 
 	rCode := dns.RCodeFromError(err)

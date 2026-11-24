@@ -4,6 +4,20 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
 
 ## Unreleased
 
+### Fixed
+
+- **A server without IPv6 no longer gets apps' IPv6 traffic through DNS answers.** With the IP
+  type "Automatic" (the default for subscription profiles) Elarni's DNS handed apps IPv6
+  addresses whatever the server could reach. A server without IPv6 resets such TCP connections
+  a round trip later and drops such UDP without a word, so an app with no IPv4 fallback waited
+  out its own timeout, 5 s for QUIC. Elarni now finds out whether the server reaches public
+  IPv6 (a TLS hello to Cloudflare's and Google's resolvers over IPv6, and over IPv4 to tell a
+  missing IPv6 from a tunnel that is down), on the first IPv6 answer and again when the result
+  is old. While the server has no IPv6, IPv6 answers hold no public address and apps use IPv4;
+  LAN addresses and the IP types "IPv4" and "IPv6" are not affected. Apps that resolve names
+  themselves (DNS over HTTPS in a browser) or dial IPv6 addresses directly still reach the
+  server with IPv6.
+
 ## 0.6.4 - 2026-11-23
 
 ### Added

@@ -148,6 +148,9 @@ type Config struct {
 	UserLevel     uint32                 `protobuf:"varint,1,opt,name=user_level,json=userLevel,proto3" json:"user_level,omitempty"`
 	Rule          []*DNSRuleConfig       `protobuf:"bytes,2,rep,name=rule,proto3" json:"rule,omitempty"`
 	RewriteServer *net.Endpoint          `protobuf:"bytes,3,opt,name=rewrite_server,json=rewriteServer,proto3" json:"rewrite_server,omitempty"`
+	// Elarni: AAAA answers hold no public address while the route of the inbound that asks does
+	// not reach public IPv6.
+	CheckIpv6     bool `protobuf:"varint,4,opt,name=check_ipv6,json=checkIpv6,proto3" json:"check_ipv6,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -203,6 +206,13 @@ func (x *Config) GetRewriteServer() *net.Endpoint {
 	return nil
 }
 
+func (x *Config) GetCheckIpv6() bool {
+	if x != nil {
+		return x.CheckIpv6
+	}
+	return false
+}
+
 var File_proxy_dns_config_proto protoreflect.FileDescriptor
 
 const file_proxy_dns_config_proto_rawDesc = "" +
@@ -212,12 +222,14 @@ const file_proxy_dns_config_proto_rawDesc = "" +
 	"\x06action\x18\x01 \x01(\x0e2\x1a.xray.proxy.dns.RuleActionR\x06action\x12\x15\n" +
 	"\x06q_type\x18\x02 \x03(\x05R\x05qType\x127\n" +
 	"\x06domain\x18\x03 \x03(\v2\x1f.xray.common.geodata.DomainRuleR\x06domain\x12\x15\n" +
-	"\x06r_code\x18\x04 \x01(\rR\x05rCode\"\x9c\x01\n" +
+	"\x06r_code\x18\x04 \x01(\rR\x05rCode\"\xbb\x01\n" +
 	"\x06Config\x12\x1d\n" +
 	"\n" +
 	"user_level\x18\x01 \x01(\rR\tuserLevel\x121\n" +
 	"\x04rule\x18\x02 \x03(\v2\x1d.xray.proxy.dns.DNSRuleConfigR\x04rule\x12@\n" +
-	"\x0erewrite_server\x18\x03 \x01(\v2\x19.xray.common.net.EndpointR\rrewriteServer*:\n" +
+	"\x0erewrite_server\x18\x03 \x01(\v2\x19.xray.common.net.EndpointR\rrewriteServer\x12\x1d\n" +
+	"\n" +
+	"check_ipv6\x18\x04 \x01(\bR\tcheckIpv6*:\n" +
 	"\n" +
 	"RuleAction\x12\n" +
 	"\n" +
