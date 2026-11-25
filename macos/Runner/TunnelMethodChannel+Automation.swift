@@ -376,6 +376,12 @@ extension TunnelMethodChannel {
     }
   }
 
+  /// The server a restart for a stall counts for: the node and its configuration revision.
+  @MainActor
+  func stallServer(_ node: String) -> String {
+    "\(node):\((try? subscriptionStore().configurationRevision(nodeID: node)) ?? "")"
+  }
+
   @MainActor
   func automationContext(nodeID: String) throws -> AutomationContext {
     let store = try subscriptionStore()
@@ -445,6 +451,43 @@ extension TunnelMethodChannel {
     }
   }
 
+  /// One transfer check over `AutomationConfiguration.transferTargets` on the probe path `payload` names
+  /// (the tunnel's packet path or a probe core): "ok", "stalled" or "inconclusive".
+  nonisolated private static func automaticTransfer(_ payload: [String: Any]) async throws -> String {
+    var verdicts: [String] = []
+    for url in AutomationConfiguration.transferTargets where !verdicts.contains("ok") {
+      let id = UUID().uuidString.lowercased()
+      _ = try invokeLibXray(method: "prepareProbe", payload: ["operationId": id, "timeout": 8, "transfer": true])
+      defer { _ = try? invokeLibXray(method: "releaseProbe", payload: ["operationId": id]) }
+      var request = payload
+      request["operationId"] = id
+      request["url"] = url
+      request["method"] = "GET"
+      request["timeout"] = 8
+      request["transfer"] = true
+      if let idle = AutomationConfiguration.transferIdleMs { request["transferIdleMs"] = idle }
+      let arguments = request
+      do {
+        let response = try await withTaskCancellationHandler {
+          try Task.checkCancellation()
+          return try await Task.detached { try invokeLibXray(method: "ping", payload: arguments) }.value
+        } onCancel: {
+          _ = try? invokeLibXray(method: "cancelProbe", payload: ["operationId": id])
+        }
+        verdicts.append(response["verdict"] as? String ?? "inconclusive")
+      } catch let failure as RunnerProbeFailure {
+        if ["pending", "failed"].contains(failure.details["cleanupState"] as? String ?? "") {
+          throw AutomationFailure.quarantine
+        }
+        // A check that could not run says nothing about a freeze.
+        verdicts.append("inconclusive")
+      } catch is CancellationError { throw CancellationError() }
+      catch { verdicts.append("inconclusive") }
+      try Task.checkCancellation()
+    }
+    return AutomationConfiguration.transferVerdict(verdicts)
+  }
+
   @MainActor
   func activeHealth(_ context: AutomationContext) async throws -> Double {
     healthDiagnostics = []
@@ -477,6 +520,15 @@ extension TunnelMethodChannel {
     var qualifyingFailures = 0, verifiedFailures = 0
     var invalidTarget = false
     healthFailureUnverified = false
+    healthFailureStalled = false
+    // A server whose transfers stalled twice in a row fails the check whatever its small probes do.
+    if before["transferStalled"] as? Bool == true {
+      healthFailureStalled = true
+      readiness.outcomes[.providerBridge] = .passed
+      automation.observe(node: context.nodeID, passed: false, russianEntry: russianEntry(context.nodeID))
+      automation.reject(node: context.nodeID, transient: true, now: automationNow())
+      throw AutomationFailure.endpointFailure
+    }
     let passedBefore = verifiedHealth?.node == context.nodeID && verifiedHealth?.epoch == automation.epoch
     // A server to move to, not only a policy that allows moving: with none allowed now (a list of
     // one, the others cooling down) such a failure stays indeterminate and the connection is kept.
@@ -658,6 +710,7 @@ extension TunnelMethodChannel {
       if failover { automationFailover = true }
       // Read now: checking a backup below sets it for that backup.
       let unverified = failure == .endpointFailure && healthFailureUnverified
+      let stalled = failure == .endpointFailure && healthFailureStalled
       if retry {
         if automationFailover && automationConfiguration.policy != .fixed {
           do {
@@ -671,6 +724,9 @@ extension TunnelMethodChannel {
         }
         // Restarting a server that never passed its check changes nothing; the retry budget still runs.
         if unverified { throw failure }
+        // One restart per stall episode (AutomationPolicy.restartForStall): after it the server keeps
+        // running, still stalled, while the retries go on.
+        if stalled, !automation.restartForStall(server: stallServer(context.nodeID)) { throw failure }
         try await replaceAutomatically(context, previousHealthy: false)
         automation.healthy(now: self.automationNow(), jitter: self.automationJitter())
         automationFailover = false
@@ -717,7 +773,7 @@ extension TunnelMethodChannel {
         try requireAutomationContext(current)
         guard automationNow() + 10 <= deadline else { throw AutomationFailure.deadline }
         do {
-          try await replaceAutomatically(automationContext(nodeID: node), previousHealthy: false)
+          try await replaceAutomatically(automationContext(nodeID: node), previousHealthy: false, checkTransfer: true)
           automation.switched(now: automationNow())
           verifiedHealth = (node, automationNow(), automation.epoch)
           automation.healthy(now: automationNow(), jitter: automationJitter())
@@ -751,6 +807,25 @@ extension TunnelMethodChannel {
       self.commands.invalidateAutomatic()
     }
     defer { roundDeadline.cancel() }
+    // A probe core's configuration for `node`, and the SOCKS port it listens on.
+    func probeConfig(_ node: String) throws -> String {
+      let snapshot = try store.routing.runtimeProbeConfiguration(subscriptionID: store.subscriptionID(nodeID: node))
+      let outbound = try store.outbound(nodeID: node)
+      let settings = settingsStore.current.applyingIPPreference(try store.ipPreference(nodeID: node))
+      var runtime = settings.compilerRuntime
+      runtime["httpInboundEnabled"] = false
+      runtime["allowLan"] = false
+      return try Self.compilePingConfig(outbound: outbound, socksPort: Self.freePort(),
+        routes: snapshot.routes, runtime: runtime, assetDirectory: snapshot.assetDirectory,
+        profilePreferredIP: settings.profilePreferredIP)
+    }
+    func socksPort(_ config: String) throws -> Int {
+      guard let object = try JSONSerialization.jsonObject(with: Data(config.utf8)) as? [String: Any],
+            let inbounds = object["inbounds"] as? [[String: Any]], inbounds.count == 1,
+            inbounds[0]["listen"] as? String == "127.0.0.1",
+            let port = inbounds[0]["port"] as? Int else { throw AutomationFailure.unsupportedPolicy }
+      return port
+    }
     var scores: [String: Double] = [:]
     for node in nodes {
       try requireAutomationContext(current)
@@ -765,27 +840,14 @@ extension TunnelMethodChannel {
       // This branch optimizes a verified healthy path. Outage recovery above
       // verifies permitted candidates through managed provider replacement.
       let config: String
-      do {
-        let snapshot = try store.routing.runtimeProbeConfiguration(subscriptionID: store.subscriptionID(nodeID: node))
-        let outbound = try store.outbound(nodeID: node)
-        let settings = settingsStore.current.applyingIPPreference(try store.ipPreference(nodeID: node))
-        var runtime = settings.compilerRuntime
-        runtime["httpInboundEnabled"] = false
-        runtime["allowLan"] = false
-        config = try Self.compilePingConfig(outbound: outbound, socksPort: Self.freePort(),
-          routes: snapshot.routes, runtime: runtime, assetDirectory: snapshot.assetDirectory,
-          profilePreferredIP: settings.profilePreferredIP)
-      } catch {
+      do { config = try probeConfig(node) } catch {
         automation.reject(node: node, transient: false, now: self.automationNow())
         if case SubscriptionError.keychainFailure = error {
           automationCandidateFailures[node] = AutomationFailure.missingCredentials.rawValue
         } else { automationCandidateFailures[node] = AutomationFailure.invalidConfiguration.rawValue }
         continue
       }
-      guard let object = try JSONSerialization.jsonObject(with: Data(config.utf8)) as? [String: Any],
-            let inbounds = object["inbounds"] as? [[String: Any]], inbounds.count == 1,
-            inbounds[0]["listen"] as? String == "127.0.0.1",
-            let port = inbounds[0]["port"] as? Int else { throw AutomationFailure.unsupportedPolicy }
+      let port = try socksPort(config)
       var samples: [Double] = []
       do {
         var sampleFailed = false
@@ -817,13 +879,32 @@ extension TunnelMethodChannel {
     }
     try requireAutomationContext(current)
     guard self.automationNow() < deadline else { throw AutomationFailure.deadline }
-    guard let chosen = automation.choose(policy: automationConfiguration.policy,
+    guard var chosen = automation.choose(policy: automationConfiguration.policy,
       order: automationConfiguration.nodeIDs, current: current.nodeID, scores: scores,
       healthy: healthy, now: self.automationNow()) else {
       if !nodes.isEmpty && nodes.allSatisfy({ automationCandidateFailures[$0] == AutomationFailure.missingCredentials.rawValue }) {
         throw AutomationFailure.missingCredentials
       }
       throw healthy ? AutomationFailure.exhaustedCandidates : AutomationFailure.unavailableProbePath
+    }
+    // The round's winner must pass transfers too before the switch; one that stalls is skipped like a
+    // failed measurement. The next winner, unchecked after the deadline, does not replace a working server.
+    var skipped = false
+    while chosen != current.nodeID, !AutomationConfiguration.transferTargets.isEmpty {
+      if skipped && automationNow() >= deadline { return }
+      guard let config = try? probeConfig(chosen) else { break }
+      let port = try socksPort(config)
+      let verdict = try await Self.automaticTransfer(["configJSON": config, "proxy": "socks5://127.0.0.1:\(port)"])
+      try requireAutomationContext(current)
+      guard verdict == "stalled" else { break }
+      automation.observe(node: chosen, passed: false, russianEntry: russianEntry(chosen))
+      automation.reject(node: chosen, transient: true, now: automationNow())
+      automationCandidateFailures[chosen] = "stalled"
+      scores.removeValue(forKey: chosen)
+      skipped = true
+      guard let next = automation.choose(policy: automationConfiguration.policy, order: automationConfiguration.nodeIDs,
+        current: current.nodeID, scores: scores, healthy: healthy, now: automationNow()) else { return }
+      chosen = next
     }
     if chosen != current.nodeID || !healthy {
       try await replaceAutomatically(automationContext(nodeID: chosen))
@@ -835,8 +916,9 @@ extension TunnelMethodChannel {
     }
   }
 
+  /// `checkTransfer`: the candidate must pass a transfer check too, as the server a failover round keeps.
   @MainActor
-  func replaceAutomatically(_ candidate: AutomationContext, previousHealthy: Bool = true) async throws {
+  func replaceAutomatically(_ candidate: AutomationContext, previousHealthy: Bool = true, checkTransfer: Bool = false) async throws {
     try requireProbePolicy(subscriptionID: subscriptionStore().subscriptionID(nodeID: candidate.nodeID))
     let store = try subscriptionStore()
     guard let oldID = store.selectedNodeID() else { throw AutomationFailure.exhaustedCandidates }
@@ -861,6 +943,15 @@ extension TunnelMethodChannel {
       activated = true
       _ = try await activeHealth(candidate)
       try requireAutomationContext(candidate)
+      // A candidate whose transfers stall is skipped with the 60 s cooldown, as one that failed its check.
+      if checkTransfer, !AutomationConfiguration.transferTargets.isEmpty {
+        let verdict = try await Self.automaticTransfer(["packetPath": true])
+        try requireAutomationContext(candidate)
+        if verdict == "stalled" {
+          automation.observe(node: candidate.nodeID, passed: false, russianEntry: russianEntry(candidate.nodeID))
+          throw AutomationFailure.endpointFailure
+        }
+      }
       try await persistPlan(candidate.plan)
       try requireAutomationContext(candidate)
       try store.finishSelectionPublication(nodeID: candidate.nodeID)

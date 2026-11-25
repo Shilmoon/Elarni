@@ -183,13 +183,17 @@ struct HomeView: View {
   private func connectionSection(scroll: ScrollViewProxy) -> some View {
     Section {
         VStack(spacing: 8) {
-          ConnectionArtwork(connected: model.vpn.providerReady && !model.vpn.noTraffic, failed: model.vpn.failed,
-                            warning: model.vpn.noTraffic)
+          ConnectionArtwork(connected: model.vpn.providerReady && !model.vpn.noTraffic && !model.vpn.stalled, failed: model.vpn.failed,
+                            warning: model.vpn.noTraffic || model.vpn.stalled)
           VStack(spacing: 6) {
             Text(model.vpn.stateLabel).font(.headline).multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
-              .foregroundStyle(model.vpn.noTraffic ? AppPalette.warning : Color.primary)
+              .foregroundStyle(model.vpn.noTraffic || model.vpn.stalled ? AppPalette.warning : Color.primary)
             if model.vpn.noTraffic, let since = model.vpn.noTrafficSince {
               Text("The server passed no traffic at \(since.formatted(date: .omitted, time: .shortened)). Checking again each minute.")
+                .font(.footnote).foregroundStyle(AppPalette.secondary).multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
+            }
+            if model.vpn.stalled {
+              Text("Connected, but this server’s network cuts transfers off. Pages will not load; choose another server.")
                 .font(.footnote).foregroundStyle(AppPalette.secondary).multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
             }
             if let selected = model.selected {

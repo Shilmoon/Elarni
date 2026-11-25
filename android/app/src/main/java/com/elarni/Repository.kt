@@ -52,9 +52,13 @@ data class AppState(
     val liveness: String? = null,
     /** Wall-clock milliseconds when the server started failing that check. */
     val noTrafficSince: Long? = null,
+    /** Two transfer checks in a row stalled: small probes pass, but the server's network cuts transfers off. */
+    val stalled: Boolean = false,
     /** The speed while connected, from the last two readings of the counters; null before the second. */
     val rate: TrafficRate? = null,
 ) {
+    /** What Home, the tile, the widget and the notification show: "noTraffic" first, then "stalled", else [liveness]. */
+    val trafficState get() = if (liveness != "noTraffic" && stalled) "stalled" else liveness
     /** A subscription update is running, between its commands too. */
     val refreshing get() = updates > 0
     val busy get() = working || refreshing
@@ -188,7 +192,7 @@ class Repository(private val app: ElarniApplication) {
     private fun publish(loading: Boolean = mutable.value.loading) {
         // The 2 s tick publishes too; an unchanged state must not re-parse the
         // catalog, recompose the UI or repost the tile and notification.
-        val signature = listOf(loading, edits, approval?.warning, automation.status, automation.whitelist, mutable.value.connection, mutable.value.liveness).joinToString("\u0000")
+        val signature = listOf(loading, edits, approval?.warning, automation.status, automation.whitelist, mutable.value.connection, mutable.value.trafficState).joinToString("\u0000")
         if (signature == published) return
         published = signature
         // The core reads its log level as it records, so the saved one applies without a reconnect.
@@ -210,11 +214,15 @@ class Repository(private val app: ElarniApplication) {
         store.save(saved)
     }
     private fun state(value: String) {
-        if (value != mutable.value.connection) { livenessAt = null; deadCore.reset() }
+        if (value != mutable.value.connection) {
+            livenessAt = null; deadCore.reset()
+            if (value == "connected") transfer.started(Automation.clock(), runningServer()) else transfer.stopped()
+        }
         // A new start counts from zero again.
         if (value != "connected" || mutable.value.connection != "connected") trafficSample = null
         mutable.update { val kept = value == "connected" && it.connection == "connected"
-            it.copy(connection = value, liveness = it.liveness.takeIf { kept }, noTrafficSince = it.noTrafficSince.takeIf { kept }, rate = it.rate.takeIf { kept }) }
+            it.copy(connection = value, liveness = it.liveness.takeIf { kept }, noTrafficSince = it.noTrafficSince.takeIf { kept }, rate = it.rate.takeIf { kept },
+                stalled = it.stalled && kept) }
         publish()
     }
     /** Whether the app's screen is in front (MainActivity sets it), where Home shows the speed. */
@@ -224,6 +232,8 @@ class Repository(private val app: ElarniApplication) {
     private var livenessUplink = 0L
     /** The liveness checks of the running core that restart it. */
     private val deadCore = DeadCore()
+    /** The running core's transfer checks; two stalls in a row show and fail its health check. */
+    private val transfer = TransferCheck()
     private val crashRestarts = CrashRestarts()
     // The downlink proves nothing: listener replies and direct routes move it while the server is gone.
     private fun uplink() = Native.call("getRuntimeMetrics").optLong("uplinkBytes")
@@ -251,8 +261,29 @@ class Repository(private val app: ElarniApplication) {
         livenessAt = Automation.clock(); livenessUplink = uplink()
         val dead = deadCore.checked(catalog.selected + ":" + catalog.nodeOrNull(catalog.selected)?.string("configurationRevision", catalog.selected), ok)
         mutable.update { it.copy(liveness = if (ok) "ok" else "noTraffic", noTrafficSince = if (ok) null else it.noTrafficSince ?: System.currentTimeMillis()) }
+        if (!ok) transfer.noTraffic()
         publish()
         return dead
+    }
+    /** The selected server and its revision: a restart for a stall counts per server. */
+    private fun runningServer() = catalog.selected + ":" + catalog.nodeOrNull(catalog.selected)?.string("configurationRevision", catalog.selected)
+    /** Records the verdict of the running core's transfer check that ended since the last tick and shows a confirmed stall,
+     *  which makes the next health check due now; with [start], begins the next check when it is due. A check takes up to
+     *  about 20 s, so it runs on its own coroutine, one at a time, and the tick never waits for it. */
+    private fun transferCheck(time: Double, start: Boolean) {
+        transfer.takeVerdict()?.let { verdict ->
+            if (transfer.record(verdict, Automation.clock(), uplink())) automation.healthAt = automation.healthAt?.let { minOf(it, Automation.clock()) }
+            if (mutable.value.stalled != transfer.confirmed) { mutable.update { it.copy(stalled = transfer.confirmed) }; publish() }
+        }
+        if (!start || !transfer.due(time) { uplink() }) return
+        val pending = transfer.begin()
+        // Its own copy: commands change the catalog while the check runs.
+        val snapshot = catalog.copy()
+        scope.launch {
+            // A cancelled or failed check says nothing about a freeze; it ends either way, or no other would start.
+            var verdict = TransferCheck.INCONCLUSIVE
+            try { verdict = engine.transfer(snapshot, snapshot.selected) } catch (_: Exception) { } finally { pending.finish(verdict) }
+        }
     }
     fun cancel(): Long { val generation = epoch.incrementAndGet(); Native.cancelOperations(); return generation }
     private val updateEnds = AtomicLong()
@@ -837,7 +868,9 @@ class Repository(private val app: ElarniApplication) {
             val physical = engine.physical()
             val signature = "${physical?.networkHandle ?: 0}:" + networks.map { it.networkHandle }.sorted().joinToString(",")
             val available = networks.isNotEmpty()
+            val path = automation.path
             automation.path(signature, available, Automation.clock())
+            if (automation.path != path) transfer.pathChanged()
             // A start waiting for the network tries now rather than after its delay.
             if (waiting != null && available) startRetry.networkAvailable(Automation.clock())
             // The VPN's underlying network is the default one, which Android tracks itself: the core binds no socket.
@@ -932,6 +965,9 @@ class Repository(private val app: ElarniApplication) {
                 // With failover on, its health check stands in for liveness after the first check: one probe a tick, none offline.
                 if (engine.running && mutable.value.connection == "connected" && automation.online && (livenessAt == null || !config.optBoolean("enabled")))
                     probed = liveness(catalog, generation)
+                // About 100 KB, so none starts in a tick that probed.
+                if (engine.running && mutable.value.connection == "connected" && TransferCheck.targets.length() > 0)
+                    transferCheck(time, start = !probed && automation.online)
             }
             if (automation.intent && !automation.sleeping && (wantsRecovery() || mutable.value.connection == "paused")) {
                 automation.unattended(time)
@@ -939,13 +975,16 @@ class Repository(private val app: ElarniApplication) {
                 var healthy = engine.running
                 if (config.optBoolean("enabled") && engine.running && automation.online && !probed &&
                     automation.healthDue(time, mutable.value.liveness == "ok") { uplinkGrew() }) {
+                    // A server whose transfers stalled twice in a row fails the check whatever its small probes do.
+                    val stalled = transfer.confirmed
                     // As on desktop and macOS, one passing target keeps the server.
-                    healthy = targets.any { target -> runCatching { engine.probe(catalog, catalog.selected, target.copy().put("protocol", "activeProxy").put("method", "GET").put("timeout", 5)) }.isSuccess }
+                    healthy = !stalled && targets.any { target -> runCatching { engine.probe(catalog, catalog.selected, target.copy().put("protocol", "activeProxy").put("method", "GET").put("timeout", 5)) }.isSuccess }
                     check(generation)
-                    checked(healthy)
+                    if (!stalled) checked(healthy)
                     val russian = config.strings("russianEntryNodeIDs").toSet()
                     automation.observe(catalog.selected, healthy, catalog.selected in russian)
                     if (healthy) automation.healthy(time) else { automation.failures++; automation.healthAt = time + Automation.healthInterval }
+                    if (stalled) automation.cooldown[catalog.selected] = time + 60
                     val optimize = healthy && config.string("policy") == "lowestLatency" && time - automation.lastOptimization >= 300
                     if (optimize || !healthy && automation.failures >= 3) {
                         val scores = mutableMapOf<String, Double>()
@@ -958,7 +997,16 @@ class Repository(private val app: ElarniApplication) {
                             automation.observe(id, values.isNotEmpty(), id in russian)
                             if (values.isEmpty()) automation.cooldown[id] = time + 60 else scores[id] = values.average()
                         }
-                        val chosen = automation.choose(config.string("policy"), order, catalog.selected, scores, healthy, time)
+                        var chosen = automation.choose(config.string("policy"), order, catalog.selected, scores, healthy, time)
+                        // The server about to replace this one must pass transfers too; one that stalls is skipped.
+                        while (chosen != null && chosen != catalog.selected && TransferCheck.targets.length() > 0) {
+                            check(generation)
+                            if (engine.transfer(catalog, chosen) != TransferCheck.STALLED) break
+                            automation.observe(chosen, false, chosen in russian)
+                            automation.cooldown[chosen] = Automation.clock() + 60
+                            scores.remove(chosen)
+                            chosen = automation.choose(config.string("policy"), order, catalog.selected, scores, healthy, time)
+                        }
                         if (chosen != null && chosen != catalog.selected) {
                             val candidate = catalog.copy(); candidate.data.put("selectedNodeId", chosen)
                             apply(candidate, generation); automation.lastSwitch = time; automation.healthy(time); healthy = true
@@ -970,8 +1018,15 @@ class Repository(private val app: ElarniApplication) {
                 if (automation.begin(time)) {
                     // A failed save must not hold the retry back.
                     catalog.data.put("automationEpisode", automation.episode()); runCatching { persist(catalog) }.onFailure { if (it is Exception) report(it) }
-                    try { state("connecting"); start(catalog, generation, requireListedApp = true); automation.healthy(Automation.clock()); state("connected") }
-                    catch (error: Exception) { check(generation); state("failed"); automation.schedule(Automation.clock()) }
+                    // One restart per stall episode: a server restarted once for its confirmed stall keeps running, still
+                    // stalled, until a transfer check passes, another server runs or the network changes. The retry budget
+                    // runs on meanwhile, and a move to another server is not held back.
+                    val stall = engine.running && transfer.confirmed
+                    if (!stall || transfer.mayRestart(runningServer())) {
+                        if (stall) transfer.restarting(runningServer())
+                        try { state("connecting"); start(catalog, generation, requireListedApp = true); automation.healthy(Automation.clock()); state("connected") }
+                        catch (error: Exception) { check(generation); state("failed"); automation.schedule(Automation.clock()) }
+                    }
                 }
             }
             // Publishing compares the whole catalog; the tick has only automation news to publish.

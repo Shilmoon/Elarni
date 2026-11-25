@@ -35,6 +35,8 @@ final class TunnelMethodChannel {
   var verifiedHealth: (node: String, at: Double, epoch: UInt64)?
   /// The last failed health check counted only because another server may take over (`countsAgainstServer`).
   var healthFailureUnverified = false
+  /// The last failed health check failed for the provider's confirmed transfer stall.
+  var healthFailureStalled = false
   var automationPaused = false
   var automationRefreshPath = false
   var automationFailover = false
@@ -975,6 +977,14 @@ final class TunnelMethodChannel {
           }
           recordedSession = session
         } catch { /* A failed history write must not change the connection; the next poll tries again. */ }
+      }
+      // A newly confirmed stall makes the health check due now, as on desktop and Android; the app's
+      // state poll reads the provider every second.
+      if automation.transferRead(server: stallServer(node), session: "\(instance):\(generation)",
+                                 stalled: object["transferStalled"] as? Bool == true,
+                                 passed: object["transferPassed"] as? Bool == true, now: automationNow()),
+         automationWork == nil {
+        scheduleAutomation()
       }
     }
     return object

@@ -342,6 +342,22 @@ final class ElarniTests: XCTestCase {
     XCTAssertEqual(vpn.stateLabel, "Connected")
   }
 
+  // Small probes pass on a server whose network cuts transfers off; the extension's transfer checks say so.
+  func testConnectedServerWhoseNetworkCutsTransfersOffSaysSo() async throws {
+    let vpn = IOSVPNController()
+    let tunnel = FixtureTunnel(plan: Data())
+    tunnel.session.liveness = "stalled"
+    vpn.manager = tunnel
+    try await vpn.refreshProvider()
+    XCTAssertTrue(vpn.stalled)
+    XCTAssertFalse(vpn.noTraffic)
+    XCTAssertEqual(vpn.stateLabel, "Connected · transfers cut off")
+    tunnel.session.liveness = "ok"
+    try await vpn.refreshProvider()
+    XCTAssertFalse(vpn.stalled)
+    XCTAssertEqual(vpn.stateLabel, "Connected")
+  }
+
   // Home's speed line: the bytes between two samples over the time between them, none across a restarted core.
   func testTrafficRateComesFromTwoSamplesAndStartsAgainAfterACounterReset() {
     var rate = TrafficRate()

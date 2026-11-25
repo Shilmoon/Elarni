@@ -658,6 +658,120 @@ struct CoreChecks {
       try expect(tracker.state == "ok" && tracker.failures == 0, "a passing check did not end the failures")
       try expect(!tracker.needsProbe(uplink: 1, at: 4) && tracker.needsProbe(uplink: 2, at: 5), "idle and busy intervals after a pass")
     }
+    try check("transfer checks run after connect, again soon after a first stall, and confirm two stalls in a row") {
+      var transfer = ProviderTransferCheck(delay: 1, recheck: 2, interval: 30)
+      try expect(!transfer.due(at: 100), "a check ran before any core started")
+      transfer.noTraffic()
+      try expect(!transfer.due(at: 100), "no traffic before a start made a check due")
+      transfer.started(at: 0)
+      try expect(!transfer.due(at: 0.5) && transfer.due(at: 1), "the first check did not wait for its delay")
+      try expect(transfer.needsCheck(uplink: 0, at: 1), "the first check waited for traffic")
+      try expect(!transfer.record(verdict: "stalled", uplink: 0, at: 1), "one stall confirmed")
+      try expect(transfer.stalls == 1 && !transfer.confirmed, "a first stall not counted")
+      // The recheck comes after the short delay and does not wait for traffic.
+      try expect(!transfer.due(at: 2.5) && transfer.due(at: 3), "a first stall was not checked again soon")
+      try expect(transfer.needsCheck(uplink: 0, at: 3), "a stall's recheck waited for traffic")
+      try expect(!transfer.record(verdict: "inconclusive", uplink: 0, at: 3), "an inconclusive check confirmed")
+      try expect(transfer.stalls == 1, "an inconclusive check counted or ended a run of stalls")
+      try expect(transfer.due(at: 33) && transfer.needsCheck(uplink: 0, at: 33), "the stall was not checked again")
+      try expect(transfer.record(verdict: "stalled", uplink: 0, at: 33) && transfer.confirmed, "two stalls in a row did not confirm")
+      try expect(!transfer.record(verdict: "stalled", uplink: 0, at: 63) && transfer.confirmed, "a third stall confirmed again")
+      _ = transfer.record(verdict: "ok", uplink: 0, at: 64)
+      try expect(transfer.stalls == 0 && !transfer.confirmed, "a passing check did not end the stalls")
+      transfer.started(at: 100)
+      try expect(transfer.stalls == 0 && !transfer.due(at: 100.5) && transfer.due(at: 101), "a new core kept the old schedule")
+    }
+    try check("later transfer checks wait for traffic, and no traffic checks at once") {
+      var transfer = ProviderTransferCheck(delay: 1, recheck: 2, interval: 30)
+      transfer.started(at: 0)
+      _ = transfer.record(verdict: "ok", uplink: 10, at: 1)
+      try expect(!transfer.due(at: 30) && transfer.due(at: 31), "the interval was not kept")
+      // An idle interval starts the next one instead.
+      try expect(!transfer.needsCheck(uplink: 10, at: 31), "an idle interval was checked")
+      try expect(!transfer.due(at: 60) && transfer.due(at: 61), "an idle interval did not start the next one")
+      try expect(transfer.needsCheck(uplink: 11, at: 61), "an interval with traffic was not checked")
+      _ = transfer.record(verdict: "ok", uplink: 11, at: 61)
+      transfer.noTraffic()
+      try expect(transfer.due(at: 62) && transfer.needsCheck(uplink: 11, at: 62), "no traffic did not check at once")
+      _ = transfer.record(verdict: "inconclusive", uplink: 11, at: 62)
+      try expect(!transfer.due(at: 63), "a check after no traffic left the next one due")
+    }
+    try check("a transfer check runs beside the monitor loop, which keeps its pace and reads the verdict later") {
+      var transfer = ProviderTransferCheck(delay: 1, recheck: 2, interval: 30)
+      transfer.started(at: 0)
+      try expect(transfer.due(at: 1) && transfer.needsCheck(uplink: 0, at: 1), "the first check was not due")
+      let pending = transfer.begin()
+      let release = DispatchSemaphore(value: 0), done = DispatchSemaphore(value: 0)
+      DispatchQueue.global().async { release.wait(); pending.finish("stalled"); done.signal() }
+      // A check takes up to about 20 s: ten 2 s passes go by meanwhile, none waits and none starts another.
+      var passes = 0
+      for time in stride(from: 3.0, through: 21.0, by: 2) {
+        try expect(transfer.takeVerdict() == nil, "a verdict before the check ended")
+        if time == 11 { transfer.noTraffic() }
+        try expect(!transfer.due(at: time), "a second check started while one ran")
+        passes += 1
+      }
+      try expect(passes == 10, "the loop did not keep its pace")
+      release.signal(); done.wait()
+      try expect(transfer.takeVerdict() == "stalled" && transfer.takeVerdict() == nil, "the next pass did not read the verdict once")
+      try expect(!transfer.record(verdict: "stalled", uplink: 0, at: 22) && !transfer.passed, "a stall counted wrongly")
+      try expect(!transfer.due(at: 23) && transfer.due(at: 24), "the stall's recheck did not follow")
+      // A new core does not wait for a check of the old one.
+      _ = transfer.begin()
+      transfer.started(at: 30)
+      try expect(transfer.takeVerdict() == nil && !transfer.due(at: 30.5) && transfer.due(at: 31), "a new core waited for the old core's check")
+      _ = transfer.record(verdict: "ok", uplink: 0, at: 32)
+      try expect(transfer.passed, "a passing check was not shown")
+    }
+    try check("recovery restarts a stalled server once per stall episode") {
+      var policy = AutomationPolicy()
+      policy.pathChanged("wifi", available: true, now: 0)
+      try expect(policy.restartForStall(server: "a:1"), "the first restart for a stall was held")
+      // The restarted server stalls again: no second restart, however many retries follow.
+      _ = policy.transferRead(server: "a:1", session: "i:2", stalled: true, passed: false, now: 10)
+      try expect(!policy.restartForStall(server: "a:1") && !policy.restartForStall(server: "a:1"), "a stalled server restarted again")
+      _ = policy.transferRead(server: "a:1", session: "i:2", stalled: false, passed: false, now: 11)
+      try expect(!policy.restartForStall(server: "a:1"), "a check that did not pass ended the hold")
+      _ = policy.transferRead(server: "a:1", session: "i:2", stalled: false, passed: true, now: 12)
+      try expect(policy.restartForStall(server: "a:1"), "a passing check did not end the hold")
+      _ = policy.transferRead(server: "b:1", session: "i:3", stalled: false, passed: false, now: 13)
+      try expect(policy.restartForStall(server: "a:1"), "another server running did not end the hold")
+      _ = policy.transferRead(server: "a:2", session: "i:4", stalled: false, passed: false, now: 14)
+      try expect(policy.restartForStall(server: "a:1"), "a changed server did not end the hold")
+      policy.pathChanged("cellular", available: true, now: 15)
+      try expect(policy.restartForStall(server: "a:1"), "a new network path did not end the hold")
+      policy.switched(now: 16)
+      try expect(policy.restartForStall(server: "a:1"), "a move to another server did not end the hold")
+    }
+    try check("a confirmed stall makes the health check due once per confirmation") {
+      var policy = AutomationPolicy()
+      policy.pathChanged("wifi", available: true, now: 0)
+      policy.scheduleHealth(now: 0, jitter: 0)
+      try expect(!policy.transferRead(server: "a:1", session: "i:1", stalled: false, passed: false, now: 5) && policy.healthAt == 30,
+                 "no stall made the check due")
+      try expect(policy.transferRead(server: "a:1", session: "i:1", stalled: true, passed: false, now: 6) && policy.healthAt == 6,
+                 "a confirmed stall did not make the check due now")
+      // The app reads the provider every second; one confirmation is acted on once.
+      policy.scheduleHealth(now: 7, jitter: 0)
+      try expect(!policy.transferRead(server: "a:1", session: "i:1", stalled: true, passed: false, now: 8) && policy.healthAt == 37,
+                 "one confirmation made the check due twice")
+      try expect(policy.transferRead(server: "a:1", session: "i:2", stalled: true, passed: false, now: 9) && policy.healthAt == 9,
+                 "a new core's stall was not acted on")
+      policy.scheduleHealth(now: 10, jitter: 0)
+      _ = policy.transferRead(server: "a:1", session: "i:2", stalled: false, passed: true, now: 11)
+      try expect(policy.transferRead(server: "a:1", session: "i:2", stalled: true, passed: false, now: 12) && policy.healthAt == 12,
+                 "a stall confirmed again on the same core was not acted on")
+    }
+    try check("one passing transfer target wins and only answering targets count") {
+      for (verdicts, expected) in [(["stalled", "ok"], "ok"), (["stalled", "inconclusive"], "stalled"),
+                                   (["inconclusive", "stalled"], "stalled"), (["inconclusive", "inconclusive"], "inconclusive"),
+                                   (["stalled", "stalled"], "stalled"), ([], "inconclusive")] {
+        try expect(ProviderTransferCheck.combine(verdicts) == expected, "provider combined \(verdicts) wrongly")
+        try expect(AutomationConfiguration.transferVerdict(verdicts) == expected, "recovery combined \(verdicts) wrongly")
+      }
+      try expect(ProviderTransferCheck.defaultTargets == AutomationConfiguration.transferTargets,
+                 "the provider and recovery check different targets")
+    }
     try await packetFlowChecks()
     passed += 2
     print("\(passed) core checks passed")

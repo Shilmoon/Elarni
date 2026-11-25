@@ -491,15 +491,18 @@ private val LocalReselect = compositionLocalOf { 0 }
             }
         }
         val noTraffic = state.connection == "connected" && state.liveness == "noTraffic"
+        // Small probes pass, but the server's network cuts longer transfers off.
+        val stalled = state.connection == "connected" && state.trafficState == "stalled"
         val warning = if (MaterialTheme.colorScheme.surface == Color(0xFF202124)) Color(0xFFFDE047) else Color(0xFF854D0E)
-        ConnectionArtwork(state.connection == "connected", state.connection == "failed", if (noTraffic) warning else null)
-        Text(when (state.connection) { "connected" -> if (noTraffic) tr(R.string.connected_no_traffic) else tr(R.string.connected); "connecting" -> tr(R.string.connecting); "paused" -> tr(R.string.paused); "failed" -> tr(R.string.connection_failed); "disconnecting" -> tr(R.string.disconnecting); else -> tr(R.string.disconnected) }, style = MaterialTheme.typography.titleMedium, textAlign = TextAlign.Center,
+        ConnectionArtwork(state.connection == "connected", state.connection == "failed", if (noTraffic || stalled) warning else null)
+        Text(when (state.connection) { "connected" -> if (noTraffic) tr(R.string.connected_no_traffic) else if (stalled) tr(R.string.connected_transfers_cut_off) else tr(R.string.connected); "connecting" -> tr(R.string.connecting); "paused" -> tr(R.string.paused); "failed" -> tr(R.string.connection_failed); "disconnecting" -> tr(R.string.disconnecting); else -> tr(R.string.disconnected) }, style = MaterialTheme.typography.titleMedium, textAlign = TextAlign.Center,
             // TalkBack hears each change; the artwork above stays decorative, as on iPhone and desktop.
-            color = if (noTraffic) warning else Color.Unspecified, modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite })
+            color = if (noTraffic || stalled) warning else Color.Unspecified, modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite })
         if (noTraffic) state.noTrafficSince?.let { since ->
             val time = android.text.format.DateFormat.getTimeFormat(LocalContext.current).format(java.util.Date(since))
             Text(tr(R.string.the_server_passed_no_traffic_at, time), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
         }
+        if (stalled) Text(tr(R.string.this_server_s_network_cuts_transfers_off), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
         Text(selected?.string("name") ?: tr(R.string.no_server_selected), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold, textAlign = TextAlign.Center, modifier = Modifier.heightIn(min = 48.dp).clickable(enabled = selected != null, onClick = scrollServers).wrapContentHeight(), color = if (selected != null) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant)
         // A subscription update has its Cancel on the update line; Connect waits for it instead of turning into Stop.
         val stoppable = state.busy && !state.refreshing

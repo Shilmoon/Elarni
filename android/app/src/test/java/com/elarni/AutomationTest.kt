@@ -145,6 +145,141 @@ class AutomationTest {
         assertTrue(Automation(running.episode()).exhausted)
     }
 
+    // N9-01: the transfer check's schedule, with injected short timings instead of 5 s, 10 s and 15 min.
+    private fun <T> shortTransferTimings(body: () -> T): T {
+        TransferCheck.delay = 1.0; TransferCheck.recheck = 2.0; TransferCheck.interval = 30.0
+        try { return body() } finally { TransferCheck.delay = 5.0; TransferCheck.recheck = 10.0; TransferCheck.interval = 900.0 }
+    }
+
+    @Test fun twoStallsInARowConfirmAndTheFirstIsCheckedAgainSoon() = shortTransferTimings {
+        val check = TransferCheck()
+        var reads = 0
+        assertFalse("Nothing runs before a core is up", check.due(100.0) { reads++; 0L })
+        check.started(100.0, "a:1")
+        assertFalse("Not before the first delay", check.due(100.5) { reads++; 0L })
+        assertTrue("The first check needs no traffic", check.due(101.0) { reads++; 0L })
+        assertEquals(0, reads)
+        assertFalse(check.record(TransferCheck.STALLED, 102.0, 10L))
+        assertFalse("One stall is not confirmed", check.confirmed)
+        assertFalse(check.due(103.0) { 10L })
+        assertTrue("The recheck comes soon, traffic or not", check.due(104.0) { reads++; 10L })
+        assertEquals("A recheck reads no counter", 0, reads)
+        assertTrue("The second stall in a row confirms", check.record(TransferCheck.STALLED, 105.0, 10L))
+        assertTrue(check.confirmed)
+        assertFalse("It confirms once", check.record(TransferCheck.STALLED, 140.0, 20L))
+        assertTrue(check.confirmed)
+        assertFalse(check.record(TransferCheck.OK, 180.0, 30L))
+        assertFalse("A passing check ends the stall", check.confirmed)
+    }
+
+    @Test fun anInconclusiveCheckNeitherCountsNorEndsARunOfStalls() = shortTransferTimings {
+        val check = TransferCheck()
+        check.started(0.0, "a:1")
+        repeat(3) { check.record(TransferCheck.INCONCLUSIVE, 10.0 + it, 0L) }
+        assertEquals(0, check.stalls)
+        check.record(TransferCheck.STALLED, 20.0, 0L)
+        check.record(TransferCheck.INCONCLUSIVE, 22.0, 0L)
+        assertEquals("Inconclusive is no stall and no pass", 1, check.stalls)
+        assertFalse("After it the next check waits the long interval", check.due(30.0) { 0L })
+        assertTrue("A pending stall's next check needs no traffic", check.due(52.0) { 0L })
+        assertTrue(check.record(TransferCheck.STALLED, 53.0, 0L))
+    }
+
+    @Test fun laterChecksRunOnlyWhileTheUplinkGrows() = shortTransferTimings {
+        val check = TransferCheck()
+        check.started(0.0, "a:1")
+        check.record(TransferCheck.OK, 1.0, 500L)
+        assertFalse(check.due(30.0) { 900L })
+        assertFalse("No traffic since the last check", check.due(31.0) { 500L })
+        assertFalse("It looks again an interval later", check.due(60.0) { 900L })
+        assertTrue("Traffic left since", check.due(61.0) { 900L })
+        check.record(TransferCheck.STALLED, 62.0, 900L)
+        check.record(TransferCheck.STALLED, 64.0, 900L)
+        assertFalse("A confirmed stall is checked again only with traffic too", check.due(94.0) { 900L })
+        assertTrue(check.due(124.0) { 901L })
+    }
+
+    @Test fun noTrafficChecksAtOnceAndAStopEndsTheSchedule() = shortTransferTimings {
+        val check = TransferCheck()
+        check.noTraffic()
+        assertFalse("Without a core nothing runs", check.due(0.0) { 0L })
+        check.started(0.0, "a:1")
+        check.record(TransferCheck.OK, 1.0, 0L)
+        assertFalse(check.due(2.0) { 0L })
+        check.noTraffic()
+        assertTrue("Liveness found no traffic: at once", check.due(2.0) { 0L })
+        check.record(TransferCheck.INCONCLUSIVE, 3.0, 0L)
+        assertFalse("Once", check.due(4.0) { 0L })
+        check.record(TransferCheck.STALLED, 5.0, 0L); check.record(TransferCheck.STALLED, 7.0, 0L)
+        check.stopped()
+        assertFalse(check.confirmed)
+        assertFalse(check.due(1000.0) { 1L })
+        check.started(1000.0, "a:1")
+        assertEquals("A new core starts over", 0, check.stalls)
+        assertTrue(check.due(1001.0) { 0L })
+    }
+
+    // A check takes up to about 20 s; the tick goes on every 2 s meanwhile and reads the verdict on a later pass.
+    @Test fun aCheckRunsBesideTheTickWhichKeepsItsPace() = shortTransferTimings {
+        val check = TransferCheck()
+        check.started(0.0, "a:1")
+        assertTrue(check.due(1.0) { 0L })
+        val pending = check.begin()
+        val release = java.util.concurrent.CountDownLatch(1)
+        val runner = Thread { release.await(); pending.finish(TransferCheck.STALLED) }.apply { start() }
+        var ticks = 0
+        for (time in generateSequence(3.0) { it + 2.0 }.takeWhile { it <= 41.0 }) {
+            assertNull("No verdict while the check runs", check.takeVerdict())
+            assertFalse("No second check while one runs", check.due(time) { ticks.toLong() })
+            if (time == 21.0) check.noTraffic()
+            ticks++
+        }
+        assertEquals("Twenty ticks went by while the check ran", 20, ticks)
+        release.countDown(); runner.join(5000)
+        assertEquals("The next tick reads the verdict", TransferCheck.STALLED, check.takeVerdict())
+        assertNull("Once", check.takeVerdict())
+        assertFalse(check.record(TransferCheck.STALLED, 43.0, 0L))
+        assertTrue("Its recheck follows as usual", check.due(45.0) { 0L })
+        // A check that outlives its core says nothing about the next one, and the next waits for it to end.
+        val old = check.begin()
+        check.stopped(); check.started(50.0, "a:1")
+        assertFalse(check.due(52.0) { 0L })
+        old.finish(TransferCheck.STALLED)
+        assertNull("Its verdict is dropped", check.takeVerdict())
+        assertEquals(0, check.stalls)
+        assertTrue("The new core's check starts", check.due(52.0) { 0L })
+    }
+
+    @Test fun recoveryRestartsAServerOncePerStallEpisode() = shortTransferTimings {
+        val check = TransferCheck()
+        fun confirm(time: Double) { check.record(TransferCheck.STALLED, time, 0L); check.record(TransferCheck.STALLED, time + 2, 0L) }
+        check.started(0.0, "a:1"); confirm(1.0)
+        assertTrue("The first restart for a stall is allowed", check.mayRestart("a:1"))
+        check.restarting("a:1"); check.stopped(); check.started(10.0, "a:1"); confirm(11.0)
+        assertTrue(check.confirmed)
+        assertFalse("Stalled again after it: no second restart", check.mayRestart("a:1"))
+        assertTrue("Another server may restart", check.mayRestart("b:1"))
+        check.record(TransferCheck.INCONCLUSIVE, 40.0, 0L)
+        assertFalse("An inconclusive check ends nothing", check.mayRestart("a:1"))
+        check.record(TransferCheck.OK, 80.0, 0L)
+        assertTrue("A passing check ends the episode", check.mayRestart("a:1"))
+        check.restarting("a:1"); check.stopped(); check.started(90.0, "b:1")
+        assertTrue("Another server ran", check.mayRestart("a:1"))
+        check.restarting("a:1"); check.stopped(); check.started(100.0, "a:2")
+        assertTrue("A changed server is another server", check.mayRestart("a:1"))
+        check.restarting("a:1"); check.pathChanged()
+        assertTrue("The network path changed", check.mayRestart("a:1"))
+    }
+
+    @Test fun oneTargetThatPassesWinsAndOnlyAnsweringTargetsCount() {
+        val ok = TransferCheck.OK; val stalled = TransferCheck.STALLED; val inconclusive = TransferCheck.INCONCLUSIVE
+        assertEquals(ok, TransferCheck.combine(listOf(stalled, ok)))
+        assertEquals(stalled, TransferCheck.combine(listOf(stalled, stalled)))
+        assertEquals("A target that did not answer says nothing", stalled, TransferCheck.combine(listOf(inconclusive, stalled)))
+        assertEquals(inconclusive, TransferCheck.combine(listOf(inconclusive, inconclusive)))
+        assertEquals(inconclusive, TransferCheck.combine(emptyList()))
+    }
+
     @Test fun aCoreThatStopsByItselfRestartsTwiceInTenMinutesAtMost() {
         val restarts = CrashRestarts()
         assertTrue(restarts.allow(0.0))

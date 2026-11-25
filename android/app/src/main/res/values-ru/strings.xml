@@ -310,6 +310,8 @@
     <string name="no_server_selected">Сервер не выбран</string>
     <string name="the_server_passed_no_traffic_at">Сервер не передавал трафик в %1$s. Повторная проверка каждую минуту.</string>
     <string name="connected_no_traffic">Подключено · нет трафика</string>
+    <string name="connected_transfers_cut_off">Подключено · передача обрывается</string>
+    <string name="this_server_s_network_cuts_transfers_off">Подключено, но сеть этого сервера обрывает передачу данных. Страницы не загрузятся; выберите другой сервер.</string>
     <string name="connected">Подключено</string>
     <string name="connecting">Подключение…</string>
     <string name="paused">Пауза</string>
@@ -613,12 +615,14 @@
     <string name="choose_a_server_in_elarni">Выберите сервер в Elarni</string>
     <string name="disconnecting_2">Отключение</string>
     <string name="no_traffic">Нет трафика</string>
+    <string name="transfers_cut_off">Передача обрывается</string>
     <string name="connecting_2">Подключение</string>
     <string name="vpn_connected">VPN подключён</string>
     <string name="local_proxy_running">Локальный прокси работает</string>
     <string name="paused_while_screen_is_off">Пауза, пока экран выключен</string>
     <string name="connection_failed_open_to_review">Ошибка подключения · откройте, чтобы проверить</string>
     <string name="server_passes_no_traffic">" · сервер не передаёт трафик"</string>
+    <string name="server_cuts_transfers_off">" · сеть сервера обрывает передачу"</string>
     <string name="subscription_expiry">Окончание подписок</string>
     <string name="approve_download_destination">Подтвердите адрес загрузки</string>
     <string name="open_elarni_to_approve_where_a">Откройте Elarni, чтобы подтвердить, откуда загружается подписка или список маршрутизации.</string>

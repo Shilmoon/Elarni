@@ -22,6 +22,9 @@ final class PacketTunnelProvider: NEPacketTunnelProvider, @unchecked Sendable {
   private var bridgeFailure: ProviderLifecycleGeneration?
   // The monitor's latest verdict, for the generation it watched.
   private var liveness: (generation: UInt64, state: String?)?
+  // The monitor's transfer checks, for the generation it watched: whether they stalled twice in a row,
+  // and whether the last one that answered passed.
+  private var transferStalled: (generation: UInt64, confirmed: Bool, passed: Bool)?
 #if os(iOS)
   private var alertArmedAt = -Double.infinity
 #endif
@@ -303,9 +306,13 @@ final class PacketTunnelProvider: NEPacketTunnelProvider, @unchecked Sendable {
       }
       let backend = currentBackend
       let counters = backend == .xrayTun ? await xray.metrics() : bridge.counters
-      let liveness = backendLock.withLock {
-        self.liveness.flatMap { $0.generation == lifecycleState.generation ? $0.state : nil }
+      let (checked, transferStalled, transferPassed) = backendLock.withLock {
+        let transfer = self.transferStalled.flatMap { $0.generation == lifecycleState.generation ? $0 : nil }
+        return (self.liveness.flatMap { $0.generation == lifecycleState.generation ? $0.state : nil },
+                transfer?.confirmed ?? false, transfer?.passed ?? false)
       }
+      // What the apps show: no traffic first, then transfers cut off, as on desktop and Android.
+      let liveness = checked != "noTraffic" && transferStalled ? "stalled" : checked
       let response: [String: Any] = [
         "schemaVersion": 1,
         "state": lifecycleState.label,
@@ -318,6 +325,10 @@ final class PacketTunnelProvider: NEPacketTunnelProvider, @unchecked Sendable {
         "generation": lifecycleState.generation ?? 0,
         "counters": counters,
         "liveness": liveness.map { $0 as Any } ?? NSNull(),
+        // Recovery counts it as a failed health check whatever the liveness shows.
+        "transferStalled": transferStalled,
+        // Ends the hold on restarting a server for its stall (AutomationPolicy.transferRead).
+        "transferPassed": transferPassed,
         "endpoint": "[REDACTED]",
         "sharedKeychainResolved": runtime.sharedKeychainResolved,
         "backend": backend?.rawValue ?? "none",
@@ -859,17 +870,26 @@ final class PacketTunnelProvider: NEPacketTunnelProvider, @unchecked Sendable {
     wait: @Sendable () async throws -> Void = { try await Task.sleep(for: .seconds(2)) }
   ) async {
     var tracker = ProviderLiveness()
+    var transfer = ProviderTransferCheck()
+    transfer.started(at: ProcessInfo.processInfo.systemUptime)
+    backendLock.withLock { transferStalled = (generation.rawValue, false, false) }
+    // A check still running when this core's monitor ends says nothing about the next core.
+    var transferTask: Task<Void, Never>?
+    defer { transferTask?.cancel() }
     while !Task.isCancelled {
       try? await wait()
       guard !Task.isCancelled, lifecycle.isActive(generation) else { return }
       let now = ProcessInfo.processInfo.systemUptime
+      var probed = false
       if tracker.due(at: now), !backendLock.withLock({ sleeping }),
          tracker.needsProbe(uplink: await xray.metrics()["uplinkBytes"] ?? 0, at: now) {
+        probed = true
         var passed = false
         for target in ProviderLiveness.targets where !passed {
           passed = await xray.passesTraffic(url: target, timeout: 5)
         }
         guard !Task.isCancelled, lifecycle.isActive(generation) else { return }
+        if !passed { transfer.noTraffic() }
         tracker.record(passed: passed, uplink: await xray.metrics()["uplinkBytes"] ?? 0,
                        at: ProcessInfo.processInfo.systemUptime)
         let state = tracker.state, failures = tracker.failures
@@ -889,6 +909,26 @@ final class PacketTunnelProvider: NEPacketTunnelProvider, @unchecked Sendable {
           return true
         }
         if stalled { DiagnosticLog.record("core_stalled", ["failures": Int64(failures)]) }
+      }
+      // A transfer check runs beside this loop (see ProviderTransferCheck); this pass takes the verdict of
+      // one that ended since the last.
+      if let verdict = transfer.takeVerdict() {
+        _ = transfer.record(verdict: verdict, uplink: await xray.metrics()["uplinkBytes"] ?? 0,
+                            at: ProcessInfo.processInfo.systemUptime)
+        let confirmed = transfer.confirmed, passed = transfer.passed
+        backendLock.withLock { transferStalled = (generation.rawValue, confirmed, passed) }
+      }
+      // About 100 KB, so none starts in a round that ran a liveness check.
+      if !probed, !ProviderTransferCheck.targets.isEmpty, transfer.due(at: now), !backendLock.withLock({ sleeping }),
+         transfer.needsCheck(uplink: await xray.metrics()["uplinkBytes"] ?? 0, at: now) {
+        let pending = transfer.begin(), xray = self.xray
+        transferTask = Task {
+          var verdicts: [String] = []
+          for target in ProviderTransferCheck.targets where !verdicts.contains(ProviderTransferCheck.ok) {
+            verdicts.append(await xray.transfer(url: target, timeout: 8, idleMs: ProviderTransferCheck.idleMs))
+          }
+          pending.finish(ProviderTransferCheck.combine(verdicts))
+        }
       }
       if DiagnosticLog.isCollecting {
         let counters = currentBackend == .xrayTun ? await xray.metrics() : bridge.counters

@@ -221,6 +221,11 @@ class Engine(private val app: ElarniApplication, private val assets: RoutingAsse
         if (timeout !in 1..15) throw AppFailure("invalid_input")
         val delay: Long
         var exit: JSONObject? = null
+        // A transfer check instead of a latency probe: it answers with a verdict, whatever the bytes did.
+        val transfer = args.optBoolean("transfer")
+        var verdict: String? = null
+        var transferBytes = 0L
+        if (transfer && method != "proxy" && method != "activeProxy") throw AppFailure("unsupported_ping_method")
         if (method == "tcp" || method == "icmp") {
             val (endpoint, mapping) = probeTarget(catalog, id, epoch)
             if (method == "tcp" && !endpoint.optBoolean("supportsTcpProbe")) throw AppFailure("unsupported_ping_method")
@@ -243,9 +248,11 @@ class Engine(private val app: ElarniApplication, private val assets: RoutingAsse
         } else {
             val active = running && catalog.selected == id
             if (method == "activeProxy" && !active) throw AppFailure("not_connected")
-            val request = obj("timeout" to timeout, "url" to args.string("url", "https://www.gstatic.com/generate_204"), "method" to args.string("method", "HEAD"), "mode" to args.string("mode", "default"))
-            for (key in listOf("expectedStatus", "expectedBody")) if (args.has(key)) request.put(key, args.get(key))
-            if (args.optBoolean("trace")) request.put("trace", true)
+            val request = if (transfer) obj("timeout" to timeout, "url" to args.getString("url"), "method" to "GET", "transfer" to true)
+                .apply { if (args.has("transferIdleMs")) put("transferIdleMs", args.getInt("transferIdleMs")) }
+            else obj("timeout" to timeout, "url" to args.string("url", "https://www.gstatic.com/generate_204"), "method" to args.string("method", "HEAD"), "mode" to args.string("mode", "default"))
+            if (!transfer) for (key in listOf("expectedStatus", "expectedBody")) if (args.has(key)) request.put(key, args.get(key))
+            if (!transfer && args.optBoolean("trace")) request.put("trace", true)
             var reserved = 0
             try {
                 if (active) {
@@ -265,11 +272,33 @@ class Engine(private val app: ElarniApplication, private val assets: RoutingAsse
                 delay = reply.getLong("delay")
                 if (delay < 0) throw AppFailure("ping_failed")
                 exit = reply.optJSONObject("exit")
+                if (transfer) {
+                    verdict = reply.optString("verdict").takeIf { it.isNotEmpty() } ?: throw AppFailure("ping_failed")
+                    transferBytes = reply.optLong("transferBytes")
+                }
             } finally {
                 if (reserved != 0) synchronized(probePorts) { probePorts.remove(reserved) }
             }
         }
         return obj("nodeId" to id, "configurationRevision" to catalog.node(id).string("configurationRevision", id), "protocol" to method, "status" to "success", "latencyMs" to delay, "timestamp" to now())
-            .apply { exit?.let { put("exit", it) } }
+            .apply { exit?.let { put("exit", it) }; verdict?.let { put("verdict", it).put("transferBytes", transferBytes) } }
+    }
+    /** One transfer check of server [id] over the transfer targets ([TransferCheck.combine]): through the running core when it
+     *  is the selected one, else through a probe core. A target the check could not reach says nothing about a freeze. */
+    fun transfer(catalog: Catalog, id: String): String {
+        val targets = TransferCheck.targets.let { all -> (0 until all.length()).map(all::getJSONObject) }
+        val verdicts = mutableListOf<String>()
+        for (target in targets) {
+            val args = target.copy().put("protocol", if (running && catalog.selected == id) "activeProxy" else "proxy").put("timeout", 8).put("transfer", true)
+            TransferCheck.idleMs?.let { args.put("transferIdleMs", it) }
+            val verdict = try { probe(catalog, id, args).getString("verdict") } catch (error: Exception) {
+                if ((error as? AppFailure)?.code == "cancelled") throw error
+                TransferCheck.INCONCLUSIVE
+            }
+            // One ok decides; another target is fetched only when this one did not pass.
+            if (verdict == TransferCheck.OK) return verdict
+            verdicts += verdict
+        }
+        return TransferCheck.combine(verdicts)
     }
 }

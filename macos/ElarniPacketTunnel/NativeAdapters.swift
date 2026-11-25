@@ -565,6 +565,18 @@ final class NativeXrayCore: XrayCore, @unchecked Sendable {
     }) != nil
   }
 
+  func transfer(url: String, timeout: Int, idleMs: Int?) async -> String {
+    // A check that could not run says nothing about a freeze.
+    guard let verdict = try? await ProviderLifecycleRuntime.runBlocking({ () -> String? in
+      var payload: [String: Any] = ["runningCore": true, "url": url, "method": "GET", "timeout": timeout, "transfer": true]
+      if let idleMs { payload["transferIdleMs"] = idleMs }
+      return try Self.invokeObject(method: "ping", payload: payload)["verdict"] as? String
+    }), [ProviderTransferCheck.ok, ProviderTransferCheck.stalled].contains(verdict) else {
+      return ProviderTransferCheck.inconclusive
+    }
+    return verdict
+  }
+
   func socketPathChanged() async -> Bool {
     guard lock.withLock({ running }) else { return false }
     return (try? await ProviderLifecycleRuntime.runBlocking {
