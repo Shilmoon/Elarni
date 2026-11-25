@@ -37,6 +37,8 @@ struct ServerSubscription: Identifiable {
   var nodes: [ServerNode] { (raw["nodes"] as? [[String: Any]] ?? []).map { ServerNode(raw: $0, subscriptionID: id) } }
   /// Provider servers the user hid; a refresh keeps them out.
   var hiddenNodes: [HiddenServer] { (raw["hiddenNodes"] as? [[String: Any]] ?? []).map { HiddenServer(id: $0["id"] as? String ?? "", name: $0["name"] as? String ?? String(localized: "Server")) } }
+  /// The provider's message lines of the last refresh, such as the traffic left; shown as text, never as servers.
+  var notices: [String] { raw["notices"] as? [String] ?? [] }
   var metadata: [String: Any] { raw["metadata"] as? [String: Any] ?? [:] }
   var actions: [String] { raw["actions"] as? [String] ?? [] }
   var lastRefresh: Date? { (raw["lastSuccessfulFetch"] as? Double).map(Date.init(timeIntervalSince1970:)) }
@@ -156,7 +158,7 @@ struct ExitResult {
   /// A country's servers. `id` is what a closed group is remembered by: `<subscription>:<code>`
   /// under a subscription, `:<code>` in the list by country.
   struct Country: Identifiable { let id: String, code: String, location: ServerLocation?, nodes: [ServerNode] }
-  struct Source: Identifiable { let id: String, name: String, countries: [Country] }
+  struct Source: Identifiable { let id: String, name: String, countries: [Country], notices: [String] }
   static let maxClosedGroups = 256
   private var key: Key?
   private(set) var builds = 0
@@ -203,7 +205,9 @@ struct ExitResult {
       countries = grouped(ordered.flatMap(\.nodes), under: "")
       visible = countries.flatMap(\.nodes)
     default:
-      sources = ordered.filter { !$0.nodes.isEmpty }.map { Source(id: $0.id, name: $0.name, countries: grouped($0.nodes, under: $0.id)) }
+      // A provider whose feed holds only messages keeps its header, so the messages show.
+      sources = ordered.filter { !$0.nodes.isEmpty || !$0.notices.isEmpty }
+        .map { Source(id: $0.id, name: $0.name, countries: grouped($0.nodes, under: $0.id), notices: $0.notices) }
       visible = sources.flatMap { $0.countries.flatMap(\.nodes) }
     }
   }

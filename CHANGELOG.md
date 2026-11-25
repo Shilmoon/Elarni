@@ -14,6 +14,16 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
   transfers off", and automatic recovery and "lowest latency" move to another server; a backup
   whose downloads stall is skipped. With no other server to move to, recovery reconnects the
   stalled one once and then keeps it until a download passes or the network changes.
+- **Servers keep favorites, names and the selection when a 3x-ui panel rotates REALITY
+  values.** A refresh in which the panel changed a server's remark (the traffic left) together
+  with its REALITY short ID or SNI made every server new: favorites, renamed and hidden servers,
+  the automation list and the selected server were lost. Such a server is now found again by
+  its address, credentials and keys, on every platform.
+- **A provider's messages are no longer servers.** Some providers put the traffic left, a device
+  limit or "Package Ended" into the name of a line that points nowhere (a local or documentation
+  address, a public DNS resolver, port 0 or 1). From a subscription's own public address these
+  lines now show as "Provider: ..." under the subscription's name instead of as servers that
+  fail every test, and a subscription that sends only such lines is added without an error.
 - **Android: "Connect after device restart" waits for the network.** A server given by name
   was looked up once as the phone started, often before Wi-Fi or mobile data worked; the
   start failed and, with "Reconnect automatically" off, the phone stayed without VPN. A start

@@ -8,9 +8,11 @@ import (
 	dnsapp "github.com/xtls/xray-core/app/dns"
 	dnsfeature "github.com/xtls/xray-core/features/dns"
 	"net"
+	"net/netip"
 	"net/url"
 	"reflect"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"unicode"
@@ -24,6 +26,9 @@ type ClientProfile struct {
 	Name   string          `json:"name"`
 	Config json.RawMessage `json:"config,omitempty"`
 	URL    string          `json:"url,omitempty"`
+	// Notice: every server the profile names is one no provider runs (see noticeProfile), so its
+	// name is a provider's message rather than a server's.
+	Notice bool `json:"notice,omitempty"`
 }
 
 type ClientImport struct {
@@ -147,6 +152,143 @@ func systemResolverDNS(config json.RawMessage) bool {
 	return false
 }
 
+// Addresses no provider runs a server at: providers put a message ("📊 10GB left", "Device limit
+// reached") into the remark of a line that points at one of them.
+var (
+	noticePrefixes = []netip.Prefix{
+		netip.MustParsePrefix("192.0.2.0/24"), netip.MustParsePrefix("198.51.100.0/24"),
+		netip.MustParsePrefix("203.0.113.0/24"), netip.MustParsePrefix("2001:db8::/32"),
+	}
+	// 1.1.1.1 and 1.0.0.1 are also Cloudflare's edge, which a CDN-fronted server can list as its
+	// address; such a server names its own host (see streamHosts).
+	noticeResolvers = []netip.Addr{
+		netip.MustParseAddr("1.1.1.1"), netip.MustParseAddr("1.0.0.1"),
+		netip.MustParseAddr("8.8.8.8"), netip.MustParseAddr("8.8.4.4"),
+	}
+)
+
+// noticeProfile reports a profile whose proxy outbounds name at least one server and only servers
+// at a loopback (localhost included), unspecified or documentation address or at port 0 or 1, or
+// at a well-known resolver address when the outbound's stream settings name no host for it (no TLS
+// or REALITY serverName, no host or authority of the transport): a CDN-fronted server at 1.1.1.1
+// names its own domain there.
+func noticeProfile(config json.RawMessage) bool {
+	var profile struct {
+		Outbounds []*conf.OutboundDetourConfig `json:"outbounds"`
+	}
+	if json.Unmarshal(config, &profile) != nil {
+		return false
+	}
+	found := false
+	for _, outbound := range profile.Outbounds {
+		if outbound == nil {
+			continue
+		}
+		servers, ok := outboundServers(outbound)
+		if !ok {
+			continue
+		}
+		hosts := streamHosts(outbound.StreamSetting)
+		for _, server := range servers {
+			if server == nil || !noticeServer(server, hosts) {
+				return false
+			}
+			found = true
+		}
+	}
+	return found
+}
+
+func noticeServer(server *outboundServer, hosts []string) bool {
+	if server.Port == 0 || server.Port == 1 {
+		return true
+	}
+	if server.Address != nil && server.Address.Family().IsDomain() {
+		// The one name that is loopback without a lookup.
+		return strings.EqualFold(server.Address.Domain(), "localhost")
+	}
+	if server.Address == nil || !server.Address.Family().IsIP() {
+		return false
+	}
+	address, ok := netip.AddrFromSlice(server.Address.IP())
+	if !ok {
+		return false
+	}
+	address = address.Unmap()
+	if address.IsLoopback() || address.IsUnspecified() {
+		return true
+	}
+	for _, prefix := range noticePrefixes {
+		if prefix.Contains(address) {
+			return true
+		}
+	}
+	if !slices.Contains(noticeResolvers, address) {
+		return false
+	}
+	// A host the stream names makes it a server; a name that is the address itself is none.
+	for _, host := range hosts {
+		if named, err := netip.ParseAddr(host); err != nil || named.Unmap() != address {
+			return false
+		}
+	}
+	return true
+}
+
+// streamHosts lists the host names a stream sends its server: the TLS or REALITY serverName and
+// the transport's host or authority. Empty ones are left out.
+func streamHosts(stream *conf.StreamConfig) []string {
+	if stream == nil {
+		return nil
+	}
+	var hosts []string
+	if stream.TLSSettings != nil {
+		hosts = append(hosts, stream.TLSSettings.ServerName)
+	}
+	if stream.REALITYSettings != nil {
+		hosts = append(hosts, stream.REALITYSettings.ServerName)
+	}
+	if stream.WSSettings != nil {
+		hosts = append(hosts, stream.WSSettings.Host)
+		for key, value := range stream.WSSettings.Headers {
+			if strings.EqualFold(key, "host") {
+				hosts = append(hosts, value)
+			}
+		}
+	}
+	if stream.HTTPUPGRADESettings != nil {
+		hosts = append(hosts, stream.HTTPUPGRADESettings.Host)
+	}
+	for _, xhttp := range []*conf.SplitHTTPConfig{stream.XHTTPSettings, stream.SplitHTTPSettings} {
+		if xhttp != nil {
+			hosts = append(hosts, xhttp.Host)
+		}
+	}
+	if stream.GRPCSettings != nil {
+		hosts = append(hosts, stream.GRPCSettings.Authority)
+	}
+	// rawSettings is the newer name of tcpSettings.
+	for _, raw := range []*conf.TCPConfig{stream.TCPSettings, stream.RAWSettings} {
+		if raw == nil || len(raw.HeaderConfig) == 0 {
+			continue
+		}
+		var header struct {
+			Request struct {
+				Headers map[string]conf.StringList `json:"headers"`
+			} `json:"request"`
+		}
+		if json.Unmarshal(raw.HeaderConfig, &header) != nil {
+			continue
+		}
+		for key, values := range header.Request.Headers {
+			if strings.EqualFold(key, "host") {
+				hosts = append(hosts, values...)
+			}
+		}
+	}
+	return slices.DeleteFunc(hosts, func(host string) bool { return strings.TrimSpace(host) == "" })
+}
+
 // ImportClientProfiles imports every member of a feed it can and reports the rest in Skipped:
 // one unsupported line used to cost the user every server of the subscription. A feed with
 // nothing left to import fails with its first member's error; one Xray object, one WireGuard
@@ -159,8 +301,9 @@ func ImportClientProfiles(text string) (*ClientImport, error) {
 	text = input.Text
 	result, err := importClientProfiles(text)
 	if err == nil {
-		for _, profile := range result.Profiles {
+		for index, profile := range result.Profiles {
 			result.SystemResolverDNS = result.SystemResolverDNS || systemResolverDNS(profile.Config)
+			result.Profiles[index].Notice = profile.Format == "xrayProfile" && noticeProfile(profile.Config)
 		}
 		result.Migration = make(map[string]string)
 		for _, line := range strings.Split(text, "\n") {

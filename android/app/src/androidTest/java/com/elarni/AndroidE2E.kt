@@ -830,6 +830,67 @@ class AndroidE2E {
             assertTrue(snapshot().node(ws).getBoolean("favorite"))
         }
     }
+    // A 3x-ui panel picks each REALITY server's sid and sni per fetch and writes the traffic left into its remark;
+    // a refresh that changed both made every server new and lost what the user set on them (N10-06).
+    @Test fun e_remarkChangedWithRealityValuesKeepsServers() {
+        HTTPFixture().use { feed ->
+            fun servers(sid: String, sni: String, left: String) = listOf("DE-1", "DE-2", "NL-1").mapIndexed { i, name ->
+                "vless://00000000-0000-4000-8000-00000000001$i@127.0.0.1:${18080 + i}?encryption=none&flow=xtls-rprx-vision" +
+                    "&security=reality&type=tcp&fp=chrome&pbk=FCNsCTRerqst97Y-_Pc32LnnBu0g_hw-LhJYlaeiEVs&sni=$sni&sid=$sid$i#$name%20$left"
+            }.joinToString("\n")
+            feed.body = servers("a1b2c3d", "www.example.com", "9.52GB")
+            val id = subscribe(feed)
+            val ids = snapshot().nodes.map { it.getString("id") }
+            assertEquals(3, ids.size)
+            call("favorite", obj("id" to ids[0], "value" to true))
+            call("renameNode", obj("id" to ids[0], "name" to "My Frankfurt"))
+            call("select", obj("id" to ids[2]))
+            call("deleteNode", obj("id" to ids[1]))
+            call("automation", obj("configuration" to Automation.defaults().put("enabled", true).put("policy", "orderedFallback")
+                .put("subscriptionID", id).put("nodeIDs", JSONArray(listOf(ids[2], ids[0])))
+                .put("targets", JSONArray(listOf(obj("id" to "fixture", "url" to "http://127.0.0.1:9/health", "expectedStatus" to 204, "expectedBody" to ""))))))
+            for ((sid, sni, left) in listOf(Triple("e5f6a7b", "www.example.com", "9.47GB"), Triple("e5f6a7b", "cdn.example.org", "9.41GB"),
+                    Triple("0c1d2e3", "www.example.net", "9.30GB"))) {
+                feed.body = servers(sid, sni, left)
+                call("refresh", obj("id" to id))
+                val catalog = snapshot()
+                assertEquals(left, listOf(ids[0], ids[2]), catalog.nodes.map { it.getString("id") })
+                assertEquals(left, listOf(ids[1]), catalog.sources.single().objects("hiddenNodes").map { it.getString("id") })
+                assertTrue(catalog.node(ids[0]).getBoolean("favorite"))
+                assertEquals("My Frankfurt", catalog.node(ids[0]).string("name"))
+                assertEquals("NL-1 $left", catalog.node(ids[2]).string("name"))
+                assertEquals(ids[2], catalog.selected)
+                val automation = catalog.data.mapObject("automation")
+                assertTrue(automation.optBoolean("enabled"))
+                assertEquals(listOf(ids[2], ids[0]), automation.strings("nodeIDs"))
+            }
+        }
+    }
+    // Providers write a message into the remark of a line no server answers (N10-07). With the real importer, the marked
+    // lines of a public feed are notices and never servers; a feed served from this device keeps all five as servers.
+    @Test fun e_providerMessageLinesAreNoticesOnlyInAPublicFeed() {
+        val messages = listOf("socks://127.0.0.1:1080#📊 10GB left", "socks://192.0.2.1:1#Device limit reached", "trojan://1@1.1.1.1#✖ Package Ended")
+        val servers = listOf("vless://00000000-0000-4000-8000-000000000001@de.example:443?encryption=none&security=reality&type=tcp&fp=chrome" +
+            "&pbk=FCNsCTRerqst97Y-_Pc32LnnBu0g_hw-LhJYlaeiEVs&sni=www.example.com&sid=0a1b#DE-1", "trojan://fixture@nl.example:443?security=tls&sni=nl.example#NL-1")
+        val mixed = listOf(messages[0], servers[0], messages[1], servers[1], messages[2]).joinToString("\n")
+        fun imported(text: String) = Native.call("importClientProfiles", obj("text" to text)).objects("profiles")
+        val (kept, notices) = Catalog.providerNotices(imported(mixed), "https://sub.example/feed")
+        assertEquals(listOf("DE-1", "NL-1"), kept.map { it.string("name") })
+        assertEquals(listOf("📊 10GB left", "Device limit reached", "✖ Package Ended"), notices)
+        val (local, none) = Catalog.providerNotices(imported(mixed), "http://127.0.0.1:2096/feed")
+        assertEquals(listOf("📊 10GB left", "DE-1", "Device limit reached", "NL-1", "✖ Package Ended"), local.map { it.string("name") })
+        assertTrue(none.isEmpty())
+        val (alone, ended) = Catalog.providerNotices(imported(messages.joinToString("\n")), "https://sub.example/feed")
+        assertTrue(alone.isEmpty())
+        assertEquals(3, ended.size)
+        HTTPFixture().use { feed ->
+            feed.body = mixed
+            subscribe(feed)
+            val catalog = snapshot()
+            assertEquals(5, catalog.nodes.size)
+            assertFalse(catalog.sources.single().has("notices"))
+        }
+    }
     @Test fun e_renamedServerKeepsItsNameAcrossRefresh() {
         HTTPFixture().use { feed ->
             fun servers(key: Int) = listOf("tcp", "ws").joinToString("\n") { "vless://00000000-0000-4000-8000-00000000000$key@127.0.0.1:18080?encryption=none&security=none&type=$it#Same%20name" }

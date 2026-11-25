@@ -8,6 +8,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:elarni/connection_support.dart';
 import 'package:elarni/desktop_proxy.dart';
 import 'package:elarni/desktop_catalog.dart';
+import 'package:elarni/domain_ffi.dart';
 import 'package:elarni/tunnel_channel.dart';
 import 'package:elarni/headless.dart';
 import 'package:elarni/system_proxy.dart';
@@ -7246,13 +7247,16 @@ if tunnel: note('closed')
   test(
     'a refresh that only changes the REALITY shortId or SNI keeps the core running',
     () async {
-      var shortID = '0a1b', sni = 'example.com', fingerprint = 'chrome';
+      var shortID = '0a1b',
+          sni = 'example.com',
+          fingerprint = 'chrome',
+          remark = 'Reality';
       final feed = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
       feed.listen((request) async {
         // Connected means only that the local core answers; no server listens.
         request.response.write(
           'vless://$userID@127.0.0.1:9?encryption=none&security=reality&type=tcp&fp=$fingerprint'
-          '&pbk=FCNsCTRerqst97Y-_Pc32LnnBu0g_hw-LhJYlaeiEVs&sni=$sni&sid=$shortID#Reality\n',
+          '&pbk=FCNsCTRerqst97Y-_Pc32LnnBu0g_hw-LhJYlaeiEVs&sni=$sni&sid=$shortID#$remark\n',
         );
         await request.response.close();
       });
@@ -7283,6 +7287,20 @@ if tunnel: note('closed')
         sni = 'www.example.com';
         await backend.control.refreshSubscription(id);
         expect(await connectedSince(), started);
+        // With the remark (the traffic left) changed too, the server is found
+        // by its identity without these values, and the core stays as well.
+        final selected = (await backend.control.subscriptions()).selectedNodeId;
+        shortID = 'e5f6';
+        remark = 'Reality%209.47GB';
+        await backend.control.refreshSubscription(id);
+        final refreshed = await backend.control.subscriptions();
+        expect(refreshed.selectedNodeId, selected);
+        expect(refreshed.subscriptions.single.nodes.single.id, selected);
+        expect(
+          refreshed.subscriptions.single.nodes.single.name,
+          'Reality 9.47GB',
+        );
+        expect(await connectedSince(), started);
         // Any other change still restarts the core.
         fingerprint = 'firefox';
         await backend.control.refreshSubscription(id);
@@ -7293,6 +7311,257 @@ if tunnel: note('closed')
       }
     },
   );
+
+  // A 3x-ui panel picks each REALITY server's sid and sni per fetch and writes
+  // the traffic and days left into its remark. A refresh in which the remark
+  // changed with one of them made every server new: the favorite, the user's
+  // name, the hidden server, the automation list and the selection were lost
+  // (N10-06, run 8 of the 2026-11-24 issue research).
+  for (final (what, rotateSid, rotateSni) in [
+    ('the sid', true, false),
+    ('the sni', false, true),
+    ('the sid and the sni', true, true),
+  ]) {
+    test('a refresh that changed the remark with $what keeps every server and '
+        'what the user set on it', () async {
+      var second = false;
+      String server(int n) {
+        final sid = second && rotateSid ? 'e5f6a7b$n' : 'a1b2c3d$n';
+        final sni = second && rotateSni ? 'cdn.example.org' : 'www.example.com';
+        final usage = second ? '9.47GB📊-29D,21H⏳' : '9.52GB📊-29D,22H⏳';
+        return 'vless://00000000-0000-4000-8000-0000000000${10 + n}@192.0.2.${10 + n}:443'
+            '?encryption=none&flow=xtls-rprx-vision&security=reality&type=tcp&fp=chrome'
+            '&pbk=FCNsCTRerqst97Y-_Pc32LnnBu0g_hw-LhJYlaeiEVs&sni=$sni&sid=$sid'
+            '#${const ['DE-1', 'DE-2', 'NL-1'][n - 1]}-$usage';
+      }
+
+      final feed = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      feed.listen((request) async {
+        request.response.write(
+          [for (var n = 1; n <= 3; n++) server(n)].join('\n'),
+        );
+        await request.response.close();
+      });
+      final events = <String?>[];
+      try {
+        var result = await backend.control.addSubscription(
+          'http://127.0.0.1:${feed.port}/sub/fixture-token',
+        );
+        final id = result.snapshot.subscriptions.single.id;
+        for (
+          var attempt = 0;
+          result.warning != null && attempt < 4;
+          attempt++
+        ) {
+          result = await backend.control.refreshSubscription(
+            id,
+            challenge: result.warning!.challenge,
+          );
+        }
+        final ids = [
+          for (final node in result.snapshot.subscriptions.single.nodes)
+            node.id,
+        ];
+        expect(ids, hasLength(3));
+        await backend.control.setNodeFavorite(ids[0], true);
+        await backend.control.renameNode(ids[0], 'My Frankfurt');
+        await backend.control.selectNode(ids[2]);
+        await backend.control.deleteNode(ids[1]);
+        await backend.control.configureAutomation(
+          AutomationConfiguration(
+            enabled: true,
+            policy: AutomationSelectionPolicy.orderedFallback,
+            subscriptionId: id,
+            nodeIds: [ids[2], ids[0]],
+            targets: [
+              AutomationTarget(
+                id: 'fixture',
+                url: 'http://127.0.0.1:${target.port}/fixture',
+                expectedStatus: 200,
+                expectedBody: body,
+              ),
+            ],
+          ),
+        );
+        backend.control.setImportListener(events.add);
+        second = true;
+        final refreshed = await backend.control.refreshSubscription(id);
+        expect(refreshed.warning, isNull);
+        final snapshot = await backend.control.subscriptions();
+        final group = snapshot.subscriptions.single;
+        expect([for (final node in group.nodes) node.id], [ids[0], ids[2]]);
+        expect([for (final node in group.hiddenNodes) node.id], [ids[1]]);
+        expect(group.nodes.first.favorite, isTrue);
+        expect(group.nodes.first.name, 'My Frankfurt');
+        // The provider's new remark shows where the user named none.
+        expect(group.nodes.last.name, 'NL-1-9.47GB📊-29D,21H⏳');
+        expect(snapshot.selectedNodeId, ids[2]);
+        expect(events, isNot(contains('selected_server_replaced')));
+        final automation = catalogMap(
+          catalogMap(storedCatalog!['committed'])['automation'],
+        );
+        expect(automation['nodeIDs'], [ids[2], ids[0]]);
+        expect(automation['enabled'], isTrue);
+      } finally {
+        await feed.close(force: true);
+      }
+    });
+  }
+
+  // Providers write a message into the remark of a line no server answers
+  // (N10-07). The core's importer marks such lines; a feed from a public host
+  // shows them as notices, while a feed served here lists real servers there.
+  group('provider message lines', () {
+    const messages = [
+      'socks://127.0.0.1:1080#📊 10GB left',
+      'socks://192.0.2.1:1#Device limit reached',
+      'trojan://1@1.1.1.1#✖ Package Ended',
+    ];
+    const servers = [
+      'vless://$userID@de.example:443?encryption=none&security=reality'
+          '&type=tcp&fp=chrome&pbk=FCNsCTRerqst97Y-_Pc32LnnBu0g_hw-LhJYlaeiEVs'
+          '&sni=www.example.com&sid=0a1b#DE-1',
+      'trojan://fixture@nl.example:443?security=tls&sni=nl.example#NL-1',
+    ];
+    final mixed = [
+      messages[0],
+      servers[0],
+      messages[1],
+      servers[1],
+      messages[2],
+    ].join('\n');
+
+    // The stage as a refresh runs it: the feed text is canned, the importer
+    // and the identities are the real ones.
+    Future<DesktopCatalog> refreshed(String url, String text) async {
+      final library = ElarniDomainFfi.openLibrary(domainPath);
+      addTearDown(library.dispose);
+      Future<CatalogMap> core(String method, CatalogMap payload) async {
+        final process = await Process.start(
+          corePath,
+          const [],
+          environment: coreEnvironment,
+        );
+        unawaited(process.stderr.drain<void>());
+        process.stdin.writeln(
+          jsonEncode({'apiVersion': 1, 'method': method, 'payload': payload}),
+        );
+        await process.stdin.flush();
+        final line = await process.stdout
+            .transform(utf8.decoder)
+            .transform(const LineSplitter())
+            .first
+            .timeout(const Duration(seconds: 10));
+        await process.stdin.close();
+        final reply = catalogMap(jsonDecode(line));
+        expect(await process.exitCode, 0);
+        expect(reply['success'], isTrue, reason: '$reply');
+        return catalogMap(reply['data']);
+      }
+
+      final catalog = DesktopCatalog(
+        DesktopCatalog.empty(),
+        (method, payload) async => switch (method) {
+          'fetchSubscription' => {
+            'body': text,
+            'headers': <String, Object?>{},
+            'url': payload['url'],
+            'approvedChain': <Object?>[],
+          },
+          'importClientProfiles' => await core(method, payload),
+          _ => throw StateError(method),
+        },
+        (operation, payload) => library.request({
+          'schemaVersion': 1,
+          'operation': operation,
+          'payload': payload,
+        }),
+      );
+      expect(await catalog.refresh(catalog.addSource(url)), isNull);
+      return catalog;
+    }
+
+    SubscriptionGroup shown(DesktopCatalog catalog) =>
+        SubscriptionGroup.fromMap(
+          catalogList(catalog.snapshot()['subscriptions']).single,
+        );
+
+    test('of a public feed are notices and never servers', () async {
+      final catalog = await refreshed('https://sub.example/feed', mixed);
+      final group = shown(catalog);
+      expect([for (final node in group.nodes) node.name], ['DE-1', 'NL-1']);
+      expect(group.notices, [
+        '📊 10GB left',
+        'Device limit reached',
+        '✖ Package Ended',
+      ]);
+      // Selection, a test of every server and automation choose among the
+      // servers of the catalog, which hold no notice.
+      expect(catalog.selected, group.nodes.first.id);
+      expect(
+        [
+          for (final source in catalog.sources)
+            for (final key in ['nodes', 'hiddenNodes'])
+              for (final node in catalogList(source[key])) node['name'],
+        ],
+        ['DE-1', 'NL-1'],
+      );
+    });
+
+    test('of a feed from this device are servers', () async {
+      final catalog = await refreshed('http://127.0.0.1:2096/feed', mixed);
+      final group = shown(catalog);
+      expect([for (final node in group.nodes) node.name], [
+        '📊 10GB left',
+        'DE-1',
+        'Device limit reached',
+        'NL-1',
+        '✖ Package Ended',
+      ]);
+      expect(group.notices, isEmpty);
+    });
+
+    test('alone refresh a public subscription to no server', () async {
+      final catalog = await refreshed(
+        'https://sub.example/feed',
+        messages.join('\n'),
+      );
+      final group = shown(catalog);
+      expect(group.status, 'ready');
+      expect(group.nodes, isEmpty);
+      expect(group.notices, hasLength(3));
+      expect(catalog.selected, isNull);
+    });
+
+    test('of a feed served here stay servers through the backend', () async {
+      final feed = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      feed.listen((request) async {
+        request.response.write(mixed);
+        await request.response.close();
+      });
+      try {
+        var result = await backend.control.addSubscription(
+          'http://127.0.0.1:${feed.port}/sub/fixture-token',
+        );
+        final id = result.snapshot.subscriptions.single.id;
+        for (
+          var attempt = 0;
+          result.warning != null && attempt < 4;
+          attempt++
+        ) {
+          result = await backend.control.refreshSubscription(
+            id,
+            challenge: result.warning!.challenge,
+          );
+        }
+        final group = result.snapshot.subscriptions.single;
+        expect(group.nodes, hasLength(5));
+        expect(group.notices, isEmpty);
+      } finally {
+        await feed.close(force: true);
+      }
+    });
+  });
 
   test('a renamed server keeps its name and a deleted one is gone', () async {
     final feed = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);

@@ -1375,6 +1375,15 @@
       }
     }
   },
+  "providerMessageLine": "Provider: {message}",
+  "@providerMessageLine": {
+    "description": "A message line of a subscription's provider, such as the traffic left, shown under the subscription's name.",
+    "placeholders": {
+      "message": {
+        "type": "String"
+      }
+    }
+  },
   "runtime": "Runtime",
   "failureFetch": "Download failed",
   "failureFetchText": "The download failed. Check this device’s network, then retry.",

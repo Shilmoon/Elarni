@@ -2681,6 +2681,11 @@ class AppLocalizationsEn extends AppLocalizations {
   }
 
   @override
+  String providerMessageLine(String message) {
+    return 'Provider: $message';
+  }
+
+  @override
   String get runtime => 'Runtime';
 
   @override

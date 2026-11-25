@@ -79,3 +79,21 @@ func uniqueNodeIDs(
   for value in values { grouped[value.key, default: []].append(value.id) }
   return grouped.compactMapValues { $0.count == 1 ? $0[0] : nil }
 }
+
+/// Pairs a refresh's unmatched positions with stored node IDs by a key: a key that occurs as often on both
+/// sides pairs in order, any other count is left to the later stages.
+func pairedByStableIdentity(
+  fresh: [(position: Int, key: String)],
+  stale: [(id: String, key: String)]
+) -> [Int: String] {
+  var olds: [String: [String]] = [:]
+  for value in stale { olds[value.key, default: []].append(value.id) }
+  var positions: [String: [Int]] = [:]
+  for value in fresh { positions[value.key, default: []].append(value.position) }
+  var matches: [Int: String] = [:]
+  for (key, same) in positions {
+    guard let ids = olds[key], ids.count == same.count else { continue }
+    for (position, id) in zip(same, ids) { matches[position] = id }
+  }
+  return matches
+}

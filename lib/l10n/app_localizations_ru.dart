@@ -2719,6 +2719,11 @@ class AppLocalizationsRu extends AppLocalizations {
   }
 
   @override
+  String providerMessageLine(String message) {
+    return 'Провайдер: $message';
+  }
+
+  @override
   String get runtime => 'Среда выполнения';
 
   @override
