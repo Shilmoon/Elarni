@@ -18,6 +18,8 @@
     <string name="no_app_could_open_this_link">Ни одно приложение не смогло открыть эту ссылку. Проверьте адрес и установленные приложения.</string>
     <string name="android_restarted_the_app_during_export">Android перезапустил приложение во время экспорта. Экспортируйте файл снова.</string>
     <string name="the_file_could_not_be_read">Не удалось прочитать или сохранить файл. Выберите доступный файл или место.</string>
+    <string name="no_app_on_this_device_can_open">На этом устройстве нет приложения, которое открывает и сохраняет файлы. Установите файловый менеджер и повторите.</string>
+    <string name="android_on_this_device_cannot_open">Android на этом устройстве не может открыть этот экран.</string>
     <string name="no_camera_app_is_available_import">Нет приложения камеры. Импортируйте изображение QR.</string>
     <string name="no_readable_qr_code_was_found">Читаемый QR-код не найден. Используйте чёткое, хорошо освещённое изображение со всем кодом.</string>
     <string name="the_input_exceeds_the_supported_size">Данные превышают допустимый размер. Используйте файл или профиль поменьше.</string>
@@ -456,6 +458,8 @@
     <string name="package_profile_tools">Пакеты и профили</string>
     <string name="not_currently_visible_remove_unavailable_apps">Сейчас не видны: %1$s. Уберите недоступные приложения перед подключением.</string>
     <string name="no_other_installed_apps">Других установленных приложений нет.</string>
+    <string name="the_system_on_this_phone_keeps">Система этого телефона не даёт Elarni прочитать установленные приложения. Разрешите это в настройках приложения Elarni и вернитесь сюда.</string>
+    <string name="open_app_settings">Открыть настройки приложения</string>
     <string name="no_apps_match_your_search">Нет приложений по вашему запросу.</string>
     <string name="show_more">Показать ещё</string>
     <string name="installed_apps">Установленные приложения</string>
@@ -803,6 +807,7 @@
     <string name="run_in_the_background">Работа в фоне</string>
     <string name="allowed">Разрешено</string>
     <string name="reset_elarni">Сбросить Elarni</string>
+    <string name="retry">Повторить</string>
     <string name="reset_elarni_2">Сбросить Elarni?</string>
     <string name="this_deletes_every_subscription_server_and">Все подписки, серверы и настройки на этом устройстве будут удалены. Отменить это нельзя.</string>
     <string name="a_chosen_server_has_no_share">У выбранного сервера нет ссылки, которая сохраняет все его настройки. Поделитесь им с его страницы.</string>

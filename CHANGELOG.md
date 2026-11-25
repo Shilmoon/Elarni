@@ -4,6 +4,28 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
 
 ## Unreleased
 
+### Fixed
+
+- **Android: "Connect after device restart" waits for the network.** A server given by name
+  was looked up once as the phone started, often before Wi-Fi or mobile data worked; the
+  start failed and, with "Reconnect automatically" off, the phone stayed without VPN. A start
+  at boot or by Always-on VPN that fails because the name has no answer or no network is up
+  now tries again after 2, 4, 8 and 16 s, then every 30 s and at once when a network comes,
+  for 2 minutes. Other failures, such as a refused setting, still end the start at once.
+- **Android: per-app routing on Xiaomi (HyperOS, MIUI) and Honor phones.** Their systems show
+  an app no other installed apps until their own permission allows it, so the list said "No
+  other installed apps." Elarni now declares that permission, so its app settings can allow
+  it. While it is denied, the empty list says so with a button to those settings, and the list
+  is read again on return.
+- **Android: no crash where Android has no file picker or settings screen.** Opening or saving
+  a file on a device without a document picker (some TV boxes), and opening Android's VPN,
+  location or app settings, the share sheet or the VPN permission dialog where the system has
+  none, closed the app. Elarni now says that the device has no app or screen for it.
+- **Android: a Keystore that fails for a moment no longer offers to reset Elarni.** Any
+  failure to decrypt the saved data read as damaged data, and the offered reset deletes the
+  subscriptions. Only a file that does not match its key, or a key Android removed, offers the
+  reset now; a failing Keystore keeps the data and offers **Retry**, which opens it again.
+
 ## 0.6.4 - 2026-11-23
 
 ### Added

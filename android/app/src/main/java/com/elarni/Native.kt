@@ -32,7 +32,8 @@ internal fun java.io.InputStream.readBounded(limit: Int): ByteArray {
     return output.toByteArray()
 }
 
-class AppFailure(val code: String) : Exception(code)
+/** [cause] says more than [code] for the app itself, such as a server name without an answer; the UI shows only [code]. */
+class AppFailure(val code: String, cause: Throwable? = null) : Exception(code, cause)
 
 object NativeBindings {
     init { System.loadLibrary("elarni_jni") }

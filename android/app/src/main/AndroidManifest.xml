@@ -5,6 +5,9 @@
          activities. Scoped intent queries cannot enumerate that set. This private
          APK requires a separate package-visibility review before Play submission. -->
     <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" tools:ignore="QueryAllPackagesPermission" />
+    <!-- HyperOS/MIUI and MagicOS show other installed apps only with their own permission, which
+         the user grants on the app's page in the system settings; other systems do not define it. -->
+    <uses-permission android:name="com.android.permission.GET_INSTALLED_APPS" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SYSTEM_EXEMPTED" />

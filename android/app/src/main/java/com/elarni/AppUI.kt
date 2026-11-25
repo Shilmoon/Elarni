@@ -322,8 +322,11 @@ private val LocalReselect = compositionLocalOf { 0 }
                 if (source == null) {
                     // Only a reset gets past a saved catalog that cannot be read, damaged or with its key gone; unavailable storage can come back by itself.
                     val unreadable = error in Repository.unreadable && activity.repository.catalogUnreadable
-                    val reset = tr(R.string.reset_elarni).takeIf { unreadable }
-                    if (snackbar.showSnackbar(errorMessage(error, unreadable), reset, withDismissAction = true) == SnackbarResult.ActionPerformed) confirmReset()
+                    val retry = !unreadable && error == "storage_unavailable" && activity.repository.catalogUnavailable
+                    val action = if (unreadable) tr(R.string.reset_elarni) else if (retry) tr(R.string.retry) else null
+                    if (snackbar.showSnackbar(errorMessage(error, unreadable), action, withDismissAction = true) == SnackbarResult.ActionPerformed) {
+                        if (unreadable) confirmReset() else activity.repository.scope.launch { activity.repository.retryOpen() }
+                    }
                 } else {
                     val support = source.mapObject("links").string("support").takeIf { error in providerFaults && it.isNotEmpty() }
                     val result = snackbar.showSnackbar(tr(R.string.the_last_working_servers_were_kept, refreshFailure(error, source.string("name"))), support?.let { tr(R.string.contact_provider) }, withDismissAction = true)
@@ -1423,6 +1426,9 @@ fun pingScope(result: JSONObject) = when (result.string("protocol")) { "tcp" -> 
                 val unreadable = state.error in Repository.unreadable && activity.repository.catalogUnreadable
                 state.error?.let { SettingsTile(errorMessage(it, unreadable), titleColor = MaterialTheme.colorScheme.error) }
                 if (unreadable) SettingsTile(tr(R.string.reset_elarni), enabled = !state.busy, titleColor = MaterialTheme.colorScheme.error, onClick = reset)
+                // Storage that was unavailable may open now; a reset would delete what it holds.
+                else if (state.error == "storage_unavailable" && activity.repository.catalogUnavailable)
+                    SettingsTile(tr(R.string.retry), enabled = !state.busy) { activity.repository.scope.launch { activity.repository.retryOpen() } }
             }
             SettingsGroup {
                 SettingsTile(tr(R.string.retry_selected_server), enabled = !state.busy) { activity.connect() }
@@ -1584,6 +1590,8 @@ fun errorMessage(code: String, unreadable: Boolean = false): String = when (code
     "invalid_qr_image" -> tr(R.string.no_readable_qr_code_was_found)
     "camera_unavailable" -> tr(R.string.no_camera_app_is_available_import)
     "file_unavailable" -> tr(R.string.the_file_could_not_be_read)
+    "picker_unavailable" -> tr(R.string.no_app_on_this_device_can_open)
+    "system_screen_unavailable" -> tr(R.string.android_on_this_device_cannot_open)
     "recording_empty" -> tr(R.string.nothing_is_recorded_yet_turn_on)
     "recording_failed" -> tr(R.string.the_recording_could_not_be_updated)
     "export_expired" -> tr(R.string.android_restarted_the_app_during_export)

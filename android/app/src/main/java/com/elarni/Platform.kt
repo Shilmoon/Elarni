@@ -220,7 +220,9 @@ class ElarniVpnService : VpnService() {
         try { foreground(vpn && !taken && prepare(this) == null) }
         catch (_: Exception) { app.repository.report(AppFailure("foreground_start_denied")); stopSelf(); return START_NOT_STICKY }
         val generation = intent?.takeIf { it.hasExtra(GENERATION) }?.getLongExtra(GENERATION, -1)
-        app.repository.scope.launch { app.repository.serviceStart(this@ElarniVpnService, intent?.action != CONNECT, generation, startId, taken, alwaysOn) }
+        // Boot and always-on start as the device starts, perhaps before its network can look the server up.
+        val untilOnline = alwaysOn || intent?.getBooleanExtra(BOOT, false) == true
+        app.repository.scope.launch { app.repository.serviceStart(this@ElarniVpnService, intent?.action != CONNECT, generation, startId, taken, alwaysOn, untilOnline) }
         if (monitor == null) monitor = app.repository.scope.launch {
             var ticks = 0
             while (isActive) {
@@ -328,7 +330,7 @@ class ElarniVpnService : VpnService() {
         super.onDestroy()
     }
     companion object {
-        const val CONNECT = "com.elarni.CONNECT"; const val DISCONNECT = "com.elarni.DISCONNECT"; const val GENERATION = "generation"
+        const val CONNECT = "com.elarni.CONNECT"; const val DISCONNECT = "com.elarni.DISCONNECT"; const val GENERATION = "generation"; const val BOOT = "boot"
         // Each TUN packet costs the userspace stack one syscall; 9000 moves bulk TCP in about 6x fewer.
         const val MTU = 9000
         const val PACKAGES_SETTLE_MS = 2000L

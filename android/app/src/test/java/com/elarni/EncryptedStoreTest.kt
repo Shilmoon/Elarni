@@ -50,6 +50,22 @@ class EncryptedStoreTest {
         }
     }
 
+    // A corrupt or locked catalog offers the reset, which deletes the subscriptions; a Keystore that fails for a moment must not.
+    @Test fun onlyADamagedFileOrALostKeyOffersTheReset() {
+        val sealed = EncryptedStore.seal(plain, aad, key)
+        val tampered = sealed.copyOf().also { it[it.lastIndex] = (it.last().toInt() xor 1).toByte() }
+        val tagFailure = runCatching { EncryptedStore.unseal(tampered, aad) { key } }.exceptionOrNull() as Exception
+        assertEquals("A changed file", "storage_corrupt", EncryptedStore.openFailure(tagFailure))
+        assertEquals("Opened to something that is no catalog", "storage_corrupt", EncryptedStore.openFailure(org.json.JSONException("not JSON")))
+        assertEquals("storage_locked", EncryptedStore.openFailure(android.security.keystore.KeyPermanentlyInvalidatedException()))
+        for (code in listOf("storage_corrupt", "storage_locked", "storage_unavailable", "input_too_large"))
+            assertEquals("An app failure keeps its code", code, EncryptedStore.openFailure(AppFailure(code)))
+        for (failure in listOf(java.security.KeyStoreException("keystore2 busy"), java.security.ProviderException("Keystore operation failed"),
+            java.security.InvalidKeyException("Keystore operation failed"), javax.crypto.IllegalBlockSizeException(),
+            android.security.keystore.UserNotAuthenticatedException(), IllegalStateException("no service"), java.io.IOException("read failed")))
+            assertEquals("A failing Keystore or read is not a damaged file: $failure", "storage_unavailable", EncryptedStore.openFailure(failure))
+    }
+
     @Test fun aDamagedHeaderReadsAsCorruptWithoutAskingForTheKey() {
         val sealed = EncryptedStore.seal(plain, aad, key)
         for (bytes in listOf(sealed.copyOf(32), byteArrayOf(), "RVAD2".toByteArray() + sealed.copyOfRange(5, sealed.size))) {
