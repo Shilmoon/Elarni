@@ -281,6 +281,8 @@
         "Vendor/libXray/cmd/elarni-core/dns_guard_test.go",
         "Vendor/libXray/cmd/elarni-core/dns_windows.go",
         "Vendor/libXray/cmd/elarni-core/dns_windows_test.go",
+        "Vendor/libXray/cmd/elarni-core/fallback_routes.go",
+        "Vendor/libXray/cmd/elarni-core/fallback_routes_test.go",
         "Vendor/libXray/cmd/elarni-core/fetch.go",
         "Vendor/libXray/cmd/elarni-core/fetch_test.go",
         "Vendor/libXray/cmd/elarni-core/firewall_keeper.go",

@@ -169,6 +169,52 @@ func TestPhysicalRouteSelectionPreservesPrefixMetricAndZone(t *testing.T) {
 	}
 }
 
+// Block traffic without VPN keeps the tunnel's prefixes on the loopback interface too. They are
+// more specific than the physical default route, and the core's own sockets bound there would
+// reach nothing: they keep the physical route, and the default route keeps its interface.
+func TestPhysicalRouteSelectionSkipsTheLoopbackInterface(t *testing.T) {
+	routes := []physicalRoute{
+		{prefix: netip.MustParsePrefix("0.0.0.0/0"), index: 7, metric: 25},
+		{prefix: netip.MustParsePrefix("::/0"), index: 7, metric: 25},
+		{prefix: netip.MustParsePrefix("192.168.1.0/24"), index: 7, metric: 281},
+	}
+	for _, prefix := range []string{"0.0.0.0/1", "128.0.0.0/1", "::/1", "8000::/1", "127.0.0.0/8", "::1/128"} {
+		routes = append(routes, physicalRoute{prefix: netip.MustParsePrefix(prefix), index: 1, metric: fallbackRouteMetric + 75, loopback: true})
+	}
+	for _, address := range []string{"9.9.9.9", "203.0.113.9", "192.168.1.20", "2001:db8::7", "fd00::7"} {
+		if got := selectPhysicalRoute(routes, netip.MustParseAddr(address)); got == nil || got.index != 7 {
+			t.Errorf("route for %s = %+v, want the physical interface", address, got)
+		}
+	}
+	cache := &physicalNetworkCache{load: func() (*physicalNetworkSnapshot, error) { return &physicalNetworkSnapshot{routes: routes}, nil }}
+	if got := cache.defaults(); got != [2]uint32{7, 7} {
+		t.Fatalf("default routes on interfaces %v, want the physical one", got)
+	}
+	// The real table: every route of the loopback interface is marked, 127.0.0.0/8 among them.
+	snapshot, err := readPhysicalNetwork(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	interfaces, err := net.Interfaces()
+	if err != nil {
+		t.Fatal(err)
+	}
+	loopback := map[uint32]bool{}
+	for _, iface := range interfaces {
+		loopback[uint32(iface.Index)] = iface.Flags&net.FlagLoopback != 0
+	}
+	marked := false
+	for _, route := range snapshot.routes {
+		if route.loopback != loopback[route.index] {
+			t.Errorf("route %s on interface %d marked loopback %v", route.prefix, route.index, route.loopback)
+		}
+		marked = marked || route.loopback && route.prefix == netip.MustParsePrefix("127.0.0.0/8")
+	}
+	if !marked {
+		t.Fatal("the loopback interface's 127.0.0.0/8 route is not marked")
+	}
+}
+
 // Regression: WireGuard kept its socket on the adapter that carried the default
 // route when it started, so a move to another adapter left the tunnel dead.
 func TestPhysicalDefaultRouteMoveReopensSockets(t *testing.T) {
