@@ -1076,13 +1076,16 @@ pub(crate) fn compile_owned_config(
 }
 
 /// The TUN's own subnets: Android's VpnService (Platform.kt) and the desktop TUN
-/// (windows_tun_config.go) hold their resolver there. Nothing else answers in them, so a
+/// (windows_tun_config.go) hold their resolver there, and the Mac and iPhone tunnel
+/// (TunnelSettingsFactory.swift) its addresses. Nothing else answers in them, so a
 /// Private DNS probe on 853 or a subnet broadcast (NetBIOS, Spotify discovery) would
 /// leave by a rule for private ranges and hang until its timeout.
-const TUN_OWN_SUBNETS: [&str; 3] = [
+const TUN_OWN_SUBNETS: [&str; 5] = [
     "198.51.100.252/30",
     "fdfe:dcba:9876::/126",
     "fd76:6f75:7465::/126",
+    "192.0.2.0/30",
+    "2001:db8::/126",
 ];
 
 /// Ends TUN traffic to its own subnets, except DNS, ahead of every other rule, the

@@ -221,6 +221,19 @@ fn after_own_subnet_block(config: &Value) -> &[Value] {
     let rules = config["routing"]["rules"].as_array().unwrap();
     assert_eq!(rules[0]["inboundTag"], json!(["elarni-tun"]));
     assert_eq!(rules[0]["port"], "1-52,54-65535");
+    // Android, the desktop TUN, and the Mac and iPhone tunnel (TunnelSettingsFactory.swift).
+    for subnet in [
+        "198.51.100.252/30",
+        "fdfe:dcba:9876::/126",
+        "fd76:6f75:7465::/126",
+        "192.0.2.0/30",
+        "2001:db8::/126",
+    ] {
+        assert!(
+            rules[0]["ip"].as_array().unwrap().contains(&json!(subnet)),
+            "{subnet} is not blocked"
+        );
+    }
     let block = config["outbounds"]
         .as_array()
         .unwrap()

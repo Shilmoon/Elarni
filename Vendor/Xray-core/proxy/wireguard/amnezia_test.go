@@ -55,12 +55,12 @@ func TestWireGuardEnginesCarryTCPAndUDP(t *testing.T) {
 			obf := ""
 			if amnezia {
 				logger := &awg.Logger{Verbosef: func(string, ...any) {}, Errorf: t.Logf}
-				server = awg.NewDevice(adaptAmneziaTUN(serverTun), &amneziaBind{serverBind}, logger)
+				server = amneziaDevice{Device: awg.NewDevice(adaptAmneziaTUN(serverTun), &amneziaBind{serverBind}, logger)}
 				// Full-width headers catch the reserved-byte corruption regression.
 				obf = "jc=4\njmin=40\njmax=80\ns1=16\ns2=17\ns3=18\ns4=19\nh1=100000-100100\nh2=200000-200100\nh3=300000-300100\nh4=400000-400100\nheader_protection_key=" + hex.EncodeToString(bytes.Repeat([]byte{0x5a}, 32)) + "\ncontent_padding_addition=4-8\nrandom_trailers=true\ndisable_cookies=true\n"
 			} else {
 				logger := &device.Logger{Verbosef: func(string, ...any) {}, Errorf: t.Logf}
-				server = device.NewDevice(serverTun, serverBind, logger)
+				server = wireguardDevice{Device: device.NewDevice(serverTun, serverBind, logger)}
 			}
 			defer serverSocket.Close()
 			defer server.Close()
@@ -245,7 +245,7 @@ func TestAmneziaJminWithoutJmaxStartsTheDevice(t *testing.T) {
 			if err := handler.init(context.Background()); err != nil {
 				t.Fatalf("the AmneziaWG device refused the profile: %v", err)
 			}
-			state, err := handler.dev.(*awg.Device).IpcGet()
+			state, err := handler.dev.(amneziaDevice).IpcGet()
 			if err != nil {
 				t.Fatal(err)
 			}

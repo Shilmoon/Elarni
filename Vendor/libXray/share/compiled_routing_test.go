@@ -290,10 +290,11 @@ func TestCompiledDirectRouteDialsDnsHostsPin(t *testing.T) {
 	}
 }
 
-// The TUN's own subnets (Android Platform.kt, desktop TunGateway4/6) hold only its DNS
-// resolver. A Private DNS probe to it on 853 or a subnet broadcast there must end at
-// once instead of leaving by a profile rule for 198.51.100.0/24, the fixtures' direct
-// range, while DNS on 53 and the rest of that range keep their routes.
+// The TUN's own subnets (Android Platform.kt, desktop TunGateway4/6, the Mac and iPhone
+// TunnelSettingsFactory.swift) hold only its DNS resolver and addresses. A Private DNS
+// probe to it on 853 or a subnet broadcast there must end at once instead of leaving by
+// a profile rule for 198.51.100.0/24, the fixtures' direct range, while DNS on 53 and
+// the rest of that range keep their routes.
 func TestCompiledTunBlocksItsOwnSubnets(t *testing.T) {
 	var fixtures map[string]json.RawMessage
 	if err := json.Unmarshal(compiledRoutingJSON, &fixtures); err != nil {
@@ -342,6 +343,9 @@ func TestCompiledTunBlocksItsOwnSubnets(t *testing.T) {
 				{"elarni-tun", udp("198.51.100.255", 57621), "elarni-block"},
 				{"elarni-tun", tcp("fdfe:dcba:9876::2", 853), "elarni-block"},
 				{"elarni-tun", tcp(TunDNS6, 853), "elarni-block"},
+				{"elarni-tun", tcp("192.0.2.1", 853), "elarni-block"},
+				{"elarni-tun", udp("192.0.2.3", 137), "elarni-block"},
+				{"elarni-tun", tcp("2001:db8::1", 853), "elarni-block"},
 				{"elarni-tun", fixture.dns, fixture.dnsOutbound},
 				{"elarni-tun", tcp("198.51.100.20", 443), fixture.rangeOutbound},
 				{"elarni-tun", tcp("fdfe:dcba:9876::10", 443), fixture.otherOutbound},

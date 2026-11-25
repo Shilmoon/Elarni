@@ -48,8 +48,8 @@ type Handler struct {
 	tun          tun.Device
 	tnet         *Net
 	dev          tunnelDevice
-	configured   bool // dev accepted the config; until then each dial retries IpcSet
-	stopRebind   func()
+	configured   bool   // dev accepted the config; until then each dial retries IpcSet
+	stopWatchers func() // ends the rebind and sleep watchers of dev
 	mu           sync.Mutex
 	diagnosticID uint64
 }
@@ -288,9 +288,9 @@ func (h *Handler) Process(ctx context.Context, link *transport.Link, dialer inte
 func (h *Handler) Close() (err error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if h.stopRebind != nil {
-		h.stopRebind()
-		h.stopRebind = nil
+	if h.stopWatchers != nil {
+		h.stopWatchers()
+		h.stopWatchers = nil
 	}
 	if h.dev != nil {
 		h.dev.Close()
@@ -367,27 +367,40 @@ func (h *Handler) newDevice(ctx context.Context) tunnelDevice {
 			})
 		},
 	}
+	peers := make([]string, len(h.conf.Peers))
+	for i, peer := range h.conf.Peers {
+		peers[i] = peer.PublicKey
+	}
 	var dev tunnelDevice
 	if h.conf.Amnezia {
-		dev = awg.NewDevice(adaptAmneziaTUN(h.tun), &amneziaBind{bind}, &awg.Logger{Verbosef: logger.Verbosef, Errorf: logger.Errorf})
+		dev = amneziaDevice{Device: awg.NewDevice(adaptAmneziaTUN(h.tun), &amneziaBind{bind}, &awg.Logger{Verbosef: logger.Verbosef, Errorf: logger.Errorf}), peers: peers}
 	} else {
-		dev = device.NewDevice(h.tun, bind, logger)
+		dev = wireguardDevice{Device: device.NewDevice(h.tun, bind, logger), peers: peers}
 	}
 	bind.downFunc = dev.Down
 	// The socket keeps the interface it was bound to; reopen it on the new one.
-	moves, done := make(chan struct{}, 1), make(chan struct{})
+	moves, done, watched := make(chan struct{}, 1), make(chan struct{}), make(chan struct{})
 	remove := internet.OnSocketPathChange(func() {
 		select {
 		case moves <- struct{}{}:
 		default:
 		}
 	})
-	h.stopRebind = func() { remove(); close(done) }
+	h.stopWatchers = func() { remove(); close(done); <-watched }
 	go coalesce(moves, done, rebindGap, func() {
 		if dev.BindUpdate() != nil {
 			dev.Down() // the next dial retries Up, as after a failed start
 		}
 	})
+	// Elarni: after a sleep the server may have dropped the keys the engine still thinks fresh.
+	go func() {
+		defer close(watched)
+		watchSleep(done, sleepTick, readClocks, func() {
+			if err := dev.Rehandshake(); err != nil {
+				errors.LogDebugInner(context.Background(), err, "WireGuard handshake after sleep")
+			}
+		})
+	}()
 	return dev
 }
 

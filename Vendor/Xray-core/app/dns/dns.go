@@ -482,13 +482,19 @@ func (s *DNS) serialQuery(domain string, option dns.IPOption) ([]net.IP, uint32,
 			continue
 		}
 
-		ips, ttl, err := client.QueryIP(s.ctx, domain, option)
+		ips, ttl, answeredEmpty, err := client.queryIP(s.ctx, domain, option)
 
 		if len(ips) > 0 {
 			return ips, ttl, nil
 		}
 
 		errors.LogInfoInner(s.ctx, err, "failed to lookup ip for domain ", domain, " at server ", client.Name(), " in serial query mode")
+		// Elarni: a resolver that answered an AAAA query without records said the name has no IPv6
+		// address; the next one would give the same answer or, often without an IPv6 route itself,
+		// none until its timeout.
+		if answeredEmpty && option.IPv6Enable && !option.IPv4Enable {
+			return nil, 0, dns.ErrEmptyResponse
+		}
 		if err == nil {
 			err = dns.ErrEmptyResponse
 		}

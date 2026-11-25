@@ -113,6 +113,11 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
 - **A subscription encrypted for Happ says so.** A feed that only Happ can decrypt (an
   `Encrypt-Tag` header and `?key=` in its link) failed as an invalid or unsupported feed; the
   message now says it is encrypted for another app and to ask the provider for another link.
+- **WireGuard and AmneziaWG carry traffic again right after the device wakes**, instead of
+  after about 15 s: a sleep of a minute or more renews the keys the server may have dropped.
+  Names with many addresses resolve again in apps that take small DNS answers, a name without
+  an IPv6 address no longer waits for the next DNS server, and on the Mac and iPhone a probe to
+  the tunnel's own addresses ends at once instead of hanging until its timeout.
 
 ## 0.6.4 - 2026-11-23
 
