@@ -53,8 +53,10 @@ func OnSocketPathChange(f func()) (remove func()) {
 	}
 }
 
-// SocketPathChanged runs the functions registered with OnSocketPathChange.
+// SocketPathChanged runs the functions registered with OnSocketPathChange, after forgetting
+// which address of each UDP server name answered last.
 func SocketPathChanged() {
+	forgetUDPWorking()
 	socketPathListeners.Lock()
 	listeners := make([]func(), 0, len(socketPathListeners.all))
 	for _, f := range socketPathListeners.all {

@@ -305,8 +305,9 @@ func checkAddressPortStrategy(ctx context.Context, dest net.Destination, sockopt
 	return nil, nil
 }
 
-// DialSystem calls system dialer to create a network connection.
-func DialSystem(ctx context.Context, dest net.Destination, sockopt *SocketConfig) (net.Conn, error) {
+// dialSource returns the address DialSystem dials dest from for ctx's outbound, and the
+// strategy it resolves a name of dest with when sockopt has one.
+func dialSource(ctx context.Context, dest net.Destination, sockopt *SocketConfig) (net.Address, DomainStrategy) {
 	var src net.Address
 	outbounds := session.OutboundsFromContext(ctx)
 	var outboundName string
@@ -323,6 +324,19 @@ func DialSystem(ctx context.Context, dest net.Destination, sockopt *SocketConfig
 		}
 	}
 	if sockopt == nil {
+		return src, DomainStrategy_AS_IS
+	}
+	strategy := sockopt.DomainStrategy
+	if outboundName == "freedom" && dest.Network == net.Network_UDP && origTargetAddr != nil && src == nil {
+		strategy = strategy.GetDynamicStrategy(origTargetAddr.Family())
+	}
+	return src, strategy
+}
+
+// DialSystem calls system dialer to create a network connection.
+func DialSystem(ctx context.Context, dest net.Destination, sockopt *SocketConfig) (net.Conn, error) {
+	src, finalStrategy := dialSource(ctx, dest, sockopt)
+	if sockopt == nil {
 		return effectiveSystemDialer.Dial(ctx, src, dest, sockopt)
 	}
 
@@ -332,10 +346,6 @@ func DialSystem(ctx context.Context, dest net.Destination, sockopt *SocketConfig
 	}
 
 	if sockopt.DomainStrategy.HasStrategy() && dest.Address.Family().IsDomain() {
-		finalStrategy := sockopt.DomainStrategy
-		if outboundName == "freedom" && dest.Network == net.Network_UDP && origTargetAddr != nil && src == nil {
-			finalStrategy = finalStrategy.GetDynamicStrategy(origTargetAddr.Family())
-		}
 		ips, err := LookupForIPContext(ctx, dest.Address.Domain(), finalStrategy, src)
 		if err != nil {
 			errors.LogErrorInner(ctx, err, "failed to resolve ip")

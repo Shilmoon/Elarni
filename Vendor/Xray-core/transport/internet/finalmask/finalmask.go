@@ -54,6 +54,12 @@ func NewFinalMask(tcpMasks []TCPMask, udpMasks []UDPMask, dialTCP func(context.C
 	}
 }
 
+// UDPMasks returns the masks DialUDP wraps the datagrams of a dial in. Elarni: UDP transports
+// check them before they try the addresses of a server name in turn.
+func (fm *FinalMask) UDPMasks() []UDPMask {
+	return fm.udpMasks
+}
+
 func (fm *FinalMask) DialTCP(ctx context.Context, dest net.Destination) (net.Conn, error) {
 	if len(fm.tcpMasks) == 0 {
 		return fm.dialTCP(ctx, dest)

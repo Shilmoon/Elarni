@@ -6,6 +6,7 @@ import (
 	"crypto/tls"
 	"io"
 	"net"
+	"net/http"
 	"os"
 	"slices"
 	"sync"
@@ -63,6 +64,9 @@ func (u *upstream) close() {
 // probeBound is how long a connection may stay silent after a socket path change.
 var probeBound = 5 * time.Second
 
+// handshakeTimeout bounds the QUIC handshake, over all addresses of a server name together.
+var handshakeTimeout = 10 * time.Second
+
 func NewClient(ctx context.Context, config *ClientConfig) (*Client, error) {
 	if config.Address == nil || config.Port == 0 || config.Port > 65535 || len(config.Uuid) != 16 || config.Heartbeat <= 0 {
 		return nil, errors.New("invalid TUIC client configuration")
@@ -118,7 +122,7 @@ func (c *Client) initialize(ctx context.Context, dialer internet.Dialer) (*quic.
 	copy(id[:], c.config.Uuid)
 	sockets := &socketDialer{sockopt: c.stream.SocketSettings, sockets: make(map[*ownedSocket]struct{})}
 	client, err := quic.NewClient(quic.ClientOptions{Context: ownerCtx, Dialer: sockets,
-		ServerAddress: M.ParseSocksaddr(destination.NetAddr()), TLSConfig: &tlsAdapter{config: tlsConfig, timeout: 10 * time.Second},
+		ServerAddress: M.ParseSocksaddr(destination.NetAddr()), TLSConfig: &tlsAdapter{config: tlsConfig, timeout: handshakeTimeout},
 		UUID: id, Password: c.config.Password, CongestionControl: c.config.CongestionControl,
 		UDPStream: c.config.UdpStream, Heartbeat: time.Duration(c.config.Heartbeat), ZeroRTTHandshake: c.config.ZeroRttHandshake,
 		QUICOptions: clientQUICOptions})
@@ -297,15 +301,34 @@ type socketDialer struct {
 	sockets map[*ownedSocket]struct{}
 }
 
+// DialContext opens the socket to the server. For a server name with several addresses it
+// returns a candidateSocket, whose handshake (tlsAdapter.Dial) opens a socket per address.
 func (d *socketDialer) DialContext(ctx context.Context, network string, destination M.Socksaddr) (net.Conn, error) {
 	if network != "udp" {
 		return nil, errors.New("TUIC upstream requires UDP")
 	}
+	server := xnet.UDPDestination(xnet.ParseAddress(destination.AddrString()), xnet.Port(destination.Port))
+	candidates, err := internet.UDPCandidates(ctx, server, d.sockopt, nil) // TUIC takes no final mask
+	if err != nil {
+		return nil, err
+	}
+	if len(candidates) == 1 && candidates[0] == server {
+		socket, err := d.dial(ctx, server)
+		if err != nil {
+			return nil, err
+		}
+		return socket, nil
+	}
+	return &candidateSocket{dialer: d, server: server, candidates: candidates}, nil
+}
+
+// dial opens an owned socket to destination.
+func (d *socketDialer) dial(ctx context.Context, destination xnet.Destination) (*ownedSocket, error) {
 	done, admitted := probe.Begin(ctx)
 	if !admitted {
 		return nil, os.ErrClosed
 	}
-	conn, err := internet.DialSystem(ctx, xnet.UDPDestination(xnet.ParseAddress(destination.AddrString()), xnet.Port(destination.Port)), d.sockopt)
+	conn, err := internet.DialSystem(ctx, destination, d.sockopt)
 	if err != nil {
 		done()
 		return nil, err
@@ -334,6 +357,127 @@ func (d *socketDialer) DialContext(ctx context.Context, network string, destinat
 		return nil, ctx.Err()
 	}
 	return owned, nil
+}
+
+// candidateSocket is the socket to a server name with several addresses. The handshake opens a
+// socket to each address in turn, closing the one before, and the connection keeps the socket
+// of the address that answered; quic-go reaches that socket through this one.
+type candidateSocket struct {
+	dialer     *socketDialer
+	server     xnet.Destination
+	candidates []xnet.Destination
+	mu         sync.Mutex
+	current    *ownedSocket
+	closed     bool
+}
+
+// open opens the socket to candidate.
+func (s *candidateSocket) open(ctx context.Context, candidate xnet.Destination) error {
+	socket, err := s.dialer.dial(ctx, candidate)
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		socket.Close()
+		return net.ErrClosed
+	}
+	s.current = socket
+	s.mu.Unlock()
+	return nil
+}
+
+// drop closes the socket of an address whose handshake failed.
+func (s *candidateSocket) drop() {
+	s.mu.Lock()
+	socket := s.current
+	s.current = nil
+	s.mu.Unlock()
+	if socket != nil {
+		socket.Close()
+	}
+}
+
+func (s *candidateSocket) socket() *ownedSocket {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.current
+}
+
+func (s *candidateSocket) Read(p []byte) (int, error) {
+	if socket := s.socket(); socket != nil {
+		return socket.Read(p)
+	}
+	return 0, net.ErrClosed
+}
+
+func (s *candidateSocket) Write(p []byte) (int, error) {
+	if socket := s.socket(); socket != nil {
+		return socket.Write(p)
+	}
+	return 0, net.ErrClosed
+}
+
+func (s *candidateSocket) Close() error {
+	s.mu.Lock()
+	s.closed = true
+	socket := s.current
+	s.mu.Unlock()
+	if socket != nil {
+		return socket.Close()
+	}
+	return nil
+}
+
+func (s *candidateSocket) LocalAddr() net.Addr {
+	if socket := s.socket(); socket != nil {
+		return socket.LocalAddr()
+	}
+	return nil
+}
+
+func (s *candidateSocket) RemoteAddr() net.Addr {
+	if socket := s.socket(); socket != nil {
+		return socket.RemoteAddr()
+	}
+	return nil
+}
+
+func (s *candidateSocket) SetDeadline(t time.Time) error {
+	if socket := s.socket(); socket != nil {
+		return socket.SetDeadline(t)
+	}
+	return net.ErrClosed
+}
+
+func (s *candidateSocket) SetReadDeadline(t time.Time) error {
+	if socket := s.socket(); socket != nil {
+		return socket.SetReadDeadline(t)
+	}
+	return net.ErrClosed
+}
+
+func (s *candidateSocket) SetWriteDeadline(t time.Time) error {
+	if socket := s.socket(); socket != nil {
+		return socket.SetWriteDeadline(t)
+	}
+	return net.ErrClosed
+}
+
+// PacketConn is the current socket's, as ownedSocket.PacketConn.
+func (s *candidateSocket) PacketConn() net.PacketConn {
+	if socket := s.socket(); socket != nil {
+		return socket.PacketConn()
+	}
+	return nil
+}
+
+// SetQUICConn hands the dialed connection to the current socket, which a path change checks.
+func (s *candidateSocket) SetQUICConn(conn *quicgo.Conn) {
+	if socket := s.socket(); socket != nil {
+		socket.SetQUICConn(conn)
+	}
 }
 
 func (d *socketDialer) ListenPacket(context.Context, M.Socksaddr) (net.PacketConn, error) {
@@ -431,6 +575,46 @@ func (c *tlsAdapter) STDConfig() (*tls.Config, error)       { return c.config, n
 func (c *tlsAdapter) Client(conn net.Conn) (ST.Conn, error) { return tls.Client(conn, c.config), nil }
 func (c *tlsAdapter) Clone() ST.Config {
 	return &tlsAdapter{config: c.config.Clone(), timeout: c.timeout}
+}
+
+var _ qtls.Config = (*tlsAdapter)(nil)
+
+// Dial runs the QUIC handshake over conn as sing-quic does for any other TLS config; over a
+// candidateSocket it tries each address of the server name in turn within the handshake timeout.
+func (c *tlsAdapter) Dial(ctx context.Context, conn net.Conn, config *quicgo.Config) (*quicgo.Conn, error) {
+	return c.dial(ctx, conn, config, quicgo.DialConn)
+}
+
+// DialEarly is Dial for a 0-RTT handshake.
+func (c *tlsAdapter) DialEarly(ctx context.Context, conn net.Conn, config *quicgo.Config) (*quicgo.Conn, error) {
+	return c.dial(ctx, conn, config, quicgo.DialEarlyConn)
+}
+
+func (c *tlsAdapter) dial(ctx context.Context, conn net.Conn, config *quicgo.Config, dial func(context.Context, net.Conn, *tls.Config, *quicgo.Config) (*quicgo.Conn, error)) (*quicgo.Conn, error) {
+	socket, ok := conn.(*candidateSocket)
+	if !ok {
+		return dial(ctx, conn, c.config, config)
+	}
+	return internet.DialUDPCandidates(ctx, socket.server, socket.candidates, c.timeout, func(ctx context.Context, candidate xnet.Destination) (*quicgo.Conn, error) {
+		if err := socket.open(ctx, candidate); err != nil {
+			return nil, err
+		}
+		quicConn, err := dial(ctx, socket, c.config, config)
+		if err != nil {
+			socket.drop()
+		}
+		return quicConn, err
+	})
+}
+
+// CreateTransport is not used: TUIC opens no HTTP/3 connection.
+func (c *tlsAdapter) CreateTransport(net.Conn, **quicgo.Conn, *quicgo.Config) http.RoundTripper {
+	return nil
+}
+
+// CreatePacketTransport is not used: TUIC opens no HTTP/3 connection.
+func (c *tlsAdapter) CreatePacketTransport(net.PacketConn, net.Addr, **quicgo.Conn, *quicgo.Config) http.RoundTripper {
+	return nil
 }
 
 type packetWriter struct {
