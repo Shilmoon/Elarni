@@ -48,6 +48,41 @@ and mock directories are left out.
   ACK ranges the oldest one is dropped through `DeleteBelow`, so a late duplicate of a packet in
   it is rejected instead of processed again (a DATAGRAM delivered twice). Test:
   `internal/ackhandler/received_packet_history_limit_test.go`.
+- `connection.go` (`sendPacketsWithoutGSO`, `sendPacketsWithGSO`): quic-go/quic-go PR #6223
+  (5a6c94ec) as is. When the send queue was full, the run loop stopped sending until the next
+  timer or packet, even if the queue freed up before the loop checked it again; it now sets
+  `pacingDeadline` to send at once. Test: `send_queue_freed_test.go`.
+- `framer.go` (`AppendControlFrames`, `AppendStreamFrames`), `packet_packer.go`
+  (`composeNextPacket`): quic-go/quic-go PR #5970 (6dfb89eb), ported by hand. Frames are packed
+  in the order ACK, control frames, retransmissions, DATAGRAM, STREAM, so a steady flow of
+  DATAGRAM frames (UDP over Hysteria2) no longer delays MAX_DATA, MAX_STREAM_DATA and lost
+  frames. A DATAGRAM that does not fit waits when the packet carries an ACK or other frames, and
+  is dropped only from an otherwise empty packet; ACK-only packets leave it queued. Only the
+  order is taken: v0.61 still packs one DATAGRAM per packet, with its length (#5960 and #5961 are
+  not part of it), and the fork's `peekTimes` limit is kept. Test:
+  `packet_packer_datagram_order_test.go`.
+- `connection.go` (`writeUntilInitialPacketSizeTried`, `InitialPacketSize`, `maxMTU`),
+  `config.go` (`initialPacketSize`, `initialPacketSizeIsFloor`), `interface.go`,
+  `internal/congestion/cubic_sender.go`, `internal/ackhandler/sent_packet_handler.go`
+  (`SetMaxDatagramSize`): quic-go/quic-go PR #5911 (99c74363), ported by hand to
+  v0.61's structure. Until a packet of the initial size was written and the handshake is
+  confirmed, packets are written directly instead of through the send queue, which drops a
+  "message too long" error. If the interface refuses a packet over 1,200 bytes that way (an MTU
+  below 1,280 bytes, or below the Chrome parrot's 1,250: some tunnels and mobile networks), the
+  connection drops to 1,200 bytes: the congestion controller accepts the smaller size (the cubic
+  sender's panic is gone), `InitialPacketSize()` reports 1,200 (Xray-core's Hysteria congestion
+  seeds from it), MTU discovery starts there, and loss recovery resends the refused packet.
+  Before, every handshake packet was dropped and the dial ended at the handshake timeout. As
+  upstream, an `InitialPacketSize` the application set (MASQUE's 1,350) is the smallest size it
+  accepts: the dial fails at once with the error instead. Differences from upstream: path
+  migration starts at the size in effect, not at 1,200, and the MTU discoverer is still created
+  with the transport parameters. Where the interface takes the configured size, nothing changes.
+  Not in upstream, which has no pluggable congestion control: a controller installed with
+  `SetCongestionControl` is told only sizes above the configured initial size. An early
+  connection (0-RTT, or a server's early listener) reaches the application before its first
+  packet is written, so it may install a controller seeded with the initial size before the
+  fallback, and Hysteria's BBR and sing-quic's controllers panic on a smaller size.
+  Tests: `mtu_fallback_test.go`, `internal/ackhandler/installed_congestion_size_test.go`.
 - `go.mod`, `go.sum`: tidied for the copied sources, without the `tool` block, so
   the workspace does not pull upstream's test and generator dependencies.
 - `http3/{client,headers,request_writer,response_writer,server_conn}.go`: imports

@@ -43,7 +43,7 @@ type SentPacketHandler interface {
 
 	SetCongestionControl(congestion.CongestionControl)
 
-	// MaybeNotifyAppLimited notifies the congestion controller that the application
-	// has no more data to send, if the cwnd is not fully utilized.
-	MaybeNotifyAppLimited(now monotime.Time)
+	// UpdateAppLimited is called after every attempt to send packets. The congestion
+	// controller is notified on the packets sent while the connection is application-limited.
+	UpdateAppLimited(now monotime.Time, hasPendingData bool)
 }

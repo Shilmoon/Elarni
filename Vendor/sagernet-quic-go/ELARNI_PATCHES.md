@@ -3,7 +3,22 @@
 Upstream: github.com/sagernet/quic-go v0.61.0-sing-box-mod.6 (revision
 f7b7e9c4c6f6ec45e4ab2b4788eca63192975d80, the version sing-quic's TUIC client
 requires), joined to the build by `go.work`. Only the non-test sources are
-copied, as in `Vendor/quic-go`.
+copied, as in `Vendor/quic-go`. SagerNet's mod.7, mod.12 and mod.13 commits are
+taken on top (below), without the commits between them.
+
+- `connection.go`, `framer.go` (`blockedStreams`, `HasUnblockedStreamData`),
+  `internal/ackhandler/{interfaces,sent_packet_handler}.go` (`UpdateAppLimited`),
+  `internal/congestion/cubic_sender.go` (`OnPacketSent`): SagerNet/quic-go
+  v0.61.0-sing-box-mod.7 (0cae1a7786), mod.12 (80c132feb2) and mod.13 (2e73222e), in that
+  order, as upstream ships them (sing-box 1.14.4 runs mod.12). They rework how
+  application-limited periods reach a congestion controller installed with
+  `SetCongestionControl` (sing-quic's BBR for TUIC links that ask for it; sing-box#4538 reports
+  upload at about 60% of a fresh connection's after downloads on the same connection), and the
+  cubic pacer no longer spends its budget on ACK-only packets. None changes the public
+  `congestion` package, so sing-quic v0.7.1 stays. Xray-core's
+  `proxy/tuic/bbr_upload_test.go` (`BenchmarkBBRUploadAfterDownload`) follows the issue's
+  reproduction over a loopback relay shaped to 100 Mbit/s and 5 ms each way; it does not show
+  the drop there, before or after these commits, so it does not demonstrate the fix.
 
 - `flow_controller_connection.go`: the `Vendor/quic-go` change (received stream
   bytes count as read for the connection window, up to twice its maximum size),
@@ -45,4 +60,25 @@ copied, as in `Vendor/quic-go`.
   ACK ranges the oldest one is dropped through `DeleteBelow`, so a late duplicate of a packet in
   it is rejected instead of processed again (a DATAGRAM delivered twice). Test:
   `internal/ackhandler/received_packet_history_limit_test.go`.
+- `connection.go` (`sendPacketsWithoutGSO`, `sendPacketsWithGSO`): quic-go/quic-go PR #6223
+  (5a6c94ec) as is, as in `Vendor/quic-go`: when the send queue frees up before the run loop
+  checks it, sending goes on at once instead of waiting for the next timer or packet. Test:
+  `send_queue_freed_test.go`.
+- `framer.go` (`AppendControlFrames`, `AppendStreamFrames`), `packet_packer.go`
+  (`composeNextPacket`): quic-go/quic-go PR #5970 (6dfb89eb), ported by hand as in
+  `Vendor/quic-go`: frames are packed in the order ACK, control frames, retransmissions,
+  DATAGRAM, STREAM, so UDP over TUIC no longer delays MAX_DATA, MAX_STREAM_DATA and lost frames.
+  Only the order is taken (one DATAGRAM per packet, with its length; the `peekTimes` limit is
+  kept). Test: `packet_packer_datagram_order_test.go`.
+- `connection.go` (`writeUntilInitialPacketSizeTried`, `InitialPacketSize`, `maxMTU`),
+  `config.go` (`initialPacketSize`, `initialPacketSizeIsFloor`), `interface.go`,
+  `internal/congestion/cubic_sender.go`, `internal/ackhandler/sent_packet_handler.go`
+  (`SetMaxDatagramSize`): quic-go/quic-go PR #5911 (99c74363), ported by hand as in
+  `Vendor/quic-go` (see there): a "message too long" error for a packet over 1,200 bytes
+  during the handshake drops the connection to 1,200 bytes, which `InitialPacketSize()` then
+  reports (sing-quic's TUIC congestion controllers are created with it). A controller installed
+  with `SetCongestionControl` is told only sizes above the configured initial size: with
+  `ZeroRTTHandshake` sing-quic installs one on the early connection, possibly before the
+  fallback, and its controllers panic on a smaller size. Tests: `mtu_fallback_test.go`,
+  `internal/ackhandler/installed_congestion_size_test.go`.
 - `go.mod`, `go.sum`: tidied for the copied sources, without the `tool` block.

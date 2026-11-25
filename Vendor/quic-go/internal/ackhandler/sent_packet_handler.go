@@ -124,6 +124,11 @@ type sentPacketHandler struct {
 	// maxDatagramSize converts the congestion window into a packet count, which
 	// is what the packet number length depends on when shortPacketNumbers is set.
 	maxDatagramSize protocol.ByteCount
+	// initialMaxDatagramSize is the configured initial packet size. A congestion controller
+	// installed with SetCongestionControl was seeded with at most this size (from
+	// Conn.InitialPacketSize), and Hysteria's and sing-quic's controllers panic when told a
+	// smaller one.
+	initialMaxDatagramSize protocol.ByteCount
 	// lastDatagramPadding is the room left in the datagram that was packed last,
 	// which is what the imitated client measures the window against instead.
 	lastDatagramPadding protocol.ByteCount
@@ -162,6 +167,7 @@ func NewSentPacketHandler(
 	h := &sentPacketHandler{
 		shortPacketNumbers:             shortPacketNumbers,
 		maxDatagramSize:                initialMaxDatagramSize,
+		initialMaxDatagramSize:         initialMaxDatagramSize,
 		peerCompletedAddressValidation: pers == protocol.PerspectiveServer,
 		peerAddressValidated:           pers == protocol.PerspectiveClient || clientAddressValidated,
 		initialPackets:                 newPacketNumberSpace(initialPN, false),
@@ -1103,7 +1109,19 @@ func (h *sentPacketHandler) TimeUntilSend() monotime.Time {
 
 func (h *sentPacketHandler) SetMaxDatagramSize(s protocol.ByteCount) {
 	h.maxDatagramSize = s
-	h.getCongestionControl().SetMaxDatagramSize(s)
+	// Elarni: after a "message too long" error the connection falls back below the initial
+	// size (quic-go/quic-go#5911), and path MTU discovery starts again from there. A controller
+	// installed with SetCongestionControl may have been seeded with the initial size before the
+	// fallback (an early connection hands it to the application before its first packet is
+	// written), so it only learns sizes above that one: never a decrease.
+	cc := h.getCongestionControl()
+	switch cc.(type) {
+	case *ccAdapter, *ccAdapterEx:
+		if s <= h.initialMaxDatagramSize {
+			return
+		}
+	}
+	cc.SetMaxDatagramSize(s)
 }
 
 func (h *sentPacketHandler) SetLastDatagramPadding(n protocol.ByteCount) {

@@ -101,7 +101,7 @@ type sentPacketHandler struct {
 	bytesInFlight protocol.ByteCount
 
 	nextCongestionPacketNumber atomic.Int64
-	lastNetworkLimitedTime     monotime.Time
+	appLimitedSince            monotime.Time
 
 	congestion      congestionControl
 	congestionMutex sync.RWMutex
@@ -128,6 +128,11 @@ type sentPacketHandler struct {
 	// maxDatagramSize converts the congestion window into a packet count, which
 	// is what the packet number length depends on when shortPacketNumbers is set.
 	maxDatagramSize protocol.ByteCount
+	// initialMaxDatagramSize is the configured initial packet size. A congestion controller
+	// installed with SetCongestionControl was seeded with at most this size (from
+	// Conn.InitialPacketSize), and Hysteria's and sing-quic's controllers panic when told a
+	// smaller one.
+	initialMaxDatagramSize protocol.ByteCount
 	// lastDatagramPadding is the room left in the datagram that was packed last,
 	// which is what the imitated client measures the window against instead.
 	lastDatagramPadding protocol.ByteCount
@@ -138,6 +143,8 @@ type sentPacketHandler struct {
 }
 
 var _ SentPacketHandler = &sentPacketHandler{}
+
+const appLimitedThreshold = protocol.MinPacingDelay + protocol.TimerGranularity
 
 // clientAddressValidated indicates whether the address was validated beforehand by an address validation token.
 // If the address was validated, the amplification limit doesn't apply. It has no effect for a client.
@@ -166,6 +173,7 @@ func NewSentPacketHandler(
 	h := &sentPacketHandler{
 		shortPacketNumbers:             shortPacketNumbers,
 		maxDatagramSize:                initialMaxDatagramSize,
+		initialMaxDatagramSize:         initialMaxDatagramSize,
 		peerCompletedAddressValidation: pers == protocol.PerspectiveServer,
 		peerAddressValidated:           pers == protocol.PerspectiveClient || clientAddressValidated,
 		initialPackets:                 newPacketNumberSpace(initialPN, false),
@@ -368,6 +376,9 @@ func (h *sentPacketHandler) SentPacket(
 	}
 
 	if cc.injected {
+		if cc.extended != nil && !h.appLimitedSince.IsZero() && t.Sub(h.appLimitedSince) >= appLimitedThreshold && cc.CanSend(priorInFlight) {
+			cc.extended.OnAppLimited(priorInFlight)
+		}
 		cc.OnPacketSent(t, priorInFlight, p.congestionPacketNumber, size, isAckEliciting)
 	} else {
 		cc.OnPacketSent(t, h.bytesInFlight, pn, size, isAckEliciting)
@@ -1151,18 +1162,15 @@ func (h *sentPacketHandler) SendMode(now monotime.Time) SendMode {
 		if h.logger.Debug() {
 			h.logger.Debugf("Congestion limited: bytes in flight %d, window %d", h.bytesInFlight, cc.GetCongestionWindow())
 		}
-		h.lastNetworkLimitedTime = now
 		return SendAck
 	}
 	if numTrackedPackets >= protocol.MaxOutstandingSentPackets {
 		if h.logger.Debug() {
 			h.logger.Debugf("Max outstanding limited: tracking %d packets, maximum: %d", numTrackedPackets, protocol.MaxOutstandingSentPackets)
 		}
-		h.lastNetworkLimitedTime = now
 		return SendAck
 	}
 	if !cc.HasPacingBudget(now) {
-		h.lastNetworkLimitedTime = now
 		return SendPacingLimited
 	}
 	return SendAny
@@ -1174,7 +1182,16 @@ func (h *sentPacketHandler) TimeUntilSend() monotime.Time {
 
 func (h *sentPacketHandler) SetMaxDatagramSize(s protocol.ByteCount) {
 	h.maxDatagramSize = s
-	h.getCongestionControl().SetMaxDatagramSize(s)
+	// Elarni: after a "message too long" error the connection falls back below the initial
+	// size (quic-go/quic-go#5911), and path MTU discovery starts again from there. A controller
+	// installed with SetCongestionControl may have been seeded with the initial size before the
+	// fallback (an early connection hands it to the application before its first packet is
+	// written), so it only learns sizes above that one: never a decrease.
+	cc := h.getCongestionControl()
+	if cc.injected && s <= h.initialMaxDatagramSize {
+		return
+	}
+	cc.SetMaxDatagramSize(s)
 }
 
 func (h *sentPacketHandler) SetLastDatagramPadding(n protocol.ByteCount) {
@@ -1338,18 +1355,18 @@ func (h *sentPacketHandler) SetCongestionControl(cc congestionExt.CongestionCont
 	h.congestionMutex.Unlock()
 }
 
-// Chromium reports application-limited from QuicConnection::CheckIfApplicationLimited while
-// its stream send buffers still hold everything the application queued, so an empty packet
-// creator there means the application is out of data. SendStream.Write hands the packer one
-// call's worth of data at a time, so the packer also runs empty between the Write calls of a
-// sender that the network holds back.
-func (h *sentPacketHandler) MaybeNotifyAppLimited(now monotime.Time) {
-	if now.Sub(h.lastNetworkLimitedTime) < h.rttStats.SmoothedRTT() {
-		return
+// Chromium runs QuicConnection::CheckIfApplicationLimited after every flush, including the
+// flushes that only carry acknowledgements and control frames, and reports application-limited
+// when no packet is buffered in the writer and no stream is willing to write. Streams blocked by
+// flow control are not willing to write, and the stream send buffers there hold everything the
+// application queued. SendStream.Write hands the framer one call's worth of data at a time, so
+// a sender that keeps up with the pacer also runs out of stream data between its Write calls;
+// the report is therefore only made once the connection has stayed application-limited for
+// longer than the burst the pacer allows.
+func (h *sentPacketHandler) UpdateAppLimited(now monotime.Time, hasPendingData bool) {
+	if hasPendingData || h.SendMode(now) != SendAny {
+		h.appLimitedSince = 0
+	} else if h.appLimitedSince.IsZero() {
+		h.appLimitedSince = now
 	}
-	cc := h.getCongestionControl()
-	if cc.extended == nil || !cc.CanSend(h.bytesInFlight) {
-		return
-	}
-	cc.extended.OnAppLimited(h.bytesInFlight)
 }

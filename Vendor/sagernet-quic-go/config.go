@@ -22,6 +22,20 @@ func (c *Config) maxRetryTokenAge() time.Duration {
 	return c.handshakeTimeout()
 }
 
+// initialPacketSize is the size of the first packets: the configured one, or the default.
+func (c *Config) initialPacketSize() protocol.ByteCount {
+	if c.InitialPacketSize == 0 {
+		return protocol.InitialPacketSize
+	}
+	return protocol.ByteCount(c.InitialPacketSize)
+}
+
+// initialPacketSizeIsFloor says if the application set InitialPacketSize as the smallest packet
+// size it accepts. The default and Chrome's size fall back to 1200 bytes instead.
+func (c *Config) initialPacketSizeIsFloor() bool {
+	return c.InitialPacketSize != 0 && !c.ChromeParrot
+}
+
 func validateConfig(config *Config) error {
 	if config == nil {
 		return nil
@@ -100,10 +114,9 @@ func populateConfig(config *Config) *Config {
 	} else if maxIncomingUniStreams < 0 {
 		maxIncomingUniStreams = 0
 	}
+	// Elarni: an unset InitialPacketSize stays zero, as in quic-go/quic-go#5911, so that a size the
+	// application set (the smallest it accepts) can be told apart from the default.
 	initialPacketSize := config.InitialPacketSize
-	if initialPacketSize == 0 {
-		initialPacketSize = protocol.InitialPacketSize
-	}
 	enableDatagrams := config.EnableDatagrams
 	omitMaxDatagramFrameSize := config.OmitMaxDatagramFrameSize
 	if config.ChromeParrot {
