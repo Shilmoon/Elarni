@@ -42,7 +42,7 @@ require (
 	github.com/pion/transport/v4 v4.1.0 // indirect
 	github.com/pires/go-proxyproto v0.16.0 // indirect
 	github.com/quic-go/qpack v0.6.0 // indirect
-	github.com/refraction-networking/utls v1.8.3-0.20261108164504-a13c59ffe98b // indirect
+	github.com/refraction-networking/utls v1.8.3-0.20261118233537-360383f893fb // indirect
 	github.com/robfig/cron/v3 v3.0.1 // indirect
 	github.com/rogpeppe/go-internal v1.16.0 // indirect
 	github.com/sagernet/quic-go v0.61.0-sing-box-mod.6 // indirect
@@ -62,7 +62,7 @@ require (
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260706201446-f0a921348800 // indirect
 	google.golang.org/grpc v1.84.0 // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect
-	gvisor.dev/gvisor v0.0.0-20260122175437-89a5d21be8f0 // indirect
+	gvisor.dev/gvisor v0.0.0-20261114011126-1d2425946df6 // indirect
 	lukechampine.com/blake3 v1.4.1 // indirect
 )
 

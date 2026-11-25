@@ -433,6 +433,13 @@ func (h *Handler) init(ctx context.Context) error {
 	for _, key := range keys {
 		cfg.WriteString(key + "=" + h.conf.AmneziaSettings[key] + "\n")
 	}
+	// Elarni: the engine refuses Jmin above Jmax and counts a missing Jmax as 0, which stored profiles
+	// naming only Jmin (import accepts it without junk packets) hit. Junk sizes stay on this side.
+	if jmin, ok := h.conf.AmneziaSettings["jmin"]; ok {
+		if _, ok := h.conf.AmneziaSettings["jmax"]; !ok {
+			cfg.WriteString("jmax=" + jmin + "\n")
+		}
+	}
 	for _, peer := range h.conf.Peers {
 		cfg.WriteString("public_key=" + peer.PublicKey + "\n")
 		if peer.PreSharedKey != "" {

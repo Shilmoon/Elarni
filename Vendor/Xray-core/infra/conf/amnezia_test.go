@@ -62,6 +62,23 @@ func TestOverlappingAmneziaHeaderRangesAreRejected(t *testing.T) {
 	}
 }
 
+// The engine refuses Jmin above Jmax at connect; a profile that names both that way stays refused
+// at import, with or without junk packets.
+func TestAmneziaJminAboveJmaxIsRejectedAtBuild(t *testing.T) {
+	for _, amnezia := range []string{`{"jmin": "80", "jmax": "40"}`, `{"jc": "0", "jmin": "80", "jmax": "40"}`, `{"jc": "4", "jmin": "80", "jmax": "40"}`} {
+		var config WireGuardConfig
+		settings := `{"secretKey": "YAnz5TF+lXXJte14tji3zlMNq+hd2rYUIgJBgB3fBmk=", "address": ["10.0.0.2/32"],
+			"peers": [{"publicKey": "xTIBA5rboUvnH4htodjb6e697QjLERt1NAB4mZqp8Dg=", "endpoint": "192.0.2.1:51820"}], "amnezia": ` + amnezia + `}`
+		if err := json.Unmarshal([]byte(settings), &config); err != nil {
+			t.Fatal(err)
+		}
+		config.IsClient, config.IsAmnezia, config.NoKernelTun = true, true, true
+		if _, err := config.Build(); err == nil || !strings.Contains(err.Error(), "Jmin exceeds Jmax") {
+			t.Errorf("%s: built with error %v, want Jmin exceeds Jmax", amnezia, err)
+		}
+	}
+}
+
 func TestDefaultMTULeavesRoomForAmneziaPadding(t *testing.T) {
 	for _, test := range []struct {
 		settings map[string]string

@@ -346,11 +346,11 @@ quic-go contributors' license; source snapshot with Elarni changes in
 The Xray adapter is Elarni-modified source recorded in
 `third_party/modifications.json`. Test-only sing-box/mihomo peers are not bundled.
 
-## amneziawg-go v3.1.20260828
+## amneziawg-go v3.1.20261116
 
 Module: github.com/amnezia-vpn/amneziawg-go/v3
 Source: https://github.com/amnezia-vpn/amneziawg-go
-Revision: b5928efb6ca19f0153958460c3d141f04abc5c2e. Licensed under MIT.
+Revision: 08fe3d33bbb116be09a6183d02609311b8b0c9e8. Licensed under MIT.
 
 Copyright (C) 2017-2025 WireGuard LLC. All Rights Reserved.
 
