@@ -128,12 +128,20 @@ type PingRequest struct {
 	RunningCore           bool    `json:"runningCore,omitempty"`
 	// Trace reads Cloudflare's /cdn-cgi/trace at URL to name the server's exit.
 	Trace bool `json:"trace,omitempty"`
+	// Transfer runs a transfer check instead of a latency probe: a GET of a large body at URL over one
+	// connection. Timeout is then its total limit; TransferIdleMs (default 4,000) how long the body may
+	// send nothing once the answer started.
+	Transfer       bool `json:"transfer,omitempty"`
+	TransferIdleMs int  `json:"transferIdleMs,omitempty"`
 }
 
 type PingResponse struct {
 	Delay       int64                  `json:"delay"`
 	Diagnostics *xray.ProbeDiagnostics `json:"diagnostics,omitempty"`
 	Exit        *nodep.Exit            `json:"exit,omitempty"`
+	// A transfer check's verdict (ok, stalled or inconclusive) and the body bytes it received.
+	Verdict       string `json:"verdict,omitempty"`
+	TransferBytes int64  `json:"transferBytes,omitempty"`
 }
 
 type RunXrayFromJSONRequest struct {

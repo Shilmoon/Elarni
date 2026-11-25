@@ -3944,6 +3944,12 @@ abstract class AppLocalizations {
   /// **'Connected · no traffic'**
   String get stateConnectedNoTraffic;
 
+  /// No description provided for @stateConnectedStalled.
+  ///
+  /// In en, this message translates to:
+  /// **'Connected · transfers cut off'**
+  String get stateConnectedStalled;
+
   /// No description provided for @stateConnected.
   ///
   /// In en, this message translates to:
@@ -4405,6 +4411,12 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'The server passed no traffic at {time}. Checking again each minute.'**
   String serverPassedNoTraffic(Object time);
+
+  /// No description provided for @serverCutsTransfersOff.
+  ///
+  /// In en, this message translates to:
+  /// **'Connected, but this server’s network cuts transfers off. Pages will not load; choose another server.'**
+  String get serverCutsTransfersOff;
 
   /// No description provided for @connectionCheckUnavailable.
   ///

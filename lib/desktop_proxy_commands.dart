@@ -92,7 +92,7 @@ extension _ProxyCommands on DesktopProxy {
       case 'state':
         return {
           'state': _state,
-          if (_state == 'connected') 'liveness': _liveness,
+          if (_state == 'connected') 'liveness': _reportedLiveness,
         };
       case 'subscriptions':
         return _catalog!.snapshot();
@@ -1066,6 +1066,6 @@ extension _ProxyCommands on DesktopProxy {
         ? _connectedAt?.millisecondsSinceEpoch
         : null,
     'counters': _state == 'connected' ? _latestMetrics : <String, Object?>{},
-    'liveness': _state == 'connected' ? _liveness : null,
+    'liveness': _state == 'connected' ? _reportedLiveness : null,
   };
 }

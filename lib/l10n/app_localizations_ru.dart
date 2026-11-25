@@ -2291,6 +2291,9 @@ class AppLocalizationsRu extends AppLocalizations {
   String get stateConnectedNoTraffic => 'Подключено · нет трафика';
 
   @override
+  String get stateConnectedStalled => 'Подключено · передача обрывается';
+
+  @override
   String get stateConnected => 'Подключено';
 
   @override
@@ -2557,6 +2560,10 @@ class AppLocalizationsRu extends AppLocalizations {
   String serverPassedNoTraffic(Object time) {
     return 'Сервер не передавал трафик в $time. Повторная проверка каждую минуту.';
   }
+
+  @override
+  String get serverCutsTransfersOff =>
+      'Подключено, но сеть этого сервера обрывает передачу данных. Страницы не загрузятся; выберите другой сервер.';
 
   @override
   String get connectionCheckUnavailable =>

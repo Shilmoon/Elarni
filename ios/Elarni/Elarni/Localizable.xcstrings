@@ -1291,12 +1291,32 @@
         }
       }
     },
+    "Connected · transfers cut off" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Подключено · передача обрывается"
+          }
+        }
+      }
+    },
     "Connected, awaiting check" : {
       "localizations" : {
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Подключено, ожидание проверки"
+          }
+        }
+      }
+    },
+    "Connected, but this server’s network cuts transfers off. Pages will not load; choose another server." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Подключено, но сеть этого сервера обрывает передачу данных. Страницы не загрузятся; выберите другой сервер."
           }
         }
       }

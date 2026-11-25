@@ -38,8 +38,30 @@ type ProbeDiagnostics struct {
 // The HTTP timeout still measures the original request; cleanup retains ownership.
 // prepare installs platform assets until configuration construction completes.
 func PingJSONWithPreparation(parent context.Context, configJSON string, timeout int, targetURL, proxyURL, method, mode, variant string, prepare func() (func(), error), expected ...*nodep.ExpectedResponse) (delay int64, diagnostic *ProbeDiagnostics, err error) {
-	diagnostic = &ProbeDiagnostics{CleanupState: "not_started", Stage: "admission"}
 	delay = nodep.PingDelayError
+	diagnostic, err = runProbeCore(parent, configJSON, timeout, targetURL, method, mode, variant, prepare, func(ctx context.Context) error {
+		var measured error
+		delay, measured = nodep.MeasureDelayContext(ctx, timeout, targetURL, proxyURL, method, mode, expected...)
+		return measured
+	})
+	return
+}
+
+// TransferJSONWithPreparation runs a transfer check through a temporary core, as PingJSONWithPreparation
+// runs a latency probe. timeout bounds the core's start and the check; limits bound the check itself.
+// A check that ran returns its verdict and no error; err is the core's own failure.
+func TransferJSONWithPreparation(parent context.Context, configJSON string, timeout int, targetURL, proxyURL string, limits nodep.TransferLimits, prepare func() (func(), error)) (result nodep.TransferResult, diagnostic *ProbeDiagnostics, err error) {
+	result = nodep.TransferResult{Verdict: nodep.TransferInconclusive}
+	diagnostic, err = runProbeCore(parent, configJSON, timeout, targetURL, "GET", "default", "", prepare, func(ctx context.Context) error {
+		result = nodep.MeasureTransferContext(ctx, targetURL, proxyURL, limits)
+		return nil
+	})
+	return
+}
+
+// runProbeCore starts a temporary core from configJSON, runs measure through it and closes it.
+func runProbeCore(parent context.Context, configJSON string, timeout int, targetURL, method, mode, variant string, prepare func() (func(), error), measure func(context.Context) error) (diagnostic *ProbeDiagnostics, err error) {
+	diagnostic = &ProbeDiagnostics{CleanupState: "not_started", Stage: "admission"}
 	if err = share.ValidateClientFileAccess([]byte(configJSON)); err != nil {
 		diagnostic.Code = "invalid_configuration"
 		diagnostic.TransportCode = diagnostic.Code
@@ -49,7 +71,7 @@ func PingJSONWithPreparation(parent context.Context, configJSON string, timeout 
 	if parseErr != nil || target.Hostname() == "" {
 		diagnostic.Code = "invalid_target"
 		diagnostic.TransportCode = diagnostic.Code
-		return delay, diagnostic, errors.New("invalid_target")
+		return diagnostic, errors.New("invalid_target")
 	}
 	ctx, cancel := context.WithTimeout(parent, time.Duration(timeout)*time.Second)
 	ctx, recorder := probe.New(ctx, target.Hostname())
@@ -84,7 +106,7 @@ func PingJSONWithPreparation(parent context.Context, configJSON string, timeout 
 		}
 	}()
 	if probeQuarantine.Load() > 0 {
-		return delay, diagnostic, errors.New("probe_busy")
+		return diagnostic, errors.New("probe_busy")
 	}
 	if err = ctx.Err(); err != nil {
 		return
@@ -110,14 +132,14 @@ func PingJSONWithPreparation(parent context.Context, configJSON string, timeout 
 	probe.Emit(ctx, "instance_start_begin", nil, 0)
 	config, err := core.LoadConfig("json", strings.NewReader(configJSON))
 	if err != nil {
-		return delay, diagnostic, err
+		return diagnostic, err
 	}
 	if err = ctx.Err(); err != nil {
 		return
 	}
 	server, err := core.NewWithContext(ctx, config)
 	if err != nil {
-		return delay, diagnostic, err
+		return diagnostic, err
 	}
 	defer func() {
 		cancel()
@@ -160,7 +182,7 @@ func PingJSONWithPreparation(parent context.Context, configJSON string, timeout 
 	probeStartup.Unlock()
 	diagnostic.Stage = "target_request"
 	probe.Emit(ctx, "request_begin", nil, 0)
-	delay, err = nodep.MeasureDelayContext(ctx, timeout, targetURL, proxyURL, method, mode, expected...)
+	err = measure(ctx)
 	probe.Emit(ctx, "request_end", err, 0)
 	return
 }

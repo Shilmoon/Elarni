@@ -15,6 +15,8 @@ protocol XrayCore: AnyObject, Sendable {
   func metrics() async -> [String: UInt64]
   // A request through the running core's routing, the way app traffic goes.
   func passesTraffic(url: String, timeout: Int) async -> Bool
+  /// A transfer check through the running core: "ok", "stalled" or "inconclusive" (see `ProviderTransferCheck`).
+  func transfer(url: String, timeout: Int, idleMs: Int?) async -> String
   /// Tells the running core its network moved, so it checks pooled connections and dials new ones on the
   /// current path. False when the core cannot take the signal.
   func socketPathChanged() async -> Bool
@@ -190,6 +192,111 @@ struct ProviderLiveness {
     state = passed ? "ok" : "noTraffic"
     failures = passed ? 0 : failures + 1
     checked = (now, uplink)
+  }
+}
+
+// Whether the connected server's network lets a transfer through: small probes pass on a server whose
+// network cuts each connection off after about 16 KB, so this check fetches one body and passes at
+// 96 KB. It runs 5 s after the core came up and 10 s later again when that one stalled, then every
+// 15 min while traffic left, and at once when the liveness check found no traffic. Two stalls in a
+// row confirm; an inconclusive check (connect, TLS or status failure) neither counts nor ends a run.
+// A check takes up to about 20 s, so it runs beside the monitor loop, one at a time: the loop keeps its
+// 2 s pace and reads the verdict on a later pass.
+struct ProviderTransferCheck {
+  static let ok = "ok", stalled = "stalled", inconclusive = "inconclusive"
+  /// Public bodies of at least 128 KB, from the operators of the liveness targets, as on desktop and
+  /// Android; tests point them at a fixture.
+  static let defaultTargets = ["https://ajax.googleapis.com/ajax/libs/jquery/3.7.1/jquery.js",
+                               "https://cdnjs.cloudflare.com/ajax/libs/jquery/3.7.1/jquery.js"]
+  static var targets = defaultTargets
+  /// The core's 4 s limit without a byte unless a test shortens it.
+  static var idleMs: Int?
+  /// Seconds from the core's start to its first check, from a first stall to the next, and between later checks.
+  let delay: TimeInterval, recheck: TimeInterval, interval: TimeInterval
+  private(set) var stalls = 0
+  var confirmed: Bool { stalls >= 2 }
+  /// The last check that answered passed; recovery restarts a stalled server again only after one.
+  private(set) var passed = false
+  private var dueAt: TimeInterval?
+  private var uplink: UInt64?
+  private var now = false
+  private var inFlight: Pending?
+
+  /// The verdict of the check running beside the loop; the check sets it from its own task.
+  final class Pending: @unchecked Sendable {
+    private let lock = NSLock()
+    private var verdict: String?
+
+    func finish(_ value: String) { lock.withLock { verdict = value } }
+
+    fileprivate func take() -> String? {
+      lock.withLock {
+        defer { verdict = nil }
+        return verdict
+      }
+    }
+  }
+
+  init(delay: TimeInterval = 5, recheck: TimeInterval = 10, interval: TimeInterval = 900) {
+    self.delay = delay
+    self.recheck = recheck
+    self.interval = interval
+  }
+
+  /// A core came up: its first check is `delay` away.
+  mutating func started(at time: TimeInterval) {
+    dueAt = time + delay
+    uplink = nil
+    stalls = 0
+    passed = false
+    now = false
+    inFlight = nil
+  }
+
+  /// The liveness check found no traffic: the next round checks.
+  mutating func noTraffic() { if dueAt != nil { now = true } }
+
+  /// No second check starts while one runs.
+  func due(at time: TimeInterval) -> Bool { inFlight == nil && (dueAt.map { now || time >= $0 } ?? false) }
+
+  /// A check starts; its task finishes the returned verdict.
+  mutating func begin() -> Pending {
+    let pending = Pending()
+    inFlight = pending
+    return pending
+  }
+
+  /// The verdict of the check that ended since the last pass, once; nil while it runs.
+  mutating func takeVerdict() -> String? {
+    guard let verdict = inFlight?.take() else { return nil }
+    inFlight = nil
+    return verdict
+  }
+
+  // A 15 min check finding no new traffic waits another interval instead; the first check and a
+  // stall's recheck do not wait for traffic.
+  mutating func needsCheck(uplink: UInt64, at time: TimeInterval) -> Bool {
+    if !now, stalls != 1, let last = self.uplink, uplink <= last {
+      dueAt = time + interval
+      self.uplink = uplink
+      return false
+    }
+    return true
+  }
+
+  /// Records a check that ended at `time`, with the uplink counter after it; true when it confirmed a stall.
+  mutating func record(verdict: String, uplink: UInt64, at time: TimeInterval) -> Bool {
+    now = false
+    if verdict == Self.ok { stalls = 0; passed = true }
+    if verdict == Self.stalled { stalls += 1; passed = false }
+    dueAt = time + (verdict == Self.stalled && stalls == 1 ? recheck : interval)
+    self.uplink = uplink
+    return verdict == Self.stalled && stalls == 2
+  }
+
+  /// One check over its targets' verdicts: one ok wins, and it stalled only when each target that answered stalled.
+  static func combine(_ verdicts: [String]) -> String {
+    verdicts.contains(ok) ? ok : verdicts.contains(stalled) ? stalled : inconclusive
   }
 }
 

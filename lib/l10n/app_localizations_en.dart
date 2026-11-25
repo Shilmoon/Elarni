@@ -2264,6 +2264,9 @@ class AppLocalizationsEn extends AppLocalizations {
   String get stateConnectedNoTraffic => 'Connected · no traffic';
 
   @override
+  String get stateConnectedStalled => 'Connected · transfers cut off';
+
+  @override
   String get stateConnected => 'Connected';
 
   @override
@@ -2525,6 +2528,10 @@ class AppLocalizationsEn extends AppLocalizations {
   String serverPassedNoTraffic(Object time) {
     return 'The server passed no traffic at $time. Checking again each minute.';
   }
+
+  @override
+  String get serverCutsTransfersOff =>
+      'Connected, but this server’s network cuts transfers off. Pages will not load; choose another server.';
 
   @override
   String get connectionCheckUnavailable =>

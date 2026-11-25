@@ -83,9 +83,12 @@ extension _ProxyProbes on DesktopProxy {
         catalog.settings.xrayTunEnabled)
       throw desktopError('unavailableProbePath');
     int? reserved;
+    // A transfer check (N9-01) instead of a latency probe: its answer is a
+    // verdict, whatever the bytes did.
+    final transfer = args['transfer'] == true;
     try {
       int latency;
-      Object? exit;
+      Object? exit, verdict, transferBytes;
       if (protocol == 'tcp' || protocol == 'icmp') {
         final (:endpoint, :mapping) = await _probeTarget(catalog, id);
         if (protocol == 'tcp' && endpoint['supportsTcpProbe'] != true) {
@@ -128,16 +131,20 @@ extension _ProxyProbes on DesktopProxy {
         }
       } else {
         final payload = <String, Object?>{
-          for (final key in [
-            'url',
-            'timeout',
-            'method',
-            'mode',
-            'expectedStatus',
-            'expectedBody',
-          ])
+          for (final key
+              in transfer
+                  ? ['url', 'timeout', 'method', 'transferIdleMs']
+                  : [
+                      'url',
+                      'timeout',
+                      'method',
+                      'mode',
+                      'expectedStatus',
+                      'expectedBody',
+                    ])
             key: args[key],
           if (args['trace'] == true) 'trace': true,
+          if (transfer) 'transfer': true,
         };
         // Only-listed mode sends the probe process direct, so it uses the proxy listener.
         if (active &&
@@ -203,6 +210,9 @@ extension _ProxyProbes on DesktopProxy {
         latency = response['delay']! as int;
         if (latency < 0) throw desktopError('ping_failed');
         exit = response['exit'];
+        verdict = response['verdict'];
+        transferBytes = response['transferBytes'];
+        if (transfer && verdict is! String) throw desktopError('ping_failed');
       }
       _checkGeneration(generation);
       return {
@@ -214,6 +224,8 @@ extension _ProxyProbes on DesktopProxy {
         'latencyMs': latency,
         'timestamp': DateTime.now().millisecondsSinceEpoch / 1000,
         'exit': ?exit,
+        'verdict': ?verdict,
+        'transferBytes': ?transferBytes,
       };
     } on Object catch (error) {
       if (error is PlatformException &&

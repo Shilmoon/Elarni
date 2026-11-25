@@ -310,6 +310,8 @@
     <string name="no_server_selected">No server selected</string>
     <string name="the_server_passed_no_traffic_at">The server passed no traffic at %1$s. Checking again each minute.</string>
     <string name="connected_no_traffic">Connected · no traffic</string>
+    <string name="connected_transfers_cut_off">Connected · transfers cut off</string>
+    <string name="this_server_s_network_cuts_transfers_off">Connected, but this server’s network cuts transfers off. Pages will not load; choose another server.</string>
     <string name="connected">Connected</string>
     <string name="connecting">Connecting…</string>
     <string name="paused">Paused</string>
@@ -613,12 +615,14 @@
     <string name="choose_a_server_in_elarni">Choose a server in Elarni</string>
     <string name="disconnecting_2">Disconnecting</string>
     <string name="no_traffic">No traffic</string>
+    <string name="transfers_cut_off">Transfers cut off</string>
     <string name="connecting_2">Connecting</string>
     <string name="vpn_connected">VPN connected</string>
     <string name="local_proxy_running">Local proxy running</string>
     <string name="paused_while_screen_is_off">Paused while screen is off</string>
     <string name="connection_failed_open_to_review">Connection failed · open to review</string>
     <string name="server_passes_no_traffic">" · server passes no traffic"</string>
+    <string name="server_cuts_transfers_off">" · server’s network cuts transfers off"</string>
     <string name="subscription_expiry">Subscription expiry</string>
     <string name="approve_download_destination">Approve download destination</string>
     <string name="open_elarni_to_approve_where_a">Open Elarni to approve where a subscription or routing list downloads from.</string>

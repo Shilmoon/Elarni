@@ -401,7 +401,8 @@ class _ElarniHomeState extends State<ElarniHome> {
   String _health = 'unknown';
   String? _healthNodeId;
   DateTime? _healthAt;
-  // Whether the connected server passes traffic: ok, noTraffic or null.
+  // Whether the connected server passes traffic: ok, noTraffic, stalled (small
+  // probes pass, longer transfers are cut off) or null.
   String? _liveness;
   DateTime? _noTrafficAt;
   // The saved local proxy login, shown in Settings on request.
@@ -639,7 +640,11 @@ class _ElarniHomeState extends State<ElarniHome> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       widget.desktop.status(
-        _noTraffic ? 'connected, no traffic' : _state.name,
+        _noTraffic
+            ? 'connected, no traffic'
+            : _stalled
+            ? 'connected, transfers cut off'
+            : _state.name,
         canConnect: _canConnect,
         canDisconnect: _canDisconnect,
       );
