@@ -326,7 +326,7 @@ jobs:
         if: matrix.ios
         run: |
           rustup target add aarch64-apple-ios
-          sh scripts/build-ios-native iphoneos
+          sh scripts/build-ios-native iphoneos --dev
           python scripts/check_report.py -- xcodebuild -quiet -project ios/Elarni/Elarni.xcodeproj -scheme Elarni -configuration Debug -destination 'generic/platform=iOS' -derivedDataPath .build/ios/Device CODE_SIGNING_ALLOWED=NO build
       - name: Retain candidates (not production releases)
         if: matrix.release && github.event_name != 'pull_request'

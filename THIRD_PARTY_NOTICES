@@ -436,6 +436,9 @@ static/dynamic-linking exception and remaining LGPL conditions.
 - Flutter 3.44.2: BSD-3-Clause; repository build pin, not a packaged runtime license claim.
 - Rust 1.98.0: build toolchain; compiler distribution has component-specific notices.
 - Go 1.26.8: BSD-3-Clause; repository build pin.
+  iOS builds compile Go's `internal/cpu` with upstream Go commit 8058a577 ("internal/cpu:
+  enable ARM64 feature detection on ios"), applied by `scripts/go-ios-cpu-features.patch`;
+  BSD-3-Clause, The Go Authors.
 - ffigen 21.0.0: BSD-3-Clause build-time generator.
 - cbindgen 0.29.4: MPL-2.0 build-time generator; not linked into Elarni.
 

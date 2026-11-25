@@ -108,6 +108,10 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
 - **A subscription encrypted for Happ says so.** A feed that only Happ can decrypt (an
   `Encrypt-Tag` header and `?key=` in its link) failed as an invalid or unsupported feed; the
   message now says it is encrypted for another app and to ask the provider for another link.
+- **iPhone: encryption uses the phone's AES and SHA instructions.** The iPhone core encrypted
+  AES-GCM about 45 times slower than the phone's own crypto library, costing battery and heat
+  on every connection that uses it. Its packet path and ShadowQUIC client are now built with
+  full optimization too.
 
 ## 0.6.4 - 2026-11-23
 
