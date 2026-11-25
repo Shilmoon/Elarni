@@ -3,6 +3,7 @@ package quic
 import (
 	"errors"
 	"net"
+	"sync/atomic"
 
 	"github.com/sagernet/quic-go/internal/protocol"
 )
@@ -28,19 +29,22 @@ type sendQueue struct {
 	runStopped  chan struct{} // runStopped when the run loop returns
 	available   chan struct{}
 	conn        sendConn
+	// Elarni: set by the connection once its handshake is complete.
+	handshakeComplete *atomic.Bool
 }
 
 var _ sender = &sendQueue{}
 
 const sendQueueCapacity = 8
 
-func newSendQueue(conn sendConn) sender {
+func newSendQueue(conn sendConn, handshakeComplete *atomic.Bool) sender {
 	return &sendQueue{
-		conn:        conn,
-		runStopped:  make(chan struct{}),
-		closeCalled: make(chan struct{}),
-		available:   make(chan struct{}, 1),
-		queue:       make(chan queueEntry, sendQueueCapacity),
+		conn:              conn,
+		runStopped:        make(chan struct{}),
+		closeCalled:       make(chan struct{}),
+		available:         make(chan struct{}, 1),
+		queue:             make(chan queueEntry, sendQueueCapacity),
+		handshakeComplete: handshakeComplete,
 	}
 }
 
@@ -93,8 +97,12 @@ func (h *sendQueue) Run() error {
 				// 1. Checking for "datagram too large" message from the kernel, as such,
 				// 2. Path MTU discovery,and
 				// 3. Eventual detection of loss PingFrame.
+				// Elarni: a route or local address that is gone during a network switch drops
+				// only this packet, as ENOBUFS does, once the handshake is complete; loss
+				// recovery resends it. Before that, such an error still fails the dial at once.
 				var tooLarge *DatagramTooLargeError
-				if !isSendMsgSizeErr(err) && !isNoBufferSpaceErr(err) && !errors.As(err, &tooLarge) {
+				networkChange := h.handshakeComplete.Load() && isNetworkChangeErr(err)
+				if !isSendMsgSizeErr(err) && !isNoBufferSpaceErr(err) && !networkChange && !errors.As(err, &tooLarge) {
 					return err
 				}
 			}
