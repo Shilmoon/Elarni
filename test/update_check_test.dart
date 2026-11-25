@@ -592,6 +592,90 @@ void main() {
       },
     );
 
+    // N3-69: Not now hid the notice, and the next start installed the release.
+    test(
+      'Not now keeps a downloaded release from installing by itself',
+      () async {
+        for (final kind in ['msi', 'appimage']) {
+          stored = [
+            jsonEncode({'updateFeedURL': feedURL, 'dismissedUpdate': '0.7.0'}),
+          ];
+          quits = [];
+          control = FakeTunnelControl()
+            ..updateStatusValue = {
+              'kind': kind,
+              'silent': true,
+              'ready': '0.7.0',
+            }
+            ..installUpdateValue = kind == 'msi'
+                ? const {'exit': true}
+                : const {'restart': true};
+          final desktop = await start();
+          expect(control.installRelaunches, isEmpty, reason: kind);
+          expect(quits, isEmpty, reason: kind);
+          expect(saved()['updateAttempted'], isNot('0.7.0'), reason: kind);
+          expect(desktop.updateStage, UpdateStage.ready, reason: kind);
+          expect(desktop.updateVersion, '0.7.0', reason: kind);
+          // The feed still names it: nothing installs on a later check either.
+          desktop.appVersion = '0.6.1+1';
+          await pumpEventQueue();
+          expect(control.installRelaunches, isEmpty, reason: kind);
+          // Update, from the window, still installs it.
+          await desktop.installUpdate(reconnect: false);
+          expect(control.installRelaunches, [true], reason: kind);
+        }
+      },
+    );
+
+    test(
+      'Not now stops the download of that release; the next one downloads',
+      () async {
+        stored = [
+          jsonEncode({'updateFeedURL': feedURL, 'dismissedUpdate': '0.7.0'}),
+        ];
+        control.updateStatusValue = {'kind': 'msi', 'silent': true};
+        final desktop = await start();
+        expect(desktop.availableUpdate?.version, '0.7.0');
+        expect(control.downloadedAssets, isEmpty);
+        expect(desktop.updateStage, UpdateStage.none);
+        updateFeedFetch = (url) async => release.replaceAll('0.7.0', '0.7.1');
+        control.downloadUpdateValue = {...downloaded, 'version': '0.7.1'};
+        desktop.appVersion = '0.6.1+1';
+        await pumpEventQueue();
+        expect(control.downloadedAssets, hasLength(1));
+        expect(desktop.updateStage, UpdateStage.ready);
+        expect(desktop.updateVersion, '0.7.1');
+      },
+    );
+
+    test(
+      'Not now during an AppImage download holds back only that version',
+      () async {
+        final downloading = Completer<void>();
+        control
+          ..updateStatusValue = {'kind': 'appimage', 'silent': true}
+          ..installUpdateValue = {'restart': true}
+          ..onDownloadUpdate = () => downloading.future;
+        final desktop = await start();
+        expect(desktop.updateStage, UpdateStage.downloading);
+        await desktop.update(dismissedUpdate: '0.7.0');
+        downloading.complete();
+        await pumpEventQueue();
+        expect(desktop.updateStage, UpdateStage.ready);
+        expect(control.installRelaunches, isEmpty);
+        // The downloaded release does not hide the next one, which swaps by itself.
+        updateFeedFetch = (url) async => release.replaceAll('0.7.0', '0.7.1');
+        control.downloadUpdateValue = {...downloaded, 'version': '0.7.1'};
+        desktop.appVersion = '0.6.1+1';
+        await pumpEventQueue();
+        expect(control.downloadedAssets, hasLength(2));
+        expect(control.installRelaunches, [true]);
+        expect(desktop.updateStage, UpdateStage.installed);
+        expect(desktop.updateVersion, '0.7.1');
+        expect(quits, isEmpty);
+      },
+    );
+
     testWidgets('Home offers Install for a package that was tried at start', (
       tester,
     ) async {

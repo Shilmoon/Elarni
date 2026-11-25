@@ -4,6 +4,30 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
 
 ## Unreleased
 
+### Fixed
+
+- **A DNS resolver running on the computer works in VPN mode.** On Windows the DNS guard blocked
+  every lookup to port 53 that did not go through the tunnel, including lookups to 127.0.0.1
+  and ::1, so apps that used a local resolver (dnscrypt-proxy, Acrylic, AdGuard Home) got no
+  answers. On Linux such lookups went to Elarni's DNS instead of the resolver. Lookups to
+  loopback now reach the resolver. Its own plain lookups to its upstream servers still go
+  through the tunnel (Linux) or are blocked (Windows), as are lookups to the router or another
+  resolver on the local network. On Linux, systemd-resolved (127.0.0.53, 127.0.0.54) is still
+  answered by Elarni, because its own lookups would leave outside the tunnel.
+- **Linux: the VPN puts its firewall rules back when another program removes them.** A program
+  that ran `nft flush ruleset` removed Elarni's DNS redirect and kill switch rules, so DNS
+  lookups went around the tunnel until the next Connect. Elarni checks once a second, puts the
+  rules back and logs it. If it cannot put them back, it logs why and the VPN disconnects.
+- **Windows: a Wintun failure says what went wrong.** When the Windows network driver (Wintun)
+  could not be loaded, Elarni showed a generic connection failure. The message now names the
+  driver, says that antivirus software or a device installation policy can cause this, and
+  suggests reinstalling Elarni or using System proxy mode. The diagnostics export keeps the
+  Windows error code.
+- **Not now on an update keeps that version from installing by itself.** With automatic updates
+  on, a release you put off with **Not now** was still downloaded and installed at the next
+  check or start. Now it waits until you press **Update**. A newer release is offered and
+  downloaded as usual.
+
 ## 0.6.4 - 2026-11-23
 
 ### Added

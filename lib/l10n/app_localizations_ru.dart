@@ -172,6 +172,14 @@ class AppLocalizationsRu extends AppLocalizations {
       'Нет инструмента межсетевого экрана для VPN.';
 
   @override
+  String get issueWintunFailedRemedy =>
+      'Причиной может быть антивирус или политика установки устройств. Переустановите Elarni или используйте режим системного прокси.';
+
+  @override
+  String get issueWintunFailed =>
+      'Не удалось загрузить сетевой драйвер Windows (Wintun) или создать его сетевой адаптер.';
+
+  @override
   String get issueDisconnectUnconfirmedRemedy =>
       'Обновите состояние перед повторным подключением или используйте «Исправить настройку VPN».';
 

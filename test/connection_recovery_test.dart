@@ -6,8 +6,11 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:elarni/connection_support.dart';
 import 'package:elarni/connection_recovery.dart';
+import 'package:elarni/desktop_catalog.dart' show desktopError;
 import 'package:elarni/desktop_integration.dart';
+import 'package:elarni/desktop_proxy.dart' show desktopFailureCode;
 import 'package:elarni/elarni_app.dart';
+import 'package:elarni/strings.dart' show appLocale;
 import 'package:elarni/tunnel_channel.dart';
 
 import 'elarni_app_test.dart'
@@ -107,6 +110,75 @@ void main() {
       descriptions.add(issue.description);
     }
     expect(descriptions, hasLength(4));
+  });
+
+  // N3-58: antivirus removed the helper's wintun.dll and the app blamed the server.
+  test('a Wintun failure names the driver and keeps its Windows error', () {
+    final generic = ConnectionIssue.forCode('connection_failed').description;
+    for (final code in ['vpn_wintun_failed_126', 'vpn_wintun_failed']) {
+      for (final runtime in [true, false]) {
+        expect(desktopFailureCode(code, runtime: runtime), code, reason: code);
+      }
+      final issue = ConnectionIssue.from(
+        desktopError(desktopFailureCode(code, runtime: true)),
+      );
+      expect(issue.code, code);
+      expect(issue.description, isNot(generic));
+      expect(issue.message, contains('Wintun'));
+      expect(issue.remedy, contains('Antivirus'));
+      expect(issue.remedy, contains('Reinstall Elarni'));
+      expect(issue.remedy, contains('System proxy mode'));
+      expect(failureText(code), issue.description);
+      expect(desktopError(code).message, issue.description);
+      // The number reaches the evidence export.
+      expect(
+        connectionDiagnostics(
+          platform: 'windows',
+          state: 'disconnected',
+          provider: const {},
+          automation: const {},
+          issueCodes: [issue.code],
+        )['recentIssues'],
+        [code],
+      );
+    }
+    // Other helper failures, and anything that only starts like one, stay generic.
+    for (final (code, runtime, expected) in [
+      ('vpn_core_failed', true, 'connection_failed'),
+      ('vpn_adapter_failed_5', true, 'connection_failed'),
+      ('vpn_wintun_failed_', true, 'connection_failed'),
+      ('vpn_wintun_failed_x', false, 'operation_failed'),
+      (
+        'vpn_wintun_failed_126 https://secret.example',
+        true,
+        'connection_failed',
+      ),
+      (null, true, 'connection_failed'),
+    ]) {
+      expect(
+        desktopFailureCode(code, runtime: runtime),
+        expected,
+        reason: code,
+      );
+    }
+    expect(
+      connectionDiagnostics(
+        platform: 'windows',
+        state: 'disconnected',
+        provider: const {},
+        automation: const {},
+        issueCodes: ['vpn_wintun_failed_126 https://secret.example'],
+      )['recentIssues'],
+      ['operation_failed'],
+    );
+    appLocale = const Locale('ru');
+    addTearDown(() => appLocale = const Locale('en'));
+    final russian = ConnectionIssue.forCode('vpn_wintun_failed_126');
+    expect(russian.message, contains('Wintun'));
+    expect(
+      russian.description,
+      isNot(ConnectionIssue.forCode('operation_failed').description),
+    );
   });
 
   for (final windows in [false, true]) {

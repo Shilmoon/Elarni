@@ -46,6 +46,8 @@
   "issueVpnGuardBusy": "На этом компьютере уже подключён другой VPN Elarni.",
   "issueVpnFirewallUnavailableRemedy": "Установите nftables (команду nft) и повторите попытку.",
   "issueVpnFirewallUnavailable": "Нет инструмента межсетевого экрана для VPN.",
+  "issueWintunFailedRemedy": "Причиной может быть антивирус или политика установки устройств. Переустановите Elarni или используйте режим системного прокси.",
+  "issueWintunFailed": "Не удалось загрузить сетевой драйвер Windows (Wintun) или создать его сетевой адаптер.",
   "issueDisconnectUnconfirmedRemedy": "Обновите состояние перед повторным подключением или используйте «Исправить настройку VPN».",
   "issueDisconnectUnconfirmed": "Не удалось подтвердить отключение.",
   "issueProviderUnavailableRemedy": "Повторите попытку с выбранным сервером. Если проблема останется, используйте «Исправить настройку VPN».",

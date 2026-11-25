@@ -41,6 +41,12 @@ const supportIssueCodes = {
   'vpn_guard_stale',
 };
 
+/// Whether [code] is the Windows helper's: Wintun, the network driver, could not
+/// be loaded or its adapter created. The helper appends the Windows error number
+/// (vpn_wintun_failed_126); the code stays whole, so the evidence export names it.
+bool wintunFailure(String code) =>
+    RegExp(r'^vpn_wintun_failed(_\d{1,10})?$').hasMatch(code);
+
 /// Allowlist support fields; do not recursively copy arbitrary runtime maps.
 Map<String, Object?> connectionDiagnostics({
   required String platform,
@@ -56,7 +62,9 @@ Map<String, Object?> connectionDiagnostics({
   'recentIssues': issueCodes
       .take(8)
       .map(
-        (code) => supportIssueCodes.contains(code) ? code : 'operation_failed',
+        (code) => supportIssueCodes.contains(code) || wintunFailure(code)
+            ? code
+            : 'operation_failed',
       )
       .toList(),
   'recovery': {
@@ -171,5 +179,6 @@ String supportIssueCode(String code) => switch (code.replaceFirst(
   'invalid_route_enforcement' => 'invalid_route_enforcement',
   'route_model_too_large' => 'route_model_too_large',
   'cancelled' || 'operation_cancelled' => 'cancelled',
+  final wintun when wintunFailure(wintun) => wintun,
   _ => 'operation_failed',
 };
