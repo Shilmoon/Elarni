@@ -35,6 +35,10 @@ typedef _CountryGroup = ({
         l10n.failureLinkRemoved,
         l10n.failureLinkRemovedText(provider),
       ),
+      'encrypted_feed' => (
+        l10n.failureEncrypted,
+        l10n.failureEncryptedText(provider),
+      ),
       'unsupported_profile' => (
         l10n.failureUnsupported,
         l10n.failureUnsupportedText(provider),
@@ -258,6 +262,7 @@ extension _HomePages on _ElarniHomeState {
     'provider_error',
     'subscription_denied',
     'subscription_unavailable',
+    'encrypted_feed',
     'hwid_required',
     'hwid_limit',
   };

@@ -2,10 +2,28 @@ package share
 
 import (
 	"net/url"
+	"regexp"
 	"strings"
 
 	"github.com/xtls/xray-core/infra/conf"
+	"github.com/xtls/xray-core/transport/internet/tls"
 )
+
+// versionedFingerprint is a browser fingerprint named with its version, as "chrome_120".
+var versionedFingerprint = regexp.MustCompile(`^(chrome|firefox|safari|ios|android|edge|360|qq)_[0-9][0-9a-z_]*$`)
+
+// shareFingerprint is the uTLS fingerprint a link names. Some links name a browser with its version,
+// which Xray does not know by that name: the browser's own preset, its current version, stands for it.
+func shareFingerprint(name string) string {
+	lower := strings.ToLower(name)
+	if lower == "unsafe" || tls.GetFingerprint(lower) != nil {
+		return name
+	}
+	if match := versionedFingerprint.FindStringSubmatch(lower); match != nil {
+		return match[1]
+	}
+	return name
+}
 
 func (proxy xrayShareLink) streamSettings(link *url.URL) (*conf.StreamConfig, error) {
 	query := link.Query()
@@ -28,7 +46,7 @@ func (proxy xrayShareLink) parseSecurityFromURL(link *url.URL, streamSettings *c
 	tlsSettings := &conf.TLSConfig{}
 	realitySettings := &conf.REALITYConfig{}
 
-	fp := query.Get("fp")
+	fp := shareFingerprint(query.Get("fp"))
 	tlsSettings.Fingerprint = fp
 	realitySettings.Fingerprint = fp
 

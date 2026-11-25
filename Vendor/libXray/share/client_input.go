@@ -149,11 +149,16 @@ func NormalizeClientInput(input string) (ClientInput, error) {
 			payload, wrapped = strings.CutPrefix(text, "happ://add/")
 		}
 		if !wrapped {
-			if u, err := url.Parse(text); err == nil && (u.Scheme == "https" || u.Scheme == "http") &&
-				u.User == nil && u.Hostname() != "" && u.Path != "" && u.Path != "/" && u.Fragment != "" &&
+			u, err := url.Parse(text)
+			usableName := err == nil && utf8.RuneCountInString(u.Fragment) <= 128 && strings.IndexFunc(u.Fragment, unicode.IsControl) < 0
+			// Subscription QR links may carry a display name, which is not part of the HTTP target.
+			// A panel's root counts when the name is usable (https://host/#Name, probe N10-09): the
+			// apps add a root URL as a subscription when it has a name. An HTTP proxy link has no path
+			// (https://host:443#Name).
+			if err == nil && (u.Scheme == "https" || u.Scheme == "http") &&
+				u.User == nil && u.Hostname() != "" && u.Path != "" && (u.Path != "/" || usableName) && u.Fragment != "" &&
 				!((strings.EqualFold(u.Hostname(), "t.me") || strings.EqualFold(u.Hostname(), "telegram.me")) && u.Path == "/proxy") {
-				// Subscription QR links may carry a display name, which is not part of the HTTP target.
-				if result.Name == "" && utf8.RuneCountInString(u.Fragment) <= 128 && strings.IndexFunc(u.Fragment, unicode.IsControl) < 0 {
+				if result.Name == "" && usableName {
 					result.Name = u.Fragment
 				}
 				u.Fragment, u.RawFragment = "", ""

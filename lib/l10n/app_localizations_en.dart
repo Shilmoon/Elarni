@@ -2731,6 +2731,14 @@ class AppLocalizationsEn extends AppLocalizations {
   }
 
   @override
+  String get failureEncrypted => 'Encrypted for another app';
+
+  @override
+  String failureEncryptedText(String provider) {
+    return '$provider encrypted this subscription for another app, such as Happ, and Elarni cannot read it. Ask the provider for a link without encryption.';
+  }
+
+  @override
   String get failureUnsupported => 'Unsupported content';
 
   @override

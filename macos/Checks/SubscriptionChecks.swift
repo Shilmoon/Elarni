@@ -1293,7 +1293,13 @@ struct SubscriptionChecks {
     try expect(name(store) == "Hysteria2", "link fallback was lost after a provider title change")
     try await mode("baseline")
     print("PASS subscription link labels stay below provider titles and explicit renames across relaunch")
-    return 1
+    // A panel's root named in its fragment is a subscription (probe N10-09); an HTTP proxy link has no path.
+    let root = try store.registerProfiles(fixture.absoluteString + "/#Root%20feed")
+    let rootGroup = (store.snapshot()["subscriptions"] as! [[String: Any]]).first { $0["id"] as? String == root }
+    try expect(root != id && rootGroup?["isLocal"] as? Bool == false && rootGroup?["name"] as? String == "Root feed",
+      "a named root URL was not added as a subscription with its name")
+    print("PASS a root subscription URL named in its fragment is added under that name")
+    return 2
   }
 
   static func refreshChecks(fixture: URL) async throws -> Int {

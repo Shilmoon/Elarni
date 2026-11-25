@@ -439,8 +439,38 @@ func TestHysteriaLinkPrefersItsOwnParameters(t *testing.T) {
 	}
 }
 
+// The official Hysteria URI writes gecko without packet sizes (probe N10-12): Hysteria's own client
+// defaults, 512 and 1200, stand for a size the link leaves out.
+func TestHysteria2GeckoWithoutSizesTakesHysteriasDefaults(t *testing.T) {
+	const base = "hysteria2://pw@example.com:443/?sni=example.com&obfs=gecko&obfs-password=abc"
+	for _, test := range []struct {
+		sizes    string
+		min, max int32
+	}{
+		{"", 512, 1200},
+		{"&minPacketSize=600", 600, 1200},
+		{"&maxPacketSize=1000", 512, 1000},
+		{"&minPacketSize=100&maxPacketSize=2048", 100, 2048},
+	} {
+		imported, err := ImportClientProfiles(base + test.sizes + "#hy2-gecko-nosize")
+		if err != nil {
+			t.Errorf("%q: %v", test.sizes, err)
+			continue
+		}
+		masks := builtOutbound(t, imported.Profiles[0].Config).stream.(*internet.StreamConfig).Udpmasks
+		if len(masks) != 1 {
+			t.Errorf("%q: %d masks: %s", test.sizes, len(masks), imported.Profiles[0].Config)
+			continue
+		}
+		mask, err := masks[0].GetInstance()
+		if gecko, ok := mask.(*salamander.GeckoConfig); err != nil || !ok || gecko.Password != "abc" || gecko.MinPacketSize != test.min || gecko.MaxPacketSize != test.max {
+			t.Errorf("%q: mask %T %v (%v)", test.sizes, mask, mask, err)
+		}
+	}
+}
+
 // 3x-ui and v2rayN write Xray's gecko mask, salamander with a packet size range, as obfs=gecko with
-// minPacketSize and maxPacketSize. Without the sizes the mask cannot be built.
+// minPacketSize and maxPacketSize.
 func TestHysteria2GeckoObfuscationImportsAndShares(t *testing.T) {
 	const base = "hysteria2://pw@203.0.113.9:443?sni=h.example&obfs=gecko&obfs-password=secret"
 	imported, err := ImportClientProfiles(base + "&minPacketSize=512&maxPacketSize=1200#g")
@@ -475,8 +505,8 @@ func TestHysteria2GeckoObfuscationImportsAndShares(t *testing.T) {
 	if got := builtOutbound(t, again.Profiles[0].Config); !proto.Equal(want.proxy, got.proxy) || !proto.Equal(want.stream, got.stream) {
 		t.Errorf("server changed through %s", links)
 	}
-	for _, sizes := range []string{"", "&minPacketSize=512", "&maxPacketSize=1200", "&minPacketSize=0&maxPacketSize=1200",
-		"&minPacketSize=1200&maxPacketSize=512", "&minPacketSize=512&maxPacketSize=2049", "&minPacketSize=a&maxPacketSize=1200"} {
+	for _, sizes := range []string{"&minPacketSize=0&maxPacketSize=1200", "&minPacketSize=1200&maxPacketSize=512",
+		"&minPacketSize=512&maxPacketSize=2049", "&minPacketSize=a&maxPacketSize=1200", "&minPacketSize=1300", "&maxPacketSize=2049", "&maxPacketSize=100"} {
 		if result, err := ImportClientProfiles(base + sizes); err == nil {
 			t.Errorf("%q imported as %s", sizes, result.Profiles[0].Config)
 		}

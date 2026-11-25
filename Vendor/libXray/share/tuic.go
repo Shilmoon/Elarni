@@ -41,7 +41,9 @@ func (proxy xrayShareLink) tuicOutbound() (*conf.OutboundDetourConfig, error) {
 	}
 	for key, values := range query {
 		switch key {
-		case "sni", "alpn", "congestion_control", "udp_relay_mode", "allow_insecure", "allowInsecure", "insecure":
+		// The "fp" some panels add to every link says nothing here: TUIC's QUIC handshake has no
+		// browser fingerprint, and the core no setting for one.
+		case "sni", "alpn", "congestion_control", "udp_relay_mode", "allow_insecure", "allowInsecure", "insecure", "fp", "reduce_rtt", "disable_sni":
 		default:
 			return nil, fmt.Errorf("unsupported TUIC URI parameter")
 		}
@@ -49,8 +51,29 @@ func (proxy xrayShareLink) tuicOutbound() (*conf.OutboundDetourConfig, error) {
 			return nil, fmt.Errorf("duplicate TUIC URI parameter")
 		}
 	}
+	// Panels write the names in any case; the core reads them in lower case.
 	settings := &conf.TUICClientConfig{Address: parseAddress(u.Hostname()), Port: port, UUID: uuid, Password: &password,
-		CongestionControl: query.Get("congestion_control"), UDPRelayMode: query.Get("udp_relay_mode")}
+		CongestionControl: strings.ToLower(query.Get("congestion_control")), UDPRelayMode: strings.ToLower(query.Get("udp_relay_mode"))}
+	// sing-box and Clash name the 0-RTT handshake reduce_rtt.
+	if reduce, ok := query["reduce_rtt"]; ok {
+		switch reduce[0] {
+		case "0", "false":
+		case "1", "true":
+			settings.ZeroRTTHandshake = true
+		default:
+			return nil, fmt.Errorf("invalid TUIC reduce_rtt flag")
+		}
+	}
+	if disable, ok := query["disable_sni"]; ok {
+		switch disable[0] {
+		case "0", "false":
+		case "1", "true":
+			// The core names the server in every TLS handshake.
+			return nil, fmt.Errorf("TUIC disable_sni is not supported")
+		default:
+			return nil, fmt.Errorf("invalid TUIC disable_sni flag")
+		}
+	}
 	tls := &conf.TLSConfig{ServerName: u.Hostname(), ALPN: new(conf.StringList([]string{"h3"}))}
 	if sni, ok := query["sni"]; ok {
 		if sni[0] == "" {

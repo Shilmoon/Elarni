@@ -1423,6 +1423,15 @@
       }
     }
   },
+  "failureEncrypted": "Encrypted for another app",
+  "failureEncryptedText": "{provider} encrypted this subscription for another app, such as Happ, and Elarni cannot read it. Ask the provider for a link without encryption.",
+  "@failureEncryptedText": {
+    "placeholders": {
+      "provider": {
+        "type": "String"
+      }
+    }
+  },
   "failureUnsupported": "Unsupported content",
   "failureUnsupportedText": "{provider} sent nothing Elarni can read: the format or one of its settings is not supported.",
   "@failureUnsupportedText": {
