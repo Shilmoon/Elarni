@@ -31,6 +31,8 @@ type link struct {
 	wrong    func(args ...any)
 	done     chan struct{}
 	once     sync.Once
+	// errs, if set, gives the errors that reads return, as a tun that fails now and then does
+	errs chan error
 }
 
 func newLink() *link {
@@ -50,6 +52,8 @@ func (l *link) ReadPacket(b []byte) ([]byte, error) {
 	select {
 	case packet := <-l.in:
 		return b[packetRoom : packetRoom+copy(b[packetRoom:], packet)], nil
+	case err := <-l.errs:
+		return nil, err
 	case <-l.done:
 		return nil, io.EOF
 	}
@@ -74,6 +78,8 @@ func (l *link) ReadParts(parts [][]byte) (int, error) {
 			n += copy(p, packet[n:])
 		}
 		return n, nil
+	case err := <-l.errs:
+		return 0, err
 	case <-l.done:
 		return 0, io.EOF
 	}
@@ -107,18 +113,24 @@ func (l *link) WriteSegment(header []byte, payload [][]byte, mss int) error {
 }
 
 func newTestStack(t *testing.T, l *link, handle func(net.Conn, net.Destination)) *stack {
-	s := &stack{ctx: context.Background(), tun: l, mtu: testMTU, window: tcpWindow, handle: handle, conns: make(map[flow]*tcpConn), sockets: make(map[netip.AddrPort]*udpSocket)}
+	s := newUnstartedStack(t, l, handle)
+	s.Start()
+	t.Cleanup(func() {
+		s.Close()
+		l.Close()
+	})
+	return s
+}
+
+// newUnstartedStack is the stack of newTestStack before it reads the link
+func newUnstartedStack(t *testing.T, l *link, handle func(net.Conn, net.Destination)) *stack {
+	s := &stack{ctx: context.Background(), tun: l, mtu: testMTU, window: tcpWindow, handle: handle, conns: make(map[flow]*tcpConn), sockets: make(map[netip.AddrPort]*udpSocket), closing: make(chan struct{})}
 	if l.segments {
 		s.segmenter, s.window, l.wrong = l, tcpLargeWindow, t.Error
 	}
 	if handle != nil {
 		s.udp = newUdpConnectionHandler(handle, s.writeUDP)
 	}
-	s.Start()
-	t.Cleanup(func() {
-		s.Close()
-		l.Close()
-	})
 	return s
 }
 

@@ -55,7 +55,8 @@ func (h *httpHandler) AuthHTTP(w http.ResponseWriter, r *http.Request) bool {
 		}
 
 		auth := r.Header.Get(RequestHeaderAuth)
-		down, _ := strconv.ParseUint(r.Header.Get(CommonHeaderCCRX), 10, 64)
+		remoteRx, _ := strconv.ParseUint(r.Header.Get(CommonHeaderCCRX), 10, 64)
+		tx := h.quicParams.BrutalUp
 
 		var user *protocol.MemoryUser
 		var ok bool
@@ -76,10 +77,14 @@ func (h *httpHandler) AuthHTTP(w http.ResponseWriter, r *http.Request) bool {
 			case "bbr":
 				congestion.UseBBR(conn, bbr.Profile(quicParams.BbrProfile))
 			case "", "brutal":
-				if quicParams.BrutalUp == 0 || down == 0 {
+				// as official Hysteria: the client's rx turns Brutal on, the server's up rate only caps it
+				if remoteRx == 0 {
 					congestion.UseBBR(conn, bbr.Profile(quicParams.BbrProfile))
 				} else {
-					congestion.UseBrutal(conn, min(quicParams.BrutalUp, down), quicParams.BrutalDisableLossCompensation)
+					if tx > 0 {
+						remoteRx = min(remoteRx, tx)
+					}
+					congestion.UseBrutal(conn, remoteRx, quicParams.BrutalDisableLossCompensation)
 				}
 			case "force-brutal":
 				congestion.UseBrutal(conn, quicParams.BrutalUp, quicParams.BrutalDisableLossCompensation)

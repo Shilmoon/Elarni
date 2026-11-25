@@ -10,9 +10,11 @@ import (
 	"strconv"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/xtls/xray-core/common"
 	"github.com/xtls/xray-core/common/errors"
+	"github.com/xtls/xray-core/common/retry"
 	"golang.org/x/net/ipv4"
 	"golang.zx2c4.com/wireguard/conn"
 )
@@ -62,6 +64,13 @@ func newBatchMessages() []ipv4.Message {
 
 var batchMessages = sync.Pool{New: func() any { messages := newBatchMessages(); return &messages }}
 
+// The wait between reads of a socket that keeps failing: none after the first error, then from
+// receiveRetryMin doubling up to receiveRetryMax.
+const (
+	receiveRetryMin = 5 * time.Millisecond
+	receiveRetryMax = time.Second
+)
+
 type bind struct {
 	resolveFunc    func(host string) (net.IP, error)
 	listenFunc     func() (net.PacketConn, error)
@@ -103,6 +112,9 @@ func (b *bind) Open(port uint16) (fns []conn.ReceiveFunc, actualPort uint16, err
 	var last *conn.StdNetEndpoint
 	return []conn.ReceiveFunc{
 		func(bufs [][]byte, sizes []int, eps []conn.Endpoint) (n int, err error) {
+			// Elarni: a socket error that repeats at once (a dead interface, a mask that keeps
+			// failing) spun this loop on a whole core and wrote a log line per turn.
+			backoff := retry.Backoff{Min: receiveRetryMin, Max: receiveRetryMax}
 			for {
 				var addr net.Addr
 				n = 1
@@ -130,6 +142,9 @@ func (b *bind) Open(port uint16) (fns []conn.ReceiveFunc, actualPort uint16, err
 						return 0, net.ErrClosed
 					}
 					errors.LogErrorInner(context.Background(), err, "bind recv err")
+					if !backoff.Wait(ch) {
+						return 0, net.ErrClosed
+					}
 					continue
 				}
 				for i := range n {

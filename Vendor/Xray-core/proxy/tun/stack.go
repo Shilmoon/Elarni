@@ -3,11 +3,13 @@ package tun
 import (
 	"context"
 	"encoding/binary"
+	goerrors "errors"
 	"io"
 	"math"
 	"math/rand/v2"
 	gonet "net"
 	"net/netip"
+	"os"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -16,6 +18,7 @@ import (
 	"github.com/xtls/xray-core/common/buf"
 	"github.com/xtls/xray-core/common/errors"
 	"github.com/xtls/xray-core/common/net"
+	"github.com/xtls/xray-core/common/retry"
 )
 
 // Stack interface implement ip protocol stack, bridging raw network packets and data streams
@@ -83,6 +86,8 @@ type stack struct {
 	// sockets are the ports that DialUDP has opened
 	sockets map[netip.AddrPort]*udpSocket
 	closed  bool
+	// closing is closed with closed set: it ends the wait of read after an error of the tun (Elarni)
+	closing chan struct{}
 	// opening is how many of conns wait for the answer to their SYN or SYN-ACK
 	opening atomic.Int32
 	// fragments are the packets that are larger than a link on their way and come in parts.
@@ -105,6 +110,7 @@ func NewStack(ctx context.Context, options StackOptions, handler ConnectionHandl
 		stamps:    options.Remote,
 		conns:     make(map[flow]*tcpConn),
 		sockets:   make(map[netip.AddrPort]*udpSocket),
+		closing:   make(chan struct{}),
 	}
 	if t, ok := options.Tun.(segmenter); ok && t.Segments() {
 		s.segmenter = t
@@ -138,6 +144,9 @@ func (s *stack) Start() error {
 // Close is called by Handler to shut down the stack
 func (s *stack) Close() error {
 	s.mu.Lock()
+	if !s.closed && s.closing != nil {
+		close(s.closing)
+	}
 	s.closed = true
 	conns := make([]*tcpConn, 0, len(s.conns))
 	for _, c := range s.conns {
@@ -162,32 +171,38 @@ func (s *stack) Close() error {
 	return nil
 }
 
+// The wait between reads of a tun that keeps failing: none after the first error, then from readRetryMin
+// doubling up to readRetryMax
+const (
+	readRetryMin = 5 * time.Millisecond
+	readRetryMax = time.Second
+)
+
 // read takes the packets of the tun until it is closed
 func (s *stack) read() {
-	var err error
+	backoff := retry.Backoff{Min: readRetryMin, Max: readRetryMax}
 	if s.segmenter != nil {
-		err = s.readSegments()
-	} else {
-		// as large as a packet can be, whatever the MTU is
-		b := make([]byte, packetRoom+1<<16)
-		for err == nil {
-			var p []byte
-			if p, err = s.tun.ReadPacket(b); err == nil {
-				s.Input(p)
-			}
-		}
+		s.readSegments(&backoff)
+		return
 	}
-	s.mu.Lock()
-	closed := s.closed
-	s.mu.Unlock()
-	if !closed {
-		errors.LogErrorInner(s.ctx, err, "[tun] failed to read a packet, no more are read")
+	// as large as a packet can be, whatever the MTU is
+	b := make([]byte, packetRoom+1<<16)
+	for {
+		p, err := s.tun.ReadPacket(b)
+		if err != nil {
+			if !s.readOn(err, &backoff) {
+				return
+			}
+			continue
+		}
+		backoff.Reset()
+		s.Input(p)
 	}
 }
 
 // readSegments is read for a tun that does not split segments and gives them as large as a packet can be.
 // They are read into buffers for a connection to keep what is large as it is, see keep
-func (s *stack) readSegments() error {
+func (s *stack) readSegments(backoff *retry.Backoff) {
 	s.bufs = make(buf.MultiBuffer, (1<<16)/buf.Size)
 	defer buf.ReleaseMulti(s.bufs)
 	parts := make([][]byte, len(s.bufs))
@@ -202,10 +217,32 @@ func (s *stack) readSegments() error {
 		}
 		n, err := s.segmenter.ReadParts(parts)
 		if err != nil {
-			return err
+			if !s.readOn(err, backoff) {
+				return
+			}
+			continue
 		}
+		backoff.Reset()
 		s.input(parts[0][:min(n, buf.Size)], max(n-buf.Size, 0))
 	}
+}
+
+// readOn tells whether read goes on after err, and waits before it does. Elarni: only a closed stack or tun
+// ends the reading; any other error ended it for good, and with it every connection of the tunnel while the
+// app still showed it connected
+func (s *stack) readOn(err error, backoff *retry.Backoff) bool {
+	s.mu.Lock()
+	closed := s.closed
+	s.mu.Unlock()
+	if closed {
+		return false
+	}
+	if goerrors.Is(err, os.ErrClosed) || goerrors.Is(err, io.EOF) || goerrors.Is(err, gonet.ErrClosed) {
+		errors.LogErrorInner(s.ctx, err, "[tun] failed to read a packet, no more are read")
+		return false
+	}
+	errors.LogWarningInner(s.ctx, err, "[tun] failed to read a packet")
+	return backoff.Wait(s.closing)
 }
 
 // room takes what it is given to read into as read: that is the room of a Buffer as it is, not cleared

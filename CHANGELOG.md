@@ -25,6 +25,34 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
   failure to decrypt the saved data read as damaged data, and the offered reset deletes the
   subscriptions. Only a file that does not match its key, or a key Android removed, offers the
   reset now; a failing Keystore keeps the data and offers **Retry**, which opens it again.
+- **REALITY with a randomized fingerprint could not connect on about half of the app starts.**
+  The randomized hello carried the post-quantum key share that REALITY servers since Xray 26.9.8
+  require only half the time; it now takes the hello that "random" picks, which always has it.
+- **The tunnel could stop carrying traffic after one read error of its network adapter**, while
+  the app still showed it connected. Elarni reads on after such an error and stops reading only
+  when the tunnel stops.
+- **WireGuard could keep a CPU core busy while its socket kept failing.** It now waits longer
+  after each error, up to a second, instead of retrying at once.
+- **Hysteria2 uses the upload speed you set, as the official client does.** Brutal congestion
+  control starts whenever the up speed is set, capped by the server's limit if it has one; it
+  needed a server limit too. "100 mbps" now means 100,000,000 bits per second, not 104,857,600.
+- **A Hysteria2, MASQUE, XDRIVE or HTTP/3 XHTTP server chained through another one could freeze
+  when a connection closed.** The socket under it is closed first now, so the close no longer
+  waits for the outer connection to end.
+- **An XHTTP `scMaxEachPostBytes` of 0 or less, such as `"0-1000000"`, crashed the core** at
+  the first connection. The profile is refused with an error that names the setting.
+- **Mux uses its configured concurrency again (8 by default).** Every outbound had been raised
+  to 128 connections per mux; only XDRIVE, which needs it, still is.
+- **Server tests left a connection open for every server that accepted but stalled in TLS.**
+  The test's own timeout now ends the TLS handshake and the wait for an answer too.
+- **XDNS with a TCP resolver did not work**: its queries went out without the length that DNS
+  over TCP needs. The resolver now sends and answers them on a pool of connections.
+- **DNS answers over TCP could arrive broken when several were sent at once**, and an answer read
+  while the DNS cache was cleaned could lose its addresses.
+- **Connections of a stopped tunnel no longer run on in the background**: stopping the tunnel
+  cancels the connections it handed to the core.
+- **Ranges in profiles now include their upper end.** Fragment, noise, padding and XHTTP size
+  ranges never took their largest value, so "1-2" was always 1.
 
 ## 0.6.4 - 2026-11-23
 

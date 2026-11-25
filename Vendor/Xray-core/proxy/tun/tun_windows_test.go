@@ -3,6 +3,8 @@
 package tun
 
 import (
+	"errors"
+	"os"
 	"testing"
 	"time"
 
@@ -57,8 +59,9 @@ func TestWindowsTunUnparkReusesTheParkedAdapter(t *testing.T) {
 
 func TestWindowsTunClosedOperationsDoNotUseNativeSession(t *testing.T) {
 	device := &WindowsTun{closed: true}
-	if _, err := device.ReadPacket(make([]byte, 1500)); err == nil {
-		t.Fatal("closed read succeeded")
+	// the stack reads on after an error that does not say the tun is closed
+	if _, err := device.ReadPacket(make([]byte, 1500)); !errors.Is(err, os.ErrClosed) {
+		t.Fatalf("closed read: %v, want os.ErrClosed", err)
 	}
 	if err := device.WritePacket(nil, nil); err == nil {
 		t.Fatal("closed write accepted")

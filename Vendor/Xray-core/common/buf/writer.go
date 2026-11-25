@@ -59,6 +59,10 @@ func (w *BufferToBytesWriter) WriteMultiBuffer(mb MultiBuffer) error {
 		if err != nil {
 			return err
 		}
+		if n == 0 {
+			// a writer that takes nothing and reports no error would be asked again forever
+			return io.ErrShortWrite
+		}
 		size -= int32(n)
 	}
 

@@ -5,6 +5,8 @@ package tun
 import (
 	"bytes"
 	"crypto/rand"
+	"errors"
+	"os"
 	"testing"
 	"time"
 
@@ -57,8 +59,9 @@ func TestReadParts(t *testing.T) {
 	tun.closeFile()
 	select {
 	case err := <-read:
-		if err == nil {
-			t.Fatal("read after the tun was closed")
+		// the stack reads on after any other error
+		if !errors.Is(err, os.ErrClosed) {
+			t.Fatal("read after the tun was closed: ", err, ", want os.ErrClosed")
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("still waits after the tun was closed")

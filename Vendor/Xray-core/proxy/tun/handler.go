@@ -28,7 +28,10 @@ import (
 
 // Handler is managing object that tie together tun interface, ip stack and dispatch connections to the routing
 type Handler struct {
+	// ctx is detached from the instance's; cancel ends it, and with it every dispatch started from it,
+	// when the handler closes, since nothing else would
 	ctx             context.Context
+	cancel          context.CancelFunc
 	config          *Config
 	stack           Stack
 	tun             Tun
@@ -124,7 +127,7 @@ func (t *Handler) Init(ctx context.Context, pm policy.Manager, dispatcher routin
 		t.sniffingRequest = content.SniffingRequest
 	}
 
-	t.ctx = core.ToBackgroundDetachedContext(ctx)
+	t.ctx, t.cancel = context.WithCancel(core.ToBackgroundDetachedContext(ctx))
 	t.policyManager = pm
 	t.dispatcher = dispatcher
 	t.tcpAdmission.limit, t.udpAdmission.limit = tcpLimit.Load(), udpLimit.Load()
@@ -389,6 +392,11 @@ func (t *Handler) serve(conn net.Conn, destination net.Destination, admitted *ad
 
 // Close implements common.Closable.
 func (t *Handler) Close() error {
+	// cancel first so every dispatch in flight unwinds, then close the stack (resets TCP, ends UDP flows)
+	// and the tun
+	if t.cancel != nil {
+		t.cancel()
+	}
 	return errors.Combine(common.CloseIfExists(t.stack), common.CloseIfExists(t.tun))
 }
 

@@ -128,6 +128,8 @@ func (w *UDPWriter) WriteMessage(b *buf.Buffer) error {
 
 type TCPWriter struct {
 	buf.Writer
+	// the DNS outbound answers queries from several goroutines; a message and its length go out together
+	sync.Mutex
 }
 
 func (w *TCPWriter) WriteMessage(b *buf.Buffer) error {
@@ -140,5 +142,7 @@ func (w *TCPWriter) WriteMessage(b *buf.Buffer) error {
 	size := buf.New()
 	binary.BigEndian.PutUint16(size.Extend(2), uint16(b.Len()))
 	mb = append(mb, size, b)
+	w.Lock()
+	defer w.Unlock()
 	return w.WriteMultiBuffer(mb)
 }
