@@ -485,11 +485,17 @@ private fun targetMap(value: JSONObject?) = value?.let { map -> map.keys().asSeq
     fun edits() = listOf(mode, packages, targets.filterKeys { it in packages }.toSortedMap()).toString()
     val opened = rememberSaveable { edits() }
     SaveOnLeave(activity, edits() != opened) { move -> save(move) }
-    LaunchedEffect(Unit) {
+    // The vendor's permission to read the installed apps, denied: the list holds only the apps already chosen.
+    var appsHidden by remember { mutableStateOf(false) }
+    var reads by remember { mutableIntStateOf(0) }
+    LaunchedEffect(reads) {
+        loading = true
         try { apps = activity.repository.execute("apps").objects("apps") }
         catch (_: Exception) { error = tr(R.string.couldn_t_load_installed_apps_reopen) }
         finally { loading = false }
     }
+    // Allowed in the system's settings meanwhile: the list is read again.
+    LifecycleResumeEffect(Unit) { val hidden = activity.installedAppsHidden(); if (appsHidden && !hidden) reads++; appsHidden = hidden; onPauseOrDispose {} }
     val selectedApps = apps.filter { it.string("package") in packages }
     // A listed package that is not installed matches nothing; it stays listed so it can be removed.
     val missingApps = if (loading || error != null) emptyList() else packages.filter { name -> apps.none { it.string("package") == name } }
@@ -564,6 +570,11 @@ private fun targetMap(value: JSONObject?) = value?.let { map -> map.keys().asSeq
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(trPlural(R.plurals.showing_apps, available.size, minOf(visibleCount, available.size), available.size), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     if (visibleCount < available.size) OutlinedButton({ visibleCount += 8 }, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) { Text(tr(R.string.show_more)) }
+                }
+            } else if (!loading && query.isBlank() && appsHidden) item {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(tr(R.string.the_system_on_this_phone_keeps), color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    OutlinedButton({ activity.appSettings() }, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("per-app-allow-list")) { Text(tr(R.string.open_app_settings)) }
                 }
             } else if (!loading) item { Text(if (query.isBlank()) tr(R.string.no_other_installed_apps) else tr(R.string.no_apps_match_your_search), color = MaterialTheme.colorScheme.onSurfaceVariant) }
         }

@@ -75,6 +75,9 @@ class InteractionModel : ViewModel() {
     }
 }
 
+/** HyperOS/MIUI's and MagicOS's own permission to read the installed apps, which the manifest declares. */
+private const val INSTALLED_APPS = "com.android.permission.GET_INSTALLED_APPS"
+
 class MainActivity : ComponentActivity() {
     private val app get() = application as ElarniApplication
     val repository get() = app.repository
@@ -129,7 +132,7 @@ class MainActivity : ComponentActivity() {
     fun allowWiFiNames() {
         val fine = checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == android.content.pm.PackageManager.PERMISSION_GRANTED
         when {
-            !getSystemService(android.location.LocationManager::class.java).isLocationEnabled -> startActivity(Intent(android.provider.Settings.ACTION_LOCATION_SOURCE_SETTINGS))
+            !getSystemService(android.location.LocationManager::class.java).isLocationEnabled -> systemScreen(Intent(android.provider.Settings.ACTION_LOCATION_SOURCE_SETTINGS))
             // After a final no, Android shows no dialog; only the app's settings can allow it.
             wifiAnswers > 0 && !shouldShowRequestPermissionRationale(if (fine) Manifest.permission.ACCESS_BACKGROUND_LOCATION else Manifest.permission.ACCESS_FINE_LOCATION) -> appSettings()
             fine -> backgroundLocation.launch(Manifest.permission.ACCESS_BACKGROUND_LOCATION)
@@ -196,7 +199,11 @@ class MainActivity : ComponentActivity() {
                 if (!repository.isCurrentRequest(generation)) return@withContext
                 val vpn = repository.state.value.catalog.mapObject("settings").optBoolean("xrayTunEnabled", true)
                 val consent = if (vpn) VpnService.prepare(this@MainActivity) else null
-                if (consent != null) { interaction.consentGeneration = generation; vpnConsent.launch(consent) }
+                if (consent != null) {
+                    interaction.consentGeneration = generation
+                    try { vpnConsent.launch(consent) }
+                    catch (_: ActivityNotFoundException) { interaction.consentGeneration = null; repository.report(AppFailure("system_screen_unavailable")) }
+                }
                 else {
                     if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) notifications.launch(Manifest.permission.POST_NOTIFICATIONS)
                     repository.scope.launch { try { repository.requestConnect(generation = generation) } catch (error: Exception) { if (error !is AppFailure || error.code != "cancelled") repository.report(error) } }
@@ -277,7 +284,17 @@ class MainActivity : ComponentActivity() {
         if (text.isNullOrBlank()) interaction.notice = tr(R.string.the_clipboard_is_empty_copy_a)
         else interaction.incoming = text
     }
-    fun pick(action: String) { interaction.fileAction = action; openFile.launch(if (action == "qr") arrayOf("image/*") else arrayOf("*/*")) }
+    // A device without Android's document picker (some TV boxes) has no app for these; the launch throws instead.
+    fun pick(action: String) {
+        interaction.fileAction = action
+        try { openFile.launch(if (action == "qr") arrayOf("image/*") else arrayOf("*/*")) }
+        catch (_: ActivityNotFoundException) { repository.report(AppFailure("picker_unavailable")) }
+    }
+    /** Asks where to save [InteractionModel.export] as [name]. */
+    private fun createDocument(name: String) {
+        try { createFile.launch(name) }
+        catch (_: ActivityNotFoundException) { interaction.export = null; interaction.exportNotice = null; repository.report(AppFailure("picker_unavailable")) }
+    }
     fun photographQR() {
         try {
             val file = File(cacheDir, "shared").apply { mkdirs() }.resolve("camera-qr.jpg")
@@ -295,7 +312,7 @@ class MainActivity : ComponentActivity() {
             } catch (error: Exception) { repository.report(if (error is AppFailure) error else AppFailure("file_unavailable")) }
         }
     }
-    fun save(text: String, name: String, notice: String? = null) { interaction.export = text.toByteArray(Charsets.UTF_8); interaction.exportNotice = notice; createFile.launch(name) }
+    fun save(text: String, name: String, notice: String? = null) { interaction.export = text.toByteArray(Charsets.UTF_8); interaction.exportNotice = notice; createDocument(name) }
     // Outside the repository lock, so a mark lands while a connect is stuck.
     fun markRecording() {
         repository.scope.launch {
@@ -310,7 +327,7 @@ class MainActivity : ComponentActivity() {
         repository.scope.launch {
             try {
                 val bytes = repository.engine.exportRecording()
-                withContext(Dispatchers.Main) { interaction.export = bytes; interaction.exportNotice = null; createFile.launch("elarni-recording.zip") }
+                withContext(Dispatchers.Main) { interaction.export = bytes; interaction.exportNotice = null; createDocument("elarni-recording.zip") }
             } catch (error: Exception) { repository.report(if (error is AppFailure) error else AppFailure("recording_failed")) }
         }
     }
@@ -318,7 +335,7 @@ class MainActivity : ComponentActivity() {
         // Android 13 and later then keep the text out of the clipboard preview.
         if (sensitive) description.extras = android.os.PersistableBundle().apply { putBoolean("android.content.extra.IS_SENSITIVE", true) }
     }) }
-    fun shareText(text: String) { startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, text), tr(R.string.share_profile))) }
+    fun shareText(text: String) = systemScreen(Intent.createChooser(Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, text), tr(R.string.share_profile)))
     fun shareQR(png: String) = shareFile("profile-qr.png", "image/png", tr(R.string.share_qr_code)) { android.util.Base64.decode(png, android.util.Base64.DEFAULT) }
     fun shareFile(name: String, type: String, title: String, content: () -> ByteArray) {
         try {
@@ -334,8 +351,16 @@ class MainActivity : ComponentActivity() {
             startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
         } catch (_: Exception) { repository.report(AppFailure("link_unavailable")) }
     }
-    fun vpnSettings() { startActivity(Intent(AndroidSettings.ACTION_VPN_SETTINGS)) }
-    fun appSettings() { startActivity(Intent(AndroidSettings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName"))) }
+    // Builds for TVs and some vendors leave out screens of Android's own, such as its VPN settings.
+    private fun systemScreen(intent: Intent) {
+        try { startActivity(intent) } catch (_: ActivityNotFoundException) { repository.report(AppFailure("system_screen_unavailable")) }
+    }
+    fun vpnSettings() = systemScreen(Intent(AndroidSettings.ACTION_VPN_SETTINGS))
+    fun appSettings() = systemScreen(Intent(AndroidSettings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName")))
+    /** Xiaomi's and Honor's systems show an app no other installed apps until their own permission allows it, which the
+     *  app's page in Android's settings grants; other systems have no such permission. */
+    fun installedAppsHidden(): Boolean = runCatching { packageManager.getPermissionInfo(INSTALLED_APPS, 0) }.isSuccess &&
+        checkSelfPermission(INSTALLED_APPS) != android.content.pm.PackageManager.PERMISSION_GRANTED
     fun batteryExempt(): Boolean = getSystemService(PowerManager::class.java).isIgnoringBatteryOptimizations(packageName)
     // Some builds drop Android's dialog or its list; the app's own page still reaches the battery setting.
     fun allowBackground() {

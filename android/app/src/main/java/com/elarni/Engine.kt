@@ -42,6 +42,9 @@ class Engine(private val app: ElarniApplication, private val assets: RoutingAsse
             val user = auth?.let { it.getString("username") + ":" + it.getString("password") }
             return URI("socks5", user, "127.0.0.1", catalog.settings.getInt("socksPort"), null, null, null).toASCIIString()
         }
+        /** Whether looking a server's name up failed with [error]: no answer in 5 s, or none at all, as before the network is up. */
+        fun lookupFailed(error: Exception) = error is java.util.concurrent.TimeoutException ||
+            error is java.util.concurrent.ExecutionException && error.cause is java.net.UnknownHostException
         private fun sessionCredentials(): JSONObject {
             val random = java.security.SecureRandom()
             fun token() = ByteArray(16).also(random::nextBytes).joinToString("") { "%02x".format(it) }
@@ -102,16 +105,21 @@ class Engine(private val app: ElarniApplication, private val assets: RoutingAsse
         val resolved = JSONObject(); val unavailable = JSONArray(); val mappings = mappings(config, endpoints)
         val settings = catalog.settings
         catalog.node(id).string("ipPreference").takeIf { it.isNotEmpty() }?.let { settings.put("profilePreferredIP", it) }
+        var unanswered: java.net.UnknownHostException? = null
         endpoints.forEach { endpoint ->
             try { resolved.put(endpoint.getString("addressPath"), addresses(endpoint, settings, mappings.mapObject(endpoint.getString("host"))).first().hostAddress) }
-            catch (_: Exception) { unavailable.put(endpoint.getString("addressPath")) }
+            catch (error: Exception) {
+                unavailable.put(endpoint.getString("addressPath"))
+                if (unanswered == null && lookupFailed(error)) unanswered = java.net.UnknownHostException(endpoint.getString("host"))
+            }
         }
         return try {
             Native.domain("prepareConfig", obj("config" to config, "resolved" to resolved, "unavailable" to unavailable,
                 "pin" to settings.getBoolean("resolveServer"), "pinHosts" to JSONArray(mappings.keys().asSequence().toList()))).getJSONObject("config")
         } catch (error: AppFailure) {
-            // The profile compiled above; with servers left out, a failure means none could be reached.
-            throw if (unavailable.length() > 0) AppFailure("connection_failed") else error
+            // The profile compiled above; with servers left out, a failure means none could be reached. The cause tells a
+            // start at boot that a name had no answer, which the network coming up may give.
+            throw if (unavailable.length() > 0) AppFailure("connection_failed", unanswered) else error
         }
     }
     // keepTunnel leaves a failed start's interface up, so traffic is dropped

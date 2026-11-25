@@ -18,6 +18,8 @@
     <string name="no_app_could_open_this_link">No app could open this link. Check the address and installed apps.</string>
     <string name="android_restarted_the_app_during_export">Android restarted the app during export. Export the file again.</string>
     <string name="the_file_could_not_be_read">The file could not be read or saved. Choose an accessible file or location.</string>
+    <string name="no_app_on_this_device_can_open">No app on this device can open or save files. Install a file manager, then try again.</string>
+    <string name="android_on_this_device_cannot_open">Android on this device cannot open this screen.</string>
     <string name="no_camera_app_is_available_import">No camera app is available. Import a QR image instead.</string>
     <string name="no_readable_qr_code_was_found">No readable QR code was found. Use a clear, well-lit image containing the entire code.</string>
     <string name="the_input_exceeds_the_supported_size">The input exceeds the supported size. Use a smaller file or profile.</string>
@@ -456,6 +458,8 @@
     <string name="package_profile_tools">Package &amp; profile tools</string>
     <string name="not_currently_visible_remove_unavailable_apps">Not currently visible: %1$s. Remove unavailable apps before connecting.</string>
     <string name="no_other_installed_apps">No other installed apps.</string>
+    <string name="the_system_on_this_phone_keeps">The system on this phone keeps Elarni from reading the installed apps. Allow it in Elarni\'s app settings, then come back here.</string>
+    <string name="open_app_settings">Open app settings</string>
     <string name="no_apps_match_your_search">No apps match your search.</string>
     <string name="show_more">Show more</string>
     <string name="installed_apps">Installed apps</string>
@@ -769,6 +773,7 @@
     <string name="run_in_the_background">Run in the background</string>
     <string name="allowed">Allowed</string>
     <string name="reset_elarni">Reset Elarni</string>
+    <string name="retry">Retry</string>
     <string name="reset_elarni_2">Reset Elarni?</string>
     <string name="this_deletes_every_subscription_server_and">This deletes every subscription, server and setting on this device. It cannot be undone.</string>
     <string name="a_chosen_server_has_no_share">A chosen server has no share link that keeps all its settings. Share it from its own page.</string>
