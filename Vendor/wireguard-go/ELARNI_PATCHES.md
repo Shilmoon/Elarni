@@ -11,3 +11,10 @@ version Vendor/Xray-core requires), joined to the build by `go.work`.
   `device.MaxContentSize` (proxy/wireguard `tunnelMTU`).
 - `device/pools_test.go`: the failure message reads the atomic counter with
   `Load()`, so `go vet` (copylocks) passes on Go 1.27.
+- `device/receive.go`: upstream b3bc704ef0. An IPv6 payload length near 65535 overflowed
+  uint16 when the header length was added, so the packet was cut below an IPv6 header and
+  written to the tunnel instead of dropped. Test: `device/receive_length_test.go`.
+- `device/noise-protocol.go` (`ConsumeMessageResponse`): upstream 2631ce99a0. A response
+  consumed twice at once, with a new initiation created in between, no longer installs the
+  state of the old handshake: the handshake state and local ephemeral key are checked again
+  under the write lock.

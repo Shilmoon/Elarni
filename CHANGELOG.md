@@ -4,6 +4,26 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
 
 ## Unreleased
 
+### Fixed
+
+- **A Hysteria2, TUIC or XHTTP/3 connection no longer closes over one packet it could not send.**
+  A full send buffer, frequent on Mac and iPhone, closed a Hysteria2 or XHTTP/3 connection, and a
+  moment without a network, route or local address while the device moved between Wi-Fi and
+  mobile data closed those and TUIC connections, so every app on them reconnected. Such a packet
+  is now resent like a lost one; a connection whose network does not come back still ends at the
+  idle timeout, and a connection attempt to a server the device has no route to (an IPv6 address
+  without IPv6) still fails at once. All platforms.
+- **A long-lived Hysteria2, TUIC or XHTTP/3 connection no longer runs out of streams.** A stream
+  that either side stopped while an app was still sending on it never gave its slot back, so
+  after many such streams (a video or download closed mid-transfer) the connection refused new
+  ones with "too many open streams". All platforms.
+- **Servers with a long certificate chain or a post-quantum key exchange connect over
+  Hysteria2, TUIC and XHTTP/3.** A server's first handshake reply larger than 16 KiB failed the
+  connection with CRYPTO_BUFFER_EXCEEDED. All platforms.
+- **A UDP packet over Hysteria2 or TUIC is no longer delivered twice on a path that reorders
+  packets.** After more than 64 gaps in what had arrived, a late copy of an old packet was taken
+  as new. All platforms.
+
 ## 0.6.4 - 2026-11-23
 
 ### Added

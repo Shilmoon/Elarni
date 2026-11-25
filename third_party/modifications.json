@@ -352,40 +352,78 @@
       "upstreamRevision": "184d081eef3e",
       "files": [
         "Vendor/quic-go/ELARNI_PATCHES.md",
+        "Vendor/quic-go/connection.go",
+        "Vendor/quic-go/crypto_stream.go",
+        "Vendor/quic-go/crypto_stream_limit_test.go",
         "Vendor/quic-go/flow_controller_connection.go",
         "Vendor/quic-go/flow_controller_stalled_test.go",
+        "Vendor/quic-go/frame_sorter.go",
         "Vendor/quic-go/go.mod",
         "Vendor/quic-go/go.sum",
         "Vendor/quic-go/http3/client.go",
         "Vendor/quic-go/http3/headers.go",
         "Vendor/quic-go/http3/request_writer.go",
         "Vendor/quic-go/http3/response_writer.go",
-        "Vendor/quic-go/http3/server_conn.go"
+        "Vendor/quic-go/http3/server_conn.go",
+        "Vendor/quic-go/internal/ackhandler/received_packet_history.go",
+        "Vendor/quic-go/internal/ackhandler/received_packet_history_limit_test.go",
+        "Vendor/quic-go/internal/protocol/params.go",
+        "Vendor/quic-go/send_queue.go",
+        "Vendor/quic-go/send_queue_transient_test.go",
+        "Vendor/quic-go/send_queue_transient_unix_test.go",
+        "Vendor/quic-go/send_queue_transient_windows_test.go",
+        "Vendor/quic-go/send_stream.go",
+        "Vendor/quic-go/send_stream_reset_test.go",
+        "Vendor/quic-go/sys_conn_netchange_other.go",
+        "Vendor/quic-go/sys_conn_netchange_unix.go",
+        "Vendor/quic-go/sys_conn_netchange_windows.go",
+        "Vendor/quic-go/sys_conn_nobufs_other.go",
+        "Vendor/quic-go/sys_conn_nobufs_unix.go",
+        "Vendor/quic-go/sys_conn_nobufs_windows.go"
       ],
-      "purpose": "received stream bytes count as read for the connection window up to twice its maximum, so downloads the application stopped reading no longer freeze every stream of a Hysteria2 or XHTTP/3 connection; go.mod tidied for the copied non-test sources; http3 imports sorted by gofmt"
+      "purpose": "received stream bytes count as read for the connection window up to twice its maximum, so downloads the application stopped reading no longer freeze every stream of a Hysteria2 or XHTTP/3 connection; go.mod tidied for the copied non-test sources; http3 imports sorted by gofmt; a send failing with ENOBUFS (SagerNet/quic-go e86a8a79) or, once the handshake is complete, with a lost interface, route or local address drops that packet instead of closing the connection; upstream quic-go fixes for a send stream reset during a blocked Write that never completed (254a5393), the crypto stream limit applied to out-of-order data instead of the offset (#6265) and packets from a discarded ACK range taken as new (#6308)"
     },
     {
       "name": "sagernet-quic-go",
       "upstreamRevision": "f7b7e9c4c6f6",
       "files": [
         "Vendor/sagernet-quic-go/ELARNI_PATCHES.md",
+        "Vendor/sagernet-quic-go/connection.go",
+        "Vendor/sagernet-quic-go/crypto_stream.go",
+        "Vendor/sagernet-quic-go/crypto_stream_limit_test.go",
         "Vendor/sagernet-quic-go/flow_controller_connection.go",
         "Vendor/sagernet-quic-go/flow_controller_stalled_test.go",
+        "Vendor/sagernet-quic-go/frame_sorter.go",
         "Vendor/sagernet-quic-go/go.mod",
-        "Vendor/sagernet-quic-go/go.sum"
+        "Vendor/sagernet-quic-go/go.sum",
+        "Vendor/sagernet-quic-go/internal/ackhandler/received_packet_history.go",
+        "Vendor/sagernet-quic-go/internal/ackhandler/received_packet_history_limit_test.go",
+        "Vendor/sagernet-quic-go/internal/protocol/params.go",
+        "Vendor/sagernet-quic-go/send_queue.go",
+        "Vendor/sagernet-quic-go/send_queue_transient_test.go",
+        "Vendor/sagernet-quic-go/send_queue_transient_unix_test.go",
+        "Vendor/sagernet-quic-go/send_queue_transient_windows_test.go",
+        "Vendor/sagernet-quic-go/send_stream.go",
+        "Vendor/sagernet-quic-go/send_stream_reset_test.go",
+        "Vendor/sagernet-quic-go/sys_conn_netchange_other.go",
+        "Vendor/sagernet-quic-go/sys_conn_netchange_unix.go",
+        "Vendor/sagernet-quic-go/sys_conn_netchange_windows.go"
       ],
-      "purpose": "received stream bytes count as read for the connection window up to twice its maximum, so downloads the application stopped reading no longer freeze every stream of a TUIC connection; go.mod tidied for the copied non-test sources"
+      "purpose": "received stream bytes count as read for the connection window up to twice its maximum, so downloads the application stopped reading no longer freeze every stream of a TUIC connection; go.mod tidied for the copied non-test sources; a send failing with a lost interface, route or local address once the handshake is complete drops that packet instead of closing the connection, as ENOBUFS already did; upstream quic-go fixes for a send stream reset during a blocked Write that never completed (254a5393), the crypto stream limit applied to out-of-order data instead of the offset (#6265) and packets from a discarded ACK range taken as new (#6308)"
     },
     {
       "name": "wireguard-go",
       "upstreamRevision": "f333402bd9cb",
       "files": [
         "Vendor/wireguard-go/ELARNI_PATCHES.md",
+        "Vendor/wireguard-go/device/noise-protocol.go",
         "Vendor/wireguard-go/device/pools_test.go",
         "Vendor/wireguard-go/device/queueconstants_android.go",
-        "Vendor/wireguard-go/device/queueconstants_default.go"
+        "Vendor/wireguard-go/device/queueconstants_default.go",
+        "Vendor/wireguard-go/device/receive.go",
+        "Vendor/wireguard-go/device/receive_length_test.go"
       ],
-      "purpose": "message buffers sized for one packet (2016 bytes) instead of 64 KiB on desktop and Android, since Xray's bind and gVisor TUN use no UDP GSO/GRO or TUN offload; a test reads its atomic counter for go vet"
+      "purpose": "message buffers sized for one packet (2016 bytes) instead of 64 KiB on desktop and Android, since Xray's bind and gVisor TUN use no UDP GSO/GRO or TUN offload; a test reads its atomic counter for go vet; upstream fixes for an IPv6 length that overflowed uint16 on receive (b3bc704ef0) and a handshake response consumed after an intermediate initiation (2631ce99a0)"
     },
     {
       "name": "shadowquic",
