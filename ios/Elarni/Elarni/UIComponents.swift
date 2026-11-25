@@ -220,6 +220,17 @@ struct IOSQuotaPresentation {
   }
 }
 
+/// The lines a provider sent in its feed instead of servers, such as the traffic left: text only.
+struct ProviderNoticeLines: View {
+  let notices: [String]
+  var body: some View {
+    ForEach(Array(notices.enumerated()), id: \.offset) { _, notice in
+      Text("Provider: \(notice)").font(.footnote).foregroundStyle(AppPalette.secondary)
+        .accessibilityIdentifier("providerNotice")
+    }
+  }
+}
+
 struct QuotaView: View {
   let source: ServerSubscription
   var body: some View {

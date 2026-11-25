@@ -4380,6 +4380,16 @@
         }
       }
     },
+    "Provider: %@" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Провайдер: %@"
+          }
+        }
+      }
+    },
     "Proxy" : {
       "localizations" : {
         "ru" : {

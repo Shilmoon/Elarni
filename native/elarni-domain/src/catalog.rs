@@ -41,6 +41,33 @@ pub fn node_identity(config: Value) -> Value {
     config
 }
 
+/// The REALITY values a panel such as 3x-ui picks anew on each fetch.
+const ROTATED_REALITY_FIELDS: [&str; 3] = ["shortId", "serverName", "spiderX"];
+
+/// [`node_identity`] without the REALITY values a panel rotates per fetch, wherever a stream's
+/// REALITY settings appear. A refresh that changed them together with the remark matches the
+/// server by this identity; address, port, credentials, public key and transport still count.
+pub fn stable_node_identity(config: Value) -> Value {
+    let mut config = node_identity(config);
+    forget_rotated_reality(&mut config);
+    config
+}
+
+fn forget_rotated_reality(value: &mut Value) {
+    match value {
+        Value::Object(object) => {
+            if let Some(Value::Object(reality)) = object.get_mut("realitySettings") {
+                for field in ROTATED_REALITY_FIELDS {
+                    reality.remove(field);
+                }
+            }
+            object.values_mut().for_each(forget_rotated_reality);
+        }
+        Value::Array(items) => items.iter_mut().for_each(forget_rotated_reality),
+        _ => {}
+    }
+}
+
 /// A stored REALITY shortId or serverName outlives a fetch that rotates it only this long after
 /// the node's last good connect: a value the panel retired then fails every connect, and the
 /// first refresh past the window takes the fetched one.
@@ -170,6 +197,102 @@ mod tests {
             *changed.pointer_mut(pointer).unwrap() = value;
             assert_eq!(keep(&stored, changed.clone()), changed, "{pointer}");
         }
+    }
+
+    // 3x-ui picks a REALITY server's shortId and serverName at random per fetch and puts the
+    // traffic left into the remark: the stable identity still names the same server.
+    #[test]
+    fn stable_identity_leaves_out_only_the_reality_values_a_panel_rotates() {
+        let server = |short_id: &str, server_name: &str, spider_x: &str| {
+            json!({"remarks":"DE-1-9.52GB","outbounds":[
+                {"tag":"proxy","protocol":"vless","settings":{"vnext":[{"address":"de.example.com","port":443,
+                    "users":[{"id":"00000000-0000-4000-8000-000000000001","encryption":"none","flow":"xtls-rprx-vision"}]}]},
+                 "streamSettings":{"network":"tcp","security":"reality","realitySettings":{
+                    "serverName":server_name,"publicKey":"key-1","shortId":short_id,"spiderX":spider_x,
+                    "fingerprint":"chrome"}}},
+                {"tag":"direct","protocol":"freedom"}]})
+        };
+        let stored = server("0a1b", "www.example.com", "/");
+        let mut rotated = server("c2d3", "cdn.example.org", "/a");
+        rotated["remarks"] = json!("DE-1-9.47GB");
+        assert_eq!(
+            stable_node_identity(stored.clone()),
+            stable_node_identity(rotated.clone())
+        );
+        // The exact identity still tells them apart.
+        assert_ne!(node_identity(stored.clone()), node_identity(rotated));
+        // A missing value is the same as a rotated one.
+        let mut bare = stored.clone();
+        bare["outbounds"][0]["streamSettings"]["realitySettings"] = json!({
+            "publicKey":"key-1","fingerprint":"chrome"});
+        assert_eq!(
+            stable_node_identity(bare),
+            stable_node_identity(stored.clone())
+        );
+        // Everything else still names another server.
+        for (pointer, value) in [
+            (
+                "/outbounds/0/settings/vnext/0/address",
+                json!("nl.example.com"),
+            ),
+            ("/outbounds/0/settings/vnext/0/port", json!(8443)),
+            (
+                "/outbounds/0/settings/vnext/0/users/0/id",
+                json!("00000000-0000-4000-8000-000000000002"),
+            ),
+            ("/outbounds/0/settings/vnext/0/users/0/flow", json!("")),
+            (
+                "/outbounds/0/streamSettings/realitySettings/publicKey",
+                json!("key-2"),
+            ),
+            (
+                "/outbounds/0/streamSettings/realitySettings/fingerprint",
+                json!("firefox"),
+            ),
+            ("/outbounds/0/streamSettings/network", json!("xhttp")),
+            ("/outbounds/1/protocol", json!("blackhole")),
+        ] {
+            let mut changed = stored.clone();
+            *changed.pointer_mut(pointer).unwrap() = value;
+            assert_ne!(
+                stable_node_identity(changed),
+                stable_node_identity(stored.clone()),
+                "{pointer}"
+            );
+        }
+        // A field of that name elsewhere is not a REALITY value.
+        let mut tls = stored.clone();
+        tls["outbounds"][0]["streamSettings"] = json!({"security":"tls",
+            "tlsSettings":{"serverName":"www.example.com"}});
+        let mut other_tls = tls.clone();
+        other_tls["outbounds"][0]["streamSettings"]["tlsSettings"]["serverName"] =
+            json!("cdn.example.org");
+        assert_ne!(stable_node_identity(tls), stable_node_identity(other_tls));
+    }
+
+    #[test]
+    fn stable_identity_covers_bare_wrapped_and_nested_reality_settings() {
+        let outbound = |short_id: &str, server_name: &str| {
+            json!({"tag":"DE-1","protocol":"vless","settings":{"address":"de.example.com","port":443,
+                "id":"00000000-0000-4000-8000-000000000001","encryption":"none"},
+             "streamSettings":{"network":"xhttp","security":"reality","realitySettings":{
+                "serverName":server_name,"publicKey":"key-1","shortId":short_id},
+                "xhttpSettings":{"extra":{"downloadSettings":{"address":"dl.example.com","port":443,
+                    "network":"xhttp","security":"reality","realitySettings":{
+                        "serverName":server_name,"publicKey":"key-2","shortId":short_id}}}}}})
+        };
+        let bare = outbound("0a1b", "www.example.com");
+        let wrapped =
+            json!({"remarks":"Renamed","outbounds":[outbound("c2d3", "cdn.example.org")]});
+        assert_eq!(
+            stable_node_identity(bare.clone()),
+            stable_node_identity(wrapped)
+        );
+        // The download side's own REALITY key still counts.
+        let mut other_key = bare.clone();
+        other_key["streamSettings"]["xhttpSettings"]["extra"]["downloadSettings"]["realitySettings"]
+            ["publicKey"] = json!("key-3");
+        assert_ne!(stable_node_identity(bare), stable_node_identity(other_key));
     }
 
     #[test]

@@ -646,7 +646,8 @@ fun updatedAgo(seconds: Double): String = when {
     val nested = sourceId.isEmpty() && filter == "all"
     HomeList(sources, countries, rows,
         if (nested) sources.sortedByDescending { it.optBoolean("pinned") }.mapNotNull { source ->
-            rows.filter { it.first === source }.takeIf { it.isNotEmpty() }?.let { SourceGroup(source, countryGroups(it, source.string("id"))) }
+            // A provider whose feed holds only messages keeps its header, so the messages show.
+            rows.filter { it.first === source }.takeIf { it.isNotEmpty() || source.strings("notices").isNotEmpty() }?.let { SourceGroup(source, countryGroups(it, source.string("id"))) }
         } else emptyList(),
         if (nested || filter == "favorites") emptyList() else countryGroups(rows, sourceId))
     }
@@ -830,6 +831,7 @@ fun updatedAgo(seconds: Double): String = when {
                         var menu by remember { mutableStateOf(false) }
                         Box(Modifier.padding(start = 16.dp, end = 16.dp, top = 12.dp)) {
                         SourceMenu(catalog, source, activity, state.busy, menu) { menu = false }
+                        Column {
                         Row(Modifier.clip(MaterialTheme.shapes.medium).combinedClickable(onLongClick = { menu = true }) { toggle(id) }.heightIn(min = 48.dp)
                             .padding(start = 16.dp, end = 24.dp).testTag("source-$id"), verticalAlignment = Alignment.CenterVertically) {
                             Column(Modifier.weight(1f)) {
@@ -837,6 +839,12 @@ fun updatedAgo(seconds: Double): String = when {
                                 Text(trPlural(R.plurals.server_count, groups.sumOf { it.entries.size }), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                             }
                             RouteIcon(if (isOpen) "collapse" else "expand")
+                        }
+                        // The provider's message lines, such as the traffic left: text only, outside the header's tap target.
+                        source.strings("notices").forEach { notice ->
+                            Text(tr(R.string.provider_message_line, notice), Modifier.padding(start = 16.dp, end = 24.dp, bottom = 4.dp).testTag("source-notice-$id"),
+                                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
                         }
                         }
                     }

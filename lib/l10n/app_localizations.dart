@@ -4616,6 +4616,12 @@ abstract class AppLocalizations {
   /// **'{count, plural, =1{1 server} other{{count} servers}}'**
   String serverCount(int count);
 
+  /// A message line of a subscription's provider, such as the traffic left, shown under the subscription's name.
+  ///
+  /// In en, this message translates to:
+  /// **'Provider: {message}'**
+  String providerMessageLine(String message);
+
   /// No description provided for @runtime.
   ///
   /// In en, this message translates to:

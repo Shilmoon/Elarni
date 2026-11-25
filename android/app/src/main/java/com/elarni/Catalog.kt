@@ -5,6 +5,7 @@ import android.os.Build
 import android.util.Base64
 import org.json.JSONArray
 import org.json.JSONObject
+import java.net.InetAddress
 import java.net.URI
 
 class ResourceReview(val catalog: Catalog, val routeID: String, val url: String, val warning: JSONObject) : Exception()
@@ -88,6 +89,8 @@ class Catalog(val data: JSONObject, private val snapshot: Boolean = false) {
     }
     fun parseNodes(imported: JSONObject, previous: List<JSONObject>): List<JSONObject> {
         val parsed = imported.objects("profiles").map { it.copy().apply {
+            // The importer's mark of a provider's message line is not stored.
+            remove("notice")
             if (string("format") == "telegram" && has("url")) put("config", obj("url" to get("url")))
         } }
         if (parsed.isEmpty() || parsed.size > 4096) throw AppFailure("unsupported_profile")
@@ -105,6 +108,17 @@ class Catalog(val data: JSONObject, private val snapshot: Boolean = false) {
         parsed.forEachIndexed { i, node ->
             val old = byIdentity[node.string("format") + "\n" + identity(node)]?.removeFirstOrNull()
             if (old != null) { matches[i] = old; claimed.add(old) }
+        }
+        // 3x-ui picks a REALITY server's shortId and serverName per fetch and writes the traffic left into the
+        // remark, which defeats the stage before and the ones after this one. Without those values a still
+        // unmatched identity that occurs as often on both sides pairs in feed order.
+        val unmatched = parsed.indices.filter { it !in matches }
+        val unclaimed = previous.filter { it !in claimed }
+        if (unmatched.isNotEmpty() && unclaimed.isNotEmpty()) {
+            fun stableKey(node: JSONObject) = node.string("format") + "\n" +
+                Native.domain("catalogStableIdentity", node.getJSONObject("config")).getString("identity")
+            pairByStableIdentity(unmatched.map { it to stableKey(parsed[it]) }, unclaimed.map { it to stableKey(it) })
+                .forEach { (i, old) -> matches[i] = old; claimed.add(old) }
         }
         // A server the user renamed keeps the provider's name for matching.
         fun providerName(node: JSONObject) = node.string("providerName", node.string("name"))
@@ -248,9 +262,14 @@ class Catalog(val data: JSONObject, private val snapshot: Boolean = false) {
         val headers = feed.mapObject("headers")
         val migration = JSONObject().apply { listOf("new-url", "new-domain", "fallback-url").forEach { if (headers.has(it)) put(it, headers.get(it)) } }
         val imported = Native.call("importClientProfiles", obj("text" to body, "sourceURL" to url, "migrationHeaders" to migration))
+        // A line the importer marks carries a provider's message ("📊 10GB left", "Device limit reached"), not a server.
+        val (profiles, notices) = providerNotices(imported.objects("profiles"), url)
+        imported.put("profiles", JSONArray(profiles))
         // Hidden servers are matched too, so that a refresh keeps them out.
         val hiddenIDs = source.objects("hiddenNodes").map { it.string("id") }.toSet()
-        val (hidden, nodes) = parseNodes(imported, source.objects("nodes") + source.objects("hiddenNodes")).partition { it.string("id") in hiddenIDs }
+        // A feed of messages alone leaves the subscription without servers.
+        val (hidden, nodes) = (if (profiles.isEmpty() && notices.isNotEmpty()) emptyList()
+            else parseNodes(imported, source.objects("nodes") + source.objects("hiddenNodes"))).partition { it.string("id") in hiddenIDs }
         val metadata = obj("hideURL" to (headers.string("hide-url").lowercase() in listOf("1", "true", "yes") || imported.optBoolean("hideURL")))
         val links = obj("source" to feed.getString("url"))
         readHeaders(headers, metadata, links)
@@ -276,6 +295,8 @@ class Catalog(val data: JSONObject, private val snapshot: Boolean = false) {
             .put("approvedChain", if (migrated.isEmpty()) feed.optJSONArray("approvedChain") ?: JSONArray() else JSONArray())
             .put("lastSuccessfulFetch", now()).put("refreshInterval", hours * 3600)
             .put("nextRefreshAt", now() + hours * 3600 * (0.9 + java.security.SecureRandom().nextDouble() * 0.2))
+        // Each refresh replaces the messages; a feed without any leaves none.
+        if (notices.isEmpty()) source.remove("notices") else source.put("notices", JSONArray(notices))
         if (metadata.opt("routingEnabled") != false) {
             // The header is the provider's routing in any form the decoder reads (a link, bare base64 or JSON, "off").
             addressedRouting(listOf(headers.string("routing")).filter(String::isNotEmpty) + imported.strings("directives").filter(::isRoutingLink))
@@ -639,6 +660,49 @@ class Catalog(val data: JSONObject, private val snapshot: Boolean = false) {
         }
         private fun sha256(text: String) = java.security.MessageDigest.getInstance("SHA-256").digest(text.toByteArray())
             .joinToString("") { "%02x".format(it.toInt() and 255) }
+        /**
+         * Pairs a refresh's unmatched positions with stored nodes by a key: a key that occurs as often on both sides
+         * pairs in order, any other count is left to the later stages.
+         */
+        fun <T> pairByStableIdentity(fresh: List<Pair<Int, String>>, stale: List<Pair<T, String>>): Map<Int, T> {
+            val olds = stale.groupBy({ it.second }, { it.first })
+            val matches = mutableMapOf<Int, T>()
+            fresh.groupBy({ it.second }, { it.first }).forEach { (key, positions) ->
+                val same = olds[key]?.takeIf { it.size == positions.size } ?: return@forEach
+                positions.zip(same).forEach { (position, old) -> matches[position] = old }
+            }
+            return matches
+        }
+        /**
+         * Whether the lines the importer marks as a provider's messages are messages in a feed fetched from [feedUrl].
+         * A feed served from this device or a documentation address (a test or lab feed) lists real servers there; a host
+         * name counts as public and is not resolved.
+         */
+        fun noticesApply(feedUrl: String): Boolean {
+            val host = runCatching { URI(feedUrl).host }.getOrNull()?.lowercase()?.removeSurrounding("[", "]")
+            if (host.isNullOrEmpty() || host == "localhost") return false
+            // URI accepted the bracketed form as an IPv6 literal, so this parses it and resolves nothing.
+            var bytes = if (':' in host) runCatching { InetAddress.getByName(host).address }.getOrNull() ?: return true
+                else host.split('.').takeIf { parts -> parts.size == 4 && parts.all { it.length in 1..3 && it.all(Char::isDigit) && it.toInt() <= 255 } }
+                    ?.map { it.toInt().toByte() }?.toByteArray() ?: return true
+            if (bytes.size == 16 && bytes.take(10).all { it == 0.toByte() } && bytes[10] == 0xff.toByte() && bytes[11] == 0xff.toByte())
+                bytes = bytes.copyOfRange(12, 16)
+            val octets = bytes.map { it.toInt() and 0xff }
+            if (octets.all { it == 0 }) return false
+            // 127/8, 192.0.2/24, 198.51.100/24 and 203.0.113/24.
+            if (octets.size == 4) return octets[0] != 127 && octets.take(3) !in listOf(listOf(192, 0, 2), listOf(198, 51, 100), listOf(203, 0, 113))
+            // ::1 and 2001:db8::/32.
+            return !(octets.take(15).all { it == 0 } && octets[15] == 1) && octets.take(4) != listOf(0x20, 0x01, 0x0d, 0xb8)
+        }
+        /**
+         * The servers of [profiles], an import of the feed fetched from [feedUrl], and the provider's message lines among
+         * them: the first five texts, each once, in feed order. A feed where [noticesApply] says no keeps every line a server.
+         */
+        fun providerNotices(profiles: List<JSONObject>, feedUrl: String): Pair<List<JSONObject>, List<String>> {
+            if (!noticesApply(feedUrl)) return profiles to emptyList()
+            val (marked, servers) = profiles.partition { it.optBoolean("notice") }
+            return servers to marked.map { it.string("name").trim() }.filter(String::isNotEmpty).distinct().take(5)
+        }
         // The SNI a probe's handshake sends: bulk tests run at most two probes per SNI,
         // as TSPU counts handshakes per SNI. TLS without a name sends the address;
         // ShadowQUIC keeps its name in its own settings.

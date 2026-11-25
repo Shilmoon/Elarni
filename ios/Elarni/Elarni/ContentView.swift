@@ -276,9 +276,12 @@ struct HomeView: View {
             DisclosureGroup(isExpanded: open(source.id)) {
               ForEach(source.countries) { countryGroup($0, provider: false) }
             } label: {
-              let label = ViewThatFits(in: .horizontal) {
-                HStack(spacing: 8) { sourceTitle(source); sourceCount(source) }
-                VStack(alignment: .leading, spacing: 4) { sourceTitle(source); sourceCount(source) }
+              let label = VStack(alignment: .leading, spacing: 2) {
+                ViewThatFits(in: .horizontal) {
+                  HStack(spacing: 8) { sourceTitle(source); sourceCount(source) }
+                  VStack(alignment: .leading, spacing: 4) { sourceTitle(source); sourceCount(source) }
+                }
+                ProviderNoticeLines(notices: source.notices)
               }.frame(maxWidth: .infinity, minHeight: 44, alignment: .leading).contentShape(Rectangle())
               if let subscription = model.subscriptions.first(where: { $0.id == source.id }) { label.subscriptionMenu(subscription) } else { label }
             }

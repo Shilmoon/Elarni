@@ -1679,6 +1679,7 @@ final class SubscriptionGroup {
     this.fallbackHosts = const <String>[],
     this.fetchOptions = const <String, String>{},
     this.hiddenNodes = const [],
+    this.notices = const <String>[],
   });
 
   factory SubscriptionGroup.fromMap(Map<String, Object?> value) {
@@ -1721,6 +1722,7 @@ final class SubscriptionGroup {
         for (final item in value['hiddenNodes'] as List? ?? const [])
           (id: item['id'] as String, name: item['name'] as String),
       ],
+      notices: List<String>.from(value['notices'] as List? ?? const []),
       nodes: nodes
           .map(
             (item) => SubscriptionNode.fromMap(
@@ -1746,6 +1748,10 @@ final class SubscriptionGroup {
 
   /// Provider servers the user hid; refreshes keep them out of [nodes].
   final List<({String id, String name})> hiddenNodes;
+
+  /// The provider's message lines of the last refresh, such as the traffic
+  /// left; at most five, shown under the subscription's name.
+  final List<String> notices;
 }
 
 final class SubscriptionNode {

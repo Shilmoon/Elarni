@@ -1452,6 +1452,30 @@ fn base64_text_decodes_every_alphabet_and_padding_alike() {
     }
 }
 
+// Every app matches a refreshed server by this identity when the exact one changed with the remark.
+#[test]
+fn catalog_stable_identity_is_an_operation_beside_the_exact_one() {
+    let handle = FfiHandle::new();
+    let identity = |operation: &str, short_id: &str| {
+        let request = json!({"schemaVersion":1,"operation":operation,"payload":{
+            "outbounds":[{"protocol":"vless","settings":{"address":"de.example.com","port":443,
+                "id":"00000000-0000-4000-8000-000000000001","encryption":"none"},
+                "streamSettings":{"security":"reality","realitySettings":{
+                    "serverName":"www.example.com","publicKey":"key-1","shortId":short_id}}}]}});
+        let (status, response) = handle.request(&serde_json::to_vec(&request).unwrap());
+        assert_eq!(status, ELARNI_STATUS_OK, "{operation}");
+        response.unwrap()["identity"].as_str().unwrap().to_owned()
+    };
+    assert_eq!(
+        identity("catalogStableIdentity", "0a1b"),
+        identity("catalogStableIdentity", "c2d3")
+    );
+    assert_ne!(
+        identity("catalogIdentity", "0a1b"),
+        identity("catalogIdentity", "c2d3")
+    );
+}
+
 #[test]
 fn ffi_size_and_pointer_errors_have_no_owned_buffer() {
     let handle = FfiHandle::new();
