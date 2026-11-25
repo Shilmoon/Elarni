@@ -1532,10 +1532,11 @@ private fun refreshLabel(code: String) = when (code) {
     "rate_limited" -> tr(R.string.rate_limited)
     "subscription_denied" -> tr(R.string.access_refused)
     "subscription_unavailable" -> tr(R.string.link_removed)
+    "encrypted_feed" -> tr(R.string.encrypted_for_another_app)
     else -> tr(R.string.last_update_failed)
 }
 /** Failures only the provider can fix, which offer its support link. */
-private val providerFaults = setOf("provider_unreachable", "provider_error", "subscription_denied", "subscription_unavailable", "hwid_required", "hwid_limit")
+private val providerFaults = setOf("provider_unreachable", "provider_error", "subscription_denied", "subscription_unavailable", "encrypted_feed", "hwid_required", "hwid_limit")
 /** A failed download in words that name the provider, so its outages are not reported as app bugs. */
 private fun refreshFailure(code: String, provider: String) = when (code) {
     "hwid_required", "hwid_limit" -> tr(R.string.named_provider_device_limit, provider)
@@ -1544,6 +1545,7 @@ private fun refreshFailure(code: String, provider: String) = when (code) {
     "rate_limited" -> tr(R.string.named_provider_rate_limited, provider)
     "subscription_denied" -> tr(R.string.named_provider_denied, provider)
     "subscription_unavailable" -> tr(R.string.named_provider_link_removed, provider)
+    "encrypted_feed" -> tr(R.string.named_provider_encrypted_feed, provider)
     "sharing_disabled" -> tr(R.string.named_provider_sharing_disabled, provider)
     else -> errorMessage(code)
 }
@@ -1599,6 +1601,7 @@ fun errorMessage(code: String, unreadable: Boolean = false): String = when (code
     "rate_limited" -> tr(R.string.the_provider_is_limiting_requests_elarni)
     "subscription_denied" -> tr(R.string.the_provider_refused_the_request_the)
     "subscription_unavailable" -> tr(R.string.the_provider_removed_or_changed_this)
+    "encrypted_feed" -> tr(R.string.the_provider_encrypted_this_subscription_for)
     "not_connected" -> tr(R.string.connect_to_this_server_before_testing)
     "assets_unavailable", "invalid_assets", "invalid_geodata" -> tr(R.string.routing_data_is_missing_or_invalid)
     // RoutingAssets appends the missing codes to this code.

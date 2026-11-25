@@ -5,6 +5,7 @@
     <string name="routing_data_is_missing_or_invalid">Данные маршрутизации отсутствуют или повреждены. Обновите геофайлы профиля перед подключением.</string>
     <string name="connect_to_this_server_before_testing">Подключитесь к этому серверу, прежде чем проверять активный прокси.</string>
     <string name="the_provider_removed_or_changed_this">Провайдер удалил или изменил эту ссылку. Попросите у провайдера новую.</string>
+    <string name="the_provider_encrypted_this_subscription_for">Провайдер зашифровал эту подписку для другого приложения, например Happ, и Elarni не может её прочитать. Попросите у провайдера ссылку без шифрования.</string>
     <string name="the_provider_refused_the_request_the">Провайдер отклонил запрос. Возможно, подписка истекла, закончился трафик или достигнут лимит устройств. Свяжитесь с провайдером.</string>
     <string name="the_provider_is_limiting_requests_elarni">Провайдер ограничивает запросы. Elarni повторит позже; подождите, прежде чем обновлять снова.</string>
     <string name="the_provider_s_server_reported_an">Сервер провайдера сообщил об ошибке. С Elarni и этим устройством всё в порядке; повторите позже.</string>
@@ -50,6 +51,7 @@
     <string name="operation_cancelled_your_saved_configuration_is">Операция отменена. Сохранённая конфигурация не изменилась.</string>
     <string name="last_update_failed">Последнее обновление не удалось</string>
     <string name="link_removed">Ссылка удалена</string>
+    <string name="encrypted_for_another_app">Зашифровано для другого приложения</string>
     <string name="access_refused">Доступ запрещён</string>
     <string name="rate_limited">Слишком много запросов</string>
     <string name="provider_error">Ошибка провайдера</string>
@@ -635,6 +637,7 @@
     <string name="named_provider_rate_limited">Провайдер «%1$s» ограничивает запросы. Elarni повторит позже; подождите, прежде чем обновлять снова.</string>
     <string name="named_provider_denied">Провайдер «%1$s» отклонил запрос. Возможно, подписка истекла, закончился трафик или достигнут лимит устройств. Свяжитесь с провайдером.</string>
     <string name="named_provider_link_removed">Провайдер «%1$s» удалил или изменил эту ссылку. Попросите у провайдера новую.</string>
+    <string name="named_provider_encrypted_feed">Провайдер «%1$s» зашифровал эту подписку для другого приложения, например Happ, и Elarni не может её прочитать. Попросите у провайдера ссылку без шифрования.</string>
     <string name="named_provider_sharing_disabled">Провайдер «%1$s» запретил делиться этим профилем.</string>
     <string name="unsupported_provider_directives">Неподдерживаемые директивы провайдера</string>
     <string name="servers_not_added">Серверы не добавлены</string>

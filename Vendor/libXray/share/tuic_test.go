@@ -79,6 +79,57 @@ func TestTUICV2rayNAndNekoBoxLinks(t *testing.T) {
 	}
 }
 
+// Other emitters write the congestion control in upper case, add the fp other link types carry, and
+// use sing-box's reduce_rtt and disable_sni (probe N10-10, N10-14). The core names the server in every
+// handshake, so a link that turns SNI off is refused rather than imported with it.
+func TestTUICParameterSpellingsOfOtherEmitters(t *testing.T) {
+	const link = "tuic://11111111-2222-3333-4444-555555555555:pw@example.com:443?sni=example.com&"
+	for _, test := range []struct {
+		query, congestion, relay string
+		zeroRTT                  bool
+		err                      string
+	}{
+		{query: "congestion_control=BBR&udp_relay_mode=native&alpn=h3", congestion: "bbr", relay: "native"},
+		{query: "congestion_control=Cubic&udp_relay_mode=QUIC", congestion: "cubic", relay: "quic"},
+		{query: "congestion_control=bbr&fp=chrome", congestion: "bbr"},
+		{query: "congestion_control=bbr&reduce_rtt=1", congestion: "bbr", zeroRTT: true},
+		{query: "reduce_rtt=true", zeroRTT: true},
+		{query: "reduce_rtt=0&disable_sni=0"},
+		{query: "disable_sni=false"},
+		{query: "disable_sni=1", err: "TUIC disable_sni is not supported"},
+		{query: "disable_sni=true&reduce_rtt=1", err: "TUIC disable_sni is not supported"},
+		{query: "disable_sni=maybe", err: "invalid TUIC disable_sni flag"},
+		{query: "reduce_rtt=yes", err: "invalid TUIC reduce_rtt flag"},
+		{query: "fp=chrome&fp=firefox", err: "duplicate TUIC URI parameter"},
+	} {
+		parsed, err := parseClientLink(link + test.query + "#tuic")
+		if err != nil {
+			t.Fatal(err)
+		}
+		outbound, err := (xrayShareLink{link: parsed}).outbound()
+		if test.err != "" {
+			if err == nil || err.Error() != test.err {
+				t.Errorf("%s: got %v, want %q", test.query, err, test.err)
+			}
+			continue
+		}
+		if err != nil {
+			t.Errorf("%s: %v", test.query, err)
+			continue
+		}
+		settings, err := decodeOutboundSettings[conf.TUICClientConfig](*outbound)
+		if err != nil || settings.CongestionControl != test.congestion || settings.UDPRelayMode != test.relay || settings.ZeroRTTHandshake != test.zeroRTT {
+			t.Errorf("%s: settings %+v, %v", test.query, settings, err)
+		}
+		if tls := outbound.StreamSetting.TLSSettings; tls.Fingerprint != "" || tls.ServerName != "example.com" {
+			t.Errorf("%s: TLS %+v", test.query, tls)
+		}
+		if _, err := ImportClientProfiles(link + test.query + "#tuic"); err != nil {
+			t.Errorf("%s: %v", test.query, err)
+		}
+	}
+}
+
 // Panels write the verification flag under the aliases other link types accept.
 func TestTUICInsecureAliases(t *testing.T) {
 	const link = "tuic://00000000-0000-4000-8000-000000000001:secret@127.0.0.1:443?sni=127.0.0.1&"

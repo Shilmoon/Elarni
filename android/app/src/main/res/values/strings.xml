@@ -5,6 +5,7 @@
     <string name="routing_data_is_missing_or_invalid">Routing data is missing or invalid. Refresh the profile\'s geofiles before connecting.</string>
     <string name="connect_to_this_server_before_testing">Connect to this server before testing the active proxy.</string>
     <string name="the_provider_removed_or_changed_this">The provider removed or changed this link. Ask the provider for a new one.</string>
+    <string name="the_provider_encrypted_this_subscription_for">The provider encrypted this subscription for another app, such as Happ, and Elarni cannot read it. Ask the provider for a link without encryption.</string>
     <string name="the_provider_refused_the_request_the">The provider refused the request. The subscription may have expired, run out of traffic or reached its device limit. Contact the provider.</string>
     <string name="the_provider_is_limiting_requests_elarni">The provider is limiting requests. Elarni retries later; wait before refreshing again.</string>
     <string name="the_provider_s_server_reported_an">The provider\'s server reported an error. Nothing is wrong with Elarni or this device; retry later.</string>
@@ -50,6 +51,7 @@
     <string name="operation_cancelled_your_saved_configuration_is">Operation cancelled. Your saved configuration is unchanged.</string>
     <string name="last_update_failed">Last update failed</string>
     <string name="link_removed">Link removed</string>
+    <string name="encrypted_for_another_app">Encrypted for another app</string>
     <string name="access_refused">Access refused</string>
     <string name="rate_limited">Rate limited</string>
     <string name="provider_error">Provider error</string>
@@ -635,6 +637,7 @@
     <string name="named_provider_rate_limited">%1$s is limiting requests. Elarni retries later; wait before refreshing again.</string>
     <string name="named_provider_denied">%1$s refused the request. The subscription may have expired, run out of traffic or reached its device limit. Contact the provider.</string>
     <string name="named_provider_link_removed">%1$s removed or changed this link. Ask the provider for a new one.</string>
+    <string name="named_provider_encrypted_feed">%1$s encrypted this subscription for another app, such as Happ, and Elarni cannot read it. Ask the provider for a link without encryption.</string>
     <string name="named_provider_sharing_disabled">%1$s disabled sharing for this profile.</string>
     <string name="unsupported_provider_directives">Unsupported provider directives</string>
     <string name="servers_not_added">Servers not added</string>

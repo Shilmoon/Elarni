@@ -4694,6 +4694,18 @@ abstract class AppLocalizations {
   /// **'{provider} removed or changed this link. Ask the provider for a new one.'**
   String failureLinkRemovedText(String provider);
 
+  /// No description provided for @failureEncrypted.
+  ///
+  /// In en, this message translates to:
+  /// **'Encrypted for another app'**
+  String get failureEncrypted;
+
+  /// No description provided for @failureEncryptedText.
+  ///
+  /// In en, this message translates to:
+  /// **'{provider} encrypted this subscription for another app, such as Happ, and Elarni cannot read it. Ask the provider for a link without encryption.'**
+  String failureEncryptedText(String provider);
+
   /// No description provided for @failureUnsupported.
   ///
   /// In en, this message translates to:

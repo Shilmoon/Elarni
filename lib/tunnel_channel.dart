@@ -1643,6 +1643,11 @@ const subscriptionFailures = <String, (String, String)>{
     'Link removed',
     'The provider removed or changed this link. Ask the provider for a new one.',
   ),
+  // A feed only Happ can decrypt (an Encrypt-Tag header and ?key= in its URL).
+  'encrypted_feed': (
+    'Encrypted for another app',
+    'The provider encrypted this subscription for another app, such as Happ, and Elarni cannot read it. Ask the provider for a link without encryption.',
+  ),
 };
 
 final class SubscriptionGroup {

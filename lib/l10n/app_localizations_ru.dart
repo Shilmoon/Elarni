@@ -2761,6 +2761,14 @@ class AppLocalizationsRu extends AppLocalizations {
   }
 
   @override
+  String get failureEncrypted => 'Зашифровано для другого приложения';
+
+  @override
+  String failureEncryptedText(String provider) {
+    return 'Провайдер «$provider» зашифровал эту подписку для другого приложения, например Happ, и Elarni не может её прочитать. Попросите у провайдера ссылку без шифрования.';
+  }
+
+  @override
   String get failureUnsupported => 'Неподдерживаемое содержимое';
 
   @override

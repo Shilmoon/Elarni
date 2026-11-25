@@ -542,6 +542,7 @@ extension _ProxyRuntime on DesktopProxy {
           'rate_limited',
           'subscription_denied',
           'subscription_unavailable',
+          'encrypted_feed',
           'hwid_limit',
           'hwid_required',
           'invalid_qr_image',

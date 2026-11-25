@@ -110,7 +110,7 @@ func (s *skippedMembers) addLink(line string, err error) {
 	if unescapeErr != nil {
 		name = ""
 	}
-	s.add(name, strings.ToLower(scheme), "link", err)
+	s.add(withoutServerDescription(name), strings.ToLower(scheme), "link", err)
 }
 
 func (s *skippedMembers) report(result *ClientImport) {

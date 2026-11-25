@@ -4,6 +4,26 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
 
 ## Unreleased
 
+### Fixed
+
+- **More panel and app links import.** Hysteria2 links with `obfs=salamander` next to a
+  FinalMask (`fm`) that says the same, `mports` port hopping and an old `fm` with
+  `quicParams.udpHop`; Hysteria2 Gecko without packet sizes (Hysteria's 512 and 1200);
+  Shadowsocks with `plugin=obfs-local;obfs=http` (simple-obfs HTTP mode); WireGuard links with
+  a `/` before the query, `privatekey`, a UDP `fm` and `ifp=0`; WireGuard configurations with
+  an IPv6 `Endpoint` written without brackets; TUIC links with `congestion_control=BBR`,
+  `reduce_rtt` or `fp`; versioned fingerprints such as `fp=chrome_120` (the browser's preset);
+  mKCP `mtu` and `tti`; VMess QR JSON with `"tls":"reality"`. What still cannot work says why:
+  simple-obfs TLS mode, WireGuard noise packets (`ifp`), TUIC `disable_sni=1`, VMess REALITY
+  without a public key.
+- **Server names no longer end in `?serverDescription=…`.** 3x-ui appends a server's
+  description to its name this way for Happ; Elarni leaves it out.
+- **A subscription at a panel's root named in its link, `https://host/#Name`, is added under
+  that name** on every platform, instead of failing or importing as an HTTP proxy.
+- **A subscription encrypted for Happ says so.** A feed that only Happ can decrypt (an
+  `Encrypt-Tag` header and `?key=` in its link) failed as an invalid or unsupported feed; the
+  message now says it is encrypted for another app and to ask the provider for another link.
+
 ## 0.6.4 - 2026-11-23
 
 ### Added

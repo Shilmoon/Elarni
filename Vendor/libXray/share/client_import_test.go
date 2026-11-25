@@ -13,6 +13,10 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/xtls/xray-core/infra/conf"
+	"github.com/xtls/xray-core/transport/internet"
+	"github.com/xtls/xray-core/transport/internet/kcp"
 )
 
 // Xray refuses a VLESS or Trojan server without TLS, REALITY or VLESS encryption unless its
@@ -510,6 +514,253 @@ func TestWireGuardRepeatedListsAccumulate(t *testing.T) {
 	}
 	if _, err := ImportClientProfiles(strings.Replace(config, "Endpoint", "PublicKey = "+key+"\nEndpoint", 1)); err == nil {
 		t.Error("accepted a repeated peer PublicKey")
+	}
+}
+
+// Hiddify writes "/" before a WireGuard link's query and repeats the private key there, beside its
+// noise packets as ifp; 3x-ui and v2rayN carry the server's FinalMask as fm (probe N10-04).
+func TestWireGuardLinkVariantsFromPanels(t *testing.T) {
+	const key = "xZirRKTxA325fjhUvhxuztg6m%2F7tMLYe80RV0DcxqsU%3D"
+	const other = "%2BcdBAlUKFi4b5U9jac58v0fK1kNFW1w%2FTILhJsV%2B1V4%3D"
+	const peer = "publickey=TgNJhyP2BguxwtnHSwW0jLnqtqMMXQFgDPolsdOAjv8%3D&address=10.0.0.2/32&mtu=1380&reserved=0,0,0"
+	fm := func(mask string) string { return "&fm=" + url.QueryEscape(mask) }
+	for _, test := range []struct {
+		link, name string
+		masks      int
+		err        string
+	}{
+		{link: "wireguard://" + key + "@example.com:51820/?" + peer + "#wg-slash", name: "wg-slash"},
+		{link: "wireguard://" + key + "@example.com:51820/?" + peer + "&presharedkey=obtmjnnvEuzlJqNw%2F%2By7Hu73jATWN9Qu0u%2Fj1V5c9OE%3D&privatekey=" + key + "&ifp=0-0#wg-hiddify-keys", name: "wg-hiddify-keys"},
+		{link: "wireguard://@example.com:51820?" + peer + "&privatekey=" + key + "&ifp=0", name: "Wireguard"},
+		{link: "wireguard://" + key + "@example.com:51820?" + peer + fm(`{"udp":[{"type":"mkcp-legacy","settings":{"header":"wireguard"}}]}`) + "#wg-fm", name: "wg-fm", masks: 1},
+		{link: "wireguard://" + key + "@example.com:51820?" + peer + fm(`{}`) + "#DE-1?serverDescription=U3ViIHRpdGxl", name: "DE-1"},
+		{link: "wireguard://" + key + "@example.com:51820?" + peer + "&privatekey=" + other, err: "conflicting WireGuard private keys"},
+		{link: "wireguard://" + key + "@example.com:51820?" + peer + "&ifp=5-10", err: "WireGuard noise packets (ifp) are not supported"},
+		{link: "wireguard://" + key + "@example.com:51820?" + peer + fm(`{"tcp":[{"type":"fragment"}]}`), err: "WireGuard FinalMask takes only UDP masks"},
+		{link: "wireguard://" + key + "@example.com:51820?" + peer + fm(`{"quicParams":{"congestion":"bbr"}}`), err: "WireGuard FinalMask takes only UDP masks"},
+		{link: "wireguard://" + key + "@example.com:51820?" + peer + fm(`{"udp":[{"type":"header-wireguard"}]}`), err: "unsupported WireGuard FinalMask"},
+		{link: "wireguard://" + key + "@example.com:51820?" + peer + fm(`[]`), err: "invalid WireGuard FinalMask"},
+		{link: "wireguard://" + key + "@example.com:51820/x?" + peer, err: "invalid WireGuard credentials or path"},
+		{link: "wireguard://@example.com:51820?" + peer, err: "invalid WireGuard credentials or path"},
+	} {
+		profile, err := importWireGuardLink(test.link)
+		if test.err != "" {
+			if err == nil || !strings.HasPrefix(err.Error(), test.err) {
+				t.Errorf("%s: got %v, want %q", test.link, err, test.err)
+			}
+			continue
+		}
+		if err != nil {
+			t.Errorf("%s: %v", test.link, err)
+			continue
+		}
+		imported, err := ImportClientProfiles(test.link)
+		if err != nil || len(imported.Profiles) != 1 || imported.Profiles[0].Name != test.name {
+			t.Errorf("%s: imported %+v, %v", test.link, imported, err)
+			continue
+		}
+		if !bytes.Equal(imported.Profiles[0].Config, profile.Config) {
+			t.Errorf("%s: the import and the link differ", test.link)
+		}
+		var root struct {
+			Outbounds []struct {
+				Settings struct {
+					SecretKey string `json:"secretKey"`
+					MTU       int    `json:"mtu"`
+				} `json:"settings"`
+			} `json:"outbounds"`
+		}
+		if json.Unmarshal(profile.Config, &root) != nil || root.Outbounds[0].Settings.SecretKey != "xZirRKTxA325fjhUvhxuztg6m/7tMLYe80RV0DcxqsU=" || root.Outbounds[0].Settings.MTU != 1380 {
+			t.Errorf("%s: imported as %s", test.link, profile.Config)
+		}
+		if masks := builtOutbound(t, profile.Config).stream.(*internet.StreamConfig).Udpmasks; len(masks) != test.masks {
+			t.Errorf("%s: %d masks, want %d: %s", test.link, len(masks), test.masks, profile.Config)
+		}
+	}
+}
+
+// 3x-ui writes an AmneziaWG server's IPv6 Endpoint without brackets (probe N10-05). The port follows
+// the last colon only when what is before it is an IPv6 address.
+func TestWireGuardUnbracketedIPv6Endpoint(t *testing.T) {
+	const config = "[Interface]\nPrivateKey = xZirRKTxA325fjhUvhxuztg6m/7tMLYe80RV0DcxqsU=\nAddress = 10.0.0.2/32\n" +
+		"[Peer]\nPublicKey = TgNJhyP2BguxwtnHSwW0jLnqtqMMXQFgDPolsdOAjv8=\nAllowedIPs = 0.0.0.0/0\nEndpoint = "
+	for endpoint, want := range map[string]string{
+		"2001:db8::1:51820":   "[2001:db8::1]:51820",
+		"[2001:db8::1]:51820": "[2001:db8::1]:51820",
+		"::ffff:192.0.2.1:80": "[::ffff:192.0.2.1]:80",
+		"192.0.2.1:51820":     "192.0.2.1:51820",
+		"example.com:51820":   "example.com:51820",
+		// Each of these is no endpoint, which the core refuses.
+		"2001:db8::1":          "",
+		"2001:db8::1:0":        "",
+		"2001:db8::1:65536":    "",
+		"fe80::1%eth0:51820":   "",
+		"192.0.2.1:2001:51820": "",
+	} {
+		result, err := ImportClientProfiles(config + endpoint)
+		if want == "" {
+			if err == nil {
+				t.Errorf("%s imported as %s", endpoint, result.Profiles[0].Config)
+			}
+			continue
+		}
+		if err != nil {
+			t.Errorf("%s: %v", endpoint, err)
+			continue
+		}
+		var root struct {
+			Outbounds []struct {
+				Settings struct {
+					Peers []struct {
+						Endpoint string `json:"endpoint"`
+					} `json:"peers"`
+				} `json:"settings"`
+			} `json:"outbounds"`
+		}
+		if json.Unmarshal(result.Profiles[0].Config, &root) != nil || root.Outbounds[0].Settings.Peers[0].Endpoint != want {
+			t.Errorf("%s imported as %s, want %s", endpoint, result.Profiles[0].Config, want)
+		}
+	}
+}
+
+// 3x-ui v3.11.0 appends a server's description to its name as "?serverDescription=" and Base64, which
+// Happ shows apart (probe N10-09). Other text after a "?" is the name's own.
+func TestLinkNamesLeaveOutTheServerDescription(t *testing.T) {
+	const uuid = "11111111-2222-3333-4444-555555555555"
+	const vless = "vless://" + uuid + "@example.com:443?type=ws&security=tls&sni=example.com&path=%2F#"
+	description := "?serverDescription=" + base64.StdEncoding.EncodeToString([]byte("Sub title 🇩🇪"))
+	vmess := "vmess://" + base64.StdEncoding.EncodeToString([]byte(`{"v":"2","ps":"VMess`+description+
+		`","add":"example.com","port":"443","id":"`+uuid+`","net":"tcp","tls":"tls","sni":"example.com"}`))
+	legacy := "ss://" + base64.StdEncoding.EncodeToString([]byte("aes-256-gcm:pw@192.0.2.1:8388")) + "#SS" + description
+	for link, want := range map[string]string{
+		vless + "DE-1?serverDescription=U3ViIHRpdGxl":       "DE-1",
+		vless + "DE%201" + description:                      "DE 1",
+		vless + "DE%201%3FserverDescription%3DU3ViIHRpdGxl": "DE 1",
+		vless + "What?": "What?",
+		vless + "Q?serverDescription=not%20base64":                             "Q?serverDescription=not base64",
+		vless + "Q?serverDescription=":                                         "Q?serverDescription=",
+		"trojan://secret@example.com:443?sni=example.com#Trojan" + description: "Trojan",
+		vmess:  "VMess",
+		legacy: "SS",
+	} {
+		imported, err := ImportClientProfiles(link)
+		if err != nil || len(imported.Profiles) != 1 || imported.Profiles[0].Name != want {
+			t.Errorf("%s: imported %+v, %v; want the name %q", link, imported, err, want)
+		}
+	}
+	imported, err := ImportClientProfiles(vless + "Good\nvless://broken#Bad" + description)
+	if err != nil || imported.SkippedCount != 1 || imported.Skipped[0].Name != "Bad" {
+		t.Errorf("skipped %+v, %v", imported, err)
+	}
+}
+
+// Links name a browser fingerprint with its version, as "chrome_120", which Xray does not know by that
+// name; the browser's preset stands for it (probe N10-14). A name that is no browser stays refused.
+func TestVersionedFingerprintNamesTakeTheBrowsersPreset(t *testing.T) {
+	const uuid = "11111111-2222-3333-4444-555555555555"
+	const reality = "&security=reality&pbk=FCNsCTRerqst97Y-_Pc32LnnBu0g_hw-LhJYlaeiEVs&sid=c2d3"
+	for _, test := range []struct{ fp, want string }{
+		{"chrome_120", "chrome"}, {"Firefox_148", "firefox"}, {"safari_26_3", "safari"}, {"ios_14", "ios"}, {"edge_106", "edge"},
+		{"360_11_0", "360"}, {"qq_11_1", "qq"}, {"android_11_okhttp", "android"},
+		{"chrome", "chrome"}, {"randomized", "randomized"}, {"hellochrome_120", "hellochrome_120"}, {"HelloFirefox_120", "HelloFirefox_120"},
+		{"chrome_x", ""}, {"opera_100", ""}, {"chrome_", ""},
+	} {
+		for _, security := range []string{"&security=tls", reality} {
+			link := "vless://" + uuid + "@example.com:443?type=tcp&sni=example.com&fp=" + test.fp + security + "#fp-versioned"
+			imported, err := ImportClientProfiles(link)
+			if test.want == "" {
+				if err == nil {
+					t.Errorf("%s imported as %s", link, imported.Profiles[0].Config)
+				}
+				continue
+			}
+			if err != nil {
+				t.Errorf("%s: %v", link, err)
+				continue
+			}
+			var profile conf.Config
+			if err := json.Unmarshal(imported.Profiles[0].Config, &profile); err != nil {
+				t.Fatal(err)
+			}
+			stream := profile.OutboundConfigs[0].StreamSetting
+			got := ""
+			if stream.TLSSettings != nil {
+				got = stream.TLSSettings.Fingerprint
+			} else if stream.REALITYSettings != nil {
+				got = stream.REALITYSettings.Fingerprint
+			}
+			if got != test.want {
+				t.Errorf("%s: fingerprint %q, want %q", link, got, test.want)
+			}
+		}
+	}
+	qr := `{"v":"2","ps":"m","add":"example.com","port":"443","id":"` + uuid + `","net":"tcp","tls":"tls","sni":"example.com","fp":"chrome_120"}`
+	imported, err := ImportClientProfiles("vmess://" + base64.StdEncoding.EncodeToString([]byte(qr)))
+	if err != nil || !strings.Contains(string(imported.Profiles[0].Config), `"fingerprint":"chrome"`) {
+		t.Errorf("VMess QR fp: %+v, %v", imported, err)
+	}
+}
+
+// Remnawave writes mKCP's mtu and tti in links (probe N10-14); the core checks their range.
+func TestMKCPLinkMTUAndTTI(t *testing.T) {
+	const link = "ss://YWVzLTI1Ni1nY206cHc@example.com:8388?type=kcp&headerType=wireguard&seed=fixture"
+	for _, test := range []struct {
+		query    string
+		mtu, tti uint32
+		refused  bool
+	}{
+		{query: "&mtu=1350&tti=20", mtu: 1350, tti: 20},
+		{query: "&mtu=1200", mtu: 1200, tti: 50},
+		{query: "&tti=100", mtu: 1350, tti: 100},
+		{query: "", mtu: 1350, tti: 50},
+		{query: "&mtu=abc", refused: true},
+		{query: "&tti=-1", refused: true},
+		{query: "&tti=5", refused: true},
+		{query: "&mtu=20", refused: true},
+	} {
+		imported, err := ImportClientProfiles(link + test.query + "#kcp")
+		if test.refused {
+			if err == nil {
+				t.Errorf("%q imported as %s", test.query, imported.Profiles[0].Config)
+			}
+			continue
+		}
+		if err != nil {
+			t.Errorf("%q: %v", test.query, err)
+			continue
+		}
+		stream := builtOutbound(t, imported.Profiles[0].Config).stream.(*internet.StreamConfig)
+		settings, err := stream.TransportSettings[0].Settings.GetInstance()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if config := settings.(*kcp.Config); config.GetMtu() != test.mtu || config.GetTti() != test.tti {
+			t.Errorf("%q: mtu %d, tti %d", test.query, config.GetMtu(), config.GetTti())
+		}
+	}
+}
+
+// Marzban writes a VMess REALITY server as "tls": "reality" in the VMess JSON, with pbk, sid and spx
+// (probe N10-14). Without the public key no handshake can be made.
+func TestVMessQRWithREALITY(t *testing.T) {
+	const fields = `"v":"2","ps":"r","add":"example.com","port":"443","id":"11111111-2222-3333-4444-555555555555","net":"tcp","tls":"reality","sni":"example.com","fp":"chrome"`
+	imported, err := ImportClientProfiles("vmess://" + base64.StdEncoding.EncodeToString([]byte(
+		`{`+fields+`,"pbk":"FCNsCTRerqst97Y-_Pc32LnnBu0g_hw-LhJYlaeiEVs","sid":"c2d3","spx":"/fixture"}`)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var profile conf.Config
+	if err := json.Unmarshal(imported.Profiles[0].Config, &profile); err != nil {
+		t.Fatal(err)
+	}
+	stream := profile.OutboundConfigs[0].StreamSetting
+	if reality := stream.REALITYSettings; stream.Security != "reality" || stream.TLSSettings != nil || reality == nil || reality.Fingerprint != "chrome" ||
+		reality.ServerName != "example.com" || reality.PublicKey != "FCNsCTRerqst97Y-_Pc32LnnBu0g_hw-LhJYlaeiEVs" || reality.ShortId != "c2d3" || reality.SpiderX != "/fixture" {
+		t.Fatalf("imported as %s", imported.Profiles[0].Config)
+	}
+	builtOutbound(t, imported.Profiles[0].Config)
+	if _, err := parseVMessQrCode(`{` + fields + `,"sid":"c2d3"}`); err == nil || err.Error() != "VMess REALITY server without a public key" {
+		t.Errorf("without a public key: %v", err)
 	}
 }
 

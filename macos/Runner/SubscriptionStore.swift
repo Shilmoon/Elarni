@@ -214,7 +214,8 @@ final class SubscriptionStore {
     let input = try normalizeClientInput(content)
     let text = input.text
     if let url = URL(string: text), ["https", "http"].contains(url.scheme?.lowercased()),
-       url.user == nil, !url.path.isEmpty, url.path != "/",
+       // A root URL is an HTTP proxy unless it named itself, as a panel's https://host/#Name.
+       url.user == nil, !url.path.isEmpty, url.path != "/" || input.name != nil,
        !( ["t.me", "telegram.me"].contains(url.host?.lowercased()) && url.path == "/proxy" ),
        !text.contains(where: { $0.isWhitespace }) {
       return try register(urlText: content)
