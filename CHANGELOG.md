@@ -6,6 +6,9 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
 
 ### Fixed
 
+- **Two dependencies with published advisories are updated**: the packet parser of the tunnel
+  stack (etherparse 0.20.4: a read past the end of a packet with IPv6 extension headers) and the
+  WebSocket library (the mask key now comes from the system's random source). All platforms.
 - **Android: "Connect after device restart" waits for the network.** A server given by name
   was looked up once as the phone started, often before Wi-Fi or mobile data worked; the
   start failed and, with "Reconnect automatically" off, the phone stayed without VPN. A start
