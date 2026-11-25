@@ -110,13 +110,16 @@ flutter::EncodableMap SystemInfo() {
   const auto status = RegGetValueW(HKEY_CURRENT_USER,
       L"Software\\Microsoft\\Windows\\CurrentVersion\\Run", L"Elarni",
       RRF_RT_REG_SZ, nullptr, login, &bytes);
-  const bool enabled = status == ERROR_SUCCESS && IsLaunchCommand(login, AppPath());
+  // The Run value is the only store of the hidden start too.
+  bool hidden = false;
+  const bool enabled = status == ERROR_SUCCESS && IsLaunchCommand(login, AppPath(), &hidden);
   return {{EncodableValue("os"), EncodableValue("Windows")},
       {EncodableValue("architecture"), EncodableValue("x86_64")},
       {EncodableValue("processorCount"), EncodableValue(static_cast<int32_t>(info.dwNumberOfProcessors))},
       {EncodableValue("activeProcessorCount"), EncodableValue(static_cast<int32_t>(GetActiveProcessorCount(ALL_PROCESSOR_GROUPS)))},
       {EncodableValue("physicalMemoryBytes"), EncodableValue(static_cast<int64_t>(memory.ullTotalPhys))},
-      {EncodableValue("launchAtLoginStatus"), EncodableValue(enabled ? "enabled" : "notRegistered")}};
+      {EncodableValue("launchAtLoginStatus"), EncodableValue(enabled ? "enabled" : "notRegistered")},
+      {EncodableValue("launchHidden"), EncodableValue(enabled && hidden)}};
 }
 
 
@@ -140,8 +143,8 @@ bool UnregisterProfileLinks() {
   return removed;
 }
 
-FlutterWindow::FlutterWindow(const flutter::DartProject& project)
-    : project_(project) {}
+FlutterWindow::FlutterWindow(const flutter::DartProject& project, bool start_hidden)
+    : project_(project), start_hidden_(start_hidden) {}
 
 FlutterWindow::~FlutterWindow() {}
 
@@ -361,12 +364,14 @@ bool FlutterWindow::OnCreate() {
         const auto entry = args->find(EncodableValue("enabled"));
         const auto* enabled = entry == args->end() ? nullptr : std::get_if<bool>(&entry->second);
         if (!enabled || AppPath().empty()) { result->Error("invalid_settings", "Invalid login setting."); return; }
+        const auto hidden_entry = args->find(EncodableValue("hidden"));
+        const auto* hidden = hidden_entry == args->end() ? nullptr : std::get_if<bool>(&hidden_entry->second);
         HKEY key = nullptr;
         auto status = RegCreateKeyExW(HKEY_CURRENT_USER,
             L"Software\\Microsoft\\Windows\\CurrentVersion\\Run", 0, nullptr, 0,
             KEY_SET_VALUE, nullptr, &key, nullptr);
         if (status == ERROR_SUCCESS) {
-          const std::wstring command = L"\"" + AppPath() + L"\"";
+          const std::wstring command = LaunchCommand(AppPath(), hidden && *hidden);
           status = *enabled ? RegSetValueExW(key, L"Elarni", 0, REG_SZ,
               reinterpret_cast<const BYTE*>(command.c_str()), static_cast<DWORD>((command.size() + 1) * sizeof(wchar_t)))
               : RegDeleteValueW(key, L"Elarni");
@@ -448,7 +453,8 @@ bool FlutterWindow::OnCreate() {
   });
 
   flutter_controller_->engine()->SetNextFrameCallback([&]() {
-    if (!headless_) this->Show();
+    // A start hidden in the tray shows the window only when no tray icon could bring it up.
+    if (!headless_ && (!start_hidden_ || !tray_added_)) this->Show();
   });
 
   // Flutter can complete the first frame before the "show window" callback is

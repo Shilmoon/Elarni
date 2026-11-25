@@ -905,6 +905,24 @@ class _ElarniHomeState extends State<ElarniHome> {
               ? null
               : (value) => _refreshSystemInfo(launchAtLogin: value),
         ),
+        // The login entry carries the choice on Windows and Linux; a macOS login
+        // item cannot, so macOS starts with its window.
+        if (widget.desktopCore)
+          ElarniCheckboxTile(
+            title: Text(l10n.startHiddenInTray),
+            value: _systemInfo['launchHidden'] == true,
+            onChanged:
+                _systemBusy ||
+                    !const [
+                      'enabled',
+                      'requiresApproval',
+                    ].contains(_systemInfo['launchAtLoginStatus'])
+                ? null
+                : (value) => _refreshSystemInfo(
+                    launchAtLogin: true,
+                    launchHidden: value,
+                  ),
+          ),
         if (_systemError != null) ListTile(subtitle: Text(_systemError!)),
         toggle(
           l10n.disconnectOnSleep,

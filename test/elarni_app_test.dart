@@ -2372,6 +2372,117 @@ void main() {
     expect(control.subscriptionReads, greaterThan(reads));
   });
 
+  for (final linux in [false, true])
+    testWidgets(
+      'start hidden in the tray needs launch at login (${linux ? 'Linux' : 'Windows'})',
+      (tester) async {
+        final control = FakeTunnelControl()
+          ..systemInfoValue = {
+            'launchAtLoginStatus': 'notRegistered',
+            'launchHidden': false,
+          };
+        await pumpApp(tester, control, windows: !linux, linux: linux);
+        await openSettings(tester);
+        await selectCategory(tester, SettingsCategory.general);
+        final login = find.widgetWithText(
+          ElarniCheckboxTile,
+          'Launch app at login',
+        );
+        final hidden = find.widgetWithText(
+          ElarniCheckboxTile,
+          'Start hidden in the tray',
+        );
+        await reveal(tester, hidden);
+        ElarniCheckboxTile row() => tester.widget<ElarniCheckboxTile>(hidden);
+        expect(row().value, isFalse);
+        expect(row().onChanged, isNull);
+        await tester.tap(hidden);
+        await tester.pumpAndSettle();
+        expect(control.launchAtLoginChanges, isEmpty);
+
+        await tester.tap(login);
+        await tester.pumpAndSettle();
+        expect(control.launchAtLoginChanges, [(enabled: true, hidden: false)]);
+        expect(row().onChanged, isNotNull);
+        expect(row().value, isFalse);
+
+        await tester.tap(hidden);
+        await tester.pumpAndSettle();
+        expect(control.launchAtLoginChanges.last, (
+          enabled: true,
+          hidden: true,
+        ));
+        expect(row().value, isTrue);
+        await tester.tap(hidden);
+        await tester.pumpAndSettle();
+        expect(control.launchAtLoginChanges.last, (
+          enabled: true,
+          hidden: false,
+        ));
+        expect(row().value, isFalse);
+
+        // Turning launch at login off and on again does not bring the choice back.
+        await tester.tap(hidden);
+        await tester.pumpAndSettle();
+        await tester.tap(login);
+        await tester.pumpAndSettle();
+        expect(control.launchAtLoginChanges.last, (
+          enabled: false,
+          hidden: false,
+        ));
+        expect(row().onChanged, isNull);
+        expect(row().value, isFalse);
+        await tester.tap(login);
+        await tester.pumpAndSettle();
+        expect(control.launchAtLoginChanges.last, (
+          enabled: true,
+          hidden: false,
+        ));
+        expect(row().value, isFalse);
+        expect(control.launchAtLoginChanges, hasLength(6));
+      },
+    );
+
+  testWidgets('start hidden in the tray shows the registered entry', (
+    tester,
+  ) async {
+    final control = FakeTunnelControl()
+      ..systemInfoValue = {
+        'launchAtLoginStatus': 'enabled',
+        'launchHidden': true,
+      };
+    await pumpApp(tester, control, windows: true);
+    await openSettings(tester);
+    await selectCategory(tester, SettingsCategory.general);
+    final hidden = find.widgetWithText(
+      ElarniCheckboxTile,
+      'Start hidden in the tray',
+    );
+    await reveal(tester, hidden);
+    final row = tester.widget<ElarniCheckboxTile>(hidden);
+    expect(row.value, isTrue);
+    expect(row.onChanged, isNotNull);
+  });
+
+  // A login item cannot tell the app how it was started on macOS.
+  testWidgets('macOS has no start hidden in the tray', (tester) async {
+    final control = FakeTunnelControl()
+      ..systemInfoValue = {'launchAtLoginStatus': 'enabled'};
+    await pumpApp(tester, control);
+    await openSettings(tester);
+    await selectCategory(tester, SettingsCategory.general);
+    final login = find.widgetWithText(
+      ElarniCheckboxTile,
+      'Launch app at login',
+    );
+    await reveal(tester, login);
+    expect(login, findsOneWidget);
+    expect(
+      find.widgetWithText(ElarniCheckboxTile, 'Start hidden in the tray'),
+      findsNothing,
+    );
+  });
+
   testWidgets('Windows lets this account connect without the approval prompt', (
     tester,
   ) async {

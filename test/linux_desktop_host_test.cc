@@ -266,6 +266,7 @@ int main(int argc, char** argv) {
 
   // As on Windows, an autostart entry for a moved copy does not start this one.
   const std::string autostart = config_path("autostart/com.elarni.Elarni.desktop");
+  bool login_hidden = true;
   auto login = [&](const std::string& exec) {
     g_autoptr(GKeyFile) entry = g_key_file_new();
     g_key_file_set_string(entry, "Desktop Entry", "Type", "Application");
@@ -273,10 +274,32 @@ int main(int argc, char** argv) {
     g_autofree char* contents = g_key_file_to_data(entry, nullptr, nullptr);
     assert(write_private(autostart, contents, strlen(contents)));
     g_autoptr(FlValue) info = system_info();
+    auto* hidden = fl_value_lookup_string(info, "launchHidden");
+    assert(hidden && fl_value_get_type(hidden) == FL_VALUE_TYPE_BOOL);
+    login_hidden = fl_value_get_bool(hidden);
     return std::string(fl_value_get_string(fl_value_lookup_string(info, "launchAtLoginStatus")));
   };
-  assert(login(desktop_exec("/moved/elarni")) == "notRegistered");
-  assert(login(desktop_exec(executable())) == "enabled");
+  assert(login(desktop_exec("/moved/elarni")) == "notRegistered" && !login_hidden);
+  assert(login(desktop_exec(executable())) == "enabled" && !login_hidden);
+  // The entry carries the start hidden in the tray and is the only place that keeps the choice.
+  assert(login_exec(executable(), false) == desktop_exec(executable()));
+  assert(login_exec(executable(), true) == desktop_exec(executable()) + " --hidden");
+  assert(login(login_exec(executable(), true)) == "enabled" && login_hidden);
+  assert(login(login_exec("/moved/elarni", true)) == "notRegistered" && !login_hidden);
+  // An entry with any other argument is not this app's.
+  for (const char* other : {" --minimized", " --hidden --minimized", " --hidden --hidden", "  --hidden", " --HIDDEN", "--hidden"})
+    assert(login(desktop_exec(executable()) + other) == "notRegistered" && !login_hidden);
+  // Only the login entry's own start hides the window; a link or another argument does not.
+  {
+    const char* only[] = {"--hidden", nullptr};
+    const char* none[] = {nullptr};
+    const char* with_link[] = {"--hidden", "elarni://open", nullptr};
+    const char* upper[] = {"--HIDDEN", nullptr};
+    const char* other[] = {"--minimized", nullptr};
+    assert(desktop_host_hidden_start(only));
+    assert(!desktop_host_hidden_start(none) && !desktop_host_hidden_start(nullptr));
+    assert(!desktop_host_hidden_start(with_link) && !desktop_host_hidden_start(upper) && !desktop_host_hidden_start(other));
+  }
   // An AppImage's mount is gone after exit, so login starts the image file. An AppImage
   // that merely launched this copy (its APPDIR does not hold it) is not taken.
   g_autofree char* images = g_dir_make_tmp("elarni-appimage-XXXXXX", nullptr);

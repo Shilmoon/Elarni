@@ -3200,6 +3200,12 @@ abstract class AppLocalizations {
   /// **'Launch app at login'**
   String get launchAtLogin;
 
+  /// No description provided for @startHiddenInTray.
+  ///
+  /// In en, this message translates to:
+  /// **'Start hidden in the tray'**
+  String get startHiddenInTray;
+
   /// No description provided for @windowsWifiLocationHelp.
   ///
   /// In en, this message translates to:

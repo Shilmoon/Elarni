@@ -28,6 +28,8 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
     winrt::uninit_apartment();
     return removed ? EXIT_SUCCESS : EXIT_FAILURE;
   }
+  // The login entry's start hidden in the tray.
+  const bool hidden = IsHiddenStart(command_line_arguments);
 
   // Forward links only to this executable's existing desktop window.
   for (HWND existing = FindWindowExW(nullptr, nullptr, kWindowClassName, L"Elarni");
@@ -53,6 +55,11 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
         winrt::uninit_apartment();
         return EXIT_FAILURE;
       }
+      // A start at login while Elarni already runs has no window to show.
+      if (hidden) {
+        winrt::uninit_apartment();
+        return EXIT_SUCCESS;
+      }
       for (const auto& argument : command_line_arguments) {
         if (argument.empty()) continue;
         COPYDATASTRUCT data{0x52564c31, static_cast<DWORD>(argument.size() + 1), const_cast<char*>(argument.c_str())};
@@ -75,7 +82,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
 
   project.set_dart_entrypoint_arguments(std::move(command_line_arguments));
 
-  FlutterWindow window(project);
+  FlutterWindow window(project, hidden);
   Win32Window::Point origin(10, 10);
   Win32Window::Size size(800, 600);
   if (!window.Create(L"Elarni", origin, size)) {

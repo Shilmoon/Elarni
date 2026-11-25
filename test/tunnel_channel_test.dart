@@ -80,6 +80,29 @@ void main() {
     },
   );
 
+  // Windows and Linux write the choice into the login entry; macOS ignores it.
+  test('launch at login asks for a hidden start only when chosen', () async {
+    reply = {'launchAtLoginStatus': 'enabled', 'launchHidden': true};
+    expect(
+      (await control.setLaunchAtLogin(true, hidden: true))['launchHidden'],
+      isTrue,
+    );
+    await control.setLaunchAtLogin(true);
+    await control.setLaunchAtLogin(false);
+    expect(
+      [for (final call in calls) call.method],
+      [for (var i = 0; i < 3; i++) 'setLaunchAtLogin'],
+    );
+    expect(
+      [for (final call in calls) call.arguments],
+      [
+        {'enabled': true, 'hidden': true},
+        {'enabled': true, 'hidden': false},
+        {'enabled': false, 'hidden': false},
+      ],
+    );
+  });
+
   test('the TLS fingerprint defaults to the server\'s and round-trips', () {
     expect(TunnelSettings.fromMap({}).tlsFingerprint, 'server');
     final chosen = const TunnelSettings().copyWith(tlsFingerprint: 'firefox');

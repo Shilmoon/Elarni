@@ -1837,6 +1837,9 @@ class AppLocalizationsEn extends AppLocalizations {
   String get launchAtLogin => 'Launch app at login';
 
   @override
+  String get startHiddenInTray => 'Start hidden in the tray';
+
+  @override
   String get windowsWifiLocationHelp =>
       'Windows keeps the Wi-Fi name from Elarni. Turn on Location services and Let desktop apps access your location in Settings › Privacy & security › Location. Until then every Wi-Fi network counts as untrusted.';
 

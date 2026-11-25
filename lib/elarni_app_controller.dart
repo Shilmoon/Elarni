@@ -376,8 +376,10 @@ extension _HomeController on _ElarniHomeState {
     await _saveInboundCredentials(token(), token());
   }
 
+  // A launch at login turned on starts with the window unless [launchHidden].
   Future<void> _refreshSystemInfo({
     bool? launchAtLogin,
+    bool launchHidden = false,
     bool? vpnService,
   }) async {
     if (_systemBusy) return;
@@ -393,7 +395,10 @@ extension _HomeController on _ElarniHomeState {
             }
           : launchAtLogin == null
           ? await widget.tunnelControl.systemInfo()
-          : await widget.tunnelControl.setLaunchAtLogin(launchAtLogin);
+          : await widget.tunnelControl.setLaunchAtLogin(
+              launchAtLogin,
+              hidden: launchHidden,
+            );
       if (mounted) {
         _set(() => _systemInfo = value);
         final version = value['appVersion'];

@@ -399,6 +399,21 @@ class FakeTunnelControl implements TunnelControl {
   Map<String, Object?> systemInfoValue = {};
   @override
   Future<Map<String, Object?>> systemInfo() async => systemInfoValue;
+  // As Windows and Linux answer: the login entry is the only store of both choices.
+  final launchAtLoginChanges = <({bool enabled, bool hidden})>[];
+  @override
+  Future<Map<String, Object?>> setLaunchAtLogin(
+    bool enabled, {
+    bool hidden = false,
+  }) async {
+    launchAtLoginChanges.add((enabled: enabled, hidden: hidden));
+    return systemInfoValue = {
+      ...systemInfoValue,
+      'launchAtLoginStatus': enabled ? 'enabled' : 'notRegistered',
+      'launchHidden': enabled && hidden,
+    };
+  }
+
   final vpnServiceChanges = <bool>[];
   Object? vpnServiceError;
   @override

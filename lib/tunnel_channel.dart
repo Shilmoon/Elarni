@@ -282,7 +282,14 @@ abstract interface class TunnelControl {
   Future<bool> saveFile(String kind, Uint8List bytes);
   Future<Map<String, Object?>> systemInfo();
   Future<Map<String, Object?>> routeTable();
-  Future<Map<String, Object?>> setLaunchAtLogin(bool enabled);
+
+  /// Registers or removes the start at login. Windows and Linux write [hidden]
+  /// into the login entry, which then starts the app hidden in the tray, and
+  /// report it back as `launchHidden`; macOS ignores it.
+  Future<Map<String, Object?>> setLaunchAtLogin(
+    bool enabled, {
+    bool hidden = false,
+  });
 
   /// Windows: lets this account connect System-wide VPN through the Elarni VPN
   /// service, without a consent prompt each app session; changing it asks once.
@@ -450,8 +457,13 @@ final class NativeTunnelControl implements TunnelControl {
   Future<Map<String, Object?>> routeTable() => _mapResult('routeTable');
 
   @override
-  Future<Map<String, Object?>> setLaunchAtLogin(bool enabled) =>
-      _mapResult('setLaunchAtLogin', <String, Object?>{'enabled': enabled});
+  Future<Map<String, Object?>> setLaunchAtLogin(
+    bool enabled, {
+    bool hidden = false,
+  }) => _mapResult('setLaunchAtLogin', <String, Object?>{
+    'enabled': enabled,
+    'hidden': hidden,
+  });
 
   @override
   Future<Map<String, Object?>> setVPNService(bool enabled) =>
