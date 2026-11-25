@@ -34,6 +34,10 @@ func newDirectPingClient(destination string, timeout time.Duration) *pingClient 
 func newHTTPClient(ctxv context.Context, dispatcher routing.Dispatcher, handler string, timeout time.Duration) *http.Client {
 	tr := &http.Transport{
 		DisableKeepAlives: true,
+		// Elarni: the client's timeout ends the probe but not its dial, which net/http keeps going for a later
+		// request: a server that stalls inside TLS held the socket and its goroutines until it gave up itself.
+		TLSHandshakeTimeout:   timeout,
+		ResponseHeaderTimeout: timeout,
 		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
 			dest, err := net.ParseDestination(network + ":" + addr)
 			if err != nil {

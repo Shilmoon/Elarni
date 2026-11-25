@@ -152,14 +152,24 @@ func (c *UConn) VerifyPeerCertificate(rawCerts [][]byte, verifiedChains [][]*x50
 
 // realityFingerprint swaps a hello without an X25519MLKEM768 key share for the
 // nearest modern one: REALITY servers since Xray 26.9.8 hand such hellos to the
-// cover target (XTLS/Xray-core#7259). Randomized and Go hellos have no fixed spec.
+// cover target (XTLS/Xray-core#7259). Go hellos have no fixed spec.
 func realityFingerprint(name string) *utls.ClientHelloID {
 	fingerprint := tls.GetFingerprint(name)
-	if fingerprint == nil || tls.HasMLKEMKeyShare(fingerprint) {
+	if fingerprint == nil {
+		return nil
+	}
+	switch fingerprint.Client {
+	case utls.HelloRandomized.Client, utls.HelloRandomizedALPN.Client, utls.HelloRandomizedNoALPN.Client:
+		// Elarni: a randomized hello carries the share only half the time, for the whole process with
+		// a preset's seed and for each connection without one, so about half the app starts could not
+		// connect. It takes the hello that "random" chose, which always has the share.
+		return tls.GetFingerprint("random")
+	}
+	if tls.HasMLKEMKeyShare(fingerprint) {
 		return fingerprint
 	}
 	switch fingerprint.Client {
-	case utls.HelloGolang.Client, utls.HelloRandomized.Client, utls.HelloRandomizedALPN.Client, utls.HelloRandomizedNoALPN.Client:
+	case utls.HelloGolang.Client:
 		return fingerprint
 	case utls.HelloFirefox_Auto.Client:
 		return &utls.HelloFirefox_Auto

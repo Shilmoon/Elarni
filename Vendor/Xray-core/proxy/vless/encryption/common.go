@@ -263,7 +263,8 @@ func CreatPadding(paddingLens, paddingGaps [][3]int) (length int, lens []int, ga
 	}
 	for _, y := range paddingLens {
 		l := 0
-		if y[0] >= int(crypto.RandBetween(0, 100)) {
+		// a percent: one of the 100 values 0-99, as before RandBetween took its end in
+		if y[0] >= int(crypto.RandBetween(0, 99)) {
 			l = int(crypto.RandBetween(int64(y[1]), int64(y[2])))
 		}
 		lens = append(lens, l)
@@ -271,7 +272,7 @@ func CreatPadding(paddingLens, paddingGaps [][3]int) (length int, lens []int, ga
 	}
 	for _, y := range paddingGaps {
 		g := 0
-		if y[0] >= int(crypto.RandBetween(0, 100)) {
+		if y[0] >= int(crypto.RandBetween(0, 99)) {
 			g = int(crypto.RandBetween(int64(y[1]), int64(y[2])))
 		}
 		gaps = append(gaps, time.Duration(g)*time.Millisecond)

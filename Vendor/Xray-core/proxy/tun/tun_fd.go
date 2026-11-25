@@ -4,6 +4,8 @@ package tun
 
 import (
 	"encoding/binary"
+	"errors"
+	"fmt"
 	"os"
 	"sync"
 	"syscall"
@@ -63,7 +65,23 @@ func newFdTun(fd, vnet int) *fdTun {
 func (t *fdTun) ReadPacket(b []byte) ([]byte, error) {
 	n, err := t.file.Read(b)
 	// what the virtio_net_hdr says is of no use here: no checksum is looked at, and a segment may have any size
-	return b[min(t.vnet, n):n], err
+	return b[min(t.vnet, n):n], t.readError(err)
+}
+
+// readError makes an error that only ends when the tun does one that says it is closed: the stack reads on
+// after any other (Elarni). A read that Close ends gets the poller's "use of closed file" through raw, which is
+// not os.ErrClosed, and a tun whose interface was deleted answers EBADFD to every read, as wireguard-go knows
+func (t *fdTun) readError(err error) error {
+	if err == nil {
+		return nil
+	}
+	t.writeLock.RLock()
+	closed := t.closed
+	t.writeLock.RUnlock()
+	if closed || errors.Is(err, unix.EBADFD) {
+		return fmt.Errorf("%w: %w", os.ErrClosed, err)
+	}
+	return err
 }
 
 // ReadParts implements segmenter
@@ -75,9 +93,9 @@ func (t *fdTun) ReadParts(parts [][]byte) (int, error) {
 		t.iovecs[i+1].SetLen(len(p))
 	}
 	if err := t.raw.Read(t.readv); err != nil {
-		return 0, err
+		return 0, t.readError(err)
 	}
-	return max(t.read-t.vnet, 0), t.readErr
+	return max(t.read-t.vnet, 0), t.readError(t.readErr)
 }
 
 func (t *fdTun) WritePacket(header, payload []byte) error {

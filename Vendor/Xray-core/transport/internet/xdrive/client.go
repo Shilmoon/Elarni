@@ -295,12 +295,14 @@ func newServiceClient(connCtx context.Context, h1Hosts *sync.Map, streamSettings
 				}
 				qconn, err := tr.Dial(ctx, udpAddr, gotlsConfig, cfg)
 				if err != nil {
-					tr.Close()
+					// the packet conn first: the transport waits for its read loop, which a dialerProxy's
+					// packet conn ends only by closing
 					pktConn.Close()
+					tr.Close()
 					return nil, err
 				}
 				stop := context.AfterFunc(connCtx, func() { qconn.CloseWithError(quic.ApplicationErrorCode(http3.ErrCodeNoError), "") })
-				context.AfterFunc(qconn.Context(), func() { stop(); tr.Close(); pktConn.Close() })
+				context.AfterFunc(qconn.Context(), func() { stop(); pktConn.Close(); tr.Close() })
 				if quicParams.Congestion != "reno" {
 					congestion.UseBBR(qconn, bbr.Profile(quicParams.BbrProfile))
 				}

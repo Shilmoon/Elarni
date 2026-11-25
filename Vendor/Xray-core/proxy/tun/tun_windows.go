@@ -8,8 +8,10 @@ import (
 	"crypto/md5"
 	"encoding/binary"
 	go_errors "errors"
+	"fmt"
 	"net"
 	"net/netip"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
@@ -840,7 +842,8 @@ func (t *WindowsTun) ReadPacket(b []byte) ([]byte, error) {
 		t.RLock()
 		if t.closed {
 			t.RUnlock()
-			return nil, windows.ERROR_HANDLE_EOF
+			// Elarni: the stack reads on after an error that does not say the tun is closed
+			return nil, fmt.Errorf("%w: %w", os.ErrClosed, windows.ERROR_HANDLE_EOF)
 		}
 		packet, err := t.session.ReceivePacket()
 		if err == nil {
@@ -858,6 +861,10 @@ func (t *WindowsTun) ReadPacket(b []byte) ([]byte, error) {
 		if !go_errors.Is(err, windows.ERROR_NO_MORE_ITEMS) {
 			if t.diagnosticStop != nil {
 				flightrecorder.Record(flightrecorder.Event{Name: "tun_read_error", Code: probe.Code(err), Connection: t.diagnosticID})
+			}
+			if go_errors.Is(err, windows.ERROR_HANDLE_EOF) {
+				// the session or its adapter has ended, for good: wireguard-go takes it as closed too
+				err = fmt.Errorf("%w: %w", os.ErrClosed, err)
 			}
 			return nil, err
 		}

@@ -462,8 +462,10 @@ func createHTTPClient(releaseCtx context.Context, dest net.Destination, streamSe
 
 				conn, err := tr.DialEarly(ctx, udpAddr, tlsCfg, cfg)
 				if err != nil {
-					tr.Close()
+					// the packet conn first: the transport waits for its read loop, which a dialerProxy's
+					// packet conn ends only by closing
 					pktConn.Close()
+					tr.Close()
 					return nil, err
 				}
 				open.Add(1)
@@ -476,7 +478,7 @@ func createHTTPClient(releaseCtx context.Context, dest net.Destination, streamSe
 						}
 					})
 				})
-				context.AfterFunc(conn.Context(), func() { open.Add(-1); livePaths.remove(conn); tr.Close(); pktConn.Close() })
+				context.AfterFunc(conn.Context(), func() { open.Add(-1); livePaths.remove(conn); pktConn.Close(); tr.Close() })
 
 				switch quicParams.Congestion {
 				case "reno":
@@ -1073,7 +1075,8 @@ func Dial(ctx context.Context, dest net.Destination, streamSettings *internet.Me
 	scMinPostsIntervalMs := transportConfiguration.GetNormalizedScMinPostsIntervalMs()
 
 	if scMaxEachPostBytes.From <= 0 {
-		panic("`scMaxEachPostBytes` should be bigger than 0")
+		// Elarni: a panic here ended the whole process; the config builder refuses such a range already
+		return nil, errors.New("`scMaxEachPostBytes` should be bigger than 0")
 	}
 
 	maxUploadSize := scMaxEachPostBytes.rand()
