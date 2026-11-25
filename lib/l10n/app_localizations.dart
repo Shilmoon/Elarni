@@ -374,6 +374,18 @@ abstract class AppLocalizations {
   /// **'The VPN firewall tool is missing.'**
   String get issueVpnFirewallUnavailable;
 
+  /// No description provided for @issueWintunFailedRemedy.
+  ///
+  /// In en, this message translates to:
+  /// **'Antivirus software or a device installation policy can cause this. Reinstall Elarni, or use System proxy mode.'**
+  String get issueWintunFailedRemedy;
+
+  /// No description provided for @issueWintunFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'The Windows network driver (Wintun) could not be loaded, or its network adapter could not be created.'**
+  String get issueWintunFailed;
+
   /// No description provided for @issueDisconnectUnconfirmedRemedy.
   ///
   /// In en, this message translates to:

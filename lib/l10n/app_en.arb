@@ -46,6 +46,8 @@
   "issueVpnGuardBusy": "Another Elarni VPN is connected on this computer.",
   "issueVpnFirewallUnavailableRemedy": "Install nftables (the nft command), then retry.",
   "issueVpnFirewallUnavailable": "The VPN firewall tool is missing.",
+  "issueWintunFailedRemedy": "Antivirus software or a device installation policy can cause this. Reinstall Elarni, or use System proxy mode.",
+  "issueWintunFailed": "The Windows network driver (Wintun) could not be loaded, or its network adapter could not be created.",
   "issueDisconnectUnconfirmedRemedy": "Refresh status before reconnecting, or use Repair VPN setup.",
   "issueDisconnectUnconfirmed": "Disconnection could not be confirmed.",
   "issueProviderUnavailableRemedy": "Retry the selected server. If the problem continues, use Repair VPN setup.",
