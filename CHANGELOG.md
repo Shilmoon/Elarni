@@ -6,6 +6,11 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
 
 ### Fixed
 
+- **Linux: the AppImage starts on Debian 13, Fedora, Arch and openSUSE.** It stopped at once
+  on systems without the ayatana tray libraries or GStreamer. The AppImage now carries the
+  tray libraries (their source code is a
+  separate download of each release), and without GStreamer only scanning QR codes with a
+  camera is unavailable. The AppImage and the portable archive need glibc 2.34 or newer.
 - **Android: "Connect after device restart" waits for the network.** A server given by name
   was looked up once as the phone started, often before Wi-Fi or mobile data worked; the
   start failed and, with "Reconnect automatically" off, the phone stayed without VPN. A start

@@ -21,8 +21,8 @@ WORKFLOW = '.github/workflows/release.yml'
 APK_ARTIFACT = 'unsigned-candidate-linux'
 # One attested file of each kind makes a build; the provenance job of the workflow lists the same files.
 # The inventory itself is the subject list of the build's attestation, which names them all.
-KINDS = ('*_amd64.deb', '*.AppImage', '*-linux-x64.tar.gz', '*.msi', '*.zip', '*-project-source.tar.gz',
-         '*go-module-sources.tar.gz', '*.apk')
+KINDS = ('*_amd64.deb', '*.AppImage', '*-linux-x64.tar.gz', '*-linux-bundled-sources.tar', '*.msi', '*.zip',
+         '*-project-source.tar.gz', '*go-module-sources.tar.gz', '*.apk')
 UNLISTED = ('SHA256SUMS', 'SHA256SUMS.sig')
 # The publish stage's own signature, there already when a publish that failed after its upload runs again.
 PUBLISHED = 'SHA256SUMS.sigstore.json'

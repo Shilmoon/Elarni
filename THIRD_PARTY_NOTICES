@@ -459,6 +459,27 @@ filters owned by the elevated helper process.
 
 Generated dependency reports remain subject to human/legal review before distribution.
 
+## Linux AppImage only: tray libraries
+
+The Linux AppImage carries these five libraries in its `lib/` folder; the `.deb` and the
+portable archive use the system's copies instead. Each is the unmodified Ubuntu 22.04 build
+except its RUNPATH, which points it at the others beside it. Each package's licence file is
+in the AppImage under `usr/share/doc/elarni/bundled/<package>/copyright`, and every release
+publishes their exact source packages as `elarni-<version>-linux-bundled-sources.tar`.
+Licences as the packages' copyright files state them:
+
+- `libayatana-appindicator3.so.1`: package `libayatana-appindicator3-1` 0.5.90-7ubuntu2, from
+  source package `libayatana-appindicator` 0.5.90-7ubuntu2. LGPL-2.1 or LGPL-3
+  (`src/app-indicator.c`), GPL-3 (`src/generate-id.c`, `src/dbus-shared.h`).
+- `libayatana-indicator3.so.7`: package `libayatana-indicator3-7` 0.9.1-1, from source package
+  `libayatana-indicator` 0.9.1-1. GPL-3.
+- `libayatana-ido3-0.4.so.0`: package `libayatana-ido3-0.4-0` 0.9.1-1, from source package
+  `ayatana-ido` 0.9.1-1. GPL-3, LGPL-2.1 or LGPL-3, and LGPL-2+ (`src/idotimeline.c`).
+- `libdbusmenu-glib.so.4`: package `libdbusmenu-glib4` 16.04.1+18.10.20180917-0ubuntu8, from
+  source package `libdbusmenu` 16.04.1+18.10.20180917-0ubuntu8. LGPL-2.1 or LGPL-3.
+- `libdbusmenu-gtk3.so.4`: package `libdbusmenu-gtk3-4` 16.04.1+18.10.20180917-0ubuntu8, from
+  source package `libdbusmenu` 16.04.1+18.10.20180917-0ubuntu8. LGPL-2.1 or LGPL-3.
+
 ## INCY link encoder v1.3.0
 
 The shared importer uses the official Go codec for crypt1 subscription links.

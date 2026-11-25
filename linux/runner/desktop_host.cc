@@ -1,8 +1,8 @@
 #include "desktop_host.h"
+#include "elarni_camera.h"
 
 #include <libayatana-appindicator/app-indicator.h>
-#include <gst/app/gstappsink.h>
-#include <gst/gst.h>
+#include <gmodule.h>
 #include <gio/gdesktopappinfo.h>
 #include <glib/gstdio.h>
 #include <fcntl.h>
@@ -33,8 +33,7 @@ struct DesktopHost {
   GtkWidget* disconnect = nullptr;
   GDBusConnection* system_bus = nullptr;
   guint sleep_subscription = 0;
-  GstElement* camera = nullptr;
-  GstElement* frames = nullptr;
+  ElarniCamera* camera = nullptr;
   std::string icon;
   std::vector<std::string> links;
   // The tray's Quit or Ctrl+Q asked for the close: it quits even with a tray.
@@ -179,65 +178,60 @@ FlValue* system_info() {
   fl_value_set_string_take(value, "launchAtLoginStatus", fl_value_new_string(enabled ? "enabled" : "notRegistered"));
   return value;
 }
+// The entry points of the camera module (elarni_camera.h).
+struct CameraModule {
+  decltype(&elarni_camera_open) open = nullptr;
+  decltype(&elarni_camera_frame) frame = nullptr;
+  decltype(&elarni_camera_close) close = nullptr;
+};
+// Whether the camera module at path loads; it does not where GStreamer is missing.
+bool load_camera_module(const char* path, CameraModule& module) {
+  GModule* library = g_module_open(path, static_cast<GModuleFlags>(G_MODULE_BIND_LAZY | G_MODULE_BIND_LOCAL));
+  if (!library) { g_debug("No camera: %s", g_module_error()); return false; }
+  CameraModule found;
+  if (!g_module_symbol(library, "elarni_camera_open", reinterpret_cast<gpointer*>(&found.open)) ||
+      !g_module_symbol(library, "elarni_camera_frame", reinterpret_cast<gpointer*>(&found.frame)) ||
+      !g_module_symbol(library, "elarni_camera_close", reinterpret_cast<gpointer*>(&found.close))) {
+    g_debug("No camera: %s", g_module_error());
+    g_module_close(library);
+    return false;
+  }
+  g_module_make_resident(library);
+  g_debug("Camera module loaded from %s", path);
+  module = found;
+  return true;
+}
+// The camera module beside the runner's libraries, opened at the first camera call and kept.
+const CameraModule* camera_module() {
+  static CameraModule module;
+  static const bool loaded = [] {
+    g_autofree char* directory = g_path_get_dirname(executable().c_str());
+    g_autofree char* path = g_build_filename(directory, "lib", "libelarni_camera.so", nullptr);
+    return load_camera_module(path, module);
+  }();
+  return loaded ? &module : nullptr;
+}
 void stop_camera(DesktopHost* host) {
-  if (host->camera) gst_element_set_state(host->camera, GST_STATE_NULL);
-  if (host->frames) gst_object_unref(host->frames);
-  if (host->camera) gst_object_unref(host->camera);
-  host->frames = nullptr;
+  if (host->camera) camera_module()->close(host->camera);
   host->camera = nullptr;
 }
 void camera_frame(DesktopHost* host, FlMethodCall* call) {
+  // Without the module, as without GStreamer, the answer is the one for a system without a camera.
+  const CameraModule* camera = camera_module();
+  if (!camera) { fail(call, "camera_unavailable"); return; }
   if (!host->camera) {
-    g_autoptr(GError) error = nullptr;
-    host->camera = gst_parse_launch(
-        "decodebin name=decode ! videoconvert ! videoscale ! video/x-raw,width=640,height=480 "
-        "! jpegenc ! appsink name=frames max-buffers=1 drop=true sync=false", &error);
-    if (error || !host->camera) { stop_camera(host); fail(call, "camera_unavailable"); return; }
-    // autovideosrc falls back to synthetic color bars when no camera opens.
-    // Select an actual device, including cameras whose path is not /dev/video0.
-    g_autoptr(GstDeviceMonitor) monitor = gst_device_monitor_new();
-    g_autoptr(GstCaps) caps = gst_caps_from_string("video/x-raw;image/jpeg");
-    gst_device_monitor_add_filter(monitor, "Video/Source", caps);
-    GList* devices = gst_device_monitor_get_devices(monitor);
-    GstElement* source = nullptr;
-    for (GList* item = devices; item && !source; item = item->next) {
-      auto* candidate = gst_device_create_element(GST_DEVICE(item->data), "camera");
-      if (!candidate) continue;
-      if (gst_element_set_state(candidate, GST_STATE_READY) != GST_STATE_CHANGE_FAILURE) source = candidate;
-      else { gst_element_set_state(candidate, GST_STATE_NULL); gst_object_unref(candidate); }
-    }
-    g_list_free_full(devices, gst_object_unref);
-    if (!source) { stop_camera(host); fail(call, "camera_unavailable"); return; }
-    if (!gst_bin_add(GST_BIN(host->camera), source)) {
-      gst_element_set_state(source, GST_STATE_NULL); gst_object_unref(source);
-      stop_camera(host); fail(call, "camera_unavailable"); return;
-    }
-    g_autoptr(GstElement) decoder = gst_bin_get_by_name(GST_BIN(host->camera), "decode");
-    if (!decoder || !gst_element_link(source, decoder)) { stop_camera(host); fail(call, "camera_unavailable"); return; }
-    host->frames = gst_bin_get_by_name(GST_BIN(host->camera), "frames");
-    if (!host->frames || gst_element_set_state(host->camera, GST_STATE_PLAYING) == GST_STATE_CHANGE_FAILURE) {
-      stop_camera(host); fail(call, "camera_unavailable"); return;
-    }
+    host->camera = camera->open();
+    if (!host->camera) { fail(call, "camera_unavailable"); return; }
   }
-  GstBus* bus = gst_element_get_bus(host->camera);
-  GstMessage* error = gst_bus_pop_filtered(bus, static_cast<GstMessageType>(GST_MESSAGE_ERROR | GST_MESSAGE_EOS));
-  gst_object_unref(bus);
-  if (error) { gst_message_unref(error); stop_camera(host); fail(call, "camera_unavailable"); return; }
-  GstSample* sample = gst_app_sink_try_pull_sample(GST_APP_SINK(host->frames), 0);
-  if (!sample) { success(call); return; }
-  GstBuffer* buffer = gst_sample_get_buffer(sample);
-  GstMapInfo map{};
-  if (!buffer || !gst_buffer_map(buffer, &map, GST_MAP_READ)) {
-    gst_sample_unref(sample); stop_camera(host); fail(call, "camera_unavailable"); return;
-  }
-  if (map.size == 0 || map.size > 8 * 1024 * 1024) {
-    fail(call, "camera_unavailable");
-  } else {
-    g_autoptr(FlValue) value = fl_value_new_uint8_list(map.data, map.size);
-    success(call, value);
-  }
-  gst_buffer_unmap(buffer, &map);
-  gst_sample_unref(sample);
+  gboolean failed = FALSE;
+  g_autoptr(GBytes) frame = camera->frame(host->camera, &failed);
+  if (failed) { stop_camera(host); fail(call, "camera_unavailable"); return; }
+  if (!frame) { success(call); return; }
+  gsize size = 0;
+  const auto* data = static_cast<const uint8_t*>(g_bytes_get_data(frame, &size));
+  if (size == 0 || size > 8 * 1024 * 1024) { fail(call, "camera_unavailable"); return; }
+  g_autoptr(FlValue) value = fl_value_new_uint8_list(data, size);
+  success(call, value);
 }
 bool version_name(const std::string& name) {
   return !name.empty() && name.find_first_not_of("0123456789.") == std::string::npos && name.find('.') != std::string::npos &&
@@ -805,7 +799,6 @@ DesktopHost* desktop_host_new(GtkApplication* app, GtkWindow* window, FlView* vi
   auto* host = new DesktopHost{};
   host->app = app;
   host->window = window;
-  gst_init(nullptr, nullptr);
   g_autoptr(FlStandardMethodCodec) codec = fl_standard_method_codec_new();
   auto* messenger = fl_engine_get_binary_messenger(fl_view_get_engine(view));
   host->desktop = fl_method_channel_new(messenger, "com.elarni/desktop", FL_METHOD_CODEC(codec));

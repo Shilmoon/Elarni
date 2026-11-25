@@ -22,12 +22,14 @@ import tarfile
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / 'scripts'))
 from snapshot import git, snapshot
+# deb-src and patchelf: scripts/package-linux fetches the source packages of the tray libraries the AppImage
+# carries, and points their copies at one another; run apt-get update before it, as the image keeps no lists.
 DOCKERFILE = r"""FROM ubuntu:22.04
 ENV DEBIAN_FRONTEND=noninteractive
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN sed -i 's/^# deb-src /deb-src /' /etc/apt/sources.list && apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates curl git xz-utils unzip zip jq python3 file dpkg-dev build-essential iputils-ping \
     libunwind-dev clang cmake ninja-build pkg-config libgtk-3-dev libstdc++-12-dev libayatana-appindicator3-dev \
-    libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev desktop-file-utils openjdk-17-jdk-headless \
+    libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev desktop-file-utils openjdk-17-jdk-headless patchelf \
  && rm -rf /var/lib/apt/lists/* && ln -s /usr/bin/python3 /usr/local/bin/python \
  && git config --system --add safe.directory '*'
 RUN curl -fsSL https://mise.run | MISE_VERSION=v2026.9.8 MISE_INSTALL_PATH=/usr/local/bin/mise sh
