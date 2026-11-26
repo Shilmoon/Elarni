@@ -27,4 +27,7 @@ message Config {
   uint32 user_level = 1;
   repeated DNSRuleConfig rule = 2;
   xray.common.net.Endpoint rewrite_server = 3;
+  // Elarni: AAAA answers hold no public address while the route of the inbound that asks does
+  // not reach public IPv6.
+  bool check_ipv6 = 4;
 }

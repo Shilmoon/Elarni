@@ -62,7 +62,7 @@ func TestHijackedQueriesAlwaysGetAnAnswer(t *testing.T) {
 	} {
 		messages := make(capturedMessages, 1)
 		timer := signal.CancelAfterInactivity(context.Background(), func() {}, time.Minute)
-		(&Handler{client: c.client}).handleIPQuery(7, c.qType, "example.test.", messages, timer, 512)
+		(&Handler{client: c.client}).handleIPQuery(7, c.qType, "example.test.", "", messages, timer, 512)
 		timer.SetTimeout(0)
 		select {
 		case b := <-messages:

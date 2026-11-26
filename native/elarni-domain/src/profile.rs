@@ -441,7 +441,10 @@ pub fn compile_profile(
         let (forwarder, forward) = (format!("{prefix}dns"), format!("{prefix}dns-forward"));
         for outbound in owned["outbounds"].as_array_mut().unwrap() {
             if outbound["tag"] == forwarder.as_str() {
-                outbound["settings"] = crate::compiler::dns_forward_settings(&dns["servers"]);
+                outbound["settings"] = crate::compiler::dns_forward_settings(
+                    &dns["servers"],
+                    owned_runtime.preferred_ip,
+                );
             } else if outbound["tag"] == forward.as_str() {
                 outbound["settings"]["inboundTag"] = dns
                     .get("tag")

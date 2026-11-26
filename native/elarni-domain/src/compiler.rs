@@ -676,18 +676,26 @@ pub(crate) fn apply_outbound_runtime(
 /// address, along the route of Xray's own queries: the forward loopback re-enters as its
 /// DNS tag. HTTPS records stay empty because their address hints bypass FakeDNS. An empty
 /// network keeps each query's own, so a TCP retry of a truncated answer is not truncated again.
-pub(crate) fn dns_forward_settings(servers: &Value) -> Value {
+///
+/// Automatic follows the server: with `checkIPv6` the outbound finds out whether the route of
+/// the apps reaches public IPv6, and leaves public addresses out of AAAA answers while it does
+/// not. A server without IPv6 would only drop what apps send to them.
+pub(crate) fn dns_forward_settings(servers: &Value, preferred_ip: PreferredIp) -> Value {
     let (address, port, network) = servers
         .as_array()
         .into_iter()
         .flatten()
         .find_map(dns_forward_target)
         .unwrap_or_else(|| ("1.1.1.1".to_owned(), 53, ""));
-    json!({"address": address, "port": port, "network": network, "rules": [
+    let mut settings = json!({"address": address, "port": port, "network": network, "rules": [
         {"action": "hijack", "qType": "1,28"},
         {"action": "return", "qType": "64,65"},
         {"action": "direct"}
-    ]})
+    ]});
+    if preferred_ip == PreferredIp::Automatic {
+        settings["checkIPv6"] = json!(true);
+    }
+    settings
 }
 
 // A server's IP address, or the IP host of a DoH or DoQ URL on port 53, where the public
@@ -1017,7 +1025,7 @@ pub(crate) fn compile_owned_config(
         "tag": "elarni-dns",
         "protocol": "dns",
         "streamSettings": {"sockopt": {"dialerProxy": "elarni-dns-forward"}},
-        "settings": dns_forward_settings(&json!(dns_servers))
+        "settings": dns_forward_settings(&json!(dns_servers), runtime.preferred_ip)
     }));
     routing_rules.insert(
         0,
