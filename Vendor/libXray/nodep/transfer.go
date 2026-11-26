@@ -21,7 +21,8 @@ const (
 
 // TransferLimits bound one transfer check.
 type TransferLimits struct {
-	// Total limit, from the request to the last byte.
+	// Total limit on the body, from the answer's headers to the last byte. The caller's context bounds the
+	// connection and the request before them, so a slow answer leaves the idle limit its whole time.
 	Total time.Duration
 	// Idle is how long the body may send nothing once the answer started.
 	Idle time.Duration
@@ -62,7 +63,7 @@ func TransferHTTPRequestContext(parent context.Context, c *http.Client, url stri
 	result := func(verdict string, bytes int64, err error) TransferResult {
 		return TransferResult{Verdict: verdict, Bytes: bytes, Elapsed: time.Since(start).Milliseconds(), Err: err}
 	}
-	ctx, cancel := context.WithTimeout(parent, limits.Total)
+	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
@@ -81,26 +82,52 @@ func TransferHTTPRequestContext(parent context.Context, c *http.Client, url stri
 	if response.ContentLength >= 0 && response.ContentLength < limits.Pass {
 		return result(TransferInconclusive, 0, errShortBody)
 	}
-	// The status line arrived: from here a silence of the idle limit is a stall.
-	var idled atomic.Bool
-	idle := time.AfterFunc(limits.Idle, func() {
-		idled.Store(true)
-		cancel()
-	})
-	defer idle.Stop()
+	// The status line arrived: from here a silence of the idle limit is a stall, and the total limit runs.
+	answered := time.Now()
+	total := time.AfterFunc(limits.Total, cancel)
+	defer total.Stop()
+	// Times since the answer, in nanoseconds: of the last byte read, and of the silence that ended the check
+	// (-1 while none did). The watchdog reads the first, so a byte that arrives as it fires is not missed.
+	var lastByte, stalledAt atomic.Int64
+	stalledAt.Store(-1)
+	done := make(chan struct{})
+	defer close(done)
+	go func() {
+		timer := time.NewTimer(limits.Idle)
+		defer timer.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-ctx.Done():
+				return
+			case <-timer.C:
+			}
+			now := time.Since(answered)
+			if silent := now - time.Duration(lastByte.Load()); silent < limits.Idle {
+				timer.Reset(limits.Idle - silent)
+				continue
+			}
+			stalledAt.Store(int64(now))
+			cancel()
+			return
+		}
+	}()
 	var received int64
 	buffer := make([]byte, 32*1024)
 	for received < limits.Pass {
 		n, err := response.Body.Read(buffer)
 		if n > 0 {
 			received += int64(n)
-			idle.Reset(limits.Idle)
+			lastByte.Store(int64(time.Since(answered)))
 		}
 		if err != nil {
 			if received >= limits.Pass {
 				break
 			}
-			if idled.Load() {
+			// A stall only when no byte came within the idle limit before the watchdog ended the check:
+			// one read just as it fired leaves the check inconclusive instead.
+			if at := stalledAt.Load(); at >= 0 && time.Duration(at-lastByte.Load()) >= limits.Idle {
 				return result(TransferStalled, received, nil)
 			}
 			if err == io.EOF {

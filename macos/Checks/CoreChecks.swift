@@ -675,6 +675,9 @@ struct CoreChecks {
       try expect(transfer.stalls == 1, "an inconclusive check counted or ended a run of stalls")
       try expect(transfer.due(at: 33) && transfer.needsCheck(uplink: 0, at: 33), "the stall was not checked again")
       try expect(transfer.record(verdict: "stalled", uplink: 0, at: 33) && transfer.confirmed, "two stalls in a row did not confirm")
+      // Pages that hang send nothing, and only a passing check clears the stall.
+      try expect(!transfer.due(at: 62) && transfer.due(at: 63) && transfer.needsCheck(uplink: 0, at: 63),
+                 "a confirmed stall waited for traffic")
       try expect(!transfer.record(verdict: "stalled", uplink: 0, at: 63) && transfer.confirmed, "a third stall confirmed again")
       _ = transfer.record(verdict: "ok", uplink: 0, at: 64)
       try expect(transfer.stalls == 0 && !transfer.confirmed, "a passing check did not end the stalls")

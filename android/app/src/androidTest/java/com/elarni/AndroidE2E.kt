@@ -50,8 +50,13 @@ class AndroidE2E {
         snapshot().routes.forEach { call("deleteRouting", obj("id" to it.getString("id"))) }
         call("settings", obj("settings" to Settings.defaults()))
         if (emptyBackup == null) emptyBackup = call("backup", obj("password" to EMPTY_BACKUP_PASSWORD)).getString("text")
+        // The transfer check's targets are public CDNs; no test here checks transfers.
+        TransferCheck.targets = JSONArray()
     }
-    @After fun stop() { repo.requestStop(); ui.waitUntil(10_000) { repo.state.value.connection == "disconnected" } }
+    @After fun stop() {
+        TransferCheck.targets = TransferCheck.defaultTargets
+        repo.requestStop(); ui.waitUntil(10_000) { repo.state.value.connection == "disconnected" }
+    }
 
     @Test fun a_uiImportQRAndEncryptedRestart() {
         ui.runOnIdle { ui.activity.copy(link()) }

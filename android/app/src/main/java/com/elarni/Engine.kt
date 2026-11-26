@@ -273,8 +273,7 @@ class Engine(private val app: ElarniApplication, private val assets: RoutingAsse
             var reserved = 0
             try {
                 if (active) {
-                    request.put("proxy", fetchProxy ?: throw AppFailure("not_connected"))
-                        .put("configJSON", obj("inbounds" to JSONArray(), "outbounds" to JSONArray(listOf(obj("protocol" to "freedom")))).toString())
+                    throughRunningCore(request, fetchProxy ?: throw AppFailure("not_connected"))
                 } else {
                     val port = reserveProbePort().also { reserved = it }
                     // Only settings change; 32 workers each copying a 4,096-server catalog ran out of memory.
@@ -302,22 +301,32 @@ class Engine(private val app: ElarniApplication, private val assets: RoutingAsse
     }
     /** One transfer check of server [id] over the transfer targets ([TransferCheck.combine]): through the running core when it
      *  is the selected one, else through a probe core. A target the check could not reach says nothing about a freeze. */
-    fun transfer(catalog: Catalog, id: String): String {
-        val targets = TransferCheck.targets.let { all -> (0 until all.length()).map(all::getJSONObject) }
-        val verdicts = mutableListOf<String>()
-        for (target in targets) {
-            val args = target.copy().put("protocol", if (running && catalog.selected == id) "activeProxy" else "proxy").put("timeout", 8).put("transfer", true)
-            TransferCheck.idleMs?.let { args.put("transferIdleMs", it) }
-            val verdict = try { probe(catalog, id, args).getString("verdict") } catch (error: Exception) {
-                if ((error as? AppFailure)?.code == "cancelled") throw error
-                TransferCheck.INCONCLUSIVE
-            }
-            // One ok decides; another target is fetched only when this one did not pass.
-            if (verdict == TransferCheck.OK) return verdict
-            verdicts += verdict
-        }
-        return TransferCheck.combine(verdicts)
+    fun transfer(catalog: Catalog, id: String): String = TransferCheck.over(transferTargets()) { target ->
+        val args = target.copy().put("protocol", if (running && catalog.selected == id) "activeProxy" else "proxy").put("timeout", 8).put("transfer", true)
+        TransferCheck.idleMs?.let { args.put("transferIdleMs", it) }
+        probe(catalog, id, args).getString("verdict")
     }
+    /** The running core's transfer check as [transfer] runs it, for the repository actor to start. What it needs from the
+     *  engine is read here; the check it returns calls only the core, so it runs beside the actor, which may restart or
+     *  stop the core meanwhile. */
+    fun runningTransfer(): () -> String {
+        val proxy = fetchProxy?.takeIf { running } ?: throw AppFailure("not_connected")
+        val requests = transferTargets().map { target ->
+            throughRunningCore(obj("timeout" to 8, "url" to target.getString("url"), "method" to "GET", "transfer" to true)
+                .apply { TransferCheck.idleMs?.let { put("transferIdleMs", it) } }, proxy)
+        }
+        return {
+            TransferCheck.over(requests) { request ->
+                val reply = Native.cancellable("ping", request)
+                if (reply.getLong("delay") < 0) throw AppFailure("ping_failed")
+                reply.optString("verdict").takeIf { it.isNotEmpty() } ?: throw AppFailure("ping_failed")
+            }
+        }
+    }
+    private fun transferTargets() = TransferCheck.targets.let { all -> (0 until all.length()).map(all::getJSONObject) }
+    /** [request] through the running core's listener at [proxy]. */
+    private fun throughRunningCore(request: JSONObject, proxy: String) = request.put("proxy", proxy)
+        .put("configJSON", obj("inbounds" to JSONArray(), "outbounds" to JSONArray(listOf(obj("protocol" to "freedom")))).toString())
 }
 
 /** DNS queries a start sent for its server's names ([Engine.lookUp]). Waiting for them needs no lock, so a start that waits

@@ -300,12 +300,12 @@ class Repository(private val app: ElarniApplication) {
         }
         if (!start || !transfer.due(time) { uplink() }) return
         val pending = transfer.begin()
-        // Its own copy: commands change the catalog while the check runs.
-        val snapshot = catalog.copy()
+        // The engine is read here, under the actor's lock; the check itself calls only the core.
+        val measure = try { engine.runningTransfer() } catch (_: Exception) { pending.finish(TransferCheck.INCONCLUSIVE); return }
         scope.launch {
             // A cancelled or failed check says nothing about a freeze; it ends either way, or no other would start.
             var verdict = TransferCheck.INCONCLUSIVE
-            try { verdict = engine.transfer(snapshot, snapshot.selected) } catch (_: Exception) { } finally { pending.finish(verdict) }
+            try { verdict = measure() } catch (_: Exception) { } finally { pending.finish(verdict) }
         }
     }
     fun cancel(): Long { val generation = epoch.incrementAndGet(); Native.cancelOperations(); return generation }
@@ -1036,21 +1036,34 @@ class Repository(private val app: ElarniApplication) {
                         val scores = mutableMapOf<String, Double>()
                         val order = config.strings("nodeIDs").let { ids -> if (healthy) ids else automation.recoveryOrder(ids, catalog.selected,
                             ids.filter { id -> runCatching { Automation.tcp443(catalog.node(id).mapObject("config")) }.getOrDefault(false) }.toSet(), russian) }
-                        automation.round(order, catalog.selected, time).forEach { id ->
+                        // As on the other platforms the round ends 60 s after it began: it runs inside the tick, which holds the lock.
+                        val deadline = Automation.clock() + 60
+                        for (id in automation.round(order, catalog.selected, time)) {
                             check(generation)
+                            if (Automation.clock() + 5 > deadline) break
                             // Like the health check, a candidate qualifies on the targets that answer.
-                            val values = targets.mapNotNull { runCatching { engine.probe(catalog, id, it.copy().put("protocol", "proxy").put("method", "GET").put("timeout", 5)).getDouble("latencyMs") }.getOrNull() }
+                            var cut = false
+                            val values = targets.mapNotNull { target ->
+                                if (cut || Automation.clock() + 5 > deadline) { cut = true; null }
+                                else runCatching { engine.probe(catalog, id, target.copy().put("protocol", "proxy").put("method", "GET").put("timeout", 5)).getDouble("latencyMs") }.getOrNull()
+                            }
+                            // One the deadline left unmeasured waits out the cooldown without counting as a failure.
+                            if (cut && values.isEmpty()) { automation.cooldown[id] = time + 60; continue }
                             automation.observe(id, values.isNotEmpty(), id in russian)
                             if (values.isEmpty()) automation.cooldown[id] = time + 60 else scores[id] = values.average()
                         }
                         var chosen = automation.choose(config.string("policy"), order, catalog.selected, scores, healthy, time)
-                        // The server about to replace this one must pass transfers too; one that stalls is skipped.
+                        // The server about to replace this one must pass transfers too; one that stalls is skipped. The next
+                        // winner, unchecked past the deadline, does not replace the selected server.
+                        var skipped = false
                         while (chosen != null && chosen != catalog.selected && TransferCheck.targets.length() > 0) {
+                            if (skipped && Automation.clock() >= deadline) { chosen = catalog.selected; break }
                             check(generation)
                             if (engine.transfer(catalog, chosen) != TransferCheck.STALLED) break
                             automation.observe(chosen, false, chosen in russian)
                             automation.cooldown[chosen] = Automation.clock() + 60
                             scores.remove(chosen)
+                            skipped = true
                             chosen = automation.choose(config.string("policy"), order, catalog.selected, scores, healthy, time)
                         }
                         if (chosen != null && chosen != catalog.selected) {

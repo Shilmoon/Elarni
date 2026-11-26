@@ -32,7 +32,8 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
 - **A server whose network cuts transfers off no longer looks healthy.** Some hosting networks
   stop each connection after its first 16 KB or so: the quick server checks passed while pages
   never loaded. Elarni now also downloads about 100 KB through the connected server after
-  connecting, every 15 minutes while you use it, and when it stops passing traffic. When two
+  connecting, every 15 minutes while you use it or after a download stalled, and when it stops
+  passing traffic. When two
   such downloads in a row stall, the app shows "Connected, but this server's network cuts
   transfers off", and automatic recovery and "lowest latency" move to another server; a backup
   whose downloads stall is skipped. With no other server to move to, recovery reconnects the

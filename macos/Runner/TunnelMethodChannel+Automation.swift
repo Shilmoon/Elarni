@@ -457,8 +457,6 @@ extension TunnelMethodChannel {
     var verdicts: [String] = []
     for url in AutomationConfiguration.transferTargets where !verdicts.contains("ok") {
       let id = UUID().uuidString.lowercased()
-      _ = try invokeLibXray(method: "prepareProbe", payload: ["operationId": id, "timeout": 8, "transfer": true])
-      defer { _ = try? invokeLibXray(method: "releaseProbe", payload: ["operationId": id]) }
       var request = payload
       request["operationId"] = id
       request["url"] = url
@@ -468,6 +466,9 @@ extension TunnelMethodChannel {
       if let idle = AutomationConfiguration.transferIdleMs { request["transferIdleMs"] = idle }
       let arguments = request
       do {
+        // A check that got no probe slot (all of them busy) did not run either.
+        _ = try invokeLibXray(method: "prepareProbe", payload: ["operationId": id, "timeout": 8, "transfer": true])
+        defer { _ = try? invokeLibXray(method: "releaseProbe", payload: ["operationId": id]) }
         let response = try await withTaskCancellationHandler {
           try Task.checkCancellation()
           return try await Task.detached { try invokeLibXray(method: "ping", payload: arguments) }.value

@@ -43,9 +43,12 @@ class AndroidVpnE2E {
         // The liveness check goes through the selected server; SocksFixture answers it and leaves it out of its count.
         // An address, not a name: resolving a name sends a counted DNS query through the server.
         Automation.livenessTargets = JSONArray(listOf(obj("id" to "fixture", "url" to "http://$LIVENESS_ADDRESS/", "expectedStatus" to 200, "expectedBody" to "proxy:elarni-synthetic")))
+        // The transfer check's targets are public CDNs; no test here checks transfers.
+        TransferCheck.targets = JSONArray()
     }
     @After fun cleanup() {
         Automation.livenessTargets = Automation.defaultTargets
+        TransferCheck.targets = TransferCheck.defaultTargets
         ui.runOnUiThread { ui.activity.intent = launchIntent }
         repo.requestStop(); ui.waitUntil(10_000) { repo.state.value.connection == "disconnected" }
     }

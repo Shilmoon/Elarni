@@ -203,7 +203,8 @@ class StartRetry {
 /** Some hosting networks' paths freeze each connection after about 16 KB (11 KB on mobile), so a small probe passes while
  *  pages hang. The transfer check fetches a body of at least 128 KB over one connection and passes at 96 KB received. As on
  *  desktop, the running core is checked 5 s after it came up and again 10 s later when that one stalled, then every 15 min
- *  while its uplink grew, and at once when liveness finds no traffic. Two stalls in a row are [confirmed]; an inconclusive
+ *  while its uplink grew or a stall was seen (pages that hang send nothing, and only a passing check clears the stall), and
+ *  at once when liveness finds no traffic. Two stalls in a row are [confirmed]; an inconclusive
  *  check neither counts as one nor ends a run of them. A check takes up to about 20 s, so it runs beside the tick, one at a
  *  time: the tick [begin]s it and reads its verdict with [takeVerdict] on a later pass, and never waits for it.
  *  Recovery restarts a server once per stall episode ([mayRestart]). Times are [Automation.clock] seconds. */
@@ -229,15 +230,15 @@ class TransferCheck {
     fun stopped() { dueAt = null; uplink = null; stalls = 0; now = false; stale = inFlight != null }
     /** Liveness found no traffic: the next tick checks. */
     fun noTraffic() { if (dueAt != null) now = true }
-    /** Whether a check runs at [time]. A 15 min check reads [uplink] and, finding no new traffic, waits another interval.
-     *  None runs while one is in flight. */
+    /** Whether a check runs at [time]. A 15 min check with no stall seen reads [uplink] and, finding no new traffic, waits
+     *  another interval. None runs while one is in flight. */
     fun due(time: Double, uplink: () -> Long): Boolean {
         val at = dueAt ?: return false
         if (inFlight != null) return false
         if (now) return true
         if (time < at) return false
         val last = this.uplink
-        if (stalls != 1 && last != null) {
+        if (stalls == 0 && last != null) {
             val value = uplink()
             if (value <= last) { dueAt = time + interval; this.uplink = value; return false }
         }
@@ -292,6 +293,21 @@ class TransferCheck {
         @Volatile var targets: JSONArray = defaultTargets
         /** One check over its targets' [verdicts]: one ok wins, and it stalled only when each target that answered stalled. */
         fun combine(verdicts: List<String>) = when { OK in verdicts -> OK; STALLED in verdicts -> STALLED; else -> INCONCLUSIVE }
+        /** Checks [targets] in turn with [check] until one passes, and [combine]s the verdicts. A target the check could not
+         *  reach says nothing about a freeze; a cancelled check ends them all. */
+        fun over(targets: List<JSONObject>, check: (JSONObject) -> String): String {
+            val verdicts = mutableListOf<String>()
+            for (target in targets) {
+                val verdict = try { check(target) } catch (error: Exception) {
+                    if ((error as? AppFailure)?.code == "cancelled") throw error
+                    INCONCLUSIVE
+                }
+                // One ok decides; another target is fetched only when this one did not pass.
+                if (verdict == OK) return verdict
+                verdicts += verdict
+            }
+            return combine(verdicts)
+        }
     }
 }
 

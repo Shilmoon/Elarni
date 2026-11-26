@@ -6116,12 +6116,9 @@ if tunnel: note('closed')
           await Future<void>.delayed(const Duration(milliseconds: 100));
         }
         expect(starts, hasLength(2), reason: 'no second restart');
-        // The network lets transfers through again: the next check clears it.
+        // The network lets transfers through again: the next check clears it,
+        // with no traffic of the user's (pages that hang send nothing).
         frozen = false;
-        await checkSocks(
-          (await backend.control.tunnelSettings()).socksPort,
-          target.port,
-        );
         for (var i = 0; i < 150 && metrics['liveness'] == 'stalled'; i++) {
           await Future<void>.delayed(const Duration(milliseconds: 100));
           metrics = await backend.control.runtimeMetrics();
@@ -6129,6 +6126,10 @@ if tunnel: note('closed')
         expect(metrics['liveness'], isNot('stalled'));
         expect(metrics['state'], 'connected');
         expect(starts, contains(metrics['connectedSince']));
+        await checkSocks(
+          (await backend.control.tunnelSettings()).socksPort,
+          target.port,
+        );
       } finally {
         await backend.control.disconnect();
         await relay.close();

@@ -127,8 +127,11 @@ class AndroidUIE2E {
         }
         ui.onNode(hasText("Home") and hasClickAction()).performClick()
         ui.onAllNodesWithContentDescription("Dismiss").fetchSemanticsNodes().takeIf { it.isNotEmpty() }?.let { ui.onNodeWithContentDescription("Dismiss").performClick() }
+        // The transfer check's targets are public CDNs; no test here checks transfers.
+        TransferCheck.targets = JSONArray()
     }
     @After fun cleanup() {
+        TransferCheck.targets = TransferCheck.defaultTargets
         ui.runOnUiThread { ui.activity.intent = launchIntent }
         repo.requestStop(); ui.waitUntil(10_000) { repo.state.value.connection == "disconnected" }
     }
