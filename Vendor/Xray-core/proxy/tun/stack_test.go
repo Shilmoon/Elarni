@@ -16,6 +16,7 @@ import (
 
 	"github.com/xtls/xray-core/common/buf"
 	"github.com/xtls/xray-core/common/net"
+	"github.com/xtls/xray-core/common/retry"
 )
 
 const testMTU = 1500
@@ -125,6 +126,8 @@ func newTestStack(t *testing.T, l *link, handle func(net.Conn, net.Destination))
 // newUnstartedStack is the stack of newTestStack before it reads the link
 func newUnstartedStack(t *testing.T, l *link, handle func(net.Conn, net.Destination)) *stack {
 	s := &stack{ctx: context.Background(), tun: l, mtu: testMTU, window: tcpWindow, handle: handle, conns: make(map[flow]*tcpConn), sockets: make(map[netip.AddrPort]*udpSocket), closing: make(chan struct{})}
+	// a failing tun is read again after waits much shorter than those of NewStack
+	s.readRetry = retry.Backoff{Min: time.Millisecond, Max: 10 * time.Millisecond}
 	if l.segments {
 		s.segmenter, s.window, l.wrong = l, tcpLargeWindow, t.Error
 	}

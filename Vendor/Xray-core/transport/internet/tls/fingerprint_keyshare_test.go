@@ -14,7 +14,9 @@ import (
 
 // Regression (uTLS issue 402): the "firefox" hello offers X25519MLKEM768, X25519 and P-256 key
 // shares but kept the private key of the first classical share only, so a server that picks
-// P-256 ended the handshake with "tls: invalid server key share".
+// P-256 ended the handshake with "tls: invalid server key share". The server takes the P-256
+// share of the first hello: a HelloRetryRequest would make uTLS send a new share with a new key,
+// and the handshake would pass without the fix.
 func TestFirefoxFingerprintCompletesWithAServerThatPicksP256(t *testing.T) {
 	certificate, _ := cert.MustGenerate(nil, cert.DNSNames("fixture.test"), cert.CommonName("fixture.test"))
 	pair, err := tls.X509KeyPair(certificate.ToPEM())
@@ -37,6 +39,7 @@ func TestFirefoxFingerprintCompletesWithAServerThatPicksP256(t *testing.T) {
 	}
 	defer listener.Close()
 	var curve tls.CurveID
+	var retried bool
 	served := make(chan error, 1)
 	go func() {
 		conn, err := listener.Accept()
@@ -52,6 +55,7 @@ func TestFirefoxFingerprintCompletesWithAServerThatPicksP256(t *testing.T) {
 			return
 		}
 		curve = server.ConnectionState().CurveID
+		retried = server.ConnectionState().HelloRetryRequest
 		_, err = io.Copy(conn, io.LimitReader(conn, 4))
 		served <- err
 	}()
@@ -82,5 +86,8 @@ func TestFirefoxFingerprintCompletesWithAServerThatPicksP256(t *testing.T) {
 	}
 	if curve != tls.CurveP256 {
 		t.Fatalf("server picked %v, want P-256", curve)
+	}
+	if retried {
+		t.Fatal("the server asked for another hello: the first one offered no P-256 share")
 	}
 }

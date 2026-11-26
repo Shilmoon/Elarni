@@ -88,6 +88,10 @@ type stack struct {
 	closed  bool
 	// closing is closed with closed set: it ends the wait of read after an error of the tun (Elarni)
 	closing chan struct{}
+	// readRetry is how long read waits between reads of a tun that keeps failing, each read loop from its
+	// start, and readWarnings how often it warns of that; read alone uses them (Elarni)
+	readRetry    retry.Backoff
+	readWarnings warnings
 	// opening is how many of conns wait for the answer to their SYN or SYN-ACK
 	opening atomic.Int32
 	// fragments are the packets that are larger than a link on their way and come in parts.
@@ -111,6 +115,7 @@ func NewStack(ctx context.Context, options StackOptions, handler ConnectionHandl
 		conns:     make(map[flow]*tcpConn),
 		sockets:   make(map[netip.AddrPort]*udpSocket),
 		closing:   make(chan struct{}),
+		readRetry: retry.Backoff{Min: readRetryMin, Max: readRetryMax},
 	}
 	if t, ok := options.Tun.(segmenter); ok && t.Segments() {
 		s.segmenter = t
@@ -172,15 +177,17 @@ func (s *stack) Close() error {
 }
 
 // The wait between reads of a tun that keeps failing: none after the first error, then from readRetryMin
-// doubling up to readRetryMax
+// doubling up to readRetryMax. A warning of the errors is logged the first time, then once each readWarnEvery
+// with how many it held back
 const (
-	readRetryMin = 5 * time.Millisecond
-	readRetryMax = time.Second
+	readRetryMin  = 5 * time.Millisecond
+	readRetryMax  = time.Second
+	readWarnEvery = time.Minute
 )
 
 // read takes the packets of the tun until it is closed
 func (s *stack) read() {
-	backoff := retry.Backoff{Min: readRetryMin, Max: readRetryMax}
+	backoff := s.readRetry
 	if s.segmenter != nil {
 		s.readSegments(&backoff)
 		return
@@ -227,9 +234,9 @@ func (s *stack) readSegments(backoff *retry.Backoff) {
 	}
 }
 
-// readOn tells whether read goes on after err, and waits before it does. Elarni: only a closed stack or tun
-// ends the reading; any other error ended it for good, and with it every connection of the tunnel while the
-// app still showed it connected
+// readOn tells whether read goes on after err, and waits before it does. Elarni: only a closed stack or a tun
+// that is closed or gone ends the reading; any other error ended it for good, and with it every connection of
+// the tunnel while the app still showed it connected
 func (s *stack) readOn(err error, backoff *retry.Backoff) bool {
 	s.mu.Lock()
 	closed := s.closed
@@ -237,12 +244,48 @@ func (s *stack) readOn(err error, backoff *retry.Backoff) bool {
 	if closed {
 		return false
 	}
-	if goerrors.Is(err, os.ErrClosed) || goerrors.Is(err, io.EOF) || goerrors.Is(err, gonet.ErrClosed) {
+	if tunGone(err) {
 		errors.LogErrorInner(s.ctx, err, "[tun] failed to read a packet, no more are read")
 		return false
 	}
-	errors.LogWarningInner(s.ctx, err, "[tun] failed to read a packet")
+	if log, held := s.readWarnings.pass(time.Now(), readWarnEvery); log && held > 0 {
+		errors.LogWarningInner(s.ctx, err, "[tun] failed to read a packet, and ", held, " more times since the last warning")
+	} else if log {
+		errors.LogWarningInner(s.ctx, err, "[tun] failed to read a packet")
+	}
 	return backoff.Wait(s.closing)
+}
+
+// tunGone tells whether a read error says that the tun is closed or that its device is no more, so that
+// reading it again cannot succeed. Elarni: a destroyed utun or tun answers ENXIO or EBADF to every read, an
+// fd that Android's VpnService revoked EBADF, and the reading went on at its longest wait for ever
+func tunGone(err error) bool {
+	if goerrors.Is(err, os.ErrClosed) || goerrors.Is(err, io.EOF) || goerrors.Is(err, gonet.ErrClosed) {
+		return true
+	}
+	for _, gone := range tunGoneErrors {
+		if goerrors.Is(err, gone) {
+			return true
+		}
+	}
+	return false
+}
+
+// warnings spaces out the warnings of an error that repeats: the first is logged, then one each period at most,
+// which tells how many were held back since the last one (Elarni)
+type warnings struct {
+	last time.Time
+	held int
+}
+
+// pass tells whether a warning at now is logged, and how many were held back before it
+func (w *warnings) pass(now time.Time, every time.Duration) (log bool, held int) {
+	if !w.last.IsZero() && now.Sub(w.last) < every {
+		w.held++
+		return false, 0
+	}
+	held, w.last, w.held = w.held, now, 0
+	return true, held
 }
 
 // room takes what it is given to read into as read: that is the room of a Buffer as it is, not cleared

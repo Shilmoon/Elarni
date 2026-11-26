@@ -103,7 +103,7 @@ func TestRealityPresetsReachAnMLKEMOnlyServer(t *testing.T) {
 		"inbounds":  []any{object{"listen": "127.0.0.1", "port": port, "protocol": "vless", "settings": object{"clients": []any{object{"id": id, "flow": "xtls-rprx-vision"}}, "decryption": "none"}, "streamSettings": serverStream}},
 		"outbounds": []any{object{"protocol": "freedom", "settings": object{"finalRules": []any{object{"action": "allow", "ip": []string{"127.0.0.1/32"}}}}}}})
 	gate := mlkemOnlyGate(t, net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
-	for _, fingerprint := range []string{"chrome", "firefox", "safari", "ios", "android", "edge", "360", "qq", "random"} {
+	for _, fingerprint := range []string{"chrome", "firefox", "safari", "ios", "android", "edge", "360", "qq", "random", "randomized", "randomizednoalpn"} {
 		t.Run(fingerprint, func(t *testing.T) {
 			reality := maps.Clone(clientStream["realitySettings"].(object))
 			reality["fingerprint"] = fingerprint
