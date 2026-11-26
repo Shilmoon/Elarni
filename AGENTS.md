@@ -40,7 +40,8 @@ and `output.log`. [docs/TESTING.md](docs/TESTING.md) lists each suite.
 - The CI runs on one self-hosted Linux runner and one Windows VM, so pull requests queue behind
   main. Wait for a run with `python scripts/ci-wait [run-id]` in the background, not with
   repeated `gh run list` or `gh run view`: it exits when the run ends and prints each job's
-  result and the end of every failed job's log.
+  result and the end of every failed job's log. Exit code 3 means a job stayed queued for a
+  self-hosted runner that is offline: the run goes nowhere until someone starts that runner.
 
 ## Changes
 

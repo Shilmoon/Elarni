@@ -4,6 +4,16 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
 
 ## Unreleased
 
+### Changed
+
+- For contributors: `python scripts/ci-wait` no longer waits for days on a run whose runner is
+  down. When a job stays queued for a self-hosted runner that is offline, it names the job and
+  the runner and stops with exit code 3.
+- For contributors: the Windows CI job frees disk space on its VM before it builds
+  (`scripts/free-runner-disk`). With less than 8 GB free it removes old temporary files, Go
+  build cache entries unused for 2 days and the Rust incremental caches, and only then the Rust
+  build outputs. The VM's disk had filled up and failed the job.
+
 ## 0.6.5 - 2026-11-26
 
 ### Added
