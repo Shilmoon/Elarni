@@ -248,7 +248,7 @@ func releaseGuard() error {
 		return syscall.Errno(code)
 	}
 	// The fallback routes of Block traffic without VPN go with it, then the marker that names them.
-	return clearFallbackRoutes(&loopbackRoutes{}, currentGuardMarker())
+	return clearFallbackRoutes(helperFallbackRoutes, currentGuardMarker())
 }
 
 // Only an elevated helper can give the event this owner; any user may wait on
@@ -345,8 +345,10 @@ func clearVPNGuard() (any, error) {
 // The guard outlives a crashed helper, so a crash blocks DNS instead of leaking
 // it until a helper removes it or Windows restarts. Physical DNS settings stay intact.
 // The caller holds claimGuard's owner handle for as long as the guard may exist, and has put
-// fallback, the fallback routes of Block traffic without VPN (none without it), in place.
-func protectDNS(luid uint64, protected, fallback []netip.Prefix) error {
+// the fallback routes of Block traffic without VPN in place. named are the fallback routes the
+// marker names (placeFallbackRoutes): those, and without the kill switch an earlier tunnel's that
+// could not be removed.
+func protectDNS(luid uint64, protected, named []netip.Prefix) error {
 	failed := errors.New("dns_guard_failed")
 	if unsafe.Sizeof(wfpFilter{}) != 200 || unsafe.Sizeof(wfpSession{}) != 72 || unsafe.Sizeof(wfpCondition{}) != 40 {
 		return failed
@@ -470,7 +472,7 @@ func protectDNS(luid uint64, protected, fallback []netip.Prefix) error {
 	runtime.KeepAlive(outside)
 	// Written first, so a crash right after the commit still leaves it for Repair. It keeps
 	// naming the fallback routes; without them it is empty, as before them.
-	_ = currentGuardMarker().write(fallback)
+	_ = currentGuardMarker().write(named)
 	code, _, _ = wfpCommit.Call(engine)
 	if code != 0 {
 		return syscall.Errno(code)
