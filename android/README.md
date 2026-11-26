@@ -51,6 +51,10 @@ The VPN suite needs the TUIC test server described in
 same names. `scripts/check-android-release --serial <id> --apk <signed apk>` checks
 a release build signed with a development key.
 
+CI runs the acceptance on `main` and on a manually started "Development checks" run, not on a
+pull request. Start a run on a branch that holds `main`'s tip before merging it: `main` then
+does not repeat the acceptance for the same files.
+
 Emulators don't cover the camera, OEM battery management, long Doze periods,
 Wi-Fi/cellular handoff or always-on VPN after reboot; check those on a device.
 
