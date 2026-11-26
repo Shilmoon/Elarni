@@ -12,6 +12,10 @@ without an ID) and prints each job's result and the end of every failed job's lo
 the local check results and those of the last 40 CI runs; a failure on a revision whose
 check never passed is listed apart.
 
+A pull request that changes only one platform's own folder (`android/`, `ios/`, `macos/`,
+`windows/`, `linux/`) runs only the CI jobs it can affect; the list is `PLATFORM_JOBS` in
+`scripts/check-changed`. Any other code runs every job, and so does every commit on `main`.
+
 ## Host checks
 
 These use loopback fixtures and never change routes, DNS or adapters.

@@ -23,20 +23,39 @@ concurrency:
 
 jobs:
   changes:
-    # Documentation-only changes skip the builds; "checks passed" still reports for them.
+    # Documentation-only changes skip the builds, and a pull request that changes only a platform's own folder
+    # (android/, ios/, macos/, windows/, linux/) skips the jobs it cannot affect: scripts/check-changed --ci-jobs
+    # names the ones it needs. main and manual runs check everything. "checks passed" reports in every case.
     name: changed files
     runs-on: ubuntu-24.04
     permissions:
       contents: read
       pull-requests: read
     outputs:
-      code: ${{ steps.files.outputs.code }}
+      linux: ${{ steps.files.outputs.linux }}
+      matrix: ${{ steps.files.outputs.matrix }}
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: scripts/check-changed
+          sparse-checkout-cone-mode: false
       - id: files
         env:
           GH_TOKEN: ${{ github.token }}
           PR: ${{ github.event.pull_request.number }}
           BEFORE: ${{ github.event.before }}
+          # The matrix of the "checks" job; "job" is the name scripts/check-changed gives each part.
+          # One Windows VM: tests and release candidate share a job, which saves a checkout and setup per run.
+          # Hosted macOS runners are separate machines, so the parts overlap.
+          # The iPhone app needs Xcode 26.4 or newer, which runs only on macOS 26. The Swift checks run beside it:
+          # with them the checks part took 18 minutes and was the last job of a pull request; now each part takes
+          # about 12.
+          MATRIX: >-
+            [{"job": "windows", "os": "windows-2022", "part": "checks and release", "checks": true, "release": true},
+             {"job": "macos", "os": "macos-15", "part": "checks", "checks": true},
+             {"job": "macos-release", "os": "macos-15", "part": "release", "release": true},
+             {"job": "apple", "os": "macos-26", "part": "swift and ios", "swift": true, "ios": true}]
         run: |
           if [ "$GITHUB_EVENT_NAME" = pull_request ]; then
             files=$(gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$PR/files" --jq '.[].filename')
@@ -46,8 +65,14 @@ jobs:
           else
             files=many
           fi
-          if printf '%s\n' "$files" | grep -qvE '(\.md$|^docs/|^LICENSE$)'; then code=true; else code=false; fi
-          echo "code=$code" | tee -a "$GITHUB_OUTPUT"
+          all=
+          if [ "$GITHUB_EVENT_NAME" != pull_request ]; then all=--all; fi
+          jobs=$(printf '%s\n' "$files" | python3 scripts/check-changed --ci-jobs $all)
+          case " $jobs " in *' linux '*) linux=true ;; *) linux=false ;; esac
+          {
+            echo "linux=$linux"
+            echo "matrix=$(jq -c --arg jobs "$jobs" '[.[] | select(.job as $job | $jobs | split(" ") | index($job))]' <<< "$MATRIX")"
+          } | tee -a "$GITHUB_OUTPUT"
 
   linux:
     # The self-hosted runner on the Linux server: the warm Ubuntu 22.04 container of
@@ -59,7 +84,7 @@ jobs:
     # GitHub-hosted runners, for when the server is down.
     name: linux checks and release
     needs: changes
-    if: needs.changes.outputs.code == 'true'
+    if: needs.changes.outputs.linux == 'true'
     runs-on: ${{ (github.event.pull_request.head.repo.fork || inputs.hosted || vars.ELARNI_HOSTED == 'true') && 'ubuntu-24.04' || fromJSON('["self-hosted", "elarni-linux"]') }}
     timeout-minutes: 90
     steps:
@@ -159,7 +184,7 @@ jobs:
   checks:
     name: ${{ matrix.os }} ${{ matrix.part }}
     needs: changes
-    if: needs.changes.outputs.code == 'true'
+    if: needs.changes.outputs.matrix != '[]'
     # Windows runs on the self-hosted VM on the Linux server (scripts/windows-ci-vm), which keeps its own caches;
     # pull requests from forks, and ELARNI_HOSTED runs, use the GitHub-hosted image, as in the linux job.
     runs-on: ${{ startsWith(matrix.os, 'windows') && !(github.event.pull_request.head.repo.fork || inputs.hosted || vars.ELARNI_HOSTED == 'true') && fromJSON('["self-hosted", "elarni-windows"]') || matrix.os }}
@@ -167,26 +192,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          # One Windows VM: tests and release candidate share a job, which saves a checkout and setup per run.
-          - os: windows-2022
-            part: checks and release
-            checks: true
-            release: true
-          # Hosted macOS runners are separate machines, so the parts overlap.
-          - os: macos-15
-            part: checks
-            checks: true
-          - os: macos-15
-            part: release
-            release: true
-          # The iPhone app needs Xcode 26.4 or newer, which runs only on macOS 26. The Swift checks run beside it:
-          # with them the checks part took 18 minutes and was the last job of a pull request; now each part takes
-          # about 12.
-          - os: macos-26
-            part: swift and ios
-            swift: true
-            ios: true
+        # The parts this change needs, out of the list in the "changed files" job.
+        include: ${{ fromJSON(needs.changes.outputs.matrix) }}
     defaults:
       run:
         shell: bash
