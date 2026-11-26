@@ -10,6 +10,15 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
   hidden in the tray" starts Elarni at login with only its tray icon; the tray icon, opening
   Elarni again or a link shows the window. On Linux without a tray, the window starts
   minimized instead.
+- **Linux: a server keeps answering incoming connections while the VPN is on.** With the new
+  `answerInbound` setting (`elarni-cli settings`, off by default), a connection that reaches the
+  machine from outside (SSH, a web server, a published container port) is answered through the
+  network it came from instead of the tunnel, and sessions opened before the tunnel keep working.
+  A UDP service is answered outside only when it replies from the address the request reached
+  (bound to that address, or per packet as dnsmasq and unbound do with interface binding). Under
+  the kill switch the machine's own services answer; ports forwarded to containers stay blocked.
+  What the machine opens itself, and its answers to what came in through the tunnel, still go
+  through the VPN. `linux/HEADLESS.md` has the command.
 
 ### Fixed
 
@@ -151,8 +160,9 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
   answered by Elarni, because its own lookups would leave outside the tunnel.
 - **Linux: the VPN puts its firewall rules back when another program removes them.** A program
   that ran `nft flush ruleset` removed Elarni's DNS redirect and kill switch rules, so DNS
-  lookups went around the tunnel until the next Connect. Elarni checks once a second, puts the
-  rules back and logs it. If it cannot put them back, it logs why and the VPN disconnects.
+  lookups went around the tunnel until the next Connect. Elarni checks once a second, also for a
+  flushed table or a removed chain, puts the rules back and logs it. If it cannot put them back,
+  it logs why and the VPN disconnects.
 - **Windows: a Wintun failure says what went wrong.** When the Windows network driver (Wintun)
   could not be loaded, Elarni showed a generic connection failure. The message now names the
   driver, says that antivirus software or a device installation policy can cause this, and
@@ -373,13 +383,6 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
 
 - **`url` 2.5.9.** 2.5.8 overflowed the stack in `Url::origin()` on nested `blob:` URLs
   (RUSTSEC-2026-0592). Elarni's own code does not call it; the update clears the advisory check.
-- **Linux: a server keeps answering incoming connections while the VPN is on.** With the new
-  `answerInbound` setting (`elarni-cli settings`, off by default), a connection that reaches the
-  machine from outside (SSH, a web server, a published container port, a UDP service) is
-  answered through the network it came from instead of the tunnel, and sessions opened before
-  the tunnel keep working. Under the kill switch the machine's own services answer; ports
-  forwarded to containers stay blocked. What the machine opens itself still goes
-  through the VPN. `linux/HEADLESS.md` has the command.
 
 ## 0.6.3 - 2026-11-22
 

@@ -121,9 +121,19 @@ func TestLinuxWorkerFixture(t *testing.T) {
 		_ = linuxWriteFrame(os.Stdout, linuxReply{Lost: true})
 	}
 	// Until the owner closes the input. A reload is answered as the worker does: still running,
-	// with a code when the tunnel cannot take it (here, a request that asks for 1 MB).
+	// with a code when the tunnel cannot take it (here, a request that asks for 1 MB). A pause is
+	// answered as well, and noted in the file ELARNI_LINUX_WORKER_PAUSED names.
 	for {
 		next, err := linuxReadCommand(input)
+		if err == nil && next.Action == "pause" {
+			if path := os.Getenv("ELARNI_LINUX_WORKER_PAUSED"); path != "" && os.WriteFile(path, nil, 0o600) != nil {
+				os.Exit(1)
+			}
+			if linuxWriteFrame(os.Stdout, linuxReply{Ready: true}) != nil {
+				os.Exit(1)
+			}
+			continue
+		}
 		if err != nil || next.Action != "reload" {
 			break
 		}
@@ -449,6 +459,113 @@ func TestLinuxSupervisorPassesAReloadToItsWorker(t *testing.T) {
 		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("the supervisor did not end")
+	}
+}
+
+// Regression: a stop deleted the table while the worker still ran, and its firewall keeper put it
+// back within the second, with a false warning and DNS sent to a listener about to exit. The worker
+// is paused before the first cleanup.
+func TestLinuxSupervisorPausesTheFirewallKeeperBeforeItsCleanup(t *testing.T) {
+	for _, block := range []bool{false, true} {
+		t.Run(fmt.Sprint("blockWithoutVPN=", block), func(t *testing.T) {
+			directory := t.TempDir()
+			lock, paused := filepath.Join(directory, "vpn.lock"), filepath.Join(directory, "paused")
+			var mu sync.Mutex
+			var cleanups []bool
+			host := linuxTunnelHost{
+				lock: func() (*os.File, error) { return acquireLinuxVPNLock(lock) },
+				reserve: func() (linuxNetwork, error) {
+					return linuxNetwork{Name: "rv000000000001", Table: 12001, Priority: 12001, Mark: 0x52560000 | 12001, DNSPort: 5353}, nil
+				},
+				cleanup: func(linuxNetwork) error {
+					_, err := os.Stat(paused)
+					mu.Lock()
+					defer mu.Unlock()
+					cleanups = append(cleanups, err == nil)
+					return nil
+				},
+				forget: func(linuxNetwork) {},
+				worker: func(events func(linuxReply)) (*linuxChild, error) {
+					command := linuxWorkerFixture("run")
+					command.Env = append(command.Env, "ELARNI_LINUX_WORKER_PAUSED="+paused)
+					return startLinuxChild(command, events)
+				},
+			}
+			commands, closed, replies := make(chan linuxCommand), make(chan struct{}), make(chan linuxReply, 4)
+			done := make(chan int, 1)
+			go func() {
+				done <- superviseLinuxTunnels(context.Background(), commands, closed, func(reply linuxReply) error { replies <- reply; return nil }, os.Getuid(), host)
+			}()
+			ask := func(stage string, command linuxCommand) linuxReply {
+				t.Helper()
+				select {
+				case commands <- command:
+				case code := <-done:
+					t.Fatalf("%s: the supervisor exited with %d", stage, code)
+				}
+				select {
+				case reply := <-replies:
+					return reply
+				case <-time.After(10 * time.Second):
+					t.Fatalf("%s: the supervisor did not answer", stage)
+				}
+				return linuxReply{}
+			}
+			request := vpnRequest{Config: linuxConfigFixture, RoutePolicy: &share.WindowsRoutePolicy{IncludedRoutes: []string{"0.0.0.0/0"}, BlockWithoutVPN: block}}
+			if reply := ask("start", linuxCommand{Action: "start", Request: request}); !reply.Ready {
+				t.Fatalf("start answered %+v", reply)
+			}
+			if reply := ask("stop", linuxCommand{Action: "stop", Release: true}); !reply.Ready {
+				t.Fatalf("stop answered %+v", reply)
+			}
+			mu.Lock()
+			got := fmt.Sprint(cleanups)
+			mu.Unlock()
+			// Both cleanups of the release, the one before the worker's stop and the one after it.
+			if got != "[true true]" {
+				t.Fatalf("cleanups after a paused keeper: %s, want [true true]", got)
+			}
+			close(closed)
+			select {
+			case code := <-done:
+				if code != 0 {
+					t.Fatalf("exit %d", code)
+				}
+			case <-time.After(10 * time.Second):
+				t.Fatal("the supervisor did not end")
+			}
+		})
+	}
+}
+
+// A pause goes only from the supervisor to its worker: from the broker it is a protocol
+// violation, not a start that carries a request.
+func TestLinuxSupervisorTakesNoPauseFromTheBroker(t *testing.T) {
+	started := 0
+	host := linuxTunnelHost{
+		lock: func() (*os.File, error) { return acquireLinuxVPNLock(filepath.Join(t.TempDir(), "vpn.lock")) },
+		reserve: func() (linuxNetwork, error) {
+			return linuxNetwork{Name: "rv000000000001", Table: 12001, Priority: 12001, Mark: 0x52560000 | 12001, DNSPort: 5353}, nil
+		},
+		cleanup: func(linuxNetwork) error { return nil },
+		forget:  func(linuxNetwork) {},
+		worker: func(events func(linuxReply)) (*linuxChild, error) {
+			started++
+			return startLinuxChild(linuxWorkerFixture("run"), events)
+		},
+	}
+	commands, replies, done := make(chan linuxCommand, 1), make(chan linuxReply, 4), make(chan int, 1)
+	commands <- linuxCommand{Action: "pause", Request: vpnRequest{Config: linuxConfigFixture}}
+	go func() {
+		done <- superviseLinuxTunnels(context.Background(), commands, make(chan struct{}), func(reply linuxReply) error { replies <- reply; return nil }, os.Getuid(), host)
+	}()
+	select {
+	case code := <-done:
+		if reply := <-replies; code != 1 || reply.Error != "invalid_vpn_request" || started != 0 {
+			t.Fatalf("a pause from the broker: exit %d, %+v, %d workers started", code, reply, started)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the supervisor took a pause from the broker")
 	}
 }
 

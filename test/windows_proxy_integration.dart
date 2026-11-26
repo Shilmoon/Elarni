@@ -3650,7 +3650,10 @@ if tunnel: note('closed')
     // The user's stop of a running tunnel says so too.
     expect(await backend.control.connect(), 'connected');
     expect(await backend.control.disconnect(), 'disconnected');
-    expect((await events.readAsLines()).skip(2), ['runVPN', 'stopVPN release']);
+    expect((await events.readAsLines()).skip(2), [
+      'runVPN',
+      'stopVPN release',
+    ]);
     expect(messages, ['connection_stopped_blocked']);
   });
 
@@ -3676,7 +3679,10 @@ if tunnel: note('closed')
     expect(await backend.control.disconnect(), 'disconnected');
     expect(await backend.control.state(), 'disconnected');
     expect((await events.readAsLines()).skip(2), ['runVPN', 'clearVPNGuard']);
-    expect(messages.skip(1), ['connection_stopped_blocked', 'vpn_guard_stale']);
+    expect(messages.skip(1), [
+      'connection_stopped_blocked',
+      'vpn_guard_stale',
+    ]);
   });
 
   // The helper takes a closed input for a lost tunnel and keeps its block, so

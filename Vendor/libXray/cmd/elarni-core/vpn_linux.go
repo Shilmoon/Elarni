@@ -48,6 +48,8 @@ type vpnRequest struct {
 	RecordDiagnostics bool                      `json:"recordDiagnostics"`
 }
 type linuxCommand struct {
+	// start, stop and reload come from the broker; pause goes only from the supervisor to its
+	// worker, whose firewall keeper then stops, before the supervisor removes the firewall.
 	Action string `json:"action"`
 	// Hold marks a stop the app follows with another start: with Block traffic without
 	// VPN the kill switch stays in place between the two tunnels.
@@ -148,7 +150,7 @@ func linuxWriteFrame(writer io.Writer, value any) error {
 }
 func linuxReadCommand(reader io.Reader) (linuxCommand, error) {
 	var command linuxCommand
-	if linuxReadFrame(reader, &command) != nil || (command.Action != "start" && command.Action != "stop" && command.Action != "reload") || len(command.AssetSizes) > 2 {
+	if linuxReadFrame(reader, &command) != nil || (command.Action != "start" && command.Action != "stop" && command.Action != "reload" && command.Action != "pause") || len(command.AssetSizes) > 2 {
 		return command, errors.New("invalid_request")
 	}
 	command.assets = map[string][]byte{}
@@ -654,6 +656,10 @@ func linuxSupervisor(ctx context.Context, input io.Reader, output io.Writer) int
 	})
 }
 
+// linuxPauseWait bounds the worker's answer to a pause: a tick that is checking and putting back
+// its firewall takes at most two nft runs of 5 seconds.
+const linuxPauseWait = 10 * time.Second
+
 // superviseLinuxTunnels runs one tunnel at a time for the broker. A tunnel that fails
 // to start or ends by itself is reported and this root process waits for the next
 // connect, which then needs no new consent. It exits on a stop it cannot clean up,
@@ -675,6 +681,10 @@ func superviseLinuxTunnels(ctx context.Context, commands <-chan linuxCommand, cl
 	release := func() error {
 		if worker != nil {
 			if network.Name != "" {
+				// Its firewall keeper would put back what this removes. A worker that does not
+				// answer has its input closed by the request; the cleanup after its stop removes
+				// whatever it put back.
+				_, _ = worker.request(linuxCommand{Action: "pause"}, linuxPauseWait)
 				_ = host.cleanup(network)
 			}
 			_ = worker.stop()
@@ -779,7 +789,7 @@ func superviseLinuxTunnels(ctx context.Context, commands <-chan linuxCommand, cl
 				}
 				continue
 			}
-			if worker != nil || validLinuxRequest(command.Request) != nil {
+			if worker != nil || command.Action != "start" || validLinuxRequest(command.Request) != nil {
 				_ = send(linuxReply{Error: "invalid_vpn_request"})
 				return 1
 			}
@@ -988,7 +998,7 @@ func linuxWorker(ctx context.Context, input io.Reader, output io.Writer) (code i
 	var gate metricsGate
 	var connections connectionsCursor
 	// A reload keeps the route policy (sameSession), so the firewall it put back is the same.
-	firewall := firewallKeeper{present: network.firewallPresent,
+	firewall := firewallKeeper{check: network.firewallCheck(command.Request.RoutePolicy),
 		restore: func() error { return network.restoreFirewall(command.Request.RoutePolicy) }}
 	for {
 		select {
@@ -997,6 +1007,15 @@ func linuxWorker(ctx context.Context, input io.Reader, output io.Writer) (code i
 		case <-closed:
 			return 0
 		case next := <-commands:
+			if next.Action == "pause" {
+				// The supervisor removes the firewall next, before it stops this worker: it stays
+				// removed. The answer says no tick puts it back any more.
+				firewall.paused = true
+				if linuxWriteFrame(output, linuxReply{Ready: true}) != nil {
+					return 1
+				}
+				continue
+			}
 			if next.Action != "reload" {
 				return 0
 			}
