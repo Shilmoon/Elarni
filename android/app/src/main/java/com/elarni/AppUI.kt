@@ -320,7 +320,8 @@ private val LocalReselect = compositionLocalOf { 0 }
                 // A failed refresh names its provider and offers its support link.
                 val source = state.errorSource?.let { id -> catalog.sources.firstOrNull { it.string("id") == id } }
                 if (source == null) {
-                    // Only a reset gets past a saved catalog that cannot be read, damaged or with its key gone; unavailable storage can come back by itself.
+                    // Only a reset gets past a saved catalog that cannot be read, damaged or with its key gone; unavailable storage can come
+                    // back by itself, so it offers Retry, and Troubleshooting the reset as well.
                     val unreadable = error in Repository.unreadable && activity.repository.catalogUnreadable
                     val retry = !unreadable && error == "storage_unavailable" && activity.repository.catalogUnavailable
                     val action = if (unreadable) tr(R.string.reset_elarni) else if (retry) tr(R.string.retry) else null
@@ -1436,10 +1437,14 @@ fun pingScope(result: JSONObject) = when (result.string("protocol")) { "tcp" -> 
                 // As on the error's snackbar: only an unreadable catalog needs it.
                 val unreadable = state.error in Repository.unreadable && activity.repository.catalogUnreadable
                 state.error?.let { SettingsTile(errorMessage(it, unreadable), titleColor = MaterialTheme.colorScheme.error) }
-                if (unreadable) SettingsTile(tr(R.string.reset_elarni), enabled = !state.busy, titleColor = MaterialTheme.colorScheme.error, onClick = reset)
-                // Storage that was unavailable may open now; a reset would delete what it holds.
-                else if (state.error == "storage_unavailable" && activity.repository.catalogUnavailable)
+                // The reset stays while the catalog cannot be read, whatever error came since.
+                if (activity.repository.catalogUnreadable) SettingsTile(tr(R.string.reset_elarni), enabled = !state.busy, titleColor = MaterialTheme.colorScheme.error, onClick = reset)
+                // Storage that was unavailable may open now, whatever error came since; a reset would delete what it holds,
+                // so it comes second, for a Keystore fault that never clears (a key Android's update or reset broke).
+                else if (activity.repository.catalogUnavailable) {
                     SettingsTile(tr(R.string.retry), enabled = !state.busy) { activity.repository.scope.launch { activity.repository.retryOpen() } }
+                    SettingsTile(tr(R.string.reset_elarni), enabled = !state.busy, titleColor = MaterialTheme.colorScheme.error, onClick = reset)
+                }
             }
             SettingsGroup {
                 SettingsTile(tr(R.string.retry_selected_server), enabled = !state.busy) { activity.connect() }

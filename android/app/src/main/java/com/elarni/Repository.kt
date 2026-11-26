@@ -139,10 +139,17 @@ class Repository(private val app: ElarniApplication) {
     }
     /** The saved catalog failed to open only because storage was unavailable, which can pass: [retryOpen] tries again. */
     val catalogUnavailable get() = loadFailed && storageFailure == "storage_unavailable"
-    /** The Retry of a saved catalog that storage could not open: a Keystore that failed for a moment opens it now. */
+    /** A start at boot ("boot") or by Always-on ("alwaysOn") that storage that could not open ended; a [retryOpen] that
+     *  opens it starts again. */
+    private var blockedStart: String? = null
+    /** The Retry of a saved catalog that storage could not open: a Keystore that failed for a moment opens it now. The start
+     *  the failure ended then runs: a VPN the system ended along with its process comes back, as at a process start, and
+     *  one at boot or by Always-on connects, unless a Stop came since. The user is there to see it, so that start shows its
+     *  failure at once, as a Connect does. */
     suspend fun retryOpen() {
         ready.await()
         var refresh = false
+        var resume = false
         mutex.withLock {
             if (!catalogUnavailable) return
             val failure = storageFailure
@@ -153,10 +160,26 @@ class Repository(private val app: ElarniApplication) {
             // Publishing copies the catalog only when the edits counter moved.
             edits++
             mutable.update { it.copy(error = it.error.takeUnless { error -> error == failure }) }
+            // The opened catalog's automation is new and knows no network; no callback comes until the network changes.
+            observeNetwork()
             publish()
+            // A Stop meanwhile holds, although the placeholder could not save it.
+            if (!stopRequested.get()) {
+                var restored = false
+                runCatching { if (endedWhileConnected()) { restored = true; app.startForegroundService(Intent(app, ElarniVpnService::class.java)) } }
+                    .onFailure { report(AppFailure("foreground_start_denied")) }
+                // The boot's start follows the setting the catalog holds, as boot() does.
+                resume = !restored && when (blockedStart) {
+                    "boot" -> catalog.settings.optBoolean("launchAtBoot") && catalog.selected.isNotEmpty()
+                    else -> blockedStart == "alwaysOn"
+                }
+            }
+            blockedStart = null
             refresh = backgroundWork()
         }
         app.scheduleRefresh(refresh)
+        // Outside the lock, which it takes.
+        if (resume) try { requestConnect(false) } catch (error: Exception) { report(error) }
     }
     private fun endedWhileConnected(): Boolean {
         // Without its service the VPN was already down: a failed Connect, a reboot or an earlier start that stayed down.
@@ -346,7 +369,7 @@ class Repository(private val app: ElarniApplication) {
             if (engine.service === owner && engine.running) { state("connected"); return }
             engine.attach(owner)
             try {
-                storageFailure?.let { throw AppFailure(it) }
+                storageFailure?.let { if (alwaysOn && catalogUnavailable) blockedStart = "alwaysOn"; throw AppFailure(it) }
                 if (restart && !automation.intent && !alwaysOn) { owner.finish(); return }
                 // Another app took the VPN while this process was gone: as after a revoke, this app no longer wants it.
                 if (taken) {
@@ -376,7 +399,10 @@ class Repository(private val app: ElarniApplication) {
     }
     /** A start by boot or always-on that waits for the network, in [owner]'s service, which stays in the foreground meanwhile.
      *  Stop finishes that service and a newer Connect starts in it; a Cancel elsewhere, such as an update's, leaves it waiting. */
-    private class WaitingStart(val owner: ElarniVpnService, val startId: Int)
+    private class WaitingStart(val owner: ElarniVpnService, val startId: Int) {
+        /** Its next try is looking the server's names up, outside the lock. */
+        var lookingUp = false
+    }
     private var waiting: WaitingStart? = null
     private val startRetry = StartRetry()
     /** The start [startId] of [owner]'s service failed with [error]. Without recovery the service ends, unless [untilOnline]
@@ -394,18 +420,33 @@ class Repository(private val app: ElarniApplication) {
         else { report(error); automation.schedule(Automation.clock()) }
         if (!wantsRecovery()) owner.finish(startId)
     }
-    /** The next try of a start that waits for the network, from the 2 s tick, as request [generation]. */
+    /** The next try of a start that waits for the network, from the 2 s tick, as request [generation]. The server's names are
+     *  looked up first, outside the lock: one without an answer takes 5 s, which a Disconnect or a command must not wait
+     *  behind on every try. The start then takes those answers. */
     private fun retryStart(pending: WaitingStart, generation: Long) {
         // Paused for sleep meanwhile, as a process the system killed then: the screen turning on starts it.
         if (automation.sleeping) { waiting = null; startRetry.reset(); state("paused"); return }
-        try {
-            start(catalog, generation, requireListedApp = true)
-            waiting = null; startRetry.reset()
-            started()
-        } catch (error: Exception) {
-            // A Cancel elsewhere interrupted this try, which comes again at the next tick; Stop ends the wait instead.
-            if (generation != epoch.get() && !stopRequested.get()) { runCatching { engine.stop() }; return }
-            startFailed(pending.owner, error, generation, pending.startId, untilOnline = true)
+        // A server that does not compile fails its start below, as it would without the lookups.
+        val lookups = engine.lookUp(runCatching { engine.names(catalog, catalog.selected) }.getOrDefault(emptyList()))
+        pending.lookingUp = true
+        scope.launch {
+            val answers = lookups.await()
+            mutex.withLock {
+                pending.lookingUp = false
+                // A Stop, a newer start or the service's end came meanwhile; the tick's own checks follow.
+                if (waiting !== pending || storageFailure != null || stopRequested.get()) return@withLock
+                if (engine.running || engine.service !== pending.owner || wantsRecovery()) { waiting = null; startRetry.reset(); return@withLock }
+                if (automation.sleeping) { waiting = null; startRetry.reset(); state("paused"); return@withLock }
+                try {
+                    start(catalog, generation, requireListedApp = true, answers = answers)
+                    waiting = null; startRetry.reset()
+                    started()
+                } catch (error: Exception) {
+                    // A Cancel elsewhere interrupted this try, which comes again at the next tick; Stop ends the wait instead.
+                    if (generation != epoch.get() && !stopRequested.get()) { runCatching { engine.stop() }; return@withLock }
+                    startFailed(pending.owner, error, generation, pending.startId, untilOnline = true)
+                }
+            }
         }
     }
     suspend fun serviceGone(owner: ElarniVpnService, revoked: Boolean) {
@@ -424,8 +465,10 @@ class Repository(private val app: ElarniApplication) {
     }
     /** [requireListedApp] refuses a tunnel none of the listed apps can enter, which would take every app, each going
      *  direct, and show Connected. Connect, its retry and a settings change ask for it; a refresh must not fail for a
-     *  per-app setting, and a running tunnel's own restart (a listed app removed, another network) starts as before. */
-    private fun start(value: Catalog, generation: Long, keepTunnel: Boolean = wantsRecovery(), requireListedApp: Boolean = false) {
+     *  per-app setting, and a running tunnel's own restart (a listed app removed, another network) starts as before.
+     *  [answers]: the server's names, looked up before ([Engine.lookUp]). */
+    private fun start(value: Catalog, generation: Long, keepTunnel: Boolean = wantsRecovery(), requireListedApp: Boolean = false,
+        answers: Map<String, Result<List<java.net.InetAddress>>> = emptyMap()) {
         check(generation)
         // Before the running tunnel stops.
         if (requireListedApp && engine.noListedAppInstalled(value.settings)) throw AppFailure("per_app_none_installed")
@@ -435,7 +478,7 @@ class Repository(private val app: ElarniApplication) {
             if (route.string("assetRevision").isEmpty()) { assets.prepare(value, route.getString("id")); edits++ }
         }
         check(generation)
-        engine.start(value, keepTunnel) { check(generation) }
+        engine.start(value, keepTunnel, answers) { check(generation) }
     }
     private fun apply(candidate: Catalog, generation: Long, refresh: Boolean = false): JSONObject {
         check(generation); candidate.reconcileSelection(); candidate.validate()
@@ -853,35 +896,36 @@ class Repository(private val app: ElarniApplication) {
         }))
     }
     private fun wantsRecovery(value: Catalog = catalog) = automation.intent && (value.settings.optBoolean("onDemandEnabled") || value.data.mapObject("automation").optBoolean("enabled"))
-    suspend fun networkChanged() {
-        ready.await(); mutex.withLock {
-            // Callbacks can wait behind a connection transaction and arrive out
-            // of order. Read the current physical path under the same owner;
-            // an old snapshot must not restart a newly connected tunnel.
-            val connectivity = app.getSystemService(android.net.ConnectivityManager::class.java)
-            val networks = connectivity.allNetworks.filter {
-                connectivity.getNetworkCapabilities(it)?.let { capabilities ->
-                    capabilities.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
-                        capabilities.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_NOT_VPN)
-                } == true
-            }
-            val physical = engine.physical()
-            val signature = "${physical?.networkHandle ?: 0}:" + networks.map { it.networkHandle }.sorted().joinToString(",")
-            val available = networks.isNotEmpty()
-            val path = automation.path
-            automation.path(signature, available, Automation.clock())
-            if (automation.path != path) transfer.pathChanged()
-            // A start waiting for the network tries now rather than after its delay.
-            if (waiting != null && available) startRetry.networkAvailable(Automation.clock())
-            // The VPN's underlying network is the default one, which Android tracks itself: the core binds no socket.
-            // New sockets follow the default network, and the default-network callback tells the core's pooled ones
-            // to move. A restart resets every tunneled connection, so only a network that is gone takes one. The new
-            // default often comes before the old network leaves the list; that later loss calls here again.
-            // An open approval does not hold recovery back; it gates only its own candidate.
-            if (engine.running && physical != engine.network && engine.network !in networks && available && wantsRecovery() && !automation.sleeping)
-                restart(epoch.get())
-            publish()
+    suspend fun networkChanged() { ready.await(); mutex.withLock { observeNetwork() } }
+    /** Reads the network path now, under the lock: for a network callback, and for a catalog that opened later, whose
+     *  automation knows no network yet. */
+    private fun observeNetwork() {
+        // Callbacks can wait behind a connection transaction and arrive out
+        // of order. Read the current physical path under the same owner;
+        // an old snapshot must not restart a newly connected tunnel.
+        val connectivity = app.getSystemService(android.net.ConnectivityManager::class.java)
+        val networks = connectivity.allNetworks.filter {
+            connectivity.getNetworkCapabilities(it)?.let { capabilities ->
+                capabilities.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
+                    capabilities.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_NOT_VPN)
+            } == true
         }
+        val physical = engine.physical()
+        val signature = "${physical?.networkHandle ?: 0}:" + networks.map { it.networkHandle }.sorted().joinToString(",")
+        val available = networks.isNotEmpty()
+        val path = automation.path
+        automation.path(signature, available, Automation.clock())
+        if (automation.path != path) transfer.pathChanged()
+        // A start waiting for the network tries now rather than after its delay.
+        if (waiting != null && available) startRetry.networkAvailable(Automation.clock())
+        // The VPN's underlying network is the default one, which Android tracks itself: the core binds no socket.
+        // New sockets follow the default network, and the default-network callback tells the core's pooled ones
+        // to move. A restart resets every tunneled connection, so only a network that is gone takes one. The new
+        // default often comes before the old network leaves the list; that later loss calls here again.
+        // An open approval does not hold recovery back; it gates only its own candidate.
+        if (engine.running && physical != engine.network && engine.network !in networks && available && wantsRecovery() && !automation.sleeping)
+            restart(epoch.get())
+        publish()
     }
     /** A listed app installed, removed or reinstalled while connected takes its route once the tunnel is built again. */
     suspend fun packagesChanged() {
@@ -919,6 +963,8 @@ class Repository(private val app: ElarniApplication) {
     }
     suspend fun boot() {
         ready.await()
+        // The placeholder of a catalog storage could not open holds no setting; a Retry that opens it follows the saved one.
+        if (mutex.withLock { catalogUnavailable.also { if (it) blockedStart = blockedStart ?: "boot" } }) return
         if (catalog.settings.optBoolean("launchAtBoot") && catalog.selected.isNotEmpty()) {
             try { requestConnect(false, boot = true) } catch (error: Exception) { report(error) }
         }
@@ -932,7 +978,7 @@ class Repository(private val app: ElarniApplication) {
             // A start that waits for the network tries again when it is due. Recovery, once turned on, retries instead.
             waiting?.let { pending ->
                 if (engine.running || engine.service !== pending.owner || wantsRecovery()) { waiting = null; startRetry.reset() }
-                else if (startRetry.due(time)) retryStart(pending, generation)
+                else if (startRetry.due(time) && !pending.lookingUp) retryStart(pending, generation)
             }
             val config = catalog.data.optJSONObject("automation") ?: Automation.defaults()
             var probed = false

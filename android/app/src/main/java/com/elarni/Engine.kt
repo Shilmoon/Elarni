@@ -15,6 +15,7 @@ import java.net.ServerSocket
 import java.net.Socket
 import java.net.URI
 import java.util.concurrent.Executors
+import java.util.concurrent.Future
 import java.util.concurrent.TimeUnit
 import java.io.File
 
@@ -72,16 +73,13 @@ class Engine(private val app: ElarniApplication, private val assets: RoutingAsse
     fun physical(): Network? = connectivity.activeNetwork?.takeIf(::isPhysical) ?: connectivity.allNetworks.firstOrNull(::isPhysical)
     fun attach(owner: ElarniVpnService) { service = owner }
     fun detach(owner: ElarniVpnService) { if (service === owner) service = null }
-    fun addresses(endpoint: JSONObject, settings: JSONObject, mapping: JSONObject): List<InetAddress> {
+    /** [answers]: names looked up before, by [lookUp]; another name is looked up now. */
+    fun addresses(endpoint: JSONObject, settings: JSONObject, mapping: JSONObject, answers: Map<String, Result<List<InetAddress>>> = emptyMap()): List<InetAddress> {
         if (mapping.optBoolean("blocked")) throw AppFailure("connection_failed")
         val host = mapping.string("alias", endpoint.getString("host"))
         val hints = if (mapping.has("addresses")) mapping.strings("addresses") else endpoint.strings("addresses")
         var values = if (hints.isNotEmpty()) hints.map(Settings::numericAddress) else {
-            runCatching { Settings.numericAddress(host) }.getOrNull()?.let(::listOf) ?: run {
-                val network = physical()
-                val query = dns.submit<List<InetAddress>> { (network?.getAllByName(host) ?: InetAddress.getAllByName(host)).toList() }
-                try { query.get(5, TimeUnit.SECONDS) } finally { query.cancel(true) }
-            }
+            runCatching { Settings.numericAddress(host) }.getOrNull()?.let(::listOf) ?: (answers[host] ?: lookUp(listOf(host)).await().getValue(host)).getOrThrow()
         }
         val preference = settings.string("profilePreferredIP").takeUnless { it == "inherit" } ?: settings.getString("preferredIP")
         val v4 = values.filterIsInstance<Inet4Address>(); val v6 = values.filterIsInstance<Inet6Address>()
@@ -98,16 +96,35 @@ class Engine(private val app: ElarniApplication, private val assets: RoutingAsse
         if (values.isEmpty()) throw AppFailure("connection_failed")
         return values
     }
+    /** Sends a DNS query for each of [names] on the physical network now; the answers come with [Lookups.await], which
+     *  needs no lock. */
+    fun lookUp(names: Collection<String>): Lookups {
+        val network = physical()
+        return Lookups(names.distinct().associateWith { host -> dns.submit<List<InetAddress>> { (network?.getAllByName(host) ?: InetAddress.getAllByName(host)).toList() } })
+    }
+    /** The names a start of server [id] looks up in DNS: not one its host mapping blocks or gives addresses, nor an address. */
+    fun names(catalog: Catalog, id: String): List<String> {
+        val config = catalog.compile(id, app)
+        val endpoints = physicalEndpoints(config); val mappings = mappings(config, endpoints)
+        return endpoints.mapNotNull { endpoint ->
+            val mapping = mappings.mapObject(endpoint.getString("host"))
+            val host = mapping.string("alias", endpoint.getString("host"))
+            val hints = if (mapping.has("addresses")) mapping.strings("addresses") else endpoint.strings("addresses")
+            host.takeIf { !mapping.optBoolean("blocked") && hints.isEmpty() && runCatching { Settings.numericAddress(host) }.isFailure }
+        }.distinct()
+    }
+    private fun physicalEndpoints(config: JSONObject) = Native.domain("profileEndpoints", obj("config" to config)).objects("endpoints").filter { it.optBoolean("physical") }
     private fun mappings(config: JSONObject, endpoints: List<JSONObject>) = Native.call("profileHostMappings", obj("configJSON" to config.toString(), "hosts" to JSONArray(endpoints.map { it.getString("host") }.distinct())))
-    fun prepare(catalog: Catalog, id: String, inboundAuth: JSONObject? = null): JSONObject {
+    /** [answers]: as for [addresses]. */
+    fun prepare(catalog: Catalog, id: String, inboundAuth: JSONObject? = null, answers: Map<String, Result<List<InetAddress>>> = emptyMap()): JSONObject {
         val config = catalog.compile(id, app, inboundAuth = inboundAuth)
-        val endpoints = Native.domain("profileEndpoints", obj("config" to config)).objects("endpoints").filter { it.optBoolean("physical") }
+        val endpoints = physicalEndpoints(config)
         val resolved = JSONObject(); val unavailable = JSONArray(); val mappings = mappings(config, endpoints)
         val settings = catalog.settings
         catalog.node(id).string("ipPreference").takeIf { it.isNotEmpty() }?.let { settings.put("profilePreferredIP", it) }
         var unanswered: java.net.UnknownHostException? = null
         endpoints.forEach { endpoint ->
-            try { resolved.put(endpoint.getString("addressPath"), addresses(endpoint, settings, mappings.mapObject(endpoint.getString("host"))).first().hostAddress) }
+            try { resolved.put(endpoint.getString("addressPath"), addresses(endpoint, settings, mappings.mapObject(endpoint.getString("host")), answers).first().hostAddress) }
             catch (error: Exception) {
                 unavailable.put(endpoint.getString("addressPath"))
                 if (unanswered == null && lookupFailed(error)) unanswered = java.net.UnknownHostException(endpoint.getString("host"))
@@ -123,8 +140,8 @@ class Engine(private val app: ElarniApplication, private val assets: RoutingAsse
         }
     }
     // keepTunnel leaves a failed start's interface up, so traffic is dropped
-    // instead of leaving the device while automatic recovery retries.
-    fun start(catalog: Catalog, keepTunnel: Boolean = false, valid: () -> Unit) = synchronized(Native.runtimeLock) {
+    // instead of leaving the device while automatic recovery retries. answers: as for addresses().
+    fun start(catalog: Catalog, keepTunnel: Boolean = false, answers: Map<String, Result<List<InetAddress>>> = emptyMap(), valid: () -> Unit) = synchronized(Native.runtimeLock) {
         val owner = service ?: throw AppFailure("service_unavailable")
         // Read before the tunnel and rules resolve them, so an install meanwhile shows up as a change.
         val uids = if (catalog.settings.getBoolean("xrayTunEnabled")) Catalog.listedUids(catalog.settings, ::uid) else null
@@ -132,7 +149,7 @@ class Engine(private val app: ElarniApplication, private val assets: RoutingAsse
         if (BuildConfig.ELARNI_RECORDING) runCatching { record(catalog.settings.optBoolean("recordDiagnostics")) }
         val network = physical()
         val auth = catalog.settings.takeIf { it.getBoolean("xrayTunEnabled") && !it.optBoolean("inboundAuthEnabled") }?.let { sessionCredentials() }
-        val config = prepare(catalog, catalog.selected, auth)
+        val config = prepare(catalog, catalog.selected, auth, answers)
         val directory = assets.directory(catalog.routeFor(catalog.selected)?.string("assetRevision") ?: "")
         valid()
         val setting = catalog.settings
@@ -300,5 +317,18 @@ class Engine(private val app: ElarniApplication, private val assets: RoutingAsse
             verdicts += verdict
         }
         return TransferCheck.combine(verdicts)
+    }
+}
+
+/** DNS queries a start sent for its server's names ([Engine.lookUp]). Waiting for them needs no lock, so a start that waits
+ *  for the network looks its names up outside the repository's, which a name without an answer would hold for 5 s. */
+class Lookups(private val queries: Map<String, Future<List<InetAddress>>>) {
+    /** Each name's addresses, or the failure [Engine.lookupFailed] reads: no answer at all, or none within [timeoutMs] of this
+     *  call for all of them together, after which the query is cancelled. */
+    fun await(timeoutMs: Long = 5000): Map<String, Result<List<InetAddress>>> {
+        val deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMs)
+        return queries.mapValues { (_, query) ->
+            try { runCatching { query.get(maxOf(0L, deadline - System.nanoTime()), TimeUnit.NANOSECONDS) } } finally { query.cancel(true) }
+        }
     }
 }

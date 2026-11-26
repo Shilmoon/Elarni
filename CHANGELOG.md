@@ -56,16 +56,19 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
 - **Android: per-app routing on Xiaomi (HyperOS, MIUI) and Honor phones.** Their systems show
   an app no other installed apps until their own permission allows it, so the list said "No
   other installed apps." Elarni now declares that permission, so its app settings can allow
-  it. While it is denied, the empty list says so with a button to those settings, and the list
-  is read again on return.
+  it. While it is denied, the list says so with a button to those settings, also when the
+  system still shows some of its own apps, and the list is read again on return.
 - **Android: no crash where Android has no file picker or settings screen.** Opening or saving
   a file on a device without a document picker (some TV boxes), and opening Android's VPN,
   location or app settings, the share sheet or the VPN permission dialog where the system has
   none, closed the app. Elarni now says that the device has no app or screen for it.
-- **Android: a Keystore that fails for a moment no longer offers to reset Elarni.** Any
-  failure to decrypt the saved data read as damaged data, and the offered reset deletes the
-  subscriptions. Only a file that does not match its key, or a key Android removed, offers the
-  reset now; a failing Keystore keeps the data and offers **Retry**, which opens it again.
+- **Android: a Keystore that fails for a moment offers Retry before a reset.** Any failure to
+  decrypt the saved data read as damaged data, and the offered reset deletes the
+  subscriptions. A failing Keystore now keeps the data and offers **Retry**, which opens it
+  again and then makes the connection the failure stopped: at boot, by Always-on VPN, or one
+  Android ended along with the app. For a fault that does not clear, Troubleshooting keeps
+  **Reset Elarni** below Retry. A file that does not match its key, or a key Android removed,
+  offers the reset as before.
 - **REALITY with a randomized fingerprint could not connect on about half of the app starts.**
   The randomized hello carried the post-quantum key share that REALITY servers since Xray 26.9.8
   require only half the time; it now takes the hello that "random" picks, which always has it.

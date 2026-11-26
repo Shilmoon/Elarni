@@ -345,6 +345,42 @@ class AutomationTest {
         assertFalse(StartRetry.retryable(IllegalStateException("unexpected"), offline = true))
     }
 
+    @Test fun onlyAStartAtBootOrByAlwaysOnWaitsForTheNetwork() {
+        fun waits(action: String?, restarted: Boolean = false, boot: Boolean = false, alwaysOn: Boolean = false) =
+            ElarniVpnService.waitsForNetwork(action, restarted, boot, alwaysOn)
+        // With Elarni as the always-on VPN, a server name with a typo must not show Connecting for 2 minutes.
+        assertFalse("A Connect from the app, tile or widget", waits(ElarniVpnService.CONNECT, alwaysOn = true))
+        assertFalse("A VPN the system ended along with its process, brought back", waits(null, alwaysOn = true))
+        assertTrue("Android's own always-on start", waits(android.net.VpnService.SERVICE_INTERFACE))
+        assertTrue("The always-on service's sticky restart", waits(null, restarted = true, alwaysOn = true))
+        assertFalse("A sticky restart without always-on", waits(null, restarted = true))
+        assertTrue("Connect after device restart", waits(ElarniVpnService.CONNECT, boot = true))
+        assertFalse(waits(ElarniVpnService.CONNECT))
+    }
+
+    @Test fun aWaitingStartsLookupsShareOneDeadlineAndKeepTheFailureItRetriesOn() {
+        val pool = java.util.concurrent.Executors.newCachedThreadPool()
+        val never = java.util.concurrent.CountDownLatch(1)
+        try {
+            val loopback = java.net.InetAddress.getByAddress("answered.example", byteArrayOf(127, 0, 0, 1))
+            fun query(answer: () -> List<java.net.InetAddress>) = pool.submit<List<java.net.InetAddress>> { answer() }
+            val silent = (1..3).map { index -> "silent$index.example" to query { never.await(); emptyList() } }
+            val lookups = Lookups(mapOf("answered.example" to query { listOf(loopback) },
+                "nxdomain.example" to query { throw java.net.UnknownHostException("nxdomain.example") }) + silent)
+            val started = System.nanoTime()
+            val answers = lookups.await(timeoutMs = 300)
+            val elapsed = (System.nanoTime() - started) / 1_000_000
+            assertEquals(listOf(loopback), answers.getValue("answered.example").getOrThrow())
+            // The start reads these as names without an answer, which the network coming up may give.
+            for (name in listOf("nxdomain.example") + silent.map { it.first }) {
+                val failure = answers.getValue(name).exceptionOrNull()
+                assertTrue("$name: $failure", failure is Exception && Engine.lookupFailed(failure))
+            }
+            assertTrue("Three silent names wait 300 ms together, not one after another: $elapsed ms", elapsed in 300L until 800L)
+            assertTrue("A query past the deadline is cancelled", silent.all { it.second.isCancelled })
+        } finally { never.countDown(); pool.shutdownNow() }
+    }
+
     @Test fun aServerNameWithoutAnAnswerIsALookupFailure() {
         assertTrue("No answer in 5 s", Engine.lookupFailed(java.util.concurrent.TimeoutException()))
         assertTrue("No answer at all", Engine.lookupFailed(java.util.concurrent.ExecutionException(java.net.UnknownHostException("server.example"))))
