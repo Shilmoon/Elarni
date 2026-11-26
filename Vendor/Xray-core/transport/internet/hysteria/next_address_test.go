@@ -74,20 +74,6 @@ func loopbackNamesContext() context.Context {
 	return internet.ContextWithSystemDialerFeatures(context.Background(), func() (dns.Client, outbound.Manager) { return loopbackNames{}, nil })
 }
 
-// ipv4FirstNames is the core's DNS: every name has 127.0.0.1 and then ::1.
-type ipv4FirstNames struct{ loopbackNames }
-
-func (ipv4FirstNames) LookupIP(_ string, option dns.IPOption) ([]net.IP, uint32, error) {
-	var ips []net.IP
-	if option.IPv4Enable {
-		ips = append(ips, net.IPv4(127, 0, 0, 1).To4())
-	}
-	if option.IPv6Enable {
-		ips = append(ips, net.IPv6loopback)
-	}
-	return ips, 60, nil
-}
-
 // silentIPv6Server runs a Hysteria server on 127.0.0.1 and a silent socket on [::1] at the
 // same port.
 func silentIPv6Server(t *testing.T) (*silentSocket, xnet.Port) {
@@ -130,21 +116,27 @@ func nameClient(t *testing.T) *internet.MemoryStreamConfig {
 	return settings
 }
 
+// ipv6First has settings try a name's IPv6 addresses first, as happyEyeballs' prioritizeIPv6 does.
+func ipv6First(settings *internet.MemoryStreamConfig) *internet.MemoryStreamConfig {
+	settings.SocketSettings.HappyEyeballs = &internet.HappyEyeballsConfig{PrioritizeIpv6: true, Interleave: 1}
+	return settings
+}
+
 // A server name whose first address stays silent (an IPv6 address on a network without IPv6)
-// was dialed at that address alone until the dial timed out. The dial moves to the next
-// address within its budget; later dials start with the address that answered until the
-// network changes.
+// was dialed at that address alone until the dial timed out. The next address starts beside it
+// after the stagger and wins within the budget; later dials start with the address that
+// answered until the network changes.
 func TestDialReachesTheNextAddressOfTheServerName(t *testing.T) {
 	defer func(d time.Duration) { dialTimeout = d }(dialTimeout)
 	dialTimeout = 2 * time.Second
-	t.Cleanup(internet.SetUDPAttemptMinimum(100 * time.Millisecond))
+	t.Cleanup(internet.SetUDPAttemptStagger(time.Second))
 	t.Cleanup(internet.SocketPathChanged)
 	silent, port := silentIPv6Server(t)
 	dest := xnet.UDPDestination(xnet.DomainAddress("hysteria-next.test"), port)
 	dial := func() time.Duration {
 		t.Helper()
 		started := time.Now()
-		conn, err := Dial(loopbackNamesContext(), dest, nameClient(t))
+		conn, err := Dial(loopbackNamesContext(), dest, ipv6First(nameClient(t)))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -157,7 +149,7 @@ func TestDialReachesTheNextAddressOfTheServerName(t *testing.T) {
 	}
 	tried := silent.settled()
 	if tried == 0 {
-		t.Fatal("the dial did not start with the resolver's first address")
+		t.Fatal("the dial did not start with the IPv6 address")
 	}
 	if took := dial(); took >= dialTimeout/2 {
 		t.Fatalf("the next dial took %v: it waited for the silent address", took)
@@ -168,16 +160,16 @@ func TestDialReachesTheNextAddressOfTheServerName(t *testing.T) {
 	internet.SocketPathChanged()
 	dial()
 	if silent.settled() == tried {
-		t.Fatal("after a network change the dial did not start with the resolver's first address")
+		t.Fatal("after a network change the dial did not start with the IPv6 address")
 	}
 }
 
 // A server that refuses the password has answered: the dial ends there with the error a dial
-// of that address alone gives, and the name's other address is not contacted.
+// of that address alone gives, and the name's other address (IPv6, which IPv4 goes before) is
+// not contacted.
 func TestDialStopsAtAServerThatRefusesThePassword(t *testing.T) {
 	defer func(d time.Duration) { dialTimeout = d }(dialTimeout)
 	dialTimeout = 2 * time.Second
-	t.Cleanup(internet.SetUDPAttemptMinimum(100 * time.Millisecond))
 	silent, port := silentIPv6Server(t)
 	wrongPassword := func() *internet.MemoryStreamConfig {
 		settings := nameClient(t)
@@ -188,8 +180,7 @@ func TestDialStopsAtAServerThatRefusesThePassword(t *testing.T) {
 	if alone == nil || !strings.Contains(alone.Error(), "auth failed") {
 		t.Fatalf("a dial of the server's address with a wrong password gave %v", alone)
 	}
-	ctx := internet.ContextWithSystemDialerFeatures(context.Background(), func() (dns.Client, outbound.Manager) { return ipv4FirstNames{}, nil })
-	_, err := Dial(ctx, xnet.UDPDestination(xnet.DomainAddress("hysteria-refused.test"), port), wrongPassword())
+	_, err := Dial(loopbackNamesContext(), xnet.UDPDestination(xnet.DomainAddress("hysteria-refused.test"), port), wrongPassword())
 	if err == nil || err.Error() != alone.Error() {
 		t.Fatalf("the name's dial gave %v, the address's %v", err, alone)
 	}
@@ -203,7 +194,7 @@ func TestDialStopsAtAServerThatRefusesThePassword(t *testing.T) {
 func TestDialNamesEachSilentAddressOfTheServerName(t *testing.T) {
 	defer func(d time.Duration) { dialTimeout = d }(dialTimeout)
 	dialTimeout = time.Second
-	t.Cleanup(internet.SetUDPAttemptMinimum(100 * time.Millisecond))
+	t.Cleanup(internet.SetUDPAttemptStagger(200 * time.Millisecond))
 	var v4, v6 *silentSocket
 	for v4 == nil {
 		var err error

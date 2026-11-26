@@ -80,14 +80,20 @@ func nameClient(t *testing.T) *internet.MemoryStreamConfig {
 	return client
 }
 
+// ipv6First has settings try a name's IPv6 addresses first, as happyEyeballs' prioritizeIPv6 does.
+func ipv6First(settings *internet.MemoryStreamConfig) *internet.MemoryStreamConfig {
+	settings.SocketSettings.HappyEyeballs = &internet.HappyEyeballsConfig{PrioritizeIpv6: true, Interleave: 1}
+	return settings
+}
+
 // A server name whose first address stays silent (an IPv6 address on a network without IPv6)
-// was dialed at that address alone until the setup bound. The dial moves to the next address
-// within the bound; later dials start with the address that answered until the network
-// changes.
+// was dialed at that address alone until the setup bound. The next address starts beside it
+// after the stagger and wins within the bound; later dials start with the address that answered
+// until the network changes.
 func TestXHTTP3ReachesTheNextAddressOfTheServerName(t *testing.T) {
 	const budget = 2 * time.Second
 	t.Cleanup(splithttp.SetSetupTimeout(budget))
-	t.Cleanup(internet.SetUDPAttemptMinimum(100 * time.Millisecond))
+	t.Cleanup(internet.SetUDPAttemptStagger(time.Second))
 	t.Cleanup(internet.SocketPathChanged)
 	var silent *silentSocket
 	var port net.Port
@@ -99,7 +105,7 @@ func TestXHTTP3ReachesTheNextAddressOfTheServerName(t *testing.T) {
 	dial := func() time.Duration {
 		t.Helper()
 		started := time.Now()
-		conn := dialXHTTP(t, loopbackNamesContext(), dest, nameClient(t))
+		conn := dialXHTTP(t, loopbackNamesContext(), dest, ipv6First(nameClient(t)))
 		if err := echo(conn, 1); err != nil {
 			t.Fatal(err)
 		}
@@ -111,7 +117,7 @@ func TestXHTTP3ReachesTheNextAddressOfTheServerName(t *testing.T) {
 	}
 	tried := silent.settled()
 	if tried == 0 {
-		t.Fatal("the dial did not start with the resolver's first address")
+		t.Fatal("the dial did not start with the IPv6 address")
 	}
 	if took := dial(); took >= budget/2 {
 		t.Fatalf("the next dial took %v: it waited for the silent address", took)
@@ -122,7 +128,7 @@ func TestXHTTP3ReachesTheNextAddressOfTheServerName(t *testing.T) {
 	internet.SocketPathChanged()
 	dial()
 	if silent.settled() == tried {
-		t.Fatal("after a network change the dial did not start with the resolver's first address")
+		t.Fatal("after a network change the dial did not start with the IPv6 address")
 	}
 }
 
@@ -132,7 +138,7 @@ func TestXHTTP3ReachesTheNextAddressOfTheServerName(t *testing.T) {
 func TestXHTTP3NamesEachSilentAddressOfTheServerName(t *testing.T) {
 	const budget = time.Second
 	t.Cleanup(splithttp.SetSetupTimeout(budget))
-	t.Cleanup(internet.SetUDPAttemptMinimum(100 * time.Millisecond))
+	t.Cleanup(internet.SetUDPAttemptStagger(200 * time.Millisecond))
 	var v4, v6 *silentSocket
 	for v4 == nil {
 		var err error

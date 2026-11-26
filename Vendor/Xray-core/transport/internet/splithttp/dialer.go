@@ -452,7 +452,6 @@ func createHTTPClient(releaseCtx context.Context, dest net.Destination, streamSe
 
 			if !quicParams.DisableChromeParrot {
 				tr.ConnectionIDGenerator = quic.ZeroLengthConnectionIDGenerator{}
-				tlsCfg.GetCertificate = nil
 			}
 
 			conn, err := tr.DialEarly(ctx, udpAddr, tlsCfg, cfg)
@@ -496,12 +495,21 @@ func createHTTPClient(releaseCtx context.Context, dest net.Destination, streamSe
 				budget := setupTimeout
 				ctx, cancel := context.WithTimeout(ctx, budget)
 				defer cancel()
+				if !quicParams.DisableChromeParrot {
+					tlsCfg.GetCertificate = nil // before the addresses race on it
+				}
 				candidates, err := internet.UDPCandidates(ctx, dest, streamSettings.SocketSettings, streamSettings.FinalMask)
 				if err != nil {
 					return nil, errors.New("failed to dial to dest").Base(err)
 				}
+				// A 0-RTT dial returns before the server answered: its address is remembered once the
+				// handshake completes.
 				return internet.DialUDPCandidates(ctx, dest, candidates, budget, func(ctx context.Context, dest net.Destination) (*quic.Conn, error) {
 					return dialAddress(ctx, dest, tlsCfg, cfg)
+				}, func(conn *quic.Conn) {
+					conn.CloseWithError(0, "")
+				}, func(conn *quic.Conn) (<-chan struct{}, <-chan struct{}) {
+					return conn.HandshakeComplete(), conn.Context().Done()
 				})
 			},
 		}

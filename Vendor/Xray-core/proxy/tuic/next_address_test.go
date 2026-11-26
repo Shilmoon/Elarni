@@ -2,7 +2,9 @@ package tuic
 
 import (
 	"context"
+	"errors"
 	"net"
+	"os"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -10,6 +12,7 @@ import (
 
 	M "github.com/sagernet/sing/common/metadata"
 	xnet "github.com/xtls/xray-core/common/net"
+	"github.com/xtls/xray-core/common/probe"
 	"github.com/xtls/xray-core/features/dns"
 	"github.com/xtls/xray-core/features/outbound"
 	"github.com/xtls/xray-core/transport/internet"
@@ -83,6 +86,12 @@ func nameClient(t *testing.T, name string, port int) *Client {
 	return c
 }
 
+// ipv6First has c try a name's IPv6 addresses first, as happyEyeballs' prioritizeIPv6 does.
+func ipv6First(c *Client) *Client {
+	c.stream.SocketSettings.HappyEyeballs = &internet.HappyEyeballsConfig{PrioritizeIpv6: true, Interleave: 1}
+	return c
+}
+
 // nameFlow opens a TCP flow over c as Process does.
 func nameFlow(c *Client) (net.Conn, error) {
 	ctx, cancel := context.WithTimeout(loopbackNamesContext(), 2*handshakeTimeout)
@@ -95,13 +104,13 @@ func nameFlow(c *Client) (net.Conn, error) {
 }
 
 // A server name whose first address stays silent (an IPv6 address on a network without IPv6)
-// was dialed at that address alone until the handshake timed out. The handshake moves to the
-// next address within its timeout; later connections start with the address that answered
-// until the network changes.
+// was dialed at that address alone until the handshake timed out. The next address's handshake
+// starts beside it after the stagger and wins within the timeout; later connections start with
+// the address that answered until the network changes.
 func TestHandshakeReachesTheNextAddressOfTheServerName(t *testing.T) {
 	defer func(d time.Duration) { handshakeTimeout = d }(handshakeTimeout)
 	handshakeTimeout = 2 * time.Second
-	t.Cleanup(internet.SetUDPAttemptMinimum(100 * time.Millisecond))
+	t.Cleanup(internet.SetUDPAttemptStagger(time.Second))
 	t.Cleanup(internet.SocketPathChanged)
 	var silent *silentSocket
 	var port int
@@ -112,7 +121,7 @@ func TestHandshakeReachesTheNextAddressOfTheServerName(t *testing.T) {
 	flow := func() time.Duration {
 		t.Helper()
 		started := time.Now()
-		conn, err := nameFlow(nameClient(t, "tuic-next.test", port))
+		conn, err := nameFlow(ipv6First(nameClient(t, "tuic-next.test", port)))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -128,7 +137,7 @@ func TestHandshakeReachesTheNextAddressOfTheServerName(t *testing.T) {
 	}
 	tried := silent.settled()
 	if tried == 0 {
-		t.Fatal("the handshake did not start with the resolver's first address")
+		t.Fatal("the handshake did not start with the IPv6 address")
 	}
 	if took := flow(); took >= handshakeTimeout/2 {
 		t.Fatalf("the next connection took %v: it waited for the silent address", took)
@@ -139,16 +148,16 @@ func TestHandshakeReachesTheNextAddressOfTheServerName(t *testing.T) {
 	internet.SocketPathChanged()
 	flow()
 	if silent.settled() == tried {
-		t.Fatal("after a network change the handshake did not start with the resolver's first address")
+		t.Fatal("after a network change the handshake did not start with the IPv6 address")
 	}
 }
 
 // When no address of the name answers, the flow fails within the handshake timeout and the
-// error names each address; no socket stays open.
+// error names each address; no socket of the race stays open.
 func TestHandshakeNamesEachSilentAddressOfTheServerName(t *testing.T) {
 	defer func(d time.Duration) { handshakeTimeout = d }(handshakeTimeout)
 	handshakeTimeout = time.Second
-	t.Cleanup(internet.SetUDPAttemptMinimum(100 * time.Millisecond))
+	t.Cleanup(internet.SetUDPAttemptStagger(200 * time.Millisecond))
 	var v4, v6 *silentSocket
 	for v4 == nil {
 		var err error
@@ -184,5 +193,70 @@ func TestHandshakeNamesEachSilentAddressOfTheServerName(t *testing.T) {
 	c.mu.Unlock()
 	if len(sockets) != 0 {
 		t.Fatalf("%d sockets of the failed handshake stayed open", len(sockets))
+	}
+}
+
+// heldNames is the core's DNS of loopbackNames that counts its lookups and, once held, keeps
+// each until released.
+type heldNames struct {
+	loopbackNames
+	asked   atomic.Int32
+	held    atomic.Bool
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (n *heldNames) LookupIP(host string, option dns.IPOption) ([]net.IP, uint32, error) {
+	n.asked.Add(1)
+	if n.held.Load() {
+		n.entered <- struct{}{}
+		<-n.release
+	}
+	return n.loopbackNames.LookupIP(host, option)
+}
+
+// The lookup of the server name is probe work, as the socket after it is: a sealed probe starts
+// none, and the probe's cleanup waits for one under way instead of reporting its work joined
+// while the lookup still runs on an unreachable resolver.
+func TestServerNameLookupIsProbeWork(t *testing.T) {
+	names := &heldNames{entered: make(chan struct{}, 1), release: make(chan struct{})}
+	base := internet.ContextWithSystemDialerFeatures(context.Background(), func() (dns.Client, outbound.Manager) { return names, nil })
+	sockets := &socketDialer{sockopt: &internet.SocketConfig{DomainStrategy: internet.DomainStrategy_USE_IP}, sockets: make(map[*ownedSocket]struct{})}
+	server := M.ParseSocksaddrHostPort("tuic-probe.test", 443)
+
+	sealedCtx, sealed := probe.New(base, "")
+	sealed.CloseTransport(context.Background())
+	if conn, err := sockets.DialContext(sealedCtx, "udp", server); !errors.Is(err, os.ErrClosed) {
+		if conn != nil {
+			conn.Close()
+		}
+		t.Fatalf("a sealed probe's dial gave %v", err)
+	}
+	if asked := names.asked.Load(); asked != 0 {
+		t.Fatalf("a sealed probe looked the server name up %d times", asked)
+	}
+
+	names.held.Store(true)
+	ctx, recorder := probe.New(base, "")
+	dialed := make(chan error, 1)
+	go func() {
+		conn, err := sockets.DialContext(ctx, "udp", server)
+		if conn != nil {
+			conn.Close()
+		}
+		dialed <- err
+	}()
+	<-names.entered
+	waitCtx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	if recorder.CloseTransport(waitCtx) {
+		t.Fatal("the probe's cleanup reported its work joined while the lookup ran")
+	}
+	close(names.release)
+	if err := <-dialed; err != nil {
+		t.Fatalf("the dial whose lookup the probe admitted gave %v", err)
+	}
+	if !recorder.CloseTransport(context.Background()) {
+		t.Fatal("the probe's work did not join once the lookup ended")
 	}
 }
