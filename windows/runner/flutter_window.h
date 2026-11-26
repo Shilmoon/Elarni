@@ -16,8 +16,9 @@
 // A window that does nothing but host a Flutter view.
 class FlutterWindow : public Win32Window {
  public:
-  // Creates a new FlutterWindow hosting a Flutter view running |project|.
-  explicit FlutterWindow(const flutter::DartProject& project);
+  // Creates a new FlutterWindow hosting a Flutter view running |project|. A start
+  // hidden in the tray leaves the window to the tray icon, another launch or a link.
+  explicit FlutterWindow(const flutter::DartProject& project, bool start_hidden = false);
   virtual ~FlutterWindow();
 
  protected:
@@ -38,6 +39,7 @@ class FlutterWindow : public Win32Window {
   NOTIFYICONDATAW tray_{};
   bool tray_added_ = false, can_connect_ = false, can_disconnect_ = false;
   bool headless_ = false;
+  bool start_hidden_ = false;
   // Open file dialogs; Quit waits, or the nested loop destroys their owner.
   int modal_ = 0;
   void AddTray();

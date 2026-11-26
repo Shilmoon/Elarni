@@ -20,8 +20,17 @@ std::vector<std::string> GetCommandLineArguments();
 // write leaves the previous file whole. Returns false on failure.
 bool SaveReplacing(const std::wstring& target, const std::string& content);
 
-// Reports whether a Run-key command launches app, a path compared without case.
-bool IsLaunchCommand(const std::wstring& command, const std::wstring& app);
+// The Run-key command that starts app at login: "<app>", or "<app>" --hidden, which
+// starts it hidden in the tray.
+std::wstring LaunchCommand(const std::wstring& app, bool hidden);
+
+// Reports whether a Run-key command launches app in one of LaunchCommand's two forms, the
+// path compared without case, and nothing else; hidden, when given, receives the form.
+bool IsLaunchCommand(const std::wstring& command, const std::wstring& app, bool* hidden = nullptr);
+
+// Whether the arguments are exactly the hidden login start's: the window then stays
+// hidden until the tray icon, another launch or a link shows it.
+bool IsHiddenStart(const std::vector<std::string>& arguments);
 
 // Whether the runner speaks Russian. As Flutter resolves the app's language, the
 // first English or Russian entry of the preferred UI languages decides, until the

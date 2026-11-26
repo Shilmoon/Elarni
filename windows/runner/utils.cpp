@@ -87,8 +87,24 @@ std::string Utf8FromUtf16(const wchar_t* utf16_string) {
   return utf8_string;
 }
 
-bool IsLaunchCommand(const std::wstring& command, const std::wstring& app) {
-  return _wcsicmp(command.c_str(), (L"\"" + app + L"\"").c_str()) == 0;
+static constexpr wchar_t kHiddenFlag[] = L" --hidden";
+
+std::wstring LaunchCommand(const std::wstring& app, bool hidden) {
+  return L"\"" + app + L"\"" + (hidden ? kHiddenFlag : L"");
+}
+
+bool IsLaunchCommand(const std::wstring& command, const std::wstring& app, bool* hidden) {
+  const auto bare = LaunchCommand(app, false);
+  const std::wstring flag = kHiddenFlag;
+  // The flag is compared as the runner reads it, with its case.
+  const bool flagged = command.size() == bare.size() + flag.size() && command.compare(bare.size(), flag.size(), flag) == 0;
+  if ((!flagged && command.size() != bare.size()) || _wcsnicmp(command.c_str(), bare.c_str(), bare.size()) != 0) return false;
+  if (hidden) *hidden = flagged;
+  return true;
+}
+
+bool IsHiddenStart(const std::vector<std::string>& arguments) {
+  return arguments.size() == 1 && arguments[0] == "--hidden";
 }
 
 static int chosen_russian = -1;

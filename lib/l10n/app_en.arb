@@ -853,6 +853,7 @@
   "loginStateUnavailable": "Registration state is unavailable.",
   "loginApprovalRequired": "Approval is required in macOS Login Items settings.",
   "launchAtLogin": "Launch app at login",
+  "startHiddenInTray": "Start hidden in the tray",
   "windowsWifiLocationHelp": "Windows keeps the Wi-Fi name from Elarni. Turn on Location services and Let desktop apps access your location in Settings › Privacy & security › Location. Until then every Wi-Fi network counts as untrusted.",
   "linuxWifiNameHelp": "Elarni cannot read the Wi-Fi name on this system: it needs NetworkManager's nmcli or iw. Until then every Wi-Fi network counts as untrusted.",
   "noTrustedWifi": "None. Every Wi-Fi network connects.",

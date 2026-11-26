@@ -1856,6 +1856,9 @@ class AppLocalizationsRu extends AppLocalizations {
   String get launchAtLogin => 'Запускать при входе в систему';
 
   @override
+  String get startHiddenInTray => 'Запускать свёрнутым в трей';
+
+  @override
   String get windowsWifiLocationHelp =>
       'Windows скрывает от Elarni имя сети Wi-Fi. Включите «Службы определения местоположения» и «Разрешить классическим приложениям доступ к расположению» в «Параметры › Конфиденциальность и защита › Расположение». До тех пор любая сеть Wi-Fi считается недоверенной.';
 

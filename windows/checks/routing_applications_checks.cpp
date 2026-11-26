@@ -322,7 +322,33 @@ int main() {
         !IsLaunchCommand(L"C:\\Program Files\\Elarni\\elarni.exe", L"C:\\Program Files\\Elarni\\elarni.exe"),
         "launch at login compares the Run value with the wrong case rule");
     std::puts("PASS launch at login matches its Run value in any letter case");
-    std::puts("14 native routing metadata checks passed");
+    // The Run value carries the start hidden in the tray; a value with any other argument is not ours.
+    const std::wstring app = L"C:\\Program Files\\Elarni\\elarni.exe";
+    bool hidden = true;
+    Require(LaunchCommand(app, false) == L"\"C:\\Program Files\\Elarni\\elarni.exe\"" &&
+        LaunchCommand(app, true) == L"\"C:\\Program Files\\Elarni\\elarni.exe\" --hidden",
+        "launch at login writes the wrong Run value");
+    Require(IsLaunchCommand(LaunchCommand(app, false), app, &hidden) && !hidden &&
+        IsLaunchCommand(LaunchCommand(app, true), app, &hidden) && hidden &&
+        IsLaunchCommand(L"\"c:\\program files\\elarni\\ELARNI.exe\"", app, &hidden) && !hidden &&
+        IsLaunchCommand(L"\"c:\\program files\\elarni\\ELARNI.exe\" --hidden", app, &hidden) && hidden,
+        "launch at login does not read its own Run value back");
+    Require(!IsLaunchCommand(L"\"C:\\Other\\elarni.exe\" --hidden", app) &&
+        !IsLaunchCommand(L"C:\\Program Files\\Elarni\\elarni.exe --hidden", app) &&
+        !IsLaunchCommand(LaunchCommand(app, false) + L" --minimized", app) &&
+        !IsLaunchCommand(LaunchCommand(app, true) + L" --minimized", app) &&
+        !IsLaunchCommand(LaunchCommand(app, true) + L" --hidden", app) &&
+        !IsLaunchCommand(LaunchCommand(app, false) + L" --HIDDEN", app) &&
+        !IsLaunchCommand(LaunchCommand(app, false) + L"  --hidden", app) &&
+        !IsLaunchCommand(LaunchCommand(app, true) + L" ", app) &&
+        !IsLaunchCommand(LaunchCommand(app, false) + L"--hidden", app),
+        "launch at login accepts a Run value other than its two forms");
+    Require(IsHiddenStart({"--hidden"}) && !IsHiddenStart({}) && !IsHiddenStart({"--HIDDEN"}) &&
+        !IsHiddenStart({"--hidden", "elarni://open"}) && !IsHiddenStart({"elarni://open", "--hidden"}) &&
+        !IsHiddenStart({"--minimized"}),
+        "a start other than the login entry's hides the window");
+    std::puts("PASS launch at login starts hidden in the tray only from its own Run value");
+    std::puts("15 native routing metadata checks passed");
   } catch (const std::exception& error) {
     std::fprintf(stderr, "FAIL %s\n", error.what()); return 1;
   } catch (...) { std::fputs("FAIL native routing metadata check\n", stderr); return 1; }

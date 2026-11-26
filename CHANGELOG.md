@@ -4,6 +4,13 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
 
 ## Unreleased
 
+### Added
+
+- **Windows and Linux: start at login hidden in the tray.** Under "Launch app at login", "Start
+  hidden in the tray" starts Elarni at login with only its tray icon; the tray icon, opening
+  Elarni again or a link shows the window. On Linux without a tray, the window starts
+  minimized instead.
+
 ### Fixed
 
 - **Windows: "Block traffic without VPN" now also holds WSL2, Hyper-V and Mobile Hotspot traffic.**

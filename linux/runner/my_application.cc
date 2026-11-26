@@ -16,6 +16,8 @@ struct _MyApplication {
   GtkApplication parent_instance;
   GtkWindow* window;
   DesktopHost* host;
+  // Started by the autostart entry hidden in the tray: the first frame does not show the window.
+  bool start_hidden;
 };
 G_DEFINE_TYPE(MyApplication, my_application, GTK_TYPE_APPLICATION)
 
@@ -52,7 +54,9 @@ static bool software_gl() {
   return software;
 }
 
-static void first_frame_cb(FlView* view, gpointer) {
+static void first_frame_cb(FlView* view, gpointer data) {
+  // The tray icon, another launch or a link shows a window started hidden.
+  if (MY_APPLICATION(data)->start_hidden) return;
   gtk_widget_show(gtk_widget_get_toplevel(GTK_WIDGET(view)));
 }
 
@@ -89,7 +93,7 @@ static void my_application_activate(GApplication* application) {
   fl_view_set_background_color(view, &background);
   gtk_widget_show(GTK_WIDGET(view));
   gtk_container_add(GTK_CONTAINER(self->window), GTK_WIDGET(view));
-  g_signal_connect(view, "first-frame", G_CALLBACK(first_frame_cb), nullptr);
+  g_signal_connect(view, "first-frame", G_CALLBACK(first_frame_cb), self);
   gtk_widget_realize(GTK_WIDGET(view));
   fl_register_plugins(FL_PLUGIN_REGISTRY(view));
   self->host = desktop_host_new(GTK_APPLICATION(self), self->window, view);
@@ -98,10 +102,19 @@ static void my_application_activate(GApplication* application) {
 
 static int my_application_command_line(GApplication* application, GApplicationCommandLine* command) {
   auto* self = MY_APPLICATION(application);
-  g_application_activate(application);
   g_auto(GStrv) args = g_application_command_line_get_arguments(command, nullptr);
   // A caller may exec with an empty argv, which leaves no program name to skip.
-  desktop_host_links(self->host, args && args[0] ? args + 1 : nullptr);
+  char** arguments = args && args[0] ? args + 1 : nullptr;
+  if (desktop_host_hidden_start(arguments)) {
+    // A start at login while Elarni already runs has no window to show.
+    if (self->window) return 0;
+    self->start_hidden = true;
+    g_application_activate(application);
+    desktop_host_start_hidden(self->host);
+    return 0;
+  }
+  g_application_activate(application);
+  desktop_host_links(self->host, arguments);
   return 0;
 }
 

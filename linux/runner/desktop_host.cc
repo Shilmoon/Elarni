@@ -38,6 +38,8 @@ struct DesktopHost {
   std::vector<std::string> links;
   // The tray's Quit or Ctrl+Q asked for the close: it quits even with a tray.
   bool quitting = false;
+  // A start hidden in the tray waits this source for a tray host to take the icon.
+  guint tray_wait = 0;
 };
 
 namespace {
@@ -158,6 +160,12 @@ std::string desktop_exec(const std::string& path) {
   }
   return quoted + "\"";
 }
+// The autostart entry's Exec: the launcher, with --hidden for the start hidden in the tray.
+std::string login_exec(const std::string& path, bool hidden) {
+  return desktop_exec(path) + (hidden ? " --hidden" : "");
+}
+// How long a start hidden in the tray waits for a status-notifier host to take the icon.
+constexpr guint kTrayHostWaitMs = 3000;
 FlValue* system_info() {
   auto* value = fl_value_new_map();
   struct utsname name{};
@@ -172,10 +180,13 @@ FlValue* system_info() {
   g_autoptr(GKeyFile) entry = g_key_file_new();
   bool enabled = g_key_file_load_from_file(entry, config_path("autostart/com.elarni.Elarni.desktop").c_str(), G_KEY_FILE_NONE, nullptr)
       && !g_key_file_get_boolean(entry, "Desktop Entry", "Hidden", nullptr);
-  // As on Windows, an entry for a moved or replaced copy does not start this one.
+  // As on Windows, an entry for a moved or replaced copy, or with another argument, does not
+  // start this one. The entry is the only store of the hidden start too.
   g_autofree char* exec = enabled ? g_key_file_get_string(entry, "Desktop Entry", "Exec", nullptr) : nullptr;
-  enabled = exec && desktop_exec(launcher()) == exec;
+  const bool hidden = exec && login_exec(launcher(), true) == exec;
+  enabled = exec && (hidden || login_exec(launcher(), false) == exec);
   fl_value_set_string_take(value, "launchAtLoginStatus", fl_value_new_string(enabled ? "enabled" : "notRegistered"));
+  fl_value_set_string_take(value, "launchHidden", fl_value_new_bool(hidden));
   return value;
 }
 // The entry points of the camera module (elarni_camera.h).
@@ -734,6 +745,7 @@ void platform_call(FlMethodChannel*, FlMethodCall* call, gpointer data) {
   else if (method == "setLaunchAtLogin") {
     auto* enabled = field(args, "enabled", FL_VALUE_TYPE_BOOL);
     if (!enabled) { fail(call, "invalid_settings"); return; }
+    auto* hidden = field(args, "hidden", FL_VALUE_TYPE_BOOL);
     std::string path = config_path("autostart/com.elarni.Elarni.desktop");
     if (fl_value_get_bool(enabled)) {
       std::string binary = launcher();
@@ -741,7 +753,7 @@ void platform_call(FlMethodChannel*, FlMethodCall* call, gpointer data) {
       g_autoptr(GKeyFile) entry = g_key_file_new();
       g_key_file_set_string(entry, "Desktop Entry", "Type", "Application");
       g_key_file_set_string(entry, "Desktop Entry", "Name", "Elarni");
-      g_key_file_set_string(entry, "Desktop Entry", "Exec", desktop_exec(binary).c_str());
+      g_key_file_set_string(entry, "Desktop Entry", "Exec", login_exec(binary, hidden && fl_value_get_bool(hidden)).c_str());
       g_key_file_set_string(entry, "Desktop Entry", "Icon", APPLICATION_ID);
       g_autofree char* contents = g_key_file_to_data(entry, nullptr, nullptr);
       if (!write_private(path, contents, strlen(contents))) { fail(call, "login_registration_failed"); return; }
@@ -866,8 +878,27 @@ void desktop_host_closed_to_tray(DesktopHost* host) {
   g_autoptr(FlValue) action = fl_value_new_string("closedToTray");
   notify(host->desktop, "action", action);
 }
+bool desktop_host_hidden_start(const char* const* arguments) {
+  return arguments && arguments[0] && strcmp(arguments[0], "--hidden") == 0 && !arguments[1];
+}
+void desktop_host_start_hidden(DesktopHost* host) {
+  if (!host || host->tray_wait) return;
+  host->tray_wait = g_timeout_add(kTrayHostWaitMs, [](gpointer data) -> gboolean {
+    auto* waiting = static_cast<DesktopHost*>(data);
+    waiting->tray_wait = 0;
+    gboolean connected = FALSE;
+    if (waiting->indicator) g_object_get(waiting->indicator, "connected", &connected, nullptr);
+    // Nothing else could show the window; one already shown is left as it is.
+    if (!connected && !gtk_widget_get_visible(GTK_WIDGET(waiting->window))) {
+      gtk_window_iconify(waiting->window);
+      gtk_window_present(waiting->window);
+    }
+    return G_SOURCE_REMOVE;
+  }, host);
+}
 void desktop_host_free(DesktopHost* host) {
   if (!host) return;
+  if (host->tray_wait) g_source_remove(host->tray_wait);
   stop_camera(host);
   g_action_map_remove_action(G_ACTION_MAP(host->app), "quit");
   g_action_map_remove_action(G_ACTION_MAP(host->app), "preferences");
