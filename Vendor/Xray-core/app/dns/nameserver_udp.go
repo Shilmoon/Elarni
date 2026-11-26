@@ -30,10 +30,13 @@ type ClassicNameServer struct {
 	reqID           uint32
 	clientIP        net.IP
 	dispatcher      routing.Dispatcher
+	// resendAfter is when a query still unanswered is sent once more. It belongs to the server, set before its
+	// first query: a lookup may return while a query it started is still being sent.
+	resendAfter time.Duration
 }
 
 // udpResendAfter is when a query still unanswered is sent once more.
-var udpResendAfter = time.Second
+const udpResendAfter = time.Second
 
 type udpDnsRequest struct {
 	dnsRequest
@@ -53,6 +56,7 @@ func NewClassicNameServer(address net.Destination, dispatcher routing.Dispatcher
 		requests:        make(map[uint16]*udpDnsRequest),
 		clientIP:        clientIP,
 		dispatcher:      dispatcher,
+		resendAfter:     udpResendAfter,
 	}
 	s.requestsCleanup = &task.Periodic{
 		Interval: time.Minute,
@@ -209,7 +213,7 @@ func (s *ClassicNameServer) sendQuery(ctx context.Context, noResponseErrCh chan<
 		}
 		s.udpServer.Load().Dispatch(toDnsContext(ctx, s.address.String()), *s.address, b)
 		// Elarni: a lost datagram cost the whole query timeout, since an app's own retry joins this query.
-		time.AfterFunc(udpResendAfter, func() { s.resend(udpReq) })
+		time.AfterFunc(s.resendAfter, func() { s.resend(udpReq) })
 	}
 }
 

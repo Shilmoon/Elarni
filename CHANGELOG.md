@@ -52,6 +52,10 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
 - For contributors: a TUIC emulator test that fails now says when its request began and how far
   it got, and `check-android` prints the TUIC peer's whole log, with times. The reply that came
   back empty six times in CI is not explained yet.
+- For contributors: the DNS test "an empty AAAA answer ends a parallel lookup" no longer fails
+  the race check (it did in two of nine Linux runs on 2026-11-26). The delay before a UDP query
+  is sent again was a package variable that tests changed and restored while a query of the
+  finished lookup was still being sent; it now belongs to each name server.
 
 ## 0.6.5 - 2026-11-26
 
