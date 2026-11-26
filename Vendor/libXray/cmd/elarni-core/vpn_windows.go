@@ -850,6 +850,26 @@ func reloadVPNTunnel(running *vpnCommand, next vpnCommand, adapter string) error
 	return nil
 }
 
+// vpnFailureCode is a failed start's reply error, vpn_<stage>_failed, with the Windows
+// error number err carries; native is that number, 0 without one.
+func vpnFailureCode(stage string, err error) (code string, native syscall.Errno) {
+	code = "vpn_" + stage + "_failed"
+	if errors.As(err, &native) {
+		code += "_" + strconv.FormatUint(uint64(native), 10)
+	}
+	return code, native
+}
+
+// coreStage is the stage a core that did not start reports. The TUN creates its Wintun
+// adapter inside the core's start: a refused adapter is Wintun's failure, as a DLL that
+// did not load is, so the app names the driver and does not fail over to another server.
+func coreStage(err error) string {
+	if errors.Is(err, tun.ErrAdapter) {
+		return "wintun"
+	}
+	return "core"
+}
+
 // runVPNTunnel runs one tunnel. code 0 is a requested stop; ready says the tunnel
 // was up; fatal says this process cannot run another one.
 func runVPNTunnel(pipe io.Writer, parent windows.Handle, request vpnCommand, commands <-chan vpnCommand, closed <-chan struct{}, guard *childGuard, held *heldAssets) (code int, ready, fatal bool) {
@@ -869,11 +889,7 @@ func runVPNTunnel(pipe io.Writer, parent windows.Handle, request vpnCommand, com
 		}()
 	}
 	fail := func(stage string, err error) (int, bool, bool) {
-		code := "vpn_" + stage + "_failed"
-		var native syscall.Errno
-		if errors.As(err, &native) {
-			code += "_" + strconv.FormatUint(uint64(native), 10)
-		}
+		code, native := vpnFailureCode(stage, err)
 		if flightrecorder.Enabled() {
 			flightrecorder.Record(flightrecorder.Event{Name: "windows_vpn_failure", Code: code, Values: map[string]int64{"native_error": int64(native)}})
 		}
@@ -982,7 +998,7 @@ func runVPNTunnel(pipe io.Writer, parent windows.Handle, request vpnCommand, com
 		return 1, false, true
 	}
 	if err != nil {
-		return fail("core", err)
+		return fail(coreStage(err), err)
 	}
 	iface, err := tunnelInterface(tun.AdapterGUID(adapter))
 	if err != nil {

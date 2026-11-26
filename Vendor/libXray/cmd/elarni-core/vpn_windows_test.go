@@ -5,14 +5,20 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"net"
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 
+	"github.com/xtls/libxray/xray"
+	xerrors "github.com/xtls/xray-core/common/errors"
 	"github.com/xtls/xray-core/common/geodata"
 	"github.com/xtls/xray-core/common/platform/filesystem"
 	"github.com/xtls/xray-core/proxy/tun"
@@ -66,6 +72,38 @@ func TestTunnelInterfaceResolvesByGUIDNotName(t *testing.T) {
 		return
 	}
 	t.Skip("no loopback interface to resolve")
+}
+
+// PR #145 review: the TUN creates its Wintun adapter inside the core's start, and a refused one
+// (N6-03: a device installation policy) came back as vpn_core_failed, so the app blamed the
+// server and failed over. It is Wintun's failure, as a wintun.dll that did not load is.
+func TestCoreStartThatFailedOnTheWintunAdapterIsWintuns(t *testing.T) {
+	// Wintun refuses a name with a NUL before it touches a device.
+	err := xray.RunXrayFromJSON(`{"inbounds":[{"tag":"elarni-tun","protocol":"tun","settings":{"name":"elarni-test\u0000"}}],"outbounds":[{"protocol":"freedom"}]}`)
+	if err == nil {
+		_ = xray.StopXray()
+		t.Fatal("a TUN whose adapter Wintun refused started")
+	}
+	var native syscall.Errno
+	if !errors.As(err, &native) {
+		t.Fatalf("the core's error lost the Windows error: %v", err)
+	}
+	want := "vpn_wintun_failed_" + strconv.FormatUint(uint64(native), 10)
+	if got, _ := vpnFailureCode(coreStage(err), err); got != want {
+		t.Fatalf("reply %q, want %q, for %v", got, want, err)
+	}
+	// Any other failed core start stays the core's.
+	for _, other := range []error{
+		fmt.Errorf("xray_start_failed: %w", xerrors.New("failed to start proxy").Base(windows.ERROR_ACCESS_DENIED)),
+		errors.New("xray_config_invalid"),
+	} {
+		if got, _ := vpnFailureCode(coreStage(other), other); !strings.HasPrefix(got, "vpn_core_failed") {
+			t.Fatalf("%v reported as %q", other, got)
+		}
+	}
+	if got, native := vpnFailureCode("core", windows.ERROR_ACCESS_DENIED); got != "vpn_core_failed_5" || native != 5 {
+		t.Fatalf("an access denial is reported as %q (%d)", got, native)
+	}
 }
 
 // The recording switch crosses the strict pipe to the elevated child.

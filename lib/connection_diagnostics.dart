@@ -41,11 +41,12 @@ const supportIssueCodes = {
   'vpn_guard_stale',
 };
 
+final _wintunFailure = RegExp(r'^vpn_wintun_failed(_\d{1,10})?$');
+
 /// Whether [code] is the Windows helper's: Wintun, the network driver, could not
 /// be loaded or its adapter created. The helper appends the Windows error number
 /// (vpn_wintun_failed_126); the code stays whole, so the evidence export names it.
-bool wintunFailure(String code) =>
-    RegExp(r'^vpn_wintun_failed(_\d{1,10})?$').hasMatch(code);
+bool wintunFailure(String code) => _wintunFailure.hasMatch(code);
 
 /// Allowlist support fields; do not recursively copy arbitrary runtime maps.
 Map<String, Object?> connectionDiagnostics({
