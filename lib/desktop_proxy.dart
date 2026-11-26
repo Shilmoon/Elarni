@@ -71,8 +71,9 @@ final class DesktopProxy {
        _livenessSeconds =
            (livenessInterval ?? const Duration(minutes: 1)).inMilliseconds /
            1000,
-       _transferTargets =
-           transferTargets ?? DesktopProxy.defaultTransferTargets,
+       // None unless named: the app and the daemon pass
+       // defaultTransferTargets, and a test reaches no public host.
+       _transferTargets = transferTargets ?? const [],
        _transferDelay =
            (transferDelay ?? const Duration(seconds: 5)).inMilliseconds / 1000,
        _transferRecheck =
@@ -152,7 +153,8 @@ final class DesktopProxy {
   // Some hosting networks' paths freeze each connection after about 16 KB, so a
   // small probe passes while pages hang. The transfer check fetches one of
   // these bodies (at least 128 KB, sent uncompressed) over one connection and
-  // passes at 96 KB received.
+  // passes at 96 KB received. The app and the daemon pass them; a proxy built
+  // without them checks no transfers.
   static const defaultTransferTargets = <CatalogMap>[
     {
       'id': 'googleapis',

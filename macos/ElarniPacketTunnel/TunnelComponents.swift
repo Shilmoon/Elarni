@@ -198,7 +198,8 @@ struct ProviderLiveness {
 // Whether the connected server's network lets a transfer through: small probes pass on a server whose
 // network cuts each connection off after about 16 KB, so this check fetches one body and passes at
 // 96 KB. It runs 5 s after the core came up and 10 s later again when that one stalled, then every
-// 15 min while traffic left, and at once when the liveness check found no traffic. Two stalls in a
+// 15 min while traffic left or a stall was seen (pages that hang send nothing, and only a passing check
+// clears the stall), and at once when the liveness check found no traffic. Two stalls in a
 // row confirm; an inconclusive check (connect, TLS or status failure) neither counts nor ends a run.
 // A check takes up to about 20 s, so it runs beside the monitor loop, one at a time: the loop keeps its
 // 2 s pace and reads the verdict on a later pass.
@@ -273,10 +274,10 @@ struct ProviderTransferCheck {
     return verdict
   }
 
-  // A 15 min check finding no new traffic waits another interval instead; the first check and a
-  // stall's recheck do not wait for traffic.
+  // A 15 min check with no stall seen, finding no new traffic, waits another interval instead; the
+  // first check and those after a stall do not wait for traffic.
   mutating func needsCheck(uplink: UInt64, at time: TimeInterval) -> Bool {
-    if !now, stalls != 1, let last = self.uplink, uplink <= last {
+    if !now, stalls == 0, let last = self.uplink, uplink <= last {
       dueAt = time + interval
       self.uplink = uplink
       return false

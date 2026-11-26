@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/xtls/libxray/xray"
 	"github.com/xtls/xray-core/core"
@@ -233,5 +234,36 @@ func TestTransferCheckSeesAServerWhosePathFreezes(t *testing.T) {
 		if reply := invokePingJSON(t, request); reply.Success || reply.Error != "invalid_transfer_check" {
 			t.Fatalf("%v was accepted: %+v", bad, reply)
 		}
+	}
+}
+
+// A far server's answer can take most of the check's time to start; a body that freezes after it is still a
+// stall, since the total limit runs from the answer's headers.
+func TestTransferCheckSeesAFreezeAfterASlowAnswer(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/slow", func(w http.ResponseWriter, r *http.Request) {
+		// Most of the 1 s limit: the 300 ms idle limit does not fit after it when the total limit counts it.
+		select {
+		case <-time.After(900 * time.Millisecond):
+		case <-r.Context().Done():
+			return
+		}
+		w.Header().Set("Content-Length", strconv.Itoa(1<<20))
+		_, _ = w.Write(bytes.Repeat([]byte("x"), 4096))
+		w.(http.Flusher).Flush()
+		<-r.Context().Done()
+	})
+	target, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := &http.Server{Handler: mux}
+	go server.Serve(target)
+	defer server.Close()
+	reply := invokePingJSON(t, map[string]any{"transfer": true, "packetPath": true, "method": "GET",
+		"url": "http://" + target.Addr().String() + "/slow", "timeout": 1, "transferIdleMs": 300})
+	if !reply.Success || reply.Data.Verdict != "stalled" || reply.Data.TransferBytes != 4096 {
+		t.Fatalf("want stalled after 4096 bytes, got success=%v error=%q verdict=%q after %d bytes",
+			reply.Success, reply.Error, reply.Data.Verdict, reply.Data.TransferBytes)
 	}
 }

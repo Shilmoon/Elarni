@@ -33,6 +33,7 @@ Future<void> main(List<String> arguments) async {
           confirmLink: headless
               ? null
               : (prompt) => _confirmLink(navigator, prompt),
+          transferTargets: DesktopProxy.defaultTransferTargets,
           corePath: File(Platform.resolvedExecutable).parent.uri
               .resolve(Platform.isLinux ? 'elarni-core' : 'elarni-core.exe')
               .toFilePath(),

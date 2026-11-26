@@ -185,7 +185,7 @@ class AutomationTest {
         assertTrue(check.record(TransferCheck.STALLED, 53.0, 0L))
     }
 
-    @Test fun laterChecksRunOnlyWhileTheUplinkGrows() = shortTransferTimings {
+    @Test fun laterChecksRunWhileTheUplinkGrowsOrAStallWasSeen() = shortTransferTimings {
         val check = TransferCheck()
         check.started(0.0, "a:1")
         check.record(TransferCheck.OK, 1.0, 500L)
@@ -194,9 +194,13 @@ class AutomationTest {
         assertFalse("It looks again an interval later", check.due(60.0) { 900L })
         assertTrue("Traffic left since", check.due(61.0) { 900L })
         check.record(TransferCheck.STALLED, 62.0, 900L)
-        check.record(TransferCheck.STALLED, 64.0, 900L)
-        assertFalse("A confirmed stall is checked again only with traffic too", check.due(94.0) { 900L })
-        assertTrue(check.due(124.0) { 901L })
+        assertTrue(check.record(TransferCheck.STALLED, 64.0, 900L))
+        // Pages that hang send nothing, and only a passing check clears the stall.
+        assertFalse(check.due(93.0) { 900L })
+        assertTrue("A confirmed stall is checked on schedule without traffic", check.due(94.0) { 900L })
+        check.record(TransferCheck.OK, 95.0, 900L)
+        assertFalse(check.confirmed)
+        assertFalse("After a pass, an idle interval is not checked", check.due(125.0) { 900L })
     }
 
     @Test fun noTrafficChecksAtOnceAndAStopEndsTheSchedule() = shortTransferTimings {

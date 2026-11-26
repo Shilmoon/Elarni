@@ -586,14 +586,17 @@ extension _ProxyAutomation on DesktopProxy {
   }
 
   // Checks the running server's transfers 5 s after it came up (10 s later
-  // again after a first stall), then every 15 min while traffic leaves, and at
-  // once when liveness finds no traffic. Two stalls in a row make the
-  // connection 'stalled', which the health check counts as a failure.
+  // again after a first stall), then every 15 min while traffic leaves or a
+  // stall was seen, and at once when liveness finds no traffic. Two stalls in
+  // a row make the connection 'stalled', which the health check counts as a
+  // failure.
   Future<void> _transferTick() async {
     if (_transferBusy ||
         _disposed ||
         _state != 'connected' ||
         _operation != null ||
+        _automationBusy ||
+        _livenessBusy ||
         _disconnecting != null ||
         _catalog == null ||
         _transferTargets.isEmpty ||
@@ -601,10 +604,11 @@ extension _ProxyAutomation on DesktopProxy {
         !_transferNow && _now < _transferAt!)
       return;
     final uplink = (_latestMetrics['uplinkBytes'] as num?)?.toInt();
-    // The 15 min checks wait for traffic; the first one and a stall's
-    // recheck do not.
+    // The 15 min checks wait for traffic while no stall was seen; the first
+    // one and those after a stall do not: pages that hang send nothing, and
+    // only a passing check clears the stall.
     if (!_transferNow &&
-        _transferStalls != 1 &&
+        _transferStalls == 0 &&
         _transferUplink != null &&
         !(uplink != null && uplink > _transferUplink!)) {
       _transferAt = _now + _transferSeconds;
@@ -613,6 +617,10 @@ extension _ProxyAutomation on DesktopProxy {
     }
     _transferBusy = true;
     _transferNow = false;
+    // Like a health check it holds the operation slot, so no other probe
+    // competes with its download, and the user's edits wait for it.
+    _automationBusy = true;
+    final done = _operation = Completer<void>();
     final generation = _generation, catalog = _catalog!, runtime = _connectedAt;
     String verdict;
     try {
@@ -620,6 +628,9 @@ extension _ProxyAutomation on DesktopProxy {
     } on Object {
       return;
     } finally {
+      _operation = null;
+      done.complete();
+      _automationBusy = false;
       _transferBusy = false;
     }
     // A restart during the check starts the schedule over for the new core.
