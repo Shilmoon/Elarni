@@ -249,7 +249,8 @@ abstract interface class TunnelControl {
   Future<String> state();
 
   /// Whether the connected server passes traffic, as of the last [state]:
-  /// ok, noTraffic, or null when not checked yet.
+  /// ok, noTraffic, stalled (the server's network cuts transfers off), or null
+  /// when not checked yet.
   String? get liveness;
   Future<PingResult> pingNode(
     String nodeId, {

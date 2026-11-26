@@ -1101,6 +1101,7 @@
   "stateReconnecting": "Reconnecting…",
   "stateDisconnecting": "Disconnecting…",
   "stateConnectedNoTraffic": "Connected · no traffic",
+  "stateConnectedStalled": "Connected · transfers cut off",
   "stateConnected": "Connected",
   "stateConnecting": "Connecting…",
   "statePreparing": "Preparing…",
@@ -1238,6 +1239,7 @@
       }
     }
   },
+  "serverCutsTransfersOff": "Connected, but this server’s network cuts transfers off. Pages will not load; choose another server.",
   "connectionCheckUnavailable": "Connection check unavailable for this routing setup",
   "checkingConnection": "Checking connection…",
   "lastKnownState": "Last known state: {state}",

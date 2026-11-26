@@ -60,6 +60,12 @@ extension _HomePages on _ElarniHomeState {
       _state == TunnelState.connected &&
       _liveness == 'noTraffic';
 
+  // Small probes pass, but the server's network cuts longer transfers off.
+  bool get _stalled =>
+      _stateAvailable &&
+      _state == TunnelState.connected &&
+      _liveness == 'stalled';
+
   String get _healthLabel {
     final label = _checkLabel;
     return _stateAvailable &&
@@ -100,6 +106,7 @@ extension _HomePages on _ElarniHomeState {
       ).formatTimeOfDay(TimeOfDay.fromDateTime(_noTrafficAt!));
       return l10n.serverPassedNoTraffic(time);
     }
+    if (_stalled) return l10n.serverCutsTransfersOff;
     if (_automation['enabled'] == true) {
       final status = _automation['status'];
       if (_automation['policySupported'] == false)
@@ -1005,7 +1012,7 @@ extension _HomePages on _ElarniHomeState {
         : const Color(0xff854d0e);
     final iconColor = failed
         ? scheme.error
-        : _noTraffic
+        : _noTraffic || _stalled
         ? warning
         : scheme.onSurfaceVariant.withValues(alpha: .7);
     final disconnect =
@@ -1022,7 +1029,11 @@ extension _HomePages on _ElarniHomeState {
             TunnelState.preparing => l10n.statePreparing,
             TunnelState.connecting => l10n.stateConnecting,
             TunnelState.connected =>
-              _noTraffic ? l10n.stateConnectedNoTraffic : l10n.stateConnected,
+              _noTraffic
+                  ? l10n.stateConnectedNoTraffic
+                  : _stalled
+                  ? l10n.stateConnectedStalled
+                  : l10n.stateConnected,
             TunnelState.disconnecting => l10n.stateDisconnecting,
             TunnelState.reasserting ||
             TunnelState.reconnecting => l10n.stateReconnecting,
@@ -1043,6 +1054,7 @@ extension _HomePages on _ElarniHomeState {
               end:
                   !failed &&
                       !_noTraffic &&
+                      !_stalled &&
                       _stateAvailable &&
                       _state == TunnelState.connected
                   ? 1.0
@@ -1094,7 +1106,7 @@ extension _HomePages on _ElarniHomeState {
               style: TextStyle(
                 fontSize: 18,
                 fontWeight: FontWeight.w600,
-                color: _noTraffic ? warning : null,
+                color: _noTraffic || _stalled ? warning : null,
               ),
             ),
           ),

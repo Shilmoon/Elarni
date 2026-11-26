@@ -28,7 +28,8 @@ std::wstring TrayState(const std::string& state) {
       {"connecting", L"подключение"}, {"connected", L"подключено"}, {"disconnecting", L"отключение"},
       {"reasserting", L"восстановление связи"}, {"reconnecting", L"переподключение"},
       {"invalid", L"требуется настройка"}, {"failed", L"ошибка подключения"},
-      {"connected, no traffic", L"подключено, нет трафика"}};
+      {"connected, no traffic", L"подключено, нет трафика"},
+      {"connected, transfers cut off", L"подключено, передача обрывается"}};
   const auto found = russian.find(state);
   return RussianInterface() && found != russian.end() ? std::wstring(found->second) : std::wstring(winrt::to_hstring(state));
 }

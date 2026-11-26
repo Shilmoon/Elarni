@@ -29,6 +29,14 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
 - **Two dependencies with published advisories are updated**: the packet parser of the tunnel
   stack (etherparse 0.20.4: a read past the end of a packet with IPv6 extension headers) and the
   WebSocket library (the mask key now comes from the system's random source). All platforms.
+- **A server whose network cuts transfers off no longer looks healthy.** Some hosting networks
+  stop each connection after its first 16 KB or so: the quick server checks passed while pages
+  never loaded. Elarni now also downloads about 100 KB through the connected server after
+  connecting, every 15 minutes while you use it, and when it stops passing traffic. When two
+  such downloads in a row stall, the app shows "Connected, but this server's network cuts
+  transfers off", and automatic recovery and "lowest latency" move to another server; a backup
+  whose downloads stall is skipped. With no other server to move to, recovery reconnects the
+  stalled one once and then keeps it until a download passes or the network changes.
 - **Android: "Connect after device restart" waits for the network.** A server given by name
   was looked up once as the phone started, often before Wi-Fi or mobile data worked; the
   start failed and, with "Reconnect automatically" off, the phone stayed without VPN. A start

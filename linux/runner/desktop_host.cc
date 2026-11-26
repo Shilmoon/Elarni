@@ -80,7 +80,8 @@ const char* tray_state(const char* state) {
       {"connecting", "подключение"}, {"connected", "подключено"}, {"disconnecting", "отключение"},
       {"reasserting", "восстановление связи"}, {"reconnecting", "переподключение"},
       {"invalid", "требуется настройка"}, {"failed", "ошибка подключения"},
-      {"connected, no traffic", "подключено, нет трафика"}};
+      {"connected, no traffic", "подключено, нет трафика"},
+      {"connected, transfers cut off", "подключено, передача обрывается"}};
   const auto found = russian.find(state);
   return russian_interface() && found != russian.end() ? found->second : state;
 }

@@ -20,6 +20,8 @@ final class IOSVPNController {
   var connected: Bool { [.connected, .reasserting].contains(status) }
   var providerReady: Bool { status == .connected && provider["state"] as? String == "connected" && provider["resourceRecoveryRequired"] as? Bool != true }
   var noTraffic: Bool { providerReady && provider["liveness"] as? String == "noTraffic" }
+  /// Small probes pass, but two transfer checks in a row stalled: the server's network cuts transfers off.
+  var stalled: Bool { providerReady && provider["liveness"] as? String == "stalled" }
   /// The provider holds routes but carries no traffic until it is restarted.
   var failed: Bool {
     active && (["protectedFailure", "quarantinedFailClosed"].contains(provider["state"] as? String ?? "") || provider["resourceRecoveryRequired"] as? Bool == true)
@@ -29,7 +31,10 @@ final class IOSVPNController {
   var stateLabel: String {
     if failed { return String(localized: "Connection needs attention") }
     switch status {
-    case .connected: return providerReady ? (noTraffic ? String(localized: "Connected · no traffic") : String(localized: "Connected")) : String(localized: "Checking VPN status")
+    case .connected:
+      guard providerReady else { return String(localized: "Checking VPN status") }
+      if noTraffic { return String(localized: "Connected · no traffic") }
+      return stalled ? String(localized: "Connected · transfers cut off") : String(localized: "Connected")
     case .connecting: return String(localized: "Connecting")
     case .disconnecting: return String(localized: "Disconnecting")
     case .reasserting: return String(localized: "Reconnecting")

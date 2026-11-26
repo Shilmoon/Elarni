@@ -304,6 +304,13 @@ extension _ProxyRuntime on DesktopProxy {
     _connectedAt = DateTime.now();
     _liveness = _livenessAt = null;
     _livenessFailures = 0;
+    // Each tunnel gets its first transfer check a few seconds after it is up.
+    _transferAt = _now + _transferDelay;
+    _transferUplink = null;
+    _transferStalls = 0;
+    _transferNow = false;
+    if (_stallRestart != _ProxyAutomation._serverRevision(catalog))
+      _stallRestart = null;
   }
 
   Future<void> _startCore(DesktopCatalog catalog, String config) => _native(

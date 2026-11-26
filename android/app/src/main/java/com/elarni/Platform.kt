@@ -307,7 +307,8 @@ class ElarniVpnService : VpnService() {
     private fun notification(state: String): Notification {
         val disconnect = PendingIntent.getService(this, 1, Intent(this, ElarniVpnService::class.java).setAction(DISCONNECT), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         val vpn = app.repository.state.value.catalog.mapObject("settings").optBoolean("xrayTunEnabled", true)
-        val passes = if (app.repository.state.value.liveness == "noTraffic") tr(R.string.server_passes_no_traffic) else ""
+        val passes = when (app.repository.state.value.trafficState) {
+            "noTraffic" -> tr(R.string.server_passes_no_traffic); "stalled" -> tr(R.string.server_cuts_transfers_off); else -> "" }
         val text = when (state) { "connected" -> (if (vpn) tr(R.string.vpn_connected) else tr(R.string.local_proxy_running)) + passes; "paused" -> tr(R.string.paused_while_screen_is_off); "failed" -> tr(R.string.connection_failed_open_to_review); "disconnecting" -> tr(R.string.disconnecting_2); "disconnected" -> tr(R.string.disconnected); else -> tr(R.string.connecting_2) }
         return Notification.Builder(this, ElarniApplication.CONNECTION_CHANNEL).setSmallIcon(R.drawable.ic_elarni).setContentTitle("Elarni").setContentText(text)
             .setOngoing(true).setOnlyAlertOnce(true).setCategory(Notification.CATEGORY_SERVICE).setContentIntent(app.openApp())
@@ -347,7 +348,7 @@ class ElarniTileService : TileService() {
         watch?.cancel()
         watch = app.repository.scope.launch {
             app.repository.awaitReady()
-            app.repository.state.map { Triple(it.connection, it.liveness, Catalog(it.catalog).selectedName) }.distinctUntilChanged().collect { (connection, liveness, server) ->
+            app.repository.state.map { Triple(it.connection, it.trafficState, Catalog(it.catalog).selectedName) }.distinctUntilChanged().collect { (connection, liveness, server) ->
                 qsTile?.let {
                     val running = connection in active
                     it.state = if (running) Tile.STATE_ACTIVE else Tile.STATE_INACTIVE

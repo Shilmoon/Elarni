@@ -413,6 +413,11 @@ void main() {
     int? automationRetrySeconds,
     List<CatalogMap>? livenessTargets,
     Duration? livenessInterval,
+    List<CatalogMap> transferTargets = const [],
+    Duration? transferDelay,
+    Duration? transferRecheck,
+    Duration? transferInterval,
+    Duration? transferIdle,
     DateTime Function()? clock,
     Duration? refreshInterval,
     SystemProxySession? systemProxy,
@@ -428,6 +433,12 @@ void main() {
       automationRetrySeconds: automationRetrySeconds,
       livenessTargets: livenessTargets,
       livenessInterval: livenessInterval,
+      // Transfer checks fetch public bodies by default; a test names its own.
+      transferTargets: transferTargets,
+      transferDelay: transferDelay,
+      transferRecheck: transferRecheck,
+      transferInterval: transferInterval,
+      transferIdle: transferIdle,
       clock: clock,
       refreshInterval: refreshInterval,
       systemProxy: systemProxy,
@@ -5807,6 +5818,326 @@ if tunnel: note('closed')
       }
     },
     timeout: const Timeout(Duration(seconds: 90)),
+  );
+
+  // N9-01: a server whose network freezes each connection after about 16 KB
+  // passes every small probe while pages hang. Two stalled transfer checks in a
+  // row make the connection 'stalled', recovery leaves it, and a backup that
+  // stalls too is skipped.
+  test(
+    'failover leaves a server whose network cuts transfers off',
+    () async {
+      await backend.dispose();
+      final check = {
+        'id': 'fixture',
+        'url': 'http://127.0.0.1:${target.port}/fixture',
+        'expectedStatus': 200,
+        'expectedBody': body,
+      };
+      // A body well past the 96 KB the check needs, sent only uncompressed.
+      final large = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      final payload = List<int>.filled(1 << 20, 0x61);
+      large.listen((request) async {
+        request.response.persistentConnection = false;
+        if (request.headers.value('accept-encoding') != 'identity') {
+          request.response.statusCode = 400;
+        } else {
+          request.response.contentLength = payload.length;
+          request.response.add(payload);
+        }
+        await request.response.close();
+      });
+      backend = createBackend(
+        automationProbeSeconds: 2,
+        automationRetrySeconds: 1,
+        livenessInterval: const Duration(minutes: 5),
+        livenessTargets: [check],
+        transferTargets: [
+          {'id': 'large', 'url': 'http://127.0.0.1:${large.port}/large'},
+        ],
+        transferDelay: Duration.zero,
+        transferRecheck: const Duration(seconds: 1),
+        transferIdle: const Duration(milliseconds: 500),
+      );
+      // Each relay passes 16 KB from the server on each connection; past that
+      // the bytes vanish and the connection stays open, as on a frozen path.
+      final peers = <Socket>{};
+      Future<ServerSocket> freezing() async {
+        final relay = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
+        relay.listen((client) async {
+          peers.add(client);
+          final server = await Socket.connect(
+            '127.0.0.1',
+            Uri.parse(profile).port,
+          );
+          peers.add(server);
+          unawaited(
+            client
+                .cast<List<int>>()
+                .pipe(server)
+                .catchError((Object _) => server),
+          );
+          var passed = 0;
+          server.listen(
+            (data) {
+              final room = 16384 - passed;
+              if (room <= 0) return;
+              final part = data.length <= room ? data : data.sublist(0, room);
+              passed += part.length;
+              client.add(part);
+            },
+            onDone: () {
+              if (passed < 16384) client.destroy();
+            },
+            onError: (Object _) {},
+            cancelOnError: true,
+          );
+        });
+        return relay;
+      }
+
+      final primary = await freezing(), backup = await freezing();
+      try {
+        String server(int port, String name) =>
+            Uri.parse(profile).replace(port: port, fragment: name).toString();
+        final imported = await backend.control.importClientProfiles(
+          content: [
+            server(primary.port, 'Primary'),
+            server(backup.port, 'Backup'),
+            profile,
+          ].join('\n'),
+        );
+        final group = imported.snapshot.subscriptions.single;
+        String id(String name) =>
+            group.nodes.singleWhere((node) => node.name == name).id;
+        await backend.control.selectNode(id('Primary'));
+        await backend.control.configureAutomation(
+          AutomationConfiguration(
+            enabled: true,
+            policy: AutomationSelectionPolicy.orderedFallback,
+            subscriptionId: group.id,
+            nodeIds: [
+              for (final name in ['Primary', 'Backup', 'Fixture']) id(name),
+            ],
+            targets: [
+              AutomationTarget(
+                id: 'fixture',
+                url: check['url']! as String,
+                expectedStatus: 200,
+                expectedBody: body,
+              ),
+            ],
+          ),
+        );
+        expect(await backend.control.connect(), 'connected');
+        final seen = <Object?>{};
+        final statuses = <Object?>{};
+        for (var i = 0; i < 600; i++) {
+          final metrics = await backend.control.runtimeMetrics();
+          seen.add(metrics['liveness']);
+          statuses.add((await backend.control.automationStatus())['status']);
+          if ((await backend.control.subscriptions()).selectedNodeId ==
+                  id('Fixture') &&
+              metrics['state'] == 'connected')
+            break;
+          await Future<void>.delayed(const Duration(milliseconds: 100));
+        }
+        expect(
+          statuses,
+          contains('healthy'),
+          reason: 'the small health check passes through the frozen path',
+        );
+        expect(
+          seen,
+          contains('stalled'),
+          reason: 'two stalled checks in a row show the state',
+        );
+        expect(
+          (await backend.control.subscriptions()).selectedNodeId,
+          id('Fixture'),
+          reason: 'recovery moves past the stalled server and backup',
+        );
+        final status = await backend.control.automationStatus();
+        expect(catalogMap(status['candidateFailures']!), {
+          id('Backup'): 'stalled',
+        });
+        expect(
+          catalogMap(storedCatalog!['committed'])['selectedNodeId'],
+          id('Fixture'),
+        );
+        // The working server's own check passes: no stall is reported.
+        await Future<void>.delayed(const Duration(seconds: 2));
+        expect(
+          (await backend.control.runtimeMetrics())['liveness'],
+          isNot('stalled'),
+        );
+        await checkSocks(
+          (await backend.control.tunnelSettings()).socksPort,
+          target.port,
+        );
+      } finally {
+        await backend.control.disconnect();
+        await primary.close();
+        await backup.close();
+        await large.close(force: true);
+        for (final peer in peers) {
+          peer.destroy();
+        }
+      }
+    },
+    timeout: const Timeout(Duration(seconds: 120)),
+  );
+
+  // N9-01: with nowhere else to go, recovery restarts a server whose network
+  // cuts transfers off once. A frozen network still carries small exchanges,
+  // so when the stall comes back the connection stays 'stalled' with no more
+  // restarts, until a transfer check passes again.
+  test(
+    'a stalled server with no other to move to restarts once per stall',
+    () async {
+      await backend.dispose();
+      final check = {
+        'id': 'fixture',
+        'url': 'http://127.0.0.1:${target.port}/fixture',
+        'expectedStatus': 200,
+        'expectedBody': body,
+      };
+      final large = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      final payload = List<int>.filled(1 << 20, 0x61);
+      large.listen((request) async {
+        request.response.persistentConnection = false;
+        request.response.contentLength = payload.length;
+        request.response.add(payload);
+        await request.response.close();
+      });
+      backend = createBackend(
+        automationProbeSeconds: 2,
+        automationRetrySeconds: 1,
+        livenessInterval: const Duration(minutes: 5),
+        livenessTargets: [check],
+        transferTargets: [
+          {'id': 'large', 'url': 'http://127.0.0.1:${large.port}/large'},
+        ],
+        transferDelay: Duration.zero,
+        transferRecheck: const Duration(seconds: 1),
+        transferInterval: const Duration(seconds: 1),
+        transferIdle: const Duration(milliseconds: 500),
+      );
+      // While frozen, each new connection through the relay passes 16 KB from
+      // the server; past that the bytes vanish and the connection stays open.
+      var frozen = true;
+      final peers = <Socket>{};
+      final relay = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
+      relay.listen((client) async {
+        final freezes = frozen;
+        peers.add(client);
+        // Once it passes everything, the core may close a connection while
+        // the server still sends: that write fails, which is no test failure.
+        unawaited(client.done.catchError((Object _) => client));
+        final server = await Socket.connect(
+          '127.0.0.1',
+          Uri.parse(profile).port,
+        );
+        peers.add(server);
+        unawaited(
+          client
+              .cast<List<int>>()
+              .pipe(server)
+              .catchError((Object _) => server),
+        );
+        var passed = 0;
+        server.listen(
+          (data) {
+            final room = freezes ? 16384 - passed : data.length;
+            if (room <= 0) return;
+            final part = data.length <= room ? data : data.sublist(0, room);
+            passed += part.length;
+            client.add(part);
+          },
+          onDone: () {
+            if (!freezes || passed < 16384) client.destroy();
+          },
+          onError: (Object _) {},
+          cancelOnError: true,
+        );
+      });
+      try {
+        final imported = await backend.control.importClientProfiles(
+          content: Uri.parse(
+            profile,
+          ).replace(port: relay.port, fragment: 'Frozen').toString(),
+        );
+        final group = imported.snapshot.subscriptions.single;
+        final id = group.nodes.single.id;
+        await backend.control.selectNode(id);
+        await backend.control.configureAutomation(
+          AutomationConfiguration(
+            enabled: true,
+            policy: AutomationSelectionPolicy.fixed,
+            subscriptionId: group.id,
+            nodeIds: [id],
+            targets: [
+              AutomationTarget(
+                id: 'fixture',
+                url: check['url']! as String,
+                expectedStatus: 200,
+                expectedBody: body,
+              ),
+            ],
+          ),
+        );
+        expect(await backend.control.connect(), 'connected');
+        // Each core the session ran, by the time it came up.
+        final starts = <Object?>{};
+        var metrics = <String, Object?>{};
+        Object? status;
+        for (var i = 0; i < 600; i++) {
+          metrics = await backend.control.runtimeMetrics();
+          if (metrics['state'] == 'connected')
+            starts.add(metrics['connectedSince']);
+          status = (await backend.control.automationStatus())['status'];
+          // Restarted once, stalled again, and the restart held back.
+          if (starts.length >= 2 &&
+              metrics['liveness'] == 'stalled' &&
+              status == 'endpointFailure')
+            break;
+          await Future<void>.delayed(const Duration(milliseconds: 100));
+        }
+        expect(starts, hasLength(2), reason: 'one restart for the stall');
+        expect(metrics['liveness'], 'stalled');
+        expect(status, 'endpointFailure');
+        // The retries that follow restart nothing, and the state stays.
+        for (var i = 0; i < 80; i++) {
+          metrics = await backend.control.runtimeMetrics();
+          expect(metrics['state'], 'connected');
+          expect(metrics['liveness'], 'stalled');
+          starts.add(metrics['connectedSince']);
+          await Future<void>.delayed(const Duration(milliseconds: 100));
+        }
+        expect(starts, hasLength(2), reason: 'no second restart');
+        // The network lets transfers through again: the next check clears it.
+        frozen = false;
+        await checkSocks(
+          (await backend.control.tunnelSettings()).socksPort,
+          target.port,
+        );
+        for (var i = 0; i < 150 && metrics['liveness'] == 'stalled'; i++) {
+          await Future<void>.delayed(const Duration(milliseconds: 100));
+          metrics = await backend.control.runtimeMetrics();
+        }
+        expect(metrics['liveness'], isNot('stalled'));
+        expect(metrics['state'], 'connected');
+        expect(starts, contains(metrics['connectedSince']));
+      } finally {
+        await backend.control.disconnect();
+        await relay.close();
+        await large.close(force: true);
+        for (final peer in peers) {
+          peer.destroy();
+        }
+      }
+    },
+    timeout: const Timeout(Duration(seconds: 120)),
   );
 
   // Only timeouts counted against the selected server, so one whose service

@@ -36,7 +36,8 @@ fun vpnConsented(context: Context) = runCatching { context.getSystemService(andr
 /** Connecting outside the app needs a server and, for System VPN, the consent the app already holds. */
 fun connectsWithoutApp(context: Context, catalog: Catalog) = catalog.selected.isNotEmpty() && (!catalog.settings.optBoolean("xrayTunEnabled") || vpnConsented(context))
 fun statusLabel(connection: String, liveness: String?) = when (connection) {
-    "connected" -> if (liveness == "noTraffic") tr(R.string.no_traffic) else tr(R.string.connected); "connecting" -> tr(R.string.connecting_2); "paused" -> tr(R.string.paused)
+    "connected" -> when (liveness) { "noTraffic" -> tr(R.string.no_traffic); "stalled" -> tr(R.string.transfers_cut_off); else -> tr(R.string.connected) }
+    "connecting" -> tr(R.string.connecting_2); "paused" -> tr(R.string.paused)
     "disconnecting" -> tr(R.string.disconnecting_2); "failed" -> tr(R.string.failed); else -> tr(R.string.disconnected)
 }
 fun openConnect(context: Context): Intent = Intent(context, MainActivity::class.java).setAction("com.elarni.OPEN_CONNECT").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
@@ -183,7 +184,7 @@ object Widgets {
         val catalog = Catalog(state.catalog)
         val server = catalog.selectedName
         val running = state.connection in active
-        setTextViewText(R.id.widget_status, if (server == null && !running) tr(R.string.choose_a_server_in_elarni) else statusLabel(state.connection, state.liveness))
+        setTextViewText(R.id.widget_status, if (server == null && !running) tr(R.string.choose_a_server_in_elarni) else statusLabel(state.connection, state.trafficState))
         setTextViewText(R.id.widget_server, server.orEmpty())
         setViewVisibility(R.id.widget_server, if (server == null) View.GONE else View.VISIBLE)
         val shown = speed.takeIf { state.connection == "connected" }
