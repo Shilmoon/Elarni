@@ -4,6 +4,12 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
 
 ## Unreleased
 
+### Changed
+
+- For contributors: a CI job that finds the Linux container in use by a manual
+  `scripts/check-linux-container` run waits for it to end, up to 45 minutes, instead of failing
+  within seconds. Such a failed job could only be rerun together with its whole workflow run.
+
 ## 0.6.5 - 2026-11-26
 
 ### Added
