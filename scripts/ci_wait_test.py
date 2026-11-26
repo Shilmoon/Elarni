@@ -32,10 +32,32 @@ class CiWait(unittest.TestCase):
         self.runners_refused = False
         # One entry per "gh run watch" that ends by its time limit, the run still going; called before the next one.
         self.watch_timeouts = []
+        # One entry per "gh run watch" after those: an error it gives up with while the run goes on, a function for one
+        # that ends by its time limit, None for one that sees the run end.
+        self.watch_errors = []
+        self.view_refused = 0
+        self.status = 'completed'
+        self.pauses = []
         self.module.gh = self.gh
+        self.module.time.sleep = self.pauses.append
+        self.addCleanup(setattr, self.module.time, 'sleep', __import__('time').sleep)
 
     def gh(self, *args, check=True, timeout=None):
         self.calls.append(args)
+        if args[:2] == ('run', 'watch') and self.watch_errors and not self.watch_timeouts:
+            step = self.watch_errors.pop(0)
+            self.status = 'completed' if step is None else 'in_progress'
+            if callable(step):
+                step()
+                return None, '', ''
+            if step is not None:
+                return 1, '', step
+        if args[:2] == ('run', 'view') and '--log-failed' not in args and self.view_refused:
+            self.view_refused -= 1
+            return 1, '', 'HTTP 502: Bad Gateway'
+        return (*self.answer(*args, timeout=timeout), '')
+
+    def answer(self, *args, timeout=None):
         if args[:2] == ('run', 'list'):
             return 0, json.dumps(self.runs)
         if args[:2] == ('run', 'watch'):
@@ -51,8 +73,8 @@ class CiWait(unittest.TestCase):
         if args[:2] == ('run', 'view') and '--log-failed' in args:
             return 0, self.log
         if args[:2] == ('run', 'view'):
-            return 0, json.dumps({'conclusion': self.conclusion, 'attempt': 1, 'url': 'https://example.invalid/run/77',
-                                  'jobs': self.jobs})
+            return 0, json.dumps({'status': self.status, 'conclusion': self.conclusion if self.status == 'completed' else '',
+                                  'attempt': 1, 'url': 'https://example.invalid/run/77', 'jobs': self.jobs})
         raise AssertionError(f'unexpected gh call: {args}')
 
     def run_main(self, *argv):
@@ -211,6 +233,47 @@ class CiWait(unittest.TestCase):
         code, output = self.run_main('77')
         self.assertEqual(code, 0)
         self.assertNotIn('offline', output)
+
+    def watches(self):
+        return sum(call[:2] == ('run', 'watch') for call in self.calls)
+
+    def test_a_watch_that_gives_up_while_the_run_goes_on_is_started_again(self):
+        self.watch_errors = ['failed to get run: HTTP 502: Bad Gateway', 'Post "https://api.github.com/graphql": EOF', None]
+        code, output = self.run_main('77')
+        self.assertEqual(code, 0)
+        self.assertEqual(self.watches(), 3)
+        self.assertIn('HTTP 502', output)
+        self.assertIn('success  linux checks and release', output)
+        self.assertEqual(len(self.pauses), 2, 'the next watch must not start at once: the failure may last')
+
+    def test_a_watch_that_keeps_giving_up_ends_the_wait_as_not_finished(self):
+        self.watch_errors = ['HTTP 401: Bad credentials'] * 50
+        code, output = self.run_main('77')
+        self.assertEqual(code, 1)
+        self.assertEqual(self.watches(), self.module.WATCH_TRIES)
+        self.assertIn('Bad credentials', output)
+        self.assertIn('not finished', output)
+
+    def test_gives_up_only_after_failures_in_a_row(self):
+        failures = ['HTTP 502'] * (self.module.WATCH_TRIES - 1)
+        self.watch_errors = [*failures, lambda: None, *failures, None]
+        code, _ = self.run_main('77')
+        self.assertEqual(code, 0)
+
+    def test_a_failed_run_whose_watch_exits_non_zero_is_not_watched_again(self):
+        self.conclusion = 'failure'
+        self.jobs = [{'databaseId': 1, 'name': 'linux checks and release', 'conclusion': 'failure'}]
+        code, _ = self.run_main('77')
+        self.assertEqual(code, 1)
+        self.assertEqual(self.watches(), 1)
+        self.assertEqual(self.pauses, [])
+
+    def test_a_run_whose_state_cannot_be_read_after_the_watch_is_watched_again(self):
+        self.watch_errors = ['HTTP 502: Bad Gateway', None]
+        self.view_refused = 1
+        code, _ = self.run_main('77')
+        self.assertEqual(code, 0)
+        self.assertEqual(self.watches(), 2)
 
 
 if __name__ == '__main__':

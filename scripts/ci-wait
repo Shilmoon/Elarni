@@ -6,12 +6,14 @@ per job, and for a failed job the FLAKY, FAILED and FAIL lines plus the last lin
 the whole log. Exit code: 0 when the run succeeded, 1 when it did not, 2 when there is no run to wait for,
 3 when a job stays queued for a self-hosted runner that is offline: nothing happens until someone starts it.
 Without a run ID it takes the newest run of the workflow on the branch.
+gh run watch gives up at the first request GitHub does not answer; while the run goes on it is started again.
 """
 import argparse
 import json
 import re
 import subprocess
 import sys
+import time
 
 # check-android repeats its FLAKY and FAILED lines behind "<avd> <serial>: " in its summary.
 EMULATOR = re.compile(r'^[ \t]*\S+ \S+: (?=FLAKY |FAILED )')
@@ -21,16 +23,19 @@ TIMESTAMP = re.compile(r'^\d{4}-\d\d-\d\dT[\d:.]+Z ?')
 MARKERS_SHOWN = 40
 # How often the wait looks at the runners. A runner found offline twice in a row has been gone this long.
 RUNNER_LOOK_SECONDS = 300
+# gh run watch is started again this often in a row, a pause apart, before the wait ends as not finished.
+WATCH_TRIES = 5
+WATCH_PAUSE_SECONDS = 60
 
 
 def gh(*args, check=True, timeout=None):
     try:
         result = subprocess.run(['gh', *args], capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=timeout)
     except subprocess.TimeoutExpired:
-        return None, ''
+        return None, '', ''
     if check and result.returncode:
         raise SystemExit(f"gh {' '.join(args)} failed: {result.stderr.strip()}")
-    return result.returncode, result.stdout
+    return result.returncode, result.stdout, result.stderr.strip()
 
 
 def current_branch():
@@ -38,7 +43,7 @@ def current_branch():
 
 
 def newest_run(workflow, branch, event):
-    _, listing = gh('run', 'list', '--workflow', workflow, '--branch', branch, '--limit', '20',
+    _, listing, _ = gh('run', 'list', '--workflow', workflow, '--branch', branch, '--limit', '20',
                     '--json', 'databaseId,event,status,headSha')
     runs = [run for run in json.loads(listing) if event in (None, run['event'])]
     return runs[0] if runs else None
@@ -47,8 +52,8 @@ def newest_run(workflow, branch, event):
 def stranded(run):
     """Queued jobs of the run that only offline self-hosted runners can take, as {job name: runner names}."""
     # Listing runners needs admin rights on the repository; without them there is nothing to say.
-    refused, listed = gh('api', 'repos/{owner}/{repo}/actions/runners', check=False)
-    failed, jobs = gh('api', f'repos/{{owner}}/{{repo}}/actions/runs/{run}/jobs?per_page=100', check=False)
+    refused, listed, _ = gh('api', 'repos/{owner}/{repo}/actions/runners', check=False)
+    failed, jobs, _ = gh('api', f'repos/{{owner}}/{{repo}}/actions/runs/{run}/jobs?per_page=100', check=False)
     if refused or failed:
         return {}
     found = {}
@@ -62,7 +67,7 @@ def stranded(run):
 
 
 def failed_log(run, job, lines):
-    _, log = gh('run', 'view', run, '--job', str(job), '--log-failed', check=False)
+    _, log, _ = gh('run', 'view', run, '--job', str(job), '--log-failed', check=False)
     text = [TIMESTAMP.sub('', line.split('\t', 2)[-1]) for line in log.splitlines()]
     # gh names no step, so the job's cleanup follows the failed command; the runner marks its end.
     failed = [index for index, line in enumerate(text) if line.startswith('##[error]')]
@@ -94,7 +99,7 @@ def main(argv=None):
             return 2
         run = str(found['databaseId'])
         print(f"Run {run} ({found['event']}, {found['headSha'][:7]}) is {found['status']}", flush=True)
-    waiting = {}
+    waiting, gave_up = {}, 0
     while True:
         seen, waiting = waiting, stranded(run)
         for job, runners in waiting.items():
@@ -104,10 +109,20 @@ def main(argv=None):
                 return 3
             print(f'"{job}" is queued for the runner {runners}, which is offline; '
                   f'looking again in {RUNNER_LOOK_SECONDS // 60} minutes', flush=True)
-        ended, _ = gh('run', 'watch', run, '--exit-status', '--interval', '30', check=False, timeout=RUNNER_LOOK_SECONDS)
-        if ended is not None:
+        ended, _, error = gh('run', 'watch', run, '--exit-status', '--interval', '30', check=False, timeout=RUNNER_LOOK_SECONDS)
+        if ended is None:
+            gave_up = 0
+            continue
+        unread, viewed, _ = gh('run', 'view', run, '--json', 'status', check=False)
+        if not unread and json.loads(viewed)['status'] == 'completed':
             break
-    _, viewed = gh('run', 'view', run, '--json', 'conclusion,attempt,url,jobs')
+        gave_up += 1
+        print(f"gh run watch gave up before the run ended ({(error.splitlines() or ['no message'])[-1]})"
+              + ('' if gave_up == WATCH_TRIES else '; watching again'), flush=True)
+        if gave_up == WATCH_TRIES:
+            break
+        time.sleep(WATCH_PAUSE_SECONDS)
+    _, viewed, _ = gh('run', 'view', run, '--json', 'conclusion,attempt,url,jobs')
     view = json.loads(viewed)
     print(f"Run {run} attempt {view['attempt']}: {view['conclusion'] or 'not finished'}  {view['url']}")
     for job in view['jobs']:
