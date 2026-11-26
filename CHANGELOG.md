@@ -4,6 +4,12 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
 
 ## Unreleased
 
+### Fixed
+
+- For contributors: the required "checks passed" check no longer passes when GitHub cancelled a
+  job it found no runner for. It now reads each job's own result, because GitHub reports such a
+  job matrix as passed.
+
 ## 0.6.5 - 2026-11-26
 
 ### Added

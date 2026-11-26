@@ -362,7 +362,26 @@ jobs:
     if: always()
     needs: [changes, linux, checks]
     runs-on: ubuntu-24.04
+    permissions:
+      actions: read
     steps:
       - name: Fail when a check failed
         if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
         run: exit 1
+      # "needs" reports a matrix as passed when GitHub cancelled one of its jobs for want of a runner (macos-26 ios
+      # on 2026-11-26; GitHub community discussion 211624), so every job of this attempt is asked for its own result.
+      - name: Fail when a job did not pass
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for _ in 1 2 3; do
+            if jobs=$(gh api --paginate "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT/jobs?per_page=100" \
+              --jq '.jobs[] | select(.status == "completed" and .conclusion != "success" and .conclusion != "skipped") | "\(.name): \(.conclusion)"'); then
+              if [ -z "$jobs" ]; then exit 0; fi
+              echo "$jobs"
+              exit 1
+            fi
+            sleep 20
+          done
+          echo "GitHub did not list the jobs of this run"
+          exit 1
