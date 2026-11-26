@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Package an existing Linux release bundle as a .deb, an AppImage and a portable .tar.gz."""
+"""Package an existing Linux release bundle as a .deb, an AppImage and a portable .tar.gz.
+
+The AppImage carries the tray libraries of this Ubuntu 22.04 build system; their source packages, which
+apt-get source fetches (deb-src entries, patchelf and a current apt-get update needed), go into a .tar beside it.
+"""
 import argparse
 import hashlib
 import json
@@ -26,6 +30,13 @@ DEPENDENCIES=('libc6 (>= 2.35), libgcc-s1, libstdc++6, libgtk-3-0, '
     'libayatana-appindicator3-1, libgstreamer1.0-0, libgstreamer-plugins-base1.0-0, '
     'gstreamer1.0-plugins-base, gstreamer1.0-plugins-good, libsecret-tools, '
     'iproute2, nftables, iputils-ping, pkexec | policykit-1, xdg-utils, desktop-file-utils, dbus, libglib2.0-bin')
+# The tray's libraries, which the AppImage carries: Debian 13, Fedora, Arch and openSUSE install none of the ayatana
+# ones with a desktop. GTK, GLib and the rest stay with the system; the .deb and the portable archive use the
+# system's copies of these too.
+BUNDLED_LIBRARIES=('libayatana-appindicator3.so.1','libayatana-indicator3.so.7','libayatana-ido3-0.4.so.0',
+    'libdbusmenu-glib.so.4','libdbusmenu-gtk3.so.4')
+# Where the AppImage keeps each carried package's licence file, as usr/share/doc/<package>/copyright of Debian.
+BUNDLED_NOTICES='usr/share/doc/elarni/bundled'
 
 def root_owned(info):
     # Root may extract the portable archive; keep neither the builder's ids nor group/other write.
@@ -47,11 +58,71 @@ def appimage_tool(name):
     path.chmod(0o755)
     return path
 
-def build_appimage(bundle,destination):
-    """Pack bundle, with the desktop entry and icon, into the AppImage at destination."""
+def bundled_libraries(documentation=Path('/usr/share/doc')):
+    """Each library the AppImage carries: its file on this Ubuntu build system and the package that installed it."""
+    known=subprocess.run([shutil.which('ldconfig') or '/sbin/ldconfig','-p'],check=True,capture_output=True,text=True).stdout
+    libraries=[]
+    for soname in BUNDLED_LIBRARIES:
+        found=re.search(r'^\s*'+re.escape(soname)+r' \(libc6,x86-64\) => (\S+)$',known,re.M)
+        if not found: raise SystemExit(f'The AppImage carries {soname}: install its package on the build system.')
+        path=Path(found[1]).resolve(strict=True)
+        # "<package>:<architecture>: <path>"
+        package=subprocess.run(['dpkg-query','-S',str(path)],check=True,capture_output=True,text=True).stdout.split(':',1)[0]
+        version,source,source_version=subprocess.run(['dpkg-query','-W','-f=${Version}\t${source:Package}\t${source:Version}',
+            package],check=True,capture_output=True,text=True).stdout.split('\t')
+        copyright=documentation/package/'copyright'
+        if not copyright.is_file() or not copyright.stat().st_size:
+            raise SystemExit(f'Missing licence file of bundled {soname}: {copyright}')
+        libraries.append({'soname':soname,'path':path,'package':package,'version':version,'source':source,
+            'source_version':source_version,'copyright':copyright})
+    return libraries
+
+def bundled_sources(libraries,archive,version):
+    """Write the exact Ubuntu source packages of the carried libraries, which their GPL and LGPL terms require
+    beside the AppImage, with a README naming the library each one builds, to the archive."""
+    with tempfile.TemporaryDirectory(prefix='elarni-bundled-sources-') as temporary:
+        folder=Path(temporary)/archive.name.removesuffix('.tar')
+        folder.mkdir()
+        for source,source_version in sorted({(library['source'],library['source_version']) for library in libraries}):
+            fetched=subprocess.run(['apt-get','source','--download-only','-qq',f'{source}={source_version}'],cwd=folder,
+                capture_output=True,text=True)
+            if fetched.returncode or not (folder/f"{source}_{source_version.split(':',1)[-1]}.dsc").is_file():
+                raise SystemExit(f'Cannot fetch source package {source} {source_version}; enable deb-src entries and run '
+                    f'apt-get update first: {fetched.stderr.strip()}')
+        lines=[f"{library['soname']}  {library['package']} {library['version']}, "
+            f"source package {library['source']} {library['source_version']}" for library in libraries]
+        (folder/'README').write_text(f'Source code of the libraries in the lib/ folder of the Elarni {version} AppImage\n\n'
+            'The AppImage carries these Ubuntu 22.04 libraries, changed only in their RUNPATH, which points each at the '
+            'others\nbeside it. This folder holds the Ubuntu source package each one was built from, as apt-get source '
+            'fetched it;\n"dpkg-source -x <name>.dsc" unpacks one. Their licences are in the AppImage, under '
+            f'{BUNDLED_NOTICES}/<package>/copyright.\n\n'+'\n'.join(lines)+'\n')
+        with tarfile.open(archive,'w') as output: output.add(folder,arcname=folder.name,filter=root_owned)
+
+def build_appimage(bundle,destination,libraries,sources):
+    """Pack bundle, with the desktop entry, icon and the tray libraries, into the AppImage at destination."""
+    # The carried libraries' licences go with it, and their source archive is published beside it.
+    if not sources.is_file() or not sources.stat().st_size:
+        raise SystemExit(f'Missing the source archive of the bundled libraries: {sources}')
+    for library in libraries:
+        if not library['copyright'].is_file() or not library['copyright'].stat().st_size:
+            raise SystemExit(f"Missing licence file of bundled {library['soname']}: {library['copyright']}")
     with tempfile.TemporaryDirectory(prefix='elarni-appdir-') as temporary:
-        appdir=Path(temporary)/'Elarni.AppDir'
+        appdir=Path(temporary).resolve()/'Elarni.AppDir'
         shutil.copytree(bundle,appdir,symlinks=True)
+        for library in libraries:
+            copy=appdir/'lib'/library['soname']
+            shutil.copy2(library['path'],copy)
+            # Each copy finds the others beside itself. LD_LIBRARY_PATH would do it for every process the app
+            # starts, pkexec and the root helper among them.
+            subprocess.run(['patchelf','--set-rpath','$ORIGIN',str(copy)],check=True)
+            notice=appdir/BUNDLED_NOTICES/library['package']/'copyright'
+            notice.parent.mkdir(parents=True,exist_ok=True)
+            shutil.copy2(library['copyright'],notice)
+        # The runner must load every carried library from the AppDir, not from this build system.
+        loaded=subprocess.run(['ldd',str(appdir/'elarni')],check=True,capture_output=True,text=True).stdout
+        for library in libraries:
+            if f"{library['soname']} => {appdir/'lib'/library['soname']} " not in loaded:
+                raise SystemExit(f"The AppImage's elarni does not load its own {library['soname']}:\n{loaded}")
         # The runtime starts AppRun in the mounted image; elarni finds lib/ and data/ beside itself.
         (appdir/'AppRun').symlink_to('elarni')
         shutil.copy2(ROOT/'linux/com.elarni.Elarni.desktop',appdir/'com.elarni.Elarni.desktop')
@@ -79,13 +150,18 @@ def main():
     if (built.get('version'),built.get('build_number'))!=version.groups():
         raise SystemExit('Bundle version differs from pubspec.yaml: '+str(built.get('version'))+'+'+str(built.get('build_number')))
     version='-'.join(version.groups())
-    for name in ('elarni','elarni-cli','elarni-core','elarni-shadowquic','lib/libelarni_domain.so','lib/libflutter_linux_gtk.so','lib/libapp.so'):
+    for name in ('elarni','elarni-cli','elarni-core','elarni-shadowquic','lib/libelarni_domain.so','lib/libflutter_linux_gtk.so','lib/libapp.so',
+                 'lib/libelarni_camera.so'):
         path=args.bundle/name
         with path.open('rb') as source: header=source.read(20)
         if header[:4]!=b'\x7fELF' or header[4:6]!=b'\x02\x01' or header[18:20]!=b'\x3e\x00':
             raise SystemExit('Expected Linux x86-64 ELF: '+name)
     if not (args.bundle/'data/flutter_assets/AssetManifest.bin').is_file(): raise SystemExit('Missing Flutter assets.')
+    # The AppImage's libraries, their licence files and their sources come before any package is written.
+    libraries=bundled_libraries()
     prepare_output(args.output)
+    sources=args.output/('elarni-'+version+'-linux-bundled-sources.tar')
+    bundled_sources(libraries,sources,version)
     with tempfile.TemporaryDirectory(prefix='elarni-package-') as temporary:
         stage=Path(temporary)
         portable=stage/('elarni-'+version+'-linux-x64')
@@ -145,9 +221,9 @@ def main():
         subprocess.run(['dpkg-deb','--build','--root-owner-group',str(package),str(deb)],check=True)
         subprocess.run(['desktop-file-validate',str(applications/'com.elarni.Elarni.desktop')],check=True)
         appimage=args.output/('Elarni-'+version+'-x86_64.AppImage')
-        build_appimage(args.bundle,appimage)
-        write_manifest(args.output, [deb, appimage, archive], 'linux-x64', 'unsigned-candidate')
+        build_appimage(args.bundle,appimage,libraries,sources)
+        write_manifest(args.output, [deb, appimage, archive, sources], 'linux-x64', 'unsigned-candidate')
         print(json.dumps({'deb':str(deb.resolve()),'appimage':str(appimage.resolve()),'portable':str(archive.resolve()),
-            'version':version}),flush=True)
+            'bundledSources':str(sources.resolve()),'version':version}),flush=True)
 
 if __name__=='__main__': main()

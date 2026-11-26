@@ -1,6 +1,8 @@
 """Process-level checks of candidate packaging and public source selection."""
 import ctypes
 import hashlib
+import importlib.machinery
+import importlib.util
 import json
 from pathlib import Path
 import shutil
@@ -17,6 +19,22 @@ sys.path.insert(0, str(ROOT / 'scripts'))
 from release_support import version  # noqa: E402
 # elarni.exe imports all three and elarni_domain.dll imports vcruntime140.dll; a clean Windows has none.
 VC_RUNTIME = ('msvcp140.dll', 'vcruntime140.dll', 'vcruntime140_1.dll')
+
+
+def package_linux():
+    """scripts/package-linux as a module, to run one of its steps."""
+    loader = importlib.machinery.SourceFileLoader('package_linux', str(ROOT / 'scripts/package-linux'))
+    module = importlib.util.module_from_spec(importlib.util.spec_from_loader(loader.name, loader))
+    loader.exec_module(module)
+    return module
+
+
+def ubuntu_tray_libraries():
+    """Whether this is an Ubuntu build system with the tray libraries the AppImage carries (the build container)."""
+    if sys.platform != 'linux' or not shutil.which('dpkg-query'):
+        return False
+    known = subprocess.run([shutil.which('ldconfig') or '/sbin/ldconfig', '-p'], capture_output=True, text=True).stdout
+    return 'libayatana-appindicator3.so.1 (libc6,x86-64)' in known
 
 
 def product_version(value):
@@ -218,6 +236,39 @@ class PackageReleaseChecks(unittest.TestCase):
                                      '--output', str(Path(temporary) / 'output')], capture_output=True, text=True)
             self.assertNotEqual(result.returncode, 0)
             self.assertIn('Bundle version differs from pubspec.yaml', result.stderr)
+
+    @unittest.skipUnless(ubuntu_tray_libraries(), 'the AppImage takes its tray libraries from the Ubuntu build container')
+    def test_appimage_libraries_come_with_their_packages_licence_files(self):
+        packager = package_linux()
+        libraries = packager.bundled_libraries()
+        self.assertEqual([library['soname'] for library in libraries], list(packager.BUNDLED_LIBRARIES))
+        for library in libraries:
+            self.assertTrue(library['path'].is_file() and not library['path'].is_symlink(), library)
+            self.assertTrue(library['copyright'].is_file(), library)
+            self.assertTrue(all(library[key] for key in ('package', 'version', 'source', 'source_version')), library)
+        # A build system whose packages carry no licence file (as images that drop /usr/share/doc) is refused.
+        with tempfile.TemporaryDirectory() as documentation:
+            with self.assertRaises(SystemExit) as refused:
+                packager.bundled_libraries(Path(documentation))
+            self.assertIn('Missing licence file of bundled libayatana-appindicator3.so.1', str(refused.exception))
+
+    @unittest.skipUnless(ubuntu_tray_libraries(), 'the AppImage takes its tray libraries from the Ubuntu build container')
+    def test_appimage_is_not_built_without_the_bundled_sources_or_a_licence_file(self):
+        packager = package_linux()
+        libraries = packager.bundled_libraries()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            sources = root / 'elarni-0.0.1-1-linux-bundled-sources.tar'
+            destination = root / 'Elarni-0.0.1-1-x86_64.AppImage'
+            with self.assertRaises(SystemExit) as refused:
+                packager.build_appimage(root / 'bundle', destination, libraries, sources)
+            self.assertIn('Missing the source archive of the bundled libraries', str(refused.exception))
+            sources.write_bytes(b'fixture')
+            unlicensed = [dict(libraries[0], copyright=root / 'missing/copyright'), *libraries[1:]]
+            with self.assertRaises(SystemExit) as refused:
+                packager.build_appimage(root / 'bundle', destination, unlicensed, sources)
+            self.assertIn('Missing licence file of bundled libayatana-appindicator3.so.1', str(refused.exception))
+            self.assertFalse(destination.exists())
 
     def test_bundle_without_the_vc_runtime_is_rejected(self):
         for name in VC_RUNTIME:

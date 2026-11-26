@@ -7,11 +7,15 @@ Ubuntu 22.04 or newer, x86-64, X11 or Wayland. For servers without a desktop, se
 
 - **Debian package:** `sudo apt install ./elarni_*_amd64.deb`, then open Elarni
   from the application menu.
-- **AppImage:** `chmod +x Elarni-*.AppImage` and run it. Needs `fuse3`.
+- **AppImage:** `chmod +x Elarni-*.AppImage` and run it. Needs `fuse3` and GTK 3; it
+  carries its tray libraries, so other distributions such as Debian 13, Fedora, Arch and
+  openSUSE Tumbleweed run it too.
 - **Portable archive:** extract it and run `./elarni`. `./install-desktop` adds a
   menu entry and link handlers (`--remove` undoes it).
 
-The AppImage and portable archive need these packages:
+The AppImage and the portable archive need glibc 2.34 or newer (Ubuntu 22.04 has 2.35).
+They use these packages; the AppImage does without `libayatana-appindicator3-1`, and
+the GStreamer packages are needed only to scan QR codes with a camera:
 
 ```sh
 sudo apt install libgtk-3-0 libayatana-appindicator3-1 libgstreamer1.0-0 \

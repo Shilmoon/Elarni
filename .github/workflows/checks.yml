@@ -83,11 +83,13 @@ jobs:
             clang++ -std=c++14 -Wall -Werror -Ilinux/flutter/ephemeral \
               -DAPPLICATION_ID="\"com.elarni.Elarni\"" test/linux_desktop_host_test.cc \
               -Llinux/flutter/ephemeral -lflutter_linux_gtk \
-              $(pkg-config --cflags --libs gtk+-3.0 ayatana-appindicator3-0.1 gstreamer-app-1.0) \
+              $(pkg-config --cflags --libs gtk+-3.0 ayatana-appindicator3-0.1 gmodule-no-export-2.0) \
               -o .build/linux-desktop-host-test
             LD_LIBRARY_PATH=linux/flutter/ephemeral python scripts/check_report.py -- .build/linux-desktop-host-test
             python scripts/check-server-cores
             rm -rf .build/release-candidate .build/release-source .build/release-dependencies
+            # The AppImage carries the tray libraries, whose source packages it fetches; the image keeps no package lists.
+            apt-get update -qq
             python scripts/check_report.py -- python scripts/package-linux --output .build/release-candidate
             python scripts/check_report.py -- python scripts/package-source --output .build/release-source
             python scripts/check_report.py -- python scripts/package-dependencies --output .build/release-dependencies

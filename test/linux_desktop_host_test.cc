@@ -2,7 +2,7 @@
 // clang++ -std=c++14 -Wall -Werror -Ilinux/flutter/ephemeral
 //   -DAPPLICATION_ID='"com.elarni.Elarni"' test/linux_desktop_host_test.cc
 //   -Llinux/flutter/ephemeral -lflutter_linux_gtk
-//   $(pkg-config --cflags --libs gtk+-3.0 ayatana-appindicator3-0.1 gstreamer-app-1.0)
+//   $(pkg-config --cflags --libs gtk+-3.0 ayatana-appindicator3-0.1 gmodule-no-export-2.0)
 //   -o .build/linux-desktop-host-test
 // env LD_LIBRARY_PATH=linux/flutter/ephemeral .build/linux-desktop-host-test
 // CI runs this after its Linux release build.
@@ -318,4 +318,15 @@ int main(int argc, char** argv) {
   assert(g_unlink(installed.c_str()) == 0);
   assert(g_rmdir(upgrade) == 0);
   assert(WIFEXITED(status) && WEXITSTATUS(status) == 0);
+
+  // The camera is a module the runner opens at the first camera call. Where it does not load, as
+  // without GStreamer, the camera answers as on a system without a camera: here no module lies
+  // beside the test binary. The bundle's module loads where GStreamer is installed.
+  assert(!camera_module());
+  CameraModule camera{};
+  assert(!load_camera_module("/nonexistent-elarni/lib/libelarni_camera.so", camera));
+  g_autofree char* bundled_camera = g_canonicalize_filename("build/linux/x64/release/bundle/lib/libelarni_camera.so", nullptr);
+  assert(load_camera_module(bundled_camera, camera) && camera.open && camera.frame && camera.close);
+  // Whether a camera opens depends on the machine; neither answer may crash.
+  if (ElarniCamera* opened = camera.open()) camera.close(opened);
 }
