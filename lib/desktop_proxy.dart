@@ -43,6 +43,11 @@ final class DesktopProxy {
     int? automationRetrySeconds,
     List<CatalogMap>? livenessTargets,
     Duration? livenessInterval,
+    List<CatalogMap>? transferTargets,
+    Duration? transferDelay,
+    Duration? transferRecheck,
+    Duration? transferInterval,
+    Duration? transferIdle,
     DateTime Function()? clock,
     Duration? refreshInterval,
     Future<WiFiReading> Function()? wifiNetwork,
@@ -66,6 +71,18 @@ final class DesktopProxy {
        _livenessSeconds =
            (livenessInterval ?? const Duration(minutes: 1)).inMilliseconds /
            1000,
+       // None unless named: the app and the daemon pass
+       // defaultTransferTargets, and a test reaches no public host.
+       _transferTargets = transferTargets ?? const [],
+       _transferDelay =
+           (transferDelay ?? const Duration(seconds: 5)).inMilliseconds / 1000,
+       _transferRecheck =
+           (transferRecheck ?? const Duration(seconds: 10)).inMilliseconds /
+           1000,
+       _transferSeconds =
+           (transferInterval ?? const Duration(minutes: 15)).inMilliseconds /
+           1000,
+       _transferIdleMs = transferIdle?.inMilliseconds,
        // Tests also move the refresh schedule's clock and check it more often.
        _refreshClock = clock ?? DateTime.now,
        _refreshInterval = refreshInterval ?? const Duration(seconds: 30),
@@ -133,6 +150,41 @@ final class DesktopProxy {
   // The selected server and revision that last passed traffic.
   String? _trafficServer;
   bool _livenessBusy = false;
+  // Some hosting networks' paths freeze each connection after about 16 KB, so a
+  // small probe passes while pages hang. The transfer check fetches one of
+  // these bodies (at least 128 KB, sent uncompressed) over one connection and
+  // passes at 96 KB received. The app and the daemon pass them; a proxy built
+  // without them checks no transfers.
+  static const defaultTransferTargets = <CatalogMap>[
+    {
+      'id': 'googleapis',
+      'url': 'https://ajax.googleapis.com/ajax/libs/jquery/3.7.1/jquery.js',
+    },
+    {
+      'id': 'cdnjs',
+      'url': 'https://cdnjs.cloudflare.com/ajax/libs/jquery/3.7.1/jquery.js',
+    },
+  ];
+  final List<CatalogMap> _transferTargets;
+  final double _transferDelay, _transferRecheck, _transferSeconds;
+  // The core's 4 s idle limit unless a test shortens it.
+  final int? _transferIdleMs;
+  // When the running server's next transfer check is due (null: none), the
+  // uplink counter at the last one, and its stalls in a row: two make the
+  // connection 'stalled'.
+  double? _transferAt;
+  int? _transferUplink;
+  int _transferStalls = 0;
+  bool _transferBusy = false, _transferNow = false;
+  // One restart per stall episode: the server (and revision) recovery
+  // restarted for a confirmed stall. A frozen network still carries small
+  // exchanges, and restarting in a loop would cut those too, so it is not
+  // restarted for one again until a transfer check passes, another server
+  // runs or the network path changes. Moving to another server is not held.
+  String? _stallRestart;
+  // What the connection reports: 'noTraffic' first, then a confirmed stall.
+  String? get _reportedLiveness =>
+      _liveness != 'noTraffic' && _transferStalls >= 2 ? 'stalled' : _liveness;
   double _pathReadAt = -1000;
   final DateTime Function() _refreshClock;
   static final _platform = MethodChannel(
@@ -455,6 +507,7 @@ final class DesktopProxy {
           _automationTimer = Timer.periodic(const Duration(seconds: 1), (_) {
             unawaited(_automationTick());
             unawaited(_livenessTick());
+            unawaited(_transferTick());
             unawaited(_syncSystemProxy());
           });
           _wifiTimer = Timer.periodic(

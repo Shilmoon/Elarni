@@ -15,6 +15,7 @@ import java.net.ServerSocket
 import java.net.Socket
 import java.net.URI
 import java.util.concurrent.Executors
+import java.util.concurrent.Future
 import java.util.concurrent.TimeUnit
 import java.io.File
 
@@ -42,6 +43,9 @@ class Engine(private val app: ElarniApplication, private val assets: RoutingAsse
             val user = auth?.let { it.getString("username") + ":" + it.getString("password") }
             return URI("socks5", user, "127.0.0.1", catalog.settings.getInt("socksPort"), null, null, null).toASCIIString()
         }
+        /** Whether looking a server's name up failed with [error]: no answer in 5 s, or none at all, as before the network is up. */
+        fun lookupFailed(error: Exception) = error is java.util.concurrent.TimeoutException ||
+            error is java.util.concurrent.ExecutionException && error.cause is java.net.UnknownHostException
         private fun sessionCredentials(): JSONObject {
             val random = java.security.SecureRandom()
             fun token() = ByteArray(16).also(random::nextBytes).joinToString("") { "%02x".format(it) }
@@ -69,16 +73,13 @@ class Engine(private val app: ElarniApplication, private val assets: RoutingAsse
     fun physical(): Network? = connectivity.activeNetwork?.takeIf(::isPhysical) ?: connectivity.allNetworks.firstOrNull(::isPhysical)
     fun attach(owner: ElarniVpnService) { service = owner }
     fun detach(owner: ElarniVpnService) { if (service === owner) service = null }
-    fun addresses(endpoint: JSONObject, settings: JSONObject, mapping: JSONObject): List<InetAddress> {
+    /** [answers]: names looked up before, by [lookUp]; another name is looked up now. */
+    fun addresses(endpoint: JSONObject, settings: JSONObject, mapping: JSONObject, answers: Map<String, Result<List<InetAddress>>> = emptyMap()): List<InetAddress> {
         if (mapping.optBoolean("blocked")) throw AppFailure("connection_failed")
         val host = mapping.string("alias", endpoint.getString("host"))
         val hints = if (mapping.has("addresses")) mapping.strings("addresses") else endpoint.strings("addresses")
         var values = if (hints.isNotEmpty()) hints.map(Settings::numericAddress) else {
-            runCatching { Settings.numericAddress(host) }.getOrNull()?.let(::listOf) ?: run {
-                val network = physical()
-                val query = dns.submit<List<InetAddress>> { (network?.getAllByName(host) ?: InetAddress.getAllByName(host)).toList() }
-                try { query.get(5, TimeUnit.SECONDS) } finally { query.cancel(true) }
-            }
+            runCatching { Settings.numericAddress(host) }.getOrNull()?.let(::listOf) ?: (answers[host] ?: lookUp(listOf(host)).await().getValue(host)).getOrThrow()
         }
         val preference = settings.string("profilePreferredIP").takeUnless { it == "inherit" } ?: settings.getString("preferredIP")
         val v4 = values.filterIsInstance<Inet4Address>(); val v6 = values.filterIsInstance<Inet6Address>()
@@ -95,28 +96,52 @@ class Engine(private val app: ElarniApplication, private val assets: RoutingAsse
         if (values.isEmpty()) throw AppFailure("connection_failed")
         return values
     }
+    /** Sends a DNS query for each of [names] on the physical network now; the answers come with [Lookups.await], which
+     *  needs no lock. */
+    fun lookUp(names: Collection<String>): Lookups {
+        val network = physical()
+        return Lookups(names.distinct().associateWith { host -> dns.submit<List<InetAddress>> { (network?.getAllByName(host) ?: InetAddress.getAllByName(host)).toList() } })
+    }
+    /** The names a start of server [id] looks up in DNS: not one its host mapping blocks or gives addresses, nor an address. */
+    fun names(catalog: Catalog, id: String): List<String> {
+        val config = catalog.compile(id, app)
+        val endpoints = physicalEndpoints(config); val mappings = mappings(config, endpoints)
+        return endpoints.mapNotNull { endpoint ->
+            val mapping = mappings.mapObject(endpoint.getString("host"))
+            val host = mapping.string("alias", endpoint.getString("host"))
+            val hints = if (mapping.has("addresses")) mapping.strings("addresses") else endpoint.strings("addresses")
+            host.takeIf { !mapping.optBoolean("blocked") && hints.isEmpty() && runCatching { Settings.numericAddress(host) }.isFailure }
+        }.distinct()
+    }
+    private fun physicalEndpoints(config: JSONObject) = Native.domain("profileEndpoints", obj("config" to config)).objects("endpoints").filter { it.optBoolean("physical") }
     private fun mappings(config: JSONObject, endpoints: List<JSONObject>) = Native.call("profileHostMappings", obj("configJSON" to config.toString(), "hosts" to JSONArray(endpoints.map { it.getString("host") }.distinct())))
-    fun prepare(catalog: Catalog, id: String, inboundAuth: JSONObject? = null): JSONObject {
+    /** [answers]: as for [addresses]. */
+    fun prepare(catalog: Catalog, id: String, inboundAuth: JSONObject? = null, answers: Map<String, Result<List<InetAddress>>> = emptyMap()): JSONObject {
         val config = catalog.compile(id, app, inboundAuth = inboundAuth)
-        val endpoints = Native.domain("profileEndpoints", obj("config" to config)).objects("endpoints").filter { it.optBoolean("physical") }
+        val endpoints = physicalEndpoints(config)
         val resolved = JSONObject(); val unavailable = JSONArray(); val mappings = mappings(config, endpoints)
         val settings = catalog.settings
         catalog.node(id).string("ipPreference").takeIf { it.isNotEmpty() }?.let { settings.put("profilePreferredIP", it) }
+        var unanswered: java.net.UnknownHostException? = null
         endpoints.forEach { endpoint ->
-            try { resolved.put(endpoint.getString("addressPath"), addresses(endpoint, settings, mappings.mapObject(endpoint.getString("host"))).first().hostAddress) }
-            catch (_: Exception) { unavailable.put(endpoint.getString("addressPath")) }
+            try { resolved.put(endpoint.getString("addressPath"), addresses(endpoint, settings, mappings.mapObject(endpoint.getString("host")), answers).first().hostAddress) }
+            catch (error: Exception) {
+                unavailable.put(endpoint.getString("addressPath"))
+                if (unanswered == null && lookupFailed(error)) unanswered = java.net.UnknownHostException(endpoint.getString("host"))
+            }
         }
         return try {
             Native.domain("prepareConfig", obj("config" to config, "resolved" to resolved, "unavailable" to unavailable,
                 "pin" to settings.getBoolean("resolveServer"), "pinHosts" to JSONArray(mappings.keys().asSequence().toList()))).getJSONObject("config")
         } catch (error: AppFailure) {
-            // The profile compiled above; with servers left out, a failure means none could be reached.
-            throw if (unavailable.length() > 0) AppFailure("connection_failed") else error
+            // The profile compiled above; with servers left out, a failure means none could be reached. The cause tells a
+            // start at boot that a name had no answer, which the network coming up may give.
+            throw if (unavailable.length() > 0) AppFailure("connection_failed", unanswered) else error
         }
     }
     // keepTunnel leaves a failed start's interface up, so traffic is dropped
-    // instead of leaving the device while automatic recovery retries.
-    fun start(catalog: Catalog, keepTunnel: Boolean = false, valid: () -> Unit) = synchronized(Native.runtimeLock) {
+    // instead of leaving the device while automatic recovery retries. answers: as for addresses().
+    fun start(catalog: Catalog, keepTunnel: Boolean = false, answers: Map<String, Result<List<InetAddress>>> = emptyMap(), valid: () -> Unit) = synchronized(Native.runtimeLock) {
         val owner = service ?: throw AppFailure("service_unavailable")
         // Read before the tunnel and rules resolve them, so an install meanwhile shows up as a change.
         val uids = if (catalog.settings.getBoolean("xrayTunEnabled")) Catalog.listedUids(catalog.settings, ::uid) else null
@@ -124,7 +149,7 @@ class Engine(private val app: ElarniApplication, private val assets: RoutingAsse
         if (BuildConfig.ELARNI_RECORDING) runCatching { record(catalog.settings.optBoolean("recordDiagnostics")) }
         val network = physical()
         val auth = catalog.settings.takeIf { it.getBoolean("xrayTunEnabled") && !it.optBoolean("inboundAuthEnabled") }?.let { sessionCredentials() }
-        val config = prepare(catalog, catalog.selected, auth)
+        val config = prepare(catalog, catalog.selected, auth, answers)
         val directory = assets.directory(catalog.routeFor(catalog.selected)?.string("assetRevision") ?: "")
         valid()
         val setting = catalog.settings
@@ -213,6 +238,11 @@ class Engine(private val app: ElarniApplication, private val assets: RoutingAsse
         if (timeout !in 1..15) throw AppFailure("invalid_input")
         val delay: Long
         var exit: JSONObject? = null
+        // A transfer check instead of a latency probe: it answers with a verdict, whatever the bytes did.
+        val transfer = args.optBoolean("transfer")
+        var verdict: String? = null
+        var transferBytes = 0L
+        if (transfer && method != "proxy" && method != "activeProxy") throw AppFailure("unsupported_ping_method")
         if (method == "tcp" || method == "icmp") {
             val (endpoint, mapping) = probeTarget(catalog, id, epoch)
             if (method == "tcp" && !endpoint.optBoolean("supportsTcpProbe")) throw AppFailure("unsupported_ping_method")
@@ -235,14 +265,15 @@ class Engine(private val app: ElarniApplication, private val assets: RoutingAsse
         } else {
             val active = running && catalog.selected == id
             if (method == "activeProxy" && !active) throw AppFailure("not_connected")
-            val request = obj("timeout" to timeout, "url" to args.string("url", "https://www.gstatic.com/generate_204"), "method" to args.string("method", "HEAD"), "mode" to args.string("mode", "default"))
-            for (key in listOf("expectedStatus", "expectedBody")) if (args.has(key)) request.put(key, args.get(key))
-            if (args.optBoolean("trace")) request.put("trace", true)
+            val request = if (transfer) obj("timeout" to timeout, "url" to args.getString("url"), "method" to "GET", "transfer" to true)
+                .apply { if (args.has("transferIdleMs")) put("transferIdleMs", args.getInt("transferIdleMs")) }
+            else obj("timeout" to timeout, "url" to args.string("url", "https://www.gstatic.com/generate_204"), "method" to args.string("method", "HEAD"), "mode" to args.string("mode", "default"))
+            if (!transfer) for (key in listOf("expectedStatus", "expectedBody")) if (args.has(key)) request.put(key, args.get(key))
+            if (!transfer && args.optBoolean("trace")) request.put("trace", true)
             var reserved = 0
             try {
                 if (active) {
-                    request.put("proxy", fetchProxy ?: throw AppFailure("not_connected"))
-                        .put("configJSON", obj("inbounds" to JSONArray(), "outbounds" to JSONArray(listOf(obj("protocol" to "freedom")))).toString())
+                    throughRunningCore(request, fetchProxy ?: throw AppFailure("not_connected"))
                 } else {
                     val port = reserveProbePort().also { reserved = it }
                     // Only settings change; 32 workers each copying a 4,096-server catalog ran out of memory.
@@ -257,11 +288,56 @@ class Engine(private val app: ElarniApplication, private val assets: RoutingAsse
                 delay = reply.getLong("delay")
                 if (delay < 0) throw AppFailure("ping_failed")
                 exit = reply.optJSONObject("exit")
+                if (transfer) {
+                    verdict = reply.optString("verdict").takeIf { it.isNotEmpty() } ?: throw AppFailure("ping_failed")
+                    transferBytes = reply.optLong("transferBytes")
+                }
             } finally {
                 if (reserved != 0) synchronized(probePorts) { probePorts.remove(reserved) }
             }
         }
         return obj("nodeId" to id, "configurationRevision" to catalog.node(id).string("configurationRevision", id), "protocol" to method, "status" to "success", "latencyMs" to delay, "timestamp" to now())
-            .apply { exit?.let { put("exit", it) } }
+            .apply { exit?.let { put("exit", it) }; verdict?.let { put("verdict", it).put("transferBytes", transferBytes) } }
+    }
+    /** One transfer check of server [id] over the transfer targets ([TransferCheck.combine]): through the running core when it
+     *  is the selected one, else through a probe core. A target the check could not reach says nothing about a freeze. */
+    fun transfer(catalog: Catalog, id: String): String = TransferCheck.over(transferTargets()) { target ->
+        val args = target.copy().put("protocol", if (running && catalog.selected == id) "activeProxy" else "proxy").put("timeout", 8).put("transfer", true)
+        TransferCheck.idleMs?.let { args.put("transferIdleMs", it) }
+        probe(catalog, id, args).getString("verdict")
+    }
+    /** The running core's transfer check as [transfer] runs it, for the repository actor to start. What it needs from the
+     *  engine is read here; the check it returns calls only the core, so it runs beside the actor, which may restart or
+     *  stop the core meanwhile. */
+    fun runningTransfer(): () -> String {
+        val proxy = fetchProxy?.takeIf { running } ?: throw AppFailure("not_connected")
+        val requests = transferTargets().map { target ->
+            throughRunningCore(obj("timeout" to 8, "url" to target.getString("url"), "method" to "GET", "transfer" to true)
+                .apply { TransferCheck.idleMs?.let { put("transferIdleMs", it) } }, proxy)
+        }
+        return {
+            TransferCheck.over(requests) { request ->
+                val reply = Native.cancellable("ping", request)
+                if (reply.getLong("delay") < 0) throw AppFailure("ping_failed")
+                reply.optString("verdict").takeIf { it.isNotEmpty() } ?: throw AppFailure("ping_failed")
+            }
+        }
+    }
+    private fun transferTargets() = TransferCheck.targets.let { all -> (0 until all.length()).map(all::getJSONObject) }
+    /** [request] through the running core's listener at [proxy]. */
+    private fun throughRunningCore(request: JSONObject, proxy: String) = request.put("proxy", proxy)
+        .put("configJSON", obj("inbounds" to JSONArray(), "outbounds" to JSONArray(listOf(obj("protocol" to "freedom")))).toString())
+}
+
+/** DNS queries a start sent for its server's names ([Engine.lookUp]). Waiting for them needs no lock, so a start that waits
+ *  for the network looks its names up outside the repository's, which a name without an answer would hold for 5 s. */
+class Lookups(private val queries: Map<String, Future<List<InetAddress>>>) {
+    /** Each name's addresses, or the failure [Engine.lookupFailed] reads: no answer at all, or none within [timeoutMs] of this
+     *  call for all of them together, after which the query is cancelled. */
+    fun await(timeoutMs: Long = 5000): Map<String, Result<List<InetAddress>>> {
+        val deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMs)
+        return queries.mapValues { (_, query) ->
+            try { runCatching { query.get(maxOf(0L, deadline - System.nanoTime()), TimeUnit.NANOSECONDS) } } finally { query.cancel(true) }
+        }
     }
 }

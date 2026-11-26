@@ -8,6 +8,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:elarni/connection_support.dart';
 import 'package:elarni/desktop_proxy.dart';
 import 'package:elarni/desktop_catalog.dart';
+import 'package:elarni/domain_ffi.dart';
 import 'package:elarni/tunnel_channel.dart';
 import 'package:elarni/headless.dart';
 import 'package:elarni/system_proxy.dart';
@@ -413,6 +414,11 @@ void main() {
     int? automationRetrySeconds,
     List<CatalogMap>? livenessTargets,
     Duration? livenessInterval,
+    List<CatalogMap> transferTargets = const [],
+    Duration? transferDelay,
+    Duration? transferRecheck,
+    Duration? transferInterval,
+    Duration? transferIdle,
     DateTime Function()? clock,
     Duration? refreshInterval,
     SystemProxySession? systemProxy,
@@ -428,6 +434,12 @@ void main() {
       automationRetrySeconds: automationRetrySeconds,
       livenessTargets: livenessTargets,
       livenessInterval: livenessInterval,
+      // Transfer checks fetch public bodies by default; a test names its own.
+      transferTargets: transferTargets,
+      transferDelay: transferDelay,
+      transferRecheck: transferRecheck,
+      transferInterval: transferInterval,
+      transferIdle: transferIdle,
       clock: clock,
       refreshInterval: refreshInterval,
       systemProxy: systemProxy,
@@ -3441,7 +3453,11 @@ for line in sys.stdin:
     final settings = await backend.control.tunnelSettings();
     for (final block in [false, true]) {
       await backend.control.updateTunnelSettings(
-        settings.copyWith(xrayTunEnabled: true, blockWithoutVPN: block),
+        settings.copyWith(
+          xrayTunEnabled: true,
+          blockWithoutVPN: block,
+          answerInbound: block,
+        ),
       );
       expect(await backend.control.connect(), 'connected');
       lastProcess!.kill();
@@ -3449,12 +3465,14 @@ for line in sys.stdin:
       await Future<void>.delayed(Duration.zero);
       expect(await backend.control.state(), 'failed');
     }
-    expect(
-      (await policies.readAsLines()).map(
-        (line) => (jsonDecode(line) as Map)['blockWithoutVPN'],
-      ),
-      [false, true],
-    );
+    // The helper also gets the Linux setting that answers inbound connections.
+    for (final key in ['blockWithoutVPN', 'answerInbound'])
+      expect(
+        (await policies.readAsLines()).map(
+          (line) => (jsonDecode(line) as Map)[key],
+        ),
+        [false, true],
+      );
     expect(messages, [
       'connection_stopped_repair',
       'connection_stopped_blocked',
@@ -5809,6 +5827,327 @@ if tunnel: note('closed')
     timeout: const Timeout(Duration(seconds: 90)),
   );
 
+  // N9-01: a server whose network freezes each connection after about 16 KB
+  // passes every small probe while pages hang. Two stalled transfer checks in a
+  // row make the connection 'stalled', recovery leaves it, and a backup that
+  // stalls too is skipped.
+  test(
+    'failover leaves a server whose network cuts transfers off',
+    () async {
+      await backend.dispose();
+      final check = {
+        'id': 'fixture',
+        'url': 'http://127.0.0.1:${target.port}/fixture',
+        'expectedStatus': 200,
+        'expectedBody': body,
+      };
+      // A body well past the 96 KB the check needs, sent only uncompressed.
+      final large = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      final payload = List<int>.filled(1 << 20, 0x61);
+      large.listen((request) async {
+        request.response.persistentConnection = false;
+        if (request.headers.value('accept-encoding') != 'identity') {
+          request.response.statusCode = 400;
+        } else {
+          request.response.contentLength = payload.length;
+          request.response.add(payload);
+        }
+        await request.response.close();
+      });
+      backend = createBackend(
+        automationProbeSeconds: 2,
+        automationRetrySeconds: 1,
+        livenessInterval: const Duration(minutes: 5),
+        livenessTargets: [check],
+        transferTargets: [
+          {'id': 'large', 'url': 'http://127.0.0.1:${large.port}/large'},
+        ],
+        transferDelay: Duration.zero,
+        transferRecheck: const Duration(seconds: 1),
+        transferIdle: const Duration(milliseconds: 500),
+      );
+      // Each relay passes 16 KB from the server on each connection; past that
+      // the bytes vanish and the connection stays open, as on a frozen path.
+      final peers = <Socket>{};
+      Future<ServerSocket> freezing() async {
+        final relay = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
+        relay.listen((client) async {
+          peers.add(client);
+          final server = await Socket.connect(
+            '127.0.0.1',
+            Uri.parse(profile).port,
+          );
+          peers.add(server);
+          unawaited(
+            client
+                .cast<List<int>>()
+                .pipe(server)
+                .catchError((Object _) => server),
+          );
+          var passed = 0;
+          server.listen(
+            (data) {
+              final room = 16384 - passed;
+              if (room <= 0) return;
+              final part = data.length <= room ? data : data.sublist(0, room);
+              passed += part.length;
+              client.add(part);
+            },
+            onDone: () {
+              if (passed < 16384) client.destroy();
+            },
+            onError: (Object _) {},
+            cancelOnError: true,
+          );
+        });
+        return relay;
+      }
+
+      final primary = await freezing(), backup = await freezing();
+      try {
+        String server(int port, String name) =>
+            Uri.parse(profile).replace(port: port, fragment: name).toString();
+        final imported = await backend.control.importClientProfiles(
+          content: [
+            server(primary.port, 'Primary'),
+            server(backup.port, 'Backup'),
+            profile,
+          ].join('\n'),
+        );
+        final group = imported.snapshot.subscriptions.single;
+        String id(String name) =>
+            group.nodes.singleWhere((node) => node.name == name).id;
+        await backend.control.selectNode(id('Primary'));
+        await backend.control.configureAutomation(
+          AutomationConfiguration(
+            enabled: true,
+            policy: AutomationSelectionPolicy.orderedFallback,
+            subscriptionId: group.id,
+            nodeIds: [
+              for (final name in ['Primary', 'Backup', 'Fixture']) id(name),
+            ],
+            targets: [
+              AutomationTarget(
+                id: 'fixture',
+                url: check['url']! as String,
+                expectedStatus: 200,
+                expectedBody: body,
+              ),
+            ],
+          ),
+        );
+        expect(await backend.control.connect(), 'connected');
+        final seen = <Object?>{};
+        final statuses = <Object?>{};
+        for (var i = 0; i < 600; i++) {
+          final metrics = await backend.control.runtimeMetrics();
+          seen.add(metrics['liveness']);
+          statuses.add((await backend.control.automationStatus())['status']);
+          if ((await backend.control.subscriptions()).selectedNodeId ==
+                  id('Fixture') &&
+              metrics['state'] == 'connected')
+            break;
+          await Future<void>.delayed(const Duration(milliseconds: 100));
+        }
+        expect(
+          statuses,
+          contains('healthy'),
+          reason: 'the small health check passes through the frozen path',
+        );
+        expect(
+          seen,
+          contains('stalled'),
+          reason: 'two stalled checks in a row show the state',
+        );
+        expect(
+          (await backend.control.subscriptions()).selectedNodeId,
+          id('Fixture'),
+          reason: 'recovery moves past the stalled server and backup',
+        );
+        final status = await backend.control.automationStatus();
+        expect(catalogMap(status['candidateFailures']!), {
+          id('Backup'): 'stalled',
+        });
+        expect(
+          catalogMap(storedCatalog!['committed'])['selectedNodeId'],
+          id('Fixture'),
+        );
+        // The working server's own check passes: no stall is reported.
+        await Future<void>.delayed(const Duration(seconds: 2));
+        expect(
+          (await backend.control.runtimeMetrics())['liveness'],
+          isNot('stalled'),
+        );
+        await checkSocks(
+          (await backend.control.tunnelSettings()).socksPort,
+          target.port,
+        );
+      } finally {
+        await backend.control.disconnect();
+        await primary.close();
+        await backup.close();
+        await large.close(force: true);
+        for (final peer in peers) {
+          peer.destroy();
+        }
+      }
+    },
+    timeout: const Timeout(Duration(seconds: 120)),
+  );
+
+  // N9-01: with nowhere else to go, recovery restarts a server whose network
+  // cuts transfers off once. A frozen network still carries small exchanges,
+  // so when the stall comes back the connection stays 'stalled' with no more
+  // restarts, until a transfer check passes again.
+  test(
+    'a stalled server with no other to move to restarts once per stall',
+    () async {
+      await backend.dispose();
+      final check = {
+        'id': 'fixture',
+        'url': 'http://127.0.0.1:${target.port}/fixture',
+        'expectedStatus': 200,
+        'expectedBody': body,
+      };
+      final large = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      final payload = List<int>.filled(1 << 20, 0x61);
+      large.listen((request) async {
+        request.response.persistentConnection = false;
+        request.response.contentLength = payload.length;
+        request.response.add(payload);
+        await request.response.close();
+      });
+      backend = createBackend(
+        automationProbeSeconds: 2,
+        automationRetrySeconds: 1,
+        livenessInterval: const Duration(minutes: 5),
+        livenessTargets: [check],
+        transferTargets: [
+          {'id': 'large', 'url': 'http://127.0.0.1:${large.port}/large'},
+        ],
+        transferDelay: Duration.zero,
+        transferRecheck: const Duration(seconds: 1),
+        transferInterval: const Duration(seconds: 1),
+        transferIdle: const Duration(milliseconds: 500),
+      );
+      // While frozen, each new connection through the relay passes 16 KB from
+      // the server; past that the bytes vanish and the connection stays open.
+      var frozen = true;
+      final peers = <Socket>{};
+      final relay = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
+      relay.listen((client) async {
+        final freezes = frozen;
+        peers.add(client);
+        // Once it passes everything, the core may close a connection while
+        // the server still sends: that write fails, which is no test failure.
+        unawaited(client.done.catchError((Object _) => client));
+        final server = await Socket.connect(
+          '127.0.0.1',
+          Uri.parse(profile).port,
+        );
+        peers.add(server);
+        unawaited(
+          client
+              .cast<List<int>>()
+              .pipe(server)
+              .catchError((Object _) => server),
+        );
+        var passed = 0;
+        server.listen(
+          (data) {
+            final room = freezes ? 16384 - passed : data.length;
+            if (room <= 0) return;
+            final part = data.length <= room ? data : data.sublist(0, room);
+            passed += part.length;
+            client.add(part);
+          },
+          onDone: () {
+            if (!freezes || passed < 16384) client.destroy();
+          },
+          onError: (Object _) {},
+          cancelOnError: true,
+        );
+      });
+      try {
+        final imported = await backend.control.importClientProfiles(
+          content: Uri.parse(
+            profile,
+          ).replace(port: relay.port, fragment: 'Frozen').toString(),
+        );
+        final group = imported.snapshot.subscriptions.single;
+        final id = group.nodes.single.id;
+        await backend.control.selectNode(id);
+        await backend.control.configureAutomation(
+          AutomationConfiguration(
+            enabled: true,
+            policy: AutomationSelectionPolicy.fixed,
+            subscriptionId: group.id,
+            nodeIds: [id],
+            targets: [
+              AutomationTarget(
+                id: 'fixture',
+                url: check['url']! as String,
+                expectedStatus: 200,
+                expectedBody: body,
+              ),
+            ],
+          ),
+        );
+        expect(await backend.control.connect(), 'connected');
+        // Each core the session ran, by the time it came up.
+        final starts = <Object?>{};
+        var metrics = <String, Object?>{};
+        Object? status;
+        for (var i = 0; i < 600; i++) {
+          metrics = await backend.control.runtimeMetrics();
+          if (metrics['state'] == 'connected')
+            starts.add(metrics['connectedSince']);
+          status = (await backend.control.automationStatus())['status'];
+          // Restarted once, stalled again, and the restart held back.
+          if (starts.length >= 2 &&
+              metrics['liveness'] == 'stalled' &&
+              status == 'endpointFailure')
+            break;
+          await Future<void>.delayed(const Duration(milliseconds: 100));
+        }
+        expect(starts, hasLength(2), reason: 'one restart for the stall');
+        expect(metrics['liveness'], 'stalled');
+        expect(status, 'endpointFailure');
+        // The retries that follow restart nothing, and the state stays.
+        for (var i = 0; i < 80; i++) {
+          metrics = await backend.control.runtimeMetrics();
+          expect(metrics['state'], 'connected');
+          expect(metrics['liveness'], 'stalled');
+          starts.add(metrics['connectedSince']);
+          await Future<void>.delayed(const Duration(milliseconds: 100));
+        }
+        expect(starts, hasLength(2), reason: 'no second restart');
+        // The network lets transfers through again: the next check clears it,
+        // with no traffic of the user's (pages that hang send nothing).
+        frozen = false;
+        for (var i = 0; i < 150 && metrics['liveness'] == 'stalled'; i++) {
+          await Future<void>.delayed(const Duration(milliseconds: 100));
+          metrics = await backend.control.runtimeMetrics();
+        }
+        expect(metrics['liveness'], isNot('stalled'));
+        expect(metrics['state'], 'connected');
+        expect(starts, contains(metrics['connectedSince']));
+        await checkSocks(
+          (await backend.control.tunnelSettings()).socksPort,
+          target.port,
+        );
+      } finally {
+        await backend.control.disconnect();
+        await relay.close();
+        await large.close(force: true);
+        for (final peer in peers) {
+          peer.destroy();
+        }
+      }
+    },
+    timeout: const Timeout(Duration(seconds: 120)),
+  );
+
   // Only timeouts counted against the selected server, so one whose service
   // stopped (connection refused or reset) was never left.
   test(
@@ -6185,15 +6524,20 @@ if tunnel: note('closed')
 
   test('a failed refresh says whose fault it is', () async {
     var status = 200;
+    var encrypted = false;
     final feed = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
     feed.listen((request) async {
       request.response.statusCode = status;
+      if (encrypted)
+        request.response.headers.set('encrypt-tag', 'YWJjZGVmZ2hpamtsbW5vcA==');
       if (status == 200) request.response.write(profile);
       await request.response.close();
     });
     try {
+      // Happ decrypts a feed whose URL names a key only when the reply has an
+      // Encrypt-Tag header; without one the feed is read as it is.
       final added = await backend.control.importClientProfiles(
-        content: 'http://127.0.0.1:${feed.port}/synthetic-token',
+        content: 'http://127.0.0.1:${feed.port}/synthetic-token?key=key02',
       );
       final id = added.snapshot.subscriptions.singleWhere((s) => !s.isLocal).id;
       await backend.control.refreshSubscription(
@@ -6221,6 +6565,20 @@ if tunnel: note('closed')
           reason: 'HTTP $code',
         );
       }
+      status = 200;
+      encrypted = true;
+      await expectLater(
+        backend.control.refreshSubscription(id),
+        throwsA(
+          isA<PlatformException>()
+              .having((e) => e.code, 'code', 'encrypted_feed')
+              .having(
+                (e) => e.message,
+                'message',
+                desktopError('encrypted_feed').message,
+              ),
+        ),
+      );
       // Nothing listens on the feed's port any more.
       await feed.close(force: true);
       await expectLater(
@@ -6236,6 +6594,33 @@ if tunnel: note('closed')
     } finally {
       await feed.close(force: true);
     }
+  });
+
+  // A panel's https root named in its fragment is a subscription under that
+  // name (probe N10-09); the core decides it, as on every platform.
+  test(
+    'an https root URL named in its fragment imports as a subscription',
+    () async {
+      final added = await backend.control.importClientProfiles(
+        content: 'https://127.0.0.1:9/#Root%20feed',
+      );
+      final group = added.snapshot.subscriptions.single;
+      expect([group.isLocal, group.name], [false, 'Root feed']);
+      // The loopback address waits for approval before anything is contacted.
+      expect(added.warning, isNotNull);
+    },
+  );
+
+  // http://host:port/#Name is the HTTP proxy link a browser's URL writes
+  // (146.1): it stays a proxy, named by its fragment.
+  test('an http root URL named in its fragment stays an HTTP proxy', () async {
+    final added = await backend.control.importClientProfiles(
+      content: 'http://127.0.0.1:9/#Office',
+    );
+    final group = added.snapshot.subscriptions.single;
+    expect(group.isLocal, isTrue);
+    expect([for (final node in group.nodes) node.name], ['Office']);
+    expect(added.warning, isNull);
   });
 
   // The provider's Profile-Update-Interval is each subscription's default; the
@@ -6884,13 +7269,16 @@ if tunnel: note('closed')
   test(
     'a refresh that only changes the REALITY shortId or SNI keeps the core running',
     () async {
-      var shortID = '0a1b', sni = 'example.com', fingerprint = 'chrome';
+      var shortID = '0a1b',
+          sni = 'example.com',
+          fingerprint = 'chrome',
+          remark = 'Reality';
       final feed = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
       feed.listen((request) async {
         // Connected means only that the local core answers; no server listens.
         request.response.write(
           'vless://$userID@127.0.0.1:9?encryption=none&security=reality&type=tcp&fp=$fingerprint'
-          '&pbk=FCNsCTRerqst97Y-_Pc32LnnBu0g_hw-LhJYlaeiEVs&sni=$sni&sid=$shortID#Reality\n',
+          '&pbk=FCNsCTRerqst97Y-_Pc32LnnBu0g_hw-LhJYlaeiEVs&sni=$sni&sid=$shortID#$remark\n',
         );
         await request.response.close();
       });
@@ -6921,6 +7309,20 @@ if tunnel: note('closed')
         sni = 'www.example.com';
         await backend.control.refreshSubscription(id);
         expect(await connectedSince(), started);
+        // With the remark (the traffic left) changed too, the server is found
+        // by its identity without these values, and the core stays as well.
+        final selected = (await backend.control.subscriptions()).selectedNodeId;
+        shortID = 'e5f6';
+        remark = 'Reality%209.47GB';
+        await backend.control.refreshSubscription(id);
+        final refreshed = await backend.control.subscriptions();
+        expect(refreshed.selectedNodeId, selected);
+        expect(refreshed.subscriptions.single.nodes.single.id, selected);
+        expect(
+          refreshed.subscriptions.single.nodes.single.name,
+          'Reality 9.47GB',
+        );
+        expect(await connectedSince(), started);
         // Any other change still restarts the core.
         fingerprint = 'firefox';
         await backend.control.refreshSubscription(id);
@@ -6931,6 +7333,257 @@ if tunnel: note('closed')
       }
     },
   );
+
+  // A 3x-ui panel picks each REALITY server's sid and sni per fetch and writes
+  // the traffic and days left into its remark. A refresh in which the remark
+  // changed with one of them made every server new: the favorite, the user's
+  // name, the hidden server, the automation list and the selection were lost
+  // (N10-06, run 8 of the 2026-11-24 issue research).
+  for (final (what, rotateSid, rotateSni) in [
+    ('the sid', true, false),
+    ('the sni', false, true),
+    ('the sid and the sni', true, true),
+  ]) {
+    test('a refresh that changed the remark with $what keeps every server and '
+        'what the user set on it', () async {
+      var second = false;
+      String server(int n) {
+        final sid = second && rotateSid ? 'e5f6a7b$n' : 'a1b2c3d$n';
+        final sni = second && rotateSni ? 'cdn.example.org' : 'www.example.com';
+        final usage = second ? '9.47GB📊-29D,21H⏳' : '9.52GB📊-29D,22H⏳';
+        return 'vless://00000000-0000-4000-8000-0000000000${10 + n}@192.0.2.${10 + n}:443'
+            '?encryption=none&flow=xtls-rprx-vision&security=reality&type=tcp&fp=chrome'
+            '&pbk=FCNsCTRerqst97Y-_Pc32LnnBu0g_hw-LhJYlaeiEVs&sni=$sni&sid=$sid'
+            '#${const ['DE-1', 'DE-2', 'NL-1'][n - 1]}-$usage';
+      }
+
+      final feed = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      feed.listen((request) async {
+        request.response.write(
+          [for (var n = 1; n <= 3; n++) server(n)].join('\n'),
+        );
+        await request.response.close();
+      });
+      final events = <String?>[];
+      try {
+        var result = await backend.control.addSubscription(
+          'http://127.0.0.1:${feed.port}/sub/fixture-token',
+        );
+        final id = result.snapshot.subscriptions.single.id;
+        for (
+          var attempt = 0;
+          result.warning != null && attempt < 4;
+          attempt++
+        ) {
+          result = await backend.control.refreshSubscription(
+            id,
+            challenge: result.warning!.challenge,
+          );
+        }
+        final ids = [
+          for (final node in result.snapshot.subscriptions.single.nodes)
+            node.id,
+        ];
+        expect(ids, hasLength(3));
+        await backend.control.setNodeFavorite(ids[0], true);
+        await backend.control.renameNode(ids[0], 'My Frankfurt');
+        await backend.control.selectNode(ids[2]);
+        await backend.control.deleteNode(ids[1]);
+        await backend.control.configureAutomation(
+          AutomationConfiguration(
+            enabled: true,
+            policy: AutomationSelectionPolicy.orderedFallback,
+            subscriptionId: id,
+            nodeIds: [ids[2], ids[0]],
+            targets: [
+              AutomationTarget(
+                id: 'fixture',
+                url: 'http://127.0.0.1:${target.port}/fixture',
+                expectedStatus: 200,
+                expectedBody: body,
+              ),
+            ],
+          ),
+        );
+        backend.control.setImportListener(events.add);
+        second = true;
+        final refreshed = await backend.control.refreshSubscription(id);
+        expect(refreshed.warning, isNull);
+        final snapshot = await backend.control.subscriptions();
+        final group = snapshot.subscriptions.single;
+        expect([for (final node in group.nodes) node.id], [ids[0], ids[2]]);
+        expect([for (final node in group.hiddenNodes) node.id], [ids[1]]);
+        expect(group.nodes.first.favorite, isTrue);
+        expect(group.nodes.first.name, 'My Frankfurt');
+        // The provider's new remark shows where the user named none.
+        expect(group.nodes.last.name, 'NL-1-9.47GB📊-29D,21H⏳');
+        expect(snapshot.selectedNodeId, ids[2]);
+        expect(events, isNot(contains('selected_server_replaced')));
+        final automation = catalogMap(
+          catalogMap(storedCatalog!['committed'])['automation'],
+        );
+        expect(automation['nodeIDs'], [ids[2], ids[0]]);
+        expect(automation['enabled'], isTrue);
+      } finally {
+        await feed.close(force: true);
+      }
+    });
+  }
+
+  // Providers write a message into the remark of a line no server answers
+  // (N10-07). The core's importer marks such lines; a feed from a public host
+  // shows them as notices, while a feed served here lists real servers there.
+  group('provider message lines', () {
+    const messages = [
+      'socks://127.0.0.1:1080#📊 10GB left',
+      'socks://192.0.2.1:1#Device limit reached',
+      'trojan://1@1.1.1.1#✖ Package Ended',
+    ];
+    const servers = [
+      'vless://$userID@de.example:443?encryption=none&security=reality'
+          '&type=tcp&fp=chrome&pbk=FCNsCTRerqst97Y-_Pc32LnnBu0g_hw-LhJYlaeiEVs'
+          '&sni=www.example.com&sid=0a1b#DE-1',
+      'trojan://fixture@nl.example:443?security=tls&sni=nl.example#NL-1',
+    ];
+    final mixed = [
+      messages[0],
+      servers[0],
+      messages[1],
+      servers[1],
+      messages[2],
+    ].join('\n');
+
+    // The stage as a refresh runs it: the feed text is canned, the importer
+    // and the identities are the real ones.
+    Future<DesktopCatalog> refreshed(String url, String text) async {
+      final library = ElarniDomainFfi.openLibrary(domainPath);
+      addTearDown(library.dispose);
+      Future<CatalogMap> core(String method, CatalogMap payload) async {
+        final process = await Process.start(
+          corePath,
+          const [],
+          environment: coreEnvironment,
+        );
+        unawaited(process.stderr.drain<void>());
+        process.stdin.writeln(
+          jsonEncode({'apiVersion': 1, 'method': method, 'payload': payload}),
+        );
+        await process.stdin.flush();
+        final line = await process.stdout
+            .transform(utf8.decoder)
+            .transform(const LineSplitter())
+            .first
+            .timeout(const Duration(seconds: 10));
+        await process.stdin.close();
+        final reply = catalogMap(jsonDecode(line));
+        expect(await process.exitCode, 0);
+        expect(reply['success'], isTrue, reason: '$reply');
+        return catalogMap(reply['data']);
+      }
+
+      final catalog = DesktopCatalog(
+        DesktopCatalog.empty(),
+        (method, payload) async => switch (method) {
+          'fetchSubscription' => {
+            'body': text,
+            'headers': <String, Object?>{},
+            'url': payload['url'],
+            'approvedChain': <Object?>[],
+          },
+          'importClientProfiles' => await core(method, payload),
+          _ => throw StateError(method),
+        },
+        (operation, payload) => library.request({
+          'schemaVersion': 1,
+          'operation': operation,
+          'payload': payload,
+        }),
+      );
+      expect(await catalog.refresh(catalog.addSource(url)), isNull);
+      return catalog;
+    }
+
+    SubscriptionGroup shown(DesktopCatalog catalog) =>
+        SubscriptionGroup.fromMap(
+          catalogList(catalog.snapshot()['subscriptions']).single,
+        );
+
+    test('of a public feed are notices and never servers', () async {
+      final catalog = await refreshed('https://sub.example/feed', mixed);
+      final group = shown(catalog);
+      expect([for (final node in group.nodes) node.name], ['DE-1', 'NL-1']);
+      expect(group.notices, [
+        '📊 10GB left',
+        'Device limit reached',
+        '✖ Package Ended',
+      ]);
+      // Selection, a test of every server and automation choose among the
+      // servers of the catalog, which hold no notice.
+      expect(catalog.selected, group.nodes.first.id);
+      expect(
+        [
+          for (final source in catalog.sources)
+            for (final key in ['nodes', 'hiddenNodes'])
+              for (final node in catalogList(source[key])) node['name'],
+        ],
+        ['DE-1', 'NL-1'],
+      );
+    });
+
+    test('of a feed from this device are servers', () async {
+      final catalog = await refreshed('http://127.0.0.1:2096/feed', mixed);
+      final group = shown(catalog);
+      expect([for (final node in group.nodes) node.name], [
+        '📊 10GB left',
+        'DE-1',
+        'Device limit reached',
+        'NL-1',
+        '✖ Package Ended',
+      ]);
+      expect(group.notices, isEmpty);
+    });
+
+    test('alone refresh a public subscription to no server', () async {
+      final catalog = await refreshed(
+        'https://sub.example/feed',
+        messages.join('\n'),
+      );
+      final group = shown(catalog);
+      expect(group.status, 'ready');
+      expect(group.nodes, isEmpty);
+      expect(group.notices, hasLength(3));
+      expect(catalog.selected, isNull);
+    });
+
+    test('of a feed served here stay servers through the backend', () async {
+      final feed = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      feed.listen((request) async {
+        request.response.write(mixed);
+        await request.response.close();
+      });
+      try {
+        var result = await backend.control.addSubscription(
+          'http://127.0.0.1:${feed.port}/sub/fixture-token',
+        );
+        final id = result.snapshot.subscriptions.single.id;
+        for (
+          var attempt = 0;
+          result.warning != null && attempt < 4;
+          attempt++
+        ) {
+          result = await backend.control.refreshSubscription(
+            id,
+            challenge: result.warning!.challenge,
+          );
+        }
+        final group = result.snapshot.subscriptions.single;
+        expect(group.nodes, hasLength(5));
+        expect(group.notices, isEmpty);
+      } finally {
+        await feed.close(force: true);
+      }
+    });
+  });
 
   test('a renamed server keeps its name and a deleted one is gone', () async {
     final feed = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);

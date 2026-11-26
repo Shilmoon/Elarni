@@ -9,6 +9,13 @@
 #include <stdint.h>
 #include <stdlib.h>
 
+/**
+ * A stored REALITY shortId or serverName outlives a fetch that rotates it only this long after
+ * the node's last good connect: a value the panel retired then fails every connect, and the
+ * first refresh past the window takes the fetched one.
+ */
+#define KEEP_ROTATED_SECONDS 86400.0
+
 #define ELARNI_ABI_VERSION 1
 
 #define ELARNI_SCHEMA_MIN 1
@@ -21,15 +28,18 @@
 
 #define MAX_DNS_HOSTS 4096
 
+/**
+ * Owns nothing yet: every request is independent.
+ */
 typedef struct ElarniHandle ElarniHandle;
-
-typedef uint32_t ElarniStatus;
 
 typedef struct ElarniBuffer {
   uint8_t *data;
   size_t len;
   size_t capacity;
 } ElarniBuffer;
+
+typedef uint32_t ElarniStatus;
 
 #define ELARNI_STATUS_OK 0
 

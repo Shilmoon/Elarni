@@ -142,6 +142,10 @@ final class ConnectionIssue {
         l10n.issueRouteModelTooLargeRemedy,
       ),
       'cancelled' => (l10n.issueCancelled, l10n.issueCancelledRemedy),
+      _ when wintunFailure(issue) => (
+        l10n.issueWintunFailed,
+        l10n.issueWintunFailedRemedy,
+      ),
       _ => (l10n.issueOperationFailed, l10n.issueOperationFailedRemedy),
     };
     return ConnectionIssue(issue, message, remedy);

@@ -183,13 +183,17 @@ struct HomeView: View {
   private func connectionSection(scroll: ScrollViewProxy) -> some View {
     Section {
         VStack(spacing: 8) {
-          ConnectionArtwork(connected: model.vpn.providerReady && !model.vpn.noTraffic, failed: model.vpn.failed,
-                            warning: model.vpn.noTraffic)
+          ConnectionArtwork(connected: model.vpn.providerReady && !model.vpn.noTraffic && !model.vpn.stalled, failed: model.vpn.failed,
+                            warning: model.vpn.noTraffic || model.vpn.stalled)
           VStack(spacing: 6) {
             Text(model.vpn.stateLabel).font(.headline).multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
-              .foregroundStyle(model.vpn.noTraffic ? AppPalette.warning : Color.primary)
+              .foregroundStyle(model.vpn.noTraffic || model.vpn.stalled ? AppPalette.warning : Color.primary)
             if model.vpn.noTraffic, let since = model.vpn.noTrafficSince {
               Text("The server passed no traffic at \(since.formatted(date: .omitted, time: .shortened)). Checking again each minute.")
+                .font(.footnote).foregroundStyle(AppPalette.secondary).multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
+            }
+            if model.vpn.stalled {
+              Text("Connected, but this server’s network cuts transfers off. Pages will not load; choose another server.")
                 .font(.footnote).foregroundStyle(AppPalette.secondary).multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
             }
             if let selected = model.selected {
@@ -274,14 +278,20 @@ struct HomeView: View {
         ForEach(serverList.sources) { source in
           Section {
             DisclosureGroup(isExpanded: open(source.id)) {
+              noticeRows(source)
               ForEach(source.countries) { countryGroup($0, provider: false) }
             } label: {
-              let label = ViewThatFits(in: .horizontal) {
-                HStack(spacing: 8) { sourceTitle(source); sourceCount(source) }
-                VStack(alignment: .leading, spacing: 4) { sourceTitle(source); sourceCount(source) }
+              let label = VStack(alignment: .leading, spacing: 2) {
+                ViewThatFits(in: .horizontal) {
+                  HStack(spacing: 8) { sourceTitle(source); sourceCount(source) }
+                  VStack(alignment: .leading, spacing: 4) { sourceTitle(source); sourceCount(source) }
+                }
               }.frame(maxWidth: .infinity, minHeight: 44, alignment: .leading).contentShape(Rectangle())
               if let subscription = model.subscriptions.first(where: { $0.id == source.id }) { label.subscriptionMenu(subscription) } else { label }
             }
+            // The provider's message lines sit under the header but outside it, as on Android: a tap on one neither
+            // folds the group nor opens the subscription menu. They are an open group's first rows, or follow a closed one.
+            if closed.contains(source.id) { noticeRows(source) }
           }
         }
       }
@@ -313,6 +323,12 @@ struct HomeView: View {
     case "favorites": serverList.visible
     case "country": serverList.countries.filter { !closed.contains($0.id) }.flatMap(\.nodes)
     default: serverList.sources.filter { !closed.contains($0.id) }.flatMap { $0.countries.filter { !closed.contains($0.id) }.flatMap(\.nodes) }
+    }
+  }
+  @ViewBuilder private func noticeRows(_ source: ServerListCache.Source) -> some View {
+    if !source.notices.isEmpty {
+      VStack(alignment: .leading, spacing: 2) { ProviderNoticeLines(notices: source.notices) }
+        .frame(maxWidth: .infinity, alignment: .leading).listRowSeparator(.hidden)
     }
   }
   private func sourceTitle(_ source: ServerListCache.Source) -> some View {

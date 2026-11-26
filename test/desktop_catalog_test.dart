@@ -501,6 +501,7 @@ void main() {
       (method, payload) async => throw StateError(method),
       (operation, payload) => switch (operation) {
         'catalogIdentity' => {'identity': jsonEncode(payload)},
+        'catalogStableIdentity' => {'identity': jsonEncode(payload)},
         'keepShortIds' => {'config': payload['config']},
         _ => throw StateError(operation),
       },
@@ -533,8 +534,490 @@ void main() {
     );
   });
 
+  // 3x-ui picks a REALITY server's sid and sni per fetch and writes the
+  // traffic left into the remark, so neither the exact identity nor the name
+  // finds the server again (N10-06).
+  group('a refresh matched by the stable identity', () {
+    // As the domain library: the identity without the rotated REALITY values.
+    Object? withoutRotated(Object? value) => switch (value) {
+      final Map map => {
+        for (final MapEntry(:key, value: item) in map.entries)
+          key: withoutRotated(
+            key == 'realitySettings' && item is Map
+                ? ({...item}..removeWhere(
+                    (field, _) =>
+                        {'shortId', 'serverName', 'spiderX'}.contains(field),
+                  ))
+                : item,
+          ),
+      },
+      final List list => [for (final item in list) withoutRotated(item)],
+      _ => value,
+    };
+    late List<CatalogMap> keptShortIds;
+    DesktopCatalog catalog() {
+      keptShortIds = [];
+      return DesktopCatalog(
+        DesktopCatalog.empty(),
+        (method, payload) async => throw StateError(method),
+        (operation, payload) => switch (operation) {
+          'catalogIdentity' => {'identity': jsonEncode(payload)},
+          'catalogStableIdentity' => {
+            'identity': jsonEncode(withoutRotated(payload)),
+          },
+          // The stored values stay, as for a server that connected lately.
+          'keepShortIds' => {
+            'config': (keptShortIds..add(payload)).last['previous'],
+          },
+          _ => throw StateError(operation),
+        },
+      );
+    }
+
+    CatalogMap server(
+      String name, {
+      String host = '192.0.2.11',
+      String sid = 'a1b2',
+      String sni = 'www.example.com',
+      String format = 'xrayProfile',
+    }) => {
+      'format': format,
+      'name': name,
+      'config': {
+        'outbounds': [
+          {
+            'protocol': 'vless',
+            'settings': {'address': host, 'port': 443, 'id': 'user'},
+            'streamSettings': {
+              'network': 'tcp',
+              'security': 'reality',
+              'realitySettings': {
+                'publicKey': 'key',
+                'shortId': sid,
+                'serverName': sni,
+              },
+            },
+          },
+        ],
+      },
+    };
+    List<Object?> ids(List<CatalogMap> nodes) => [
+      for (final node in nodes) node['id'],
+    ];
+
+    test('keeps each server with its user state when the remark changed with '
+        'the sid, the sni or both', () {
+      for (final (sid, sni) in [
+        ('e5f6', 'www.example.com'),
+        ('a1b2', 'cdn.example.org'),
+        ('e5f6', 'cdn.example.org'),
+      ]) {
+        final subject = catalog();
+        final before = subject.parseNodes({
+          'profiles': [
+            server('DE-1-9.52GB', host: '192.0.2.11'),
+            server('DE-2-9.52GB', host: '192.0.2.12'),
+            server('NL-1-9.52GB', host: '192.0.2.13'),
+          ],
+        }, []);
+        before[0]
+          ..['favorite'] = true
+          ..['manualName'] = 'My Frankfurt'
+          ..['ipPreference'] = 'ipv4';
+        before[2]
+          ..['lastSuccessAt'] = subject.now - 60
+          ..['lastSuccessRevision'] = before[2]['configurationRevision'];
+        final after = subject.parseNodes({
+          'profiles': [
+            server('DE-1-9.47GB', host: '192.0.2.11', sid: sid, sni: sni),
+            server('DE-2-9.47GB', host: '192.0.2.12', sid: sid, sni: sni),
+            server('NL-1-9.47GB', host: '192.0.2.13', sid: sid, sni: sni),
+          ],
+        }, before);
+        expect(ids(after), ids(before), reason: '$sid $sni');
+        expect(after[0]['favorite'], isTrue);
+        expect(after[0]['manualName'], 'My Frankfurt');
+        expect(after[0]['ipPreference'], 'ipv4');
+        expect(after[0]['name'], 'DE-1-9.47GB');
+        // The one that connected lately went through keepShortIds and keeps
+        // its stored values and revision, so the running core stays.
+        expect(keptShortIds, hasLength(1));
+        expect(after[2]['config'], before[2]['config']);
+        expect(
+          after[2]['configurationRevision'],
+          before[2]['configurationRevision'],
+        );
+        expect(after[2]['lastSuccessAt'], before[2]['lastSuccessAt']);
+        // The others take the fetched values as a new revision.
+        expect(
+          after[1]['configurationRevision'],
+          isNot(before[1]['configurationRevision']),
+        );
+      }
+    });
+
+    test('pairs one host listed N times in feed order', () {
+      final subject = catalog();
+      final before = subject.parseNodes({
+        'profiles': [
+          server('Host 1 · 9.52GB', sid: '01'),
+          server('Host 2 · 9.52GB', sid: '02'),
+          server('Host 3 · 9.52GB', sid: '03'),
+        ],
+      }, []);
+      // The selected one is matched first by the exact identity, not here.
+      subject.data['selectedNodeId'] = before[2]['id'];
+      final after = subject.parseNodes({
+        'profiles': [
+          server('Host 1 · 9.47GB', sid: '11'),
+          server('Host 2 · 9.47GB', sid: '12'),
+          server('Host 3 · 9.47GB', sid: '13'),
+        ],
+      }, before);
+      expect(ids(after), ids(before));
+      // An exact match still comes first: the entry that now has the second
+      // server's sid is the second server, and the rest pair in order.
+      final exact = subject.parseNodes({
+        'profiles': [
+          server('Host 1 · 9.40GB', sid: '22'),
+          server('Host 2 · 9.40GB', sid: '12'),
+          server('Host 3 · 9.40GB', sid: '23'),
+        ],
+      }, after);
+      expect(ids(exact), ids(before));
+      final swapped = subject.parseNodes({
+        'profiles': [
+          server('Host 1 · 9.30GB', sid: '12'),
+          server('Host 2 · 9.30GB', sid: '31'),
+          server('Host 3 · 9.30GB', sid: '32'),
+        ],
+      }, exact);
+      expect(ids(swapped), [before[1]['id'], before[0]['id'], before[2]['id']]);
+    });
+
+    test('leaves unequal counts and other formats to the name stages', () {
+      final subject = catalog();
+      final before = subject.parseNodes({
+        'profiles': [
+          server('Host 1 · 9.52GB', sid: '01'),
+          server('Host 2 · 9.52GB', sid: '02'),
+        ],
+      }, []);
+      // Two listed, one fetched: the one fetched is not guessed.
+      final fewer = subject.parseNodes({
+        'profiles': [server('Host 1 · 9.47GB', sid: '11')],
+      }, before);
+      expect(ids(fewer).single, isNot(anyOf(ids(before))));
+      // A name the stages after this one know still decides.
+      final named = subject.parseNodes({
+        'profiles': [server('Host 2 · 9.52GB', sid: '11')],
+      }, before);
+      expect(ids(named), [before[1]['id']]);
+      final more = subject.parseNodes({
+        'profiles': [
+          server('Host 1 · 9.47GB', sid: '11'),
+          server('Host 2 · 9.47GB', sid: '12'),
+          server('Host 3 · 9.47GB', sid: '13'),
+        ],
+      }, before);
+      expect(ids(more).where(ids(before).contains), isEmpty);
+      // The same server under another format is another server.
+      final telegram = subject.parseNodes({
+        'profiles': [
+          {...server('Proxy · 9.52GB'), 'format': 'telegram'},
+        ],
+      }, []);
+      final profile = subject.parseNodes({
+        'profiles': [server('Proxy · 9.47GB', sid: '11')],
+      }, telegram);
+      expect(ids(profile).single, isNot(ids(telegram).single));
+    });
+
+    // A provider lists one inbound twice with two SNIs, names the copies
+    // apart and swaps them while it rotates the sid (156.2): each keeps its
+    // user state by name, not by position.
+    test('pairs a name once on each side before position', () {
+      final subject = catalog();
+      final before = subject.parseNodes({
+        'profiles': [
+          server('DE-1 YouTube', sid: '01', sni: 'a.example'),
+          server('DE-1 WhatsApp', sid: '02', sni: 'b.example'),
+        ],
+      }, []);
+      before[0]['favorite'] = true;
+      final after = subject.parseNodes({
+        'profiles': [
+          server('DE-1 WhatsApp', sid: '12', sni: 'b.example'),
+          server('DE-1 YouTube', sid: '11', sni: 'a.example'),
+        ],
+      }, before);
+      expect(ids(after), [before[1]['id'], before[0]['id']]);
+      expect(after[1]['favorite'], isTrue);
+    });
+
+    // The user hid the first DE-1 (its SNI is blocked) and favorited the
+    // second; stored, they are [id1, NL, id0]. A refresh that rotates the sid
+    // pairs them in the feed's order, not the stored lists' (156.1).
+    test('pairs stored servers in the order of their feed', () {
+      final subject = catalog();
+      final before = subject.parseNodes({
+        'profiles': [
+          server('DE-1', sid: '01', sni: 'blocked.example'),
+          server('DE-1', sid: '01', sni: 'open.example'),
+          server('NL-1', host: '192.0.2.13'),
+        ],
+      }, []);
+      expect([for (final node in before) node['feedIndex']], [0, 1, 2]);
+      final stored = [before[1], before[2], before[0]];
+      final after = subject.parseNodes({
+        'profiles': [
+          server('DE-1', sid: '11', sni: 'blocked.example'),
+          server('DE-1', sid: '11', sni: 'open.example'),
+          server('NL-1', host: '192.0.2.13'),
+        ],
+      }, stored);
+      expect(ids(after), ids(before));
+      // A server stored before feedIndex keeps its place in the list.
+      final legacy = [
+        for (final node in stored)
+          {
+            for (final MapEntry(:key, :value) in node.entries)
+              if (key != 'feedIndex') key: value,
+          },
+      ];
+      final unordered = subject.parseNodes({
+        'profiles': [
+          server('DE-1', sid: '21', sni: 'blocked.example'),
+          server('DE-1', sid: '21', sni: 'open.example'),
+          server('NL-1', host: '192.0.2.13'),
+        ],
+      }, legacy);
+      expect(ids(unordered), [
+        before[1]['id'],
+        before[0]['id'],
+        before[2]['id'],
+      ]);
+    });
+  });
+
+  // The equal-count pairing of the stable identity stage (156.9), as
+  // Catalog.pairByStableIdentity on Android and pairedByStableIdentity on
+  // Apple platforms.
+  group('pairByStableIdentity', () {
+    Map<int, String> pair(
+      List<(int, String, String)> fresh,
+      List<(String, String, String, int)> stale,
+    ) => DesktopCatalog.pairByStableIdentity(
+      [
+        for (final (position, key, name) in fresh)
+          (position: position, key: key, name: name),
+      ],
+      [
+        for (final (value, key, name, order) in stale)
+          (value: value, key: key, name: name, order: order),
+      ],
+    );
+
+    test('pairs a key that occurs as often on both sides', () {
+      expect(
+        pair(
+          [(0, 'A', 'a'), (2, 'C', 'c')],
+          [('a', 'A', 'a', 0), ('c', 'C', 'c', 1)],
+        ),
+        {0: 'a', 2: 'c'},
+      );
+      expect(
+        pair(
+          [(1, 'X', 'X 9GB'), (3, 'X', 'X 9GB'), (4, 'X', 'X 9GB')],
+          [
+            ('x1', 'X', 'X 8GB', 0),
+            ('x2', 'X', 'X 8GB', 1),
+            ('x3', 'X', 'X 8GB', 2),
+          ],
+        ),
+        {1: 'x1', 3: 'x2', 4: 'x3'},
+        reason: 'one host listed three times pairs in order',
+      );
+      expect(
+        pair([(0, 'X', 'X')], [('x1', 'X', 'X', 0), ('x2', 'X', 'X', 1)]),
+        isEmpty,
+        reason: 'fewer in the refresh is left to the name stages',
+      );
+      expect(
+        pair(
+          [(0, 'X', 'X'), (1, 'X', 'X'), (2, 'X', 'X'), (3, 'B', 'B')],
+          [('x1', 'X', 'X', 0), ('x2', 'X', 'X', 1), ('b', 'B', 'B', 2)],
+        ),
+        {3: 'b'},
+        reason: 'more in the refresh too; other identities still pair',
+      );
+      expect(
+        pair([(0, 'xrayProfile\nX', 'X')], [('t', 'telegram\nX', 'X', 0)]),
+        isEmpty,
+        reason: 'a key on one side only',
+      );
+      expect(pair([], [('a', 'A', 'A', 0)]), isEmpty);
+    });
+
+    test('pairs a name once on each side first, the rest in feed order', () {
+      expect(
+        pair(
+          [(0, 'X', 'WhatsApp'), (1, 'X', 'YouTube')],
+          [('yt', 'X', 'YouTube', 0), ('wa', 'X', 'WhatsApp', 1)],
+        ),
+        {0: 'wa', 1: 'yt'},
+      );
+      // A repeated name is no name to pair by; the rest keep their order.
+      expect(
+        pair(
+          [(0, 'X', 'DE'), (1, 'X', 'DE'), (2, 'X', 'Solo')],
+          [
+            ('solo', 'X', 'Solo', 0),
+            ('d1', 'X', 'DE', 1),
+            ('d2', 'X', 'DE', 2),
+          ],
+        ),
+        {0: 'd1', 1: 'd2', 2: 'solo'},
+      );
+    });
+
+    test('takes the stored servers in their feed order', () {
+      expect(
+        pair(
+          [(0, 'X', 'DE-1'), (1, 'X', 'DE-1'), (2, 'N', 'NL-1')],
+          [
+            ('id1', 'X', 'DE-1', 1),
+            ('nl', 'N', 'NL-1', 2),
+            ('id0', 'X', 'DE-1', 0),
+          ],
+        ),
+        {0: 'id0', 1: 'id1', 2: 'nl'},
+      );
+      expect(
+        pair(
+          [(0, 'X', 'A'), (1, 'X', 'A')],
+          [('second', 'X', 'A', 5), ('first', 'X', 'A', 5)],
+        ),
+        {0: 'second', 1: 'first'},
+        reason: 'the same place keeps the list order',
+      );
+    });
+  });
+
   // As on Android, a running tunnel moves to the provider's next server
   // instead of stopping silently when a refresh drops the selected one.
+  // Providers write "📊 10GB left" or "Device limit reached" into the remark of
+  // a line no server answers (N10-07); the importer marks such lines.
+  // The core decides which lines are messages and returns them as notices
+  // (Go's TestFeedNotices*); desktop shows what it returns.
+  group('provider message lines', () {
+    CatalogMap line(String name) => {
+      'format': 'xrayProfile',
+      'name': name,
+      'config': {
+        'outbounds': [
+          {
+            'protocol': 'socks',
+            'settings': {'address': '$name.example', 'port': 1080},
+          },
+        ],
+      },
+    };
+    late List<CatalogMap> feed;
+    late List<String> notices;
+    final sourceURLs = <Object?>[];
+    DesktopCatalog catalog(String url) =>
+        DesktopCatalog(
+          DesktopCatalog.empty(),
+          (method, payload) async {
+            if (method == 'importClientProfiles') {
+              sourceURLs.add(payload['sourceURL']);
+            }
+            return switch (method) {
+              'fetchSubscription' => {
+                'body': 'feed',
+                'headers': {},
+                'url': payload['url'],
+              },
+              'importClientProfiles' => {
+                'profiles': feed,
+                if (notices.isNotEmpty) 'notices': notices,
+              },
+              _ => throw StateError(method),
+            };
+          },
+          (operation, payload) => switch (operation) {
+            'catalogIdentity' ||
+            'catalogStableIdentity' => {'identity': jsonEncode(payload)},
+            _ => throw StateError(operation),
+          },
+        )..putSource({
+          'id': 'feed',
+          'name': 'Feed',
+          'url': url,
+          'format': 'source',
+          'status': 'ready',
+          'nodes': <CatalogMap>[],
+        });
+    SubscriptionGroup shown(DesktopCatalog catalog) =>
+        SubscriptionGroup.fromMap(
+          catalogList(catalog.snapshot()['subscriptions']).single,
+        );
+
+    test('are the notices the core returns, beside the servers', () async {
+      sourceURLs.clear();
+      feed = [line('DE-1'), line('NL-1')];
+      notices = ['📊 10GB left', 'Device limit reached'];
+      final subscriptions = catalog('https://sub.example/feed');
+      expect(await subscriptions.refresh('feed'), isNull);
+      // The core applies its feed-host rule to the URL desktop fetched.
+      expect(sourceURLs, ['https://sub.example/feed']);
+      final group = shown(subscriptions);
+      expect(group.notices, ['📊 10GB left', 'Device limit reached']);
+      expect(subscriptions.source('feed')['notices'], hasLength(2));
+      expect([for (final node in group.nodes) node.name], ['DE-1', 'NL-1']);
+      expect(subscriptions.selected, group.nodes.first.id);
+    });
+
+    test('alone refresh a subscription to no server, and the next refresh '
+        'replaces them', () async {
+      feed = [];
+      notices = ['Device limit reached', '✖ Package Ended'];
+      final subscriptions = catalog('https://sub.example/feed');
+      expect(await subscriptions.refresh('feed'), isNull);
+      expect(subscriptions.source('feed')['status'], 'ready');
+      expect(shown(subscriptions).nodes, isEmpty);
+      expect(shown(subscriptions).notices, [
+        'Device limit reached',
+        '✖ Package Ended',
+      ]);
+      expect(subscriptions.selected, isNull);
+      feed = [line('DE-1')];
+      notices = ['📊 9GB left'];
+      await subscriptions.refresh('feed');
+      expect(shown(subscriptions).notices, ['📊 9GB left']);
+      expect(subscriptions.selected, shown(subscriptions).nodes.single.id);
+      notices = [];
+      await subscriptions.refresh('feed');
+      expect(subscriptions.source('feed').containsKey('notices'), isFalse);
+      expect(shown(subscriptions).notices, isEmpty);
+    });
+
+    test('pasted by hand are servers', () async {
+      sourceURLs.clear();
+      feed = [line('📊 10GB left')];
+      notices = [];
+      final subscriptions = catalog('https://sub.example/feed');
+      final local = await subscriptions.importLocal(
+        'socks://127.0.0.1:1080#📊 10GB left',
+      );
+      // No feed URL: the core keeps every line a server.
+      expect(sourceURLs, [null]);
+      expect([for (final node in local.added) node['name']], ['📊 10GB left']);
+      expect(subscriptions.source(local.id).containsKey('notices'), isFalse);
+    });
+  });
+
   test('a refresh that drops the selected server selects the next', () async {
     CatalogMap server(String name) => {
       'format': 'xrayProfile',
@@ -562,6 +1045,7 @@ void main() {
       },
       (operation, payload) => switch (operation) {
         'catalogIdentity' => {'identity': jsonEncode(payload)},
+        'catalogStableIdentity' => {'identity': jsonEncode(payload)},
         _ => throw StateError(operation),
       },
     );
@@ -701,6 +1185,7 @@ void main() {
       },
       (operation, payload) => switch (operation) {
         'catalogIdentity' => {'identity': jsonEncode(payload)},
+        'catalogStableIdentity' => {'identity': jsonEncode(payload)},
         // "Unreadable" does not decode; "Large" decodes but does not merge,
         // as a profile over the routing limits.
         'decodeRouting'
@@ -808,6 +1293,7 @@ void main() {
       },
       (operation, payload) => switch (operation) {
         'catalogIdentity' => {'identity': jsonEncode(payload)},
+        'catalogStableIdentity' => {'identity': jsonEncode(payload)},
         _ => throw StateError(operation),
       },
     );

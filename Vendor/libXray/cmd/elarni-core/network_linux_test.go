@@ -15,7 +15,9 @@ import (
 	"os/exec"
 	"reflect"
 	"runtime"
+	"slices"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -102,10 +104,10 @@ func TestLinuxWithoutIPv6RejectsTunnelledIPv6InsteadOfLeaking(t *testing.T) {
 // their traffic leave on the physical link when the tunnel route is missing.
 func TestLinuxGuardCoversForwardedTraffic(t *testing.T) {
 	network := linuxNetwork{Name: "rv0123456789ab", Mark: 0x52562ee1, DNSPort: 35123}
-	script := network.firewall([]netip.Prefix{netip.MustParsePrefix("0.0.0.0/1"), netip.MustParsePrefix("2001:db8::/32")})
+	script := network.firewall([]netip.Prefix{netip.MustParsePrefix("0.0.0.0/1"), netip.MustParsePrefix("2001:db8::/32")}, false)
 	for _, want := range []string{
 		"add chain inet rv0123456789ab forward_guard { type filter hook forward priority 0; policy accept; }",
-		`add rule inet rv0123456789ab forward_guard oifname "rv0123456789ab" return`,
+		`add rule inet rv0123456789ab forward_guard oifname "rv0123456789ab" return comment "elarni forward_guard"`,
 		"add rule inet rv0123456789ab forward_guard ip daddr @protected4 reject",
 		"add rule inet rv0123456789ab forward_guard ip6 daddr @protected6 reject",
 	} {
@@ -113,8 +115,271 @@ func TestLinuxGuardCoversForwardedTraffic(t *testing.T) {
 			t.Fatalf("missing %q in:\n%s", want, script)
 		}
 	}
-	if unguarded := network.firewall(nil); bytes.Contains([]byte(unguarded), []byte("forward_guard")) {
+	if unguarded := network.firewall(nil, false); bytes.Contains([]byte(unguarded), []byte("forward_guard")) {
 		t.Fatal("forward guard installed without enforced routes")
+	}
+}
+
+// 133.1: marking every reply-direction packet gave the core's mark to the host's answers to a peer
+// that first wrote to it through the tunnel, so they left outside it past the kill switch. A
+// connection is tagged where it begins instead, and only one from outside to this host is answered
+// outside the tunnel; one with no tag began before the firewall.
+func TestLinuxInboundRepliesFollowWhereTheConnectionBegan(t *testing.T) {
+	network := linuxNetwork{Name: "rv0123456789ab", Mark: 0x52562ee1, DNSPort: 35123}
+	chains := func(script string) []string {
+		var rules []string
+		for _, line := range strings.Split(script, "\n") {
+			if strings.Contains(line, " inbound ") || strings.Contains(line, " inbound_reply ") {
+				rules = append(rules, line)
+			}
+		}
+		return rules
+	}
+	want := []string{
+		"add chain inet rv0123456789ab inbound { type filter hook prerouting priority mangle; policy accept; }",
+		`add rule inet rv0123456789ab inbound ct state new ct mark 0 iifname != { "lo", "rv0123456789ab" } fib daddr type local ct mark set 1381367809 comment "elarni inbound"`,
+		"add rule inet rv0123456789ab inbound ct state new ct mark 0 ct mark set 1381367810",
+		"add rule inet rv0123456789ab inbound ct mark 1381367809 meta mark 0 fib daddr type != local meta mark set 1381379809",
+		`add rule inet rv0123456789ab inbound ct mark 0 ct direction reply iifname != { "lo", "rv0123456789ab" } meta mark 0 fib daddr type != local meta mark set 1381379809`,
+		"add chain inet rv0123456789ab inbound_reply { type route hook output priority mangle; policy accept; }",
+		`add rule inet rv0123456789ab inbound_reply ct state new ct mark 0 ct mark set 1381367810 comment "elarni inbound_reply"`,
+		"add rule inet rv0123456789ab inbound_reply ct mark 1381367809 meta mark 0 meta mark set 1381379809",
+		"add rule inet rv0123456789ab inbound_reply ct mark 0 ct direction reply meta mark 0 meta mark set 1381379809",
+	}
+	for _, protected := range [][]netip.Prefix{nil, {netip.MustParsePrefix("0.0.0.0/0")}} {
+		script := network.firewall(protected, true)
+		if got := chains(script); !reflect.DeepEqual(got, want) {
+			t.Fatalf("inbound rules:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+		}
+		// Every rule keyed on the reply direction is limited to connections older than the firewall.
+		if strings.Count(script, "ct direction reply") != 2 || strings.Count(script, "ct mark 0 ct direction reply") != 2 {
+			t.Fatalf("a reply-direction rule is not limited to older connections:\n%s", script)
+		}
+		// Replies are marked only where the setting asks for it.
+		if without := network.firewall(protected, false); strings.Contains(without, "inbound") || strings.Contains(without, " ct ") {
+			t.Fatalf("inbound replies are marked without the setting:\n%s", without)
+		}
+	}
+	// Each tag is one of Elarni's own values, not the mark of any network.
+	for _, tag := range []uint32{linuxInboundFlow, linuxSeenFlow} {
+		if table := tag &^ 0x52560000; tag&0xffff0000 != 0x52560000 || table >= 12000 && table < 28000 {
+			t.Errorf("tag %#x can be a network's mark", tag)
+		}
+	}
+}
+
+// 145.4: the keeper looks for the one marker rule of each chain, so a flushed table or a removed
+// chain is put back; the marker is the rule the chain begins with.
+func TestLinuxFirewallMarksEachChain(t *testing.T) {
+	network := linuxNetwork{Name: "rv0123456789ab", Mark: 0x52562ee1, DNSPort: 35123}
+	for _, test := range []struct {
+		protected []netip.Prefix
+		inbound   bool
+		want      []string
+	}{
+		{nil, false, []string{"elarni dns"}},
+		{[]netip.Prefix{netip.MustParsePrefix("0.0.0.0/0")}, false, []string{"elarni dns", "elarni guard", "elarni forward_guard"}},
+		{[]netip.Prefix{netip.MustParsePrefix("0.0.0.0/0")}, true, []string{"elarni inbound", "elarni inbound_reply", "elarni dns", "elarni guard", "elarni forward_guard"}},
+	} {
+		script := network.firewall(test.protected, test.inbound)
+		if got := firewallMarkers(script); !reflect.DeepEqual(got, test.want) {
+			t.Errorf("markers of %v %v: %q, want %q", test.protected, test.inbound, got, test.want)
+		}
+		if chains := strings.Count(script, "add chain inet "+network.Name+" "); chains != len(test.want) {
+			t.Errorf("%d chains, %d markers:\n%s", chains, len(test.want), script)
+		}
+		lines := strings.Split(script, "\n")
+		for _, marker := range test.want {
+			chain := strings.TrimPrefix(marker, "elarni ")
+			at := slices.IndexFunc(lines, func(line string) bool {
+				return strings.HasPrefix(line, "add chain inet "+network.Name+" "+chain+" ")
+			})
+			if at < 0 || at+1 >= len(lines) || !strings.HasPrefix(lines[at+1], "add rule inet "+network.Name+" "+chain+" ") || !strings.HasSuffix(lines[at+1], ` comment "`+marker+`"`) {
+				t.Errorf("the first rule of %s is not its marker:\n%s", chain, script)
+			}
+		}
+	}
+}
+
+// 145.5: only nft saying the table is not there means it is gone. A listing that failed otherwise
+// (a busy netlink socket while another program reloads its rules) or timed out tells nothing.
+func TestLinuxFirewallListingCountsOnlyWhatItSays(t *testing.T) {
+	markers := []string{"elarni dns", "elarni guard"}
+	whole := "table inet rv0123456789ab {\n\tchain dns {\n\t\tmeta mark 0x52562ee1 return comment \"elarni dns\"\n\t}\n\tchain guard {\n\t\tmeta mark 0x52562ee1 return comment \"elarni guard\"\n\t}\n}\n"
+	flushed := "table inet rv0123456789ab {\n\tchain dns {\n\t}\n\tchain guard {\n\t}\n}\n"
+	missing := "Error: No such file or directory\nlist table inet rv0123456789ab\n                 ^^^^^^^^^^^^^^\n"
+	for _, test := range []struct {
+		name     string
+		err      error
+		timedOut bool
+		detail   string
+		listing  string
+		want     firewallState
+	}{
+		{"whole", nil, false, "", whole, firewallWhole},
+		{"flushed table", nil, false, "", flushed, firewallIncomplete},
+		{"chain removed", nil, false, "", strings.Replace(whole, "\tchain guard {\n\t\tmeta mark 0x52562ee1 return comment \"elarni guard\"\n\t}\n", "", 1), firewallIncomplete},
+		{"table gone", &exec.ExitError{}, false, missing, "", firewallMissing},
+		{"busy", &exec.ExitError{}, false, "netlink: Error: Device or resource busy\n", "", firewallUnknown},
+		{"timed out", &exec.ExitError{}, true, missing, "", firewallUnknown},
+		{"did not run", exec.ErrNotFound, false, "", "", firewallUnknown},
+	} {
+		if got := listedFirewall(test.err, test.timedOut, test.detail, test.listing, markers); got != test.want {
+			t.Errorf("%s: %d, want %d", test.name, got, test.want)
+		}
+	}
+	// Without markers only the table counts, as cleanup asks.
+	if got := listedFirewall(nil, false, "", flushed, nil); got != firewallWhole {
+		t.Errorf("a table without markers to look for: %d", got)
+	}
+}
+
+// N6-15: a resolver the user runs on loopback answers itself. systemd-resolved does not: its own
+// lookups upstream are exempt from the redirect and would leave outside the tunnel.
+func TestLinuxLoopbackResolversAreNotRedirected(t *testing.T) {
+	network := linuxNetwork{Name: "rv0123456789ab", Mark: 0x52562ee1, DNSPort: 35123}
+	script := network.firewall(nil, false)
+	redirect := strings.Index(script, "add rule inet rv0123456789ab dns meta l4proto { tcp, udp } th dport 53 redirect to :35123\n")
+	for _, want := range []string{
+		"add rule inet rv0123456789ab dns ip daddr 127.0.0.0/8 ip daddr != { 127.0.0.53, 127.0.0.54 } return\n",
+		"add rule inet rv0123456789ab dns ip6 daddr ::1 return\n",
+	} {
+		if at := strings.Index(script, want); at < 0 || redirect < 0 || at > redirect {
+			t.Fatalf("%q is not before the DNS redirect in:\n%s", want, script)
+		}
+	}
+}
+
+func TestLinuxLoopbackResolverAnswersItselfInANamespace(t *testing.T) {
+	runtime.LockOSThread()
+	if err := unix.Unshare(unix.CLONE_NEWNET); err != nil {
+		t.Skip("a private network namespace needs root:", err)
+	}
+	// A new namespace's loopback is down and has no address until it is up.
+	if lo, err := netlink.LinkByName("lo"); err != nil || netlink.LinkSetUp(lo) != nil {
+		t.Fatal("loopback:", err)
+	}
+	network, err := reserveLinuxNetwork()
+	if errors.Is(err, errLinuxFirewallUnavailable) {
+		t.Skip("nftables is not installed")
+	} else if err != nil {
+		t.Fatal(err)
+	}
+	defer network.cleanup()
+	if err := nft(network.firewall(nil, false)); err != nil {
+		t.Fatal(err)
+	}
+	listen := func(port int) *net.UDPConn {
+		conn, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: port})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { conn.Close() })
+		return conn
+	}
+	resolver, elarni := listen(53), listen(network.DNSPort)
+	for _, query := range []struct {
+		to   string
+		want *net.UDPConn
+	}{
+		{"127.0.0.1:53", resolver},
+		{"127.0.0.53:53", elarni},
+		{"127.0.0.54:53", elarni},
+	} {
+		sender, err := net.Dial("udp4", query.to)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = sender.Write([]byte(query.to))
+		sender.Close()
+		if err != nil {
+			t.Fatal(query.to, err)
+		}
+		received := make([]byte, 64)
+		query.want.SetReadDeadline(time.Now().Add(2 * time.Second))
+		if n, _, err := query.want.ReadFromUDP(received); err != nil || string(received[:n]) != query.to {
+			t.Fatalf("a lookup to %s did not reach the expected listener: %v %q", query.to, err, received[:n])
+		}
+	}
+}
+
+// N6-16: a firewall service that reloads with nft flush ruleset removes the table while connected.
+// 145.4: one that flushes only this table, or deletes one chain, leaves a table without its rules.
+func TestLinuxFirewallIsPutBackAfterAFlush(t *testing.T) {
+	runtime.LockOSThread()
+	if err := unix.Unshare(unix.CLONE_NEWNET); err != nil {
+		t.Skip("a private network namespace needs root:", err)
+	}
+	// The reservation binds a probe on 127.0.0.1, which a new namespace has once loopback is up.
+	if lo, err := netlink.LinkByName("lo"); err != nil || netlink.LinkSetUp(lo) != nil {
+		t.Fatal("loopback:", err)
+	}
+	network, err := reserveLinuxNetwork()
+	if errors.Is(err, errLinuxFirewallUnavailable) {
+		t.Skip("nftables is not installed")
+	} else if err != nil {
+		t.Fatal(err)
+	}
+	defer network.cleanup()
+	// Every chain the firewall can have: the guard and the inbound chains too.
+	policy := &share.WindowsRoutePolicy{IncludedRoutes: []string{"0.0.0.0/0"}, BlockWithoutVPN: true, AnswerInbound: true}
+	protected, err := linuxGuardedRoutes(network, policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := nft(network.firewall(protected, true)); err != nil {
+		t.Fatal(err)
+	}
+	listing := func() string {
+		output, _ := exec.Command(linuxTool("nft"), "list", "table", "inet", network.Name).Output()
+		return string(output)
+	}
+	redirect := fmt.Sprintf("redirect to :%d", network.DNSPort)
+	// A restore over a table that is there replaces it instead of adding its rules twice.
+	if err := network.restoreFirewall(policy); err != nil || strings.Count(listing(), redirect) != 1 {
+		t.Fatalf("restore over a present table: %v\n%s", err, listing())
+	}
+	check := network.firewallCheck(policy)
+	if state := check(); state != firewallWhole {
+		t.Fatalf("the installed table was reported %d\n%s", state, listing())
+	}
+	keeper := firewallKeeper{check: check, restore: func() error { return network.restoreFirewall(policy) }}
+	now := time.Now()
+	for _, removal := range []struct {
+		script string
+		want   firewallState
+	}{
+		{"flush table inet " + network.Name + "\n", firewallIncomplete},
+		{"delete chain inet " + network.Name + " inbound_reply\n", firewallIncomplete},
+		{"flush chain inet " + network.Name + " forward_guard\n", firewallIncomplete},
+		{"flush ruleset\n", firewallMissing},
+	} {
+		if err := nft(removal.script); err != nil {
+			t.Fatal(removal.script, err)
+		}
+		if state := check(); state != removal.want {
+			t.Fatalf("after %q the table was reported %d, want %d\n%s", removal.script, state, removal.want, listing())
+		}
+		now = now.Add(time.Second)
+		if err := keeper.keep(now); err != nil || strings.Count(listing(), redirect) != 1 || check() != firewallWhole {
+			t.Fatalf("restore after %q: %v\n%s", removal.script, err, listing())
+		}
+	}
+	// A script nft rejects: the worker logs what nft said, on one line, before the tunnel ends.
+	detail, err := nftWithOutput("add rule inet " + network.Name + "x dns return\n")
+	if err == nil || err.Error() != "vpn_firewall_failed" || !strings.Contains(detail, "Error") || strings.Contains(detail, "\n") {
+		t.Fatalf("a rejected script: %v, %q", err, detail)
+	}
+	// What nft says of a table that is not there is what the check and cleanup read as missing.
+	if detail, err := nftWithOutput("delete table inet " + network.Name + "x\n"); err == nil || !nftTableMissing(detail) {
+		t.Fatalf("deleting a table that is not there: %v, %q", err, detail)
+	}
+	if err := network.cleanup(); err != nil || network.firewallState(nil) != firewallMissing {
+		t.Fatalf("cleanup left the table: %v\n%s", err, listing())
+	}
+	// A second cleanup finds nothing to delete and reports nothing.
+	if err := network.cleanup(); err != nil {
+		t.Fatal("a second cleanup:", err)
 	}
 }
 
@@ -280,6 +545,343 @@ func TestLinuxLongerPhysicalRoutesOutrankTheTunnel(t *testing.T) {
 		if err := netlink.LinkDel(&netlink.Dummy{LinkAttrs: netlink.LinkAttrs{Index: index}}); err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+// A server answers the connections that reach it from outside: without the mark their replies
+// follow the policy rule into the tunnel. Private namespaces stand for the host, a remote client
+// beyond its gateway, a container behind a forwarded port and what lies beyond the tunnel; root is
+// needed, as above.
+func TestLinuxAnswersInboundConnectionsOutsideTheTunnel(t *testing.T) {
+	runtime.LockOSThread()
+	namespace := func() int {
+		if err := unix.Unshare(unix.CLONE_NEWNET); err != nil {
+			t.Skip("a private network namespace needs root:", err)
+		}
+		fd, err := unix.Open("/proc/thread-self/ns/net", unix.O_RDONLY|unix.O_CLOEXEC, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { unix.Close(fd) })
+		return fd
+	}
+	enter := func(fd int) {
+		if err := unix.Setns(fd, unix.CLONE_NEWNET); err != nil {
+			t.Fatal(err)
+		}
+	}
+	address := func(name string, addresses ...string) int {
+		link, err := netlink.LinkByName(name)
+		if err != nil {
+			t.Fatal(name, err)
+		}
+		for _, address := range addresses {
+			parsed, err := netlink.ParseAddr(address)
+			if err != nil || netlink.AddrAdd(link, parsed) != nil {
+				t.Fatal(name, address, err)
+			}
+		}
+		if err := netlink.LinkSetUp(link); err != nil {
+			t.Fatal(name, err)
+		}
+		return link.Attrs().Index
+	}
+	route := func(link int, destination, via string) {
+		_, prefix, _ := net.ParseCIDR(destination)
+		next := netlink.Route{LinkIndex: link, Dst: prefix, Scope: netlink.SCOPE_LINK}
+		if via != "" {
+			next.Gw, next.Scope = net.ParseIP(via), netlink.SCOPE_UNIVERSE
+		}
+		if err := netlink.RouteAdd(&next); err != nil {
+			t.Fatal(destination, err)
+		}
+	}
+	echo := func(listen string) {
+		listener, err := net.Listen("tcp4", listen)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { listener.Close() })
+		go func() {
+			for {
+				connection, err := listener.Accept()
+				if err != nil {
+					return
+				}
+				go func() {
+					defer connection.Close()
+					io.Copy(connection, connection)
+				}()
+			}
+		}()
+	}
+	udp := func(listen string) *net.UDPConn {
+		conn, err := net.ListenUDP("udp4", net.UDPAddrFromAddrPort(netip.MustParseAddrPort(listen)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { conn.Close() })
+		return conn
+	}
+	reflectUDP := func(conn *net.UDPConn) {
+		go func() {
+			buffer := make([]byte, 64)
+			for {
+				n, from, err := conn.ReadFromUDPAddrPort(buffer)
+				if err != nil {
+					return
+				}
+				conn.WriteToUDPAddrPort(buffer[:n], from)
+			}
+		}()
+	}
+	// The tunnel's address on the host, and a peer beyond the tunnel, as the internet behind the core.
+	tunAddress, peerAddress := netip.MustParsePrefix(share.TunGateway4).Addr(), netip.MustParseAddr("192.0.2.77")
+	client, container, beyond, host := namespace(), namespace(), namespace(), namespace()
+	for _, peer := range []struct {
+		name, peer string
+		namespace  int
+	}{{"wan0", "peer0", client}, {"br0", "eth0", container}} {
+		attrs := netlink.NewLinkAttrs()
+		attrs.Name = peer.name
+		if err := netlink.LinkAdd(&netlink.Veth{LinkAttrs: attrs, PeerName: peer.peer, PeerNamespace: netlink.NsFd(peer.namespace)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// The reverse-path filter is the host's own setting, copied into a new namespace.
+	rpFilterOff := func(names ...string) {
+		for _, name := range append([]string{"all"}, names...) {
+			if err := os.WriteFile("/proc/sys/net/ipv4/conf/"+name+"/rp_filter", []byte("0"), 0); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if err := os.WriteFile("/proc/sys/net/ipv4/ip_forward", []byte("1"), 0); err != nil {
+		t.Fatal(err)
+	}
+	rpFilterOff("wan0", "br0")
+	address("lo")
+	route(address("wan0", "203.0.113.2/24"), "0.0.0.0/0", "203.0.113.1")
+	address("br0", "10.9.0.1/24")
+	echo("203.0.113.2:2222")
+	// A UDP service bound to the address the requests reach.
+	reflectUDP(udp("203.0.113.2:5300"))
+	// As a published container port: the host's port 8080 is the container's.
+	if err := nft("add table ip published\nadd chain ip published forward { type nat hook prerouting priority dstnat; }\n" +
+		"add rule ip published forward iifname \"wan0\" tcp dport 8080 dnat to 10.9.0.2:8080\n" +
+		// A rewrite of what the container sends out, as a transparent proxy rule does.
+		"add rule ip published forward iifname \"br0\" tcp dport 2223 dnat to 203.0.113.1:2222\n" +
+		"add rule ip published forward iifname \"br0\" ip daddr 10.9.0.1 tcp dport 2224 dnat to 203.0.113.1:2222\n"); errors.Is(err, errLinuxFirewallUnavailable) {
+		t.Skip("nftables is not installed")
+	} else if err != nil {
+		t.Fatal(err)
+	}
+	enter(container)
+	address("lo")
+	route(address("eth0", "10.9.0.2/24"), "0.0.0.0/0", "10.9.0.1")
+	echo("10.9.0.2:8080")
+	enter(beyond)
+	address("lo", peerAddress.String()+"/32")
+	echo(peerAddress.String() + ":2226")
+	peer := udp(peerAddress.String() + ":3478")
+	// The client's address is not on the host's link, so only a default route leads back to it.
+	enter(client)
+	address("lo", "192.0.2.10/32")
+	link := address("peer0", "203.0.113.1/24")
+	// What a container opens itself: a host on the physical link, which knows the way back.
+	echo("203.0.113.1:2222")
+	route(link, "10.9.0.0/24", "203.0.113.2")
+	enter(host)
+
+	dial := func(network, target string) (net.Conn, error) {
+		enter(client)
+		defer enter(host)
+		var local net.Addr = &net.TCPAddr{IP: net.ParseIP("192.0.2.10")}
+		if network == "udp4" {
+			local = &net.UDPAddr{IP: net.ParseIP("192.0.2.10")}
+		}
+		dialer := net.Dialer{LocalAddr: local, Timeout: 500 * time.Millisecond}
+		return dialer.Dial(network, target)
+	}
+	answers := func(connection net.Conn) error {
+		connection.SetDeadline(time.Now().Add(2 * time.Second))
+		if _, err := connection.Write([]byte("ping")); err != nil {
+			return err
+		}
+		_, err := io.ReadFull(connection, make([]byte, 4))
+		return err
+	}
+	answered := func(network, target string) error {
+		connection, err := dial(network, target)
+		if err != nil {
+			return err
+		}
+		defer connection.Close()
+		return answers(connection)
+	}
+	// The tunnel leads to the namespace beyond it; from there the way back to the host's tunnel
+	// address and to the container is through the tunnel.
+	tunnel := func(policy *share.WindowsRoutePolicy) (linuxNetwork, int) {
+		network, err := reserveLinuxNetwork()
+		if err != nil {
+			t.Fatal(err)
+		}
+		attrs := netlink.NewLinkAttrs()
+		attrs.Name = network.Name
+		if err := netlink.LinkAdd(&netlink.Veth{LinkAttrs: attrs, PeerName: "tun0", PeerNamespace: netlink.NsFd(beyond)}); err != nil {
+			t.Fatal(err)
+		}
+		enter(beyond)
+		far := address("tun0")
+		route(far, netip.PrefixFrom(tunAddress, 30).Masked().String(), "")
+		route(far, "10.9.0.0/24", tunAddress.String())
+		enter(host)
+		index := address(network.Name, share.TunGateway4)
+		rpFilterOff(network.Name)
+		if err := network.install(policy); err != nil {
+			t.Fatal(err)
+		}
+		return network, index
+	}
+	remove := func(network linuxNetwork, index int) {
+		if err := network.cleanup(); err != nil {
+			t.Fatal(err)
+		}
+		if err := netlink.LinkDel(&netlink.Veth{LinkAttrs: netlink.LinkAttrs{Index: index}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Sessions opened before the tunnel, as the SSH session that starts it: one where the client
+	// speaks next, and one where the server does. The tunnel resets a connection it does not know.
+	early, err := dial("tcp4", "203.0.113.2:2222")
+	if err != nil || answers(early) != nil {
+		t.Fatal("the namespaces do not reach each other:", err)
+	}
+	defer early.Close()
+	speaking, err := net.Listen("tcp4", "203.0.113.2:2225")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer speaking.Close()
+	accepted := make(chan net.Conn, 1)
+	go func() {
+		if connection, err := speaking.Accept(); err == nil {
+			accepted <- connection
+		}
+	}()
+	listening, err := dial("tcp4", "203.0.113.2:2225")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listening.Close()
+	var speaker net.Conn
+	select {
+	case speaker = <-accepted:
+		defer speaker.Close()
+	case <-time.After(2 * time.Second):
+		t.Fatal("the session that speaks first was not accepted")
+	}
+	if err := answered("udp4", "203.0.113.2:5300"); err != nil {
+		t.Fatal("the UDP service does not answer without the tunnel:", err)
+	}
+	routes := []string{"0.0.0.0/0", "::/0"}
+	network, index := tunnel(&share.WindowsRoutePolicy{IncludedRoutes: routes})
+	for _, target := range []string{"tcp4 203.0.113.2:2222", "udp4 203.0.113.2:5300"} {
+		kind, address, _ := strings.Cut(target, " ")
+		if answered(kind, address) == nil {
+			t.Fatalf("the tunnel did not take the replies to %s, so the cases below prove nothing", target)
+		}
+	}
+	remove(network, index)
+
+	// What comes in through the tunnel never takes the core's mark, in either direction, and is
+	// tagged as such; this table drops it otherwise.
+	if err := nft("add table inet probe\n" +
+		"add chain inet probe in { type filter hook prerouting priority 0; policy accept; }\n" +
+		"add chain inet probe out { type filter hook output priority 0; policy accept; }\n" +
+		fmt.Sprintf("add rule inet probe in ip saddr %s udp sport 3478 meta mark != 0 drop\n", peerAddress) +
+		fmt.Sprintf("add rule inet probe in ip saddr %s udp sport 3478 ct mark != %d drop\n", peerAddress, linuxSeenFlow) +
+		fmt.Sprintf("add rule inet probe out ip daddr %s udp dport 3478 meta mark != 0 drop\n", peerAddress) +
+		fmt.Sprintf("add rule inet probe out ip daddr %s udp dport 3478 ct mark != %d drop\n", peerAddress, linuxSeenFlow)); err != nil {
+		t.Fatal(err)
+	}
+	for i, policy := range []*share.WindowsRoutePolicy{
+		{IncludedRoutes: routes, AnswerInbound: true},
+		{IncludedRoutes: routes, AnswerInbound: true, BlockWithoutVPN: true},
+	} {
+		network, index := tunnel(policy)
+		if err := answers(early); err != nil {
+			t.Errorf("%+v: the session opened before the tunnel stopped: %v", policy, err)
+		}
+		listening.SetReadDeadline(time.Now().Add(2 * time.Second))
+		if _, err := speaker.Write([]byte("tick")); err != nil {
+			t.Errorf("%+v: the server side of an earlier session: %v", policy, err)
+		} else if _, err := io.ReadFull(listening, make([]byte, 4)); err != nil {
+			t.Errorf("%+v: what the server sent first on a session opened before the tunnel did not arrive: %v", policy, err)
+		}
+		// The host's own services answer, TCP and a UDP service bound to the address the request
+		// reached; a forwarded port does too, except under the kill switch, whose guard lets no
+		// forwarded traffic leave outside the tunnel.
+		for target, want := range map[string]bool{"tcp4 203.0.113.2:2222": true, "udp4 203.0.113.2:5300": true, "tcp4 203.0.113.2:8080": !policy.BlockWithoutVPN} {
+			kind, address, _ := strings.Cut(target, " ")
+			if err := answered(kind, address); (err == nil) != want {
+				t.Errorf("%+v: %s answered: %v, want %v (%v)", policy, target, err == nil, want, err)
+			}
+		}
+		// A peer that first writes to an app through the tunnel, as full-cone UDP lets one: the app's
+		// datagrams to it go back through the tunnel, not outside it past the kill switch.
+		app := udp(fmt.Sprintf("0.0.0.0:%d", 4500+i))
+		if _, err := peer.WriteToUDPAddrPort([]byte("in"), netip.AddrPortFrom(tunAddress, uint16(4500+i))); err != nil {
+			t.Fatal(err)
+		}
+		app.SetReadDeadline(time.Now().Add(2 * time.Second))
+		buffer := make([]byte, 16)
+		if _, from, err := app.ReadFromUDPAddrPort(buffer); err != nil {
+			t.Errorf("%+v: a datagram through the tunnel did not reach the app untouched: %v", policy, err)
+		} else if _, err := app.WriteToUDPAddrPort([]byte("out"), from); err != nil {
+			t.Fatal(err)
+		} else {
+			peer.SetReadDeadline(time.Now().Add(2 * time.Second))
+			if n, _, err := peer.ReadFromUDPAddrPort(buffer); err != nil || string(buffer[:n]) != "out" {
+				t.Errorf("%+v: the app's answer to a peer beyond the tunnel did not go through the tunnel: %v", policy, err)
+			}
+		}
+		app.Close()
+		// What a container opens itself is not an inbound connection, whatever rewrites its
+		// destination: it leaves by the longer physical route, and not at all under the kill switch.
+		// The same for the host's own address on a port that is forwarded outside.
+		dialer := net.Dialer{Timeout: 500 * time.Millisecond}
+		for _, target := range []string{"203.0.113.1:2223", "10.9.0.1:2224"} {
+			enter(container)
+			connection, err := dialer.Dial("tcp4", target)
+			enter(host)
+			if err == nil {
+				connection.Close()
+			}
+			if (err == nil) == policy.BlockWithoutVPN {
+				t.Errorf("%+v: a container's own connection to %s past the tunnel: %v", policy, target, err)
+			}
+		}
+		// A container's own connection to the internet goes through the tunnel. Under the kill switch
+		// the guard also rejects the way back to the container, so only without it.
+		if !policy.BlockWithoutVPN {
+			enter(container)
+			connection, err := dialer.Dial("tcp4", peerAddress.String()+":2226")
+			enter(host)
+			if err == nil {
+				err = answers(connection)
+				connection.Close()
+			}
+			if err != nil {
+				t.Errorf("%+v: a container's own connection did not go through the tunnel: %v", policy, err)
+			}
+		}
+		// What the host itself opens still enters the tunnel.
+		if routes, err := netlink.RouteGet(net.ParseIP("8.8.8.8")); err != nil || routes[0].LinkIndex != index {
+			t.Errorf("%+v: the host's own traffic left through %v (%v)", policy, routes, err)
+		}
+		remove(network, index)
 	}
 }
 

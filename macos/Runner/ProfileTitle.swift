@@ -79,3 +79,39 @@ func uniqueNodeIDs(
   for value in values { grouped[value.key, default: []].append(value.id) }
   return grouped.compactMapValues { $0.count == 1 ? $0[0] : nil }
 }
+
+/// Pairs a refresh's unmatched positions with stored node IDs by a key: a key that occurs as often on both
+/// sides pairs, any other count is left to the later stages. Within a key, a name that occurs once on each side
+/// pairs first: a provider that lists one server twice, with two SNIs, names the copies apart and may swap them.
+/// The rest pair in feed order, the stored nodes in the order of the feed they came from (`order`), not the
+/// order of the visible and hidden lists.
+func pairedByStableIdentity(
+  fresh: [(position: Int, key: String, name: String)],
+  stale: [(id: String, key: String, name: String, order: Int)]
+) -> [Int: String] {
+  var olds: [String: [(id: String, name: String)]] = [:]
+  let ordered = stale.enumerated().sorted { ($0.element.order, $0.offset) < ($1.element.order, $1.offset) }
+  for (_, value) in ordered { olds[value.key, default: []].append((id: value.id, name: value.name)) }
+  var positions: [String: [(position: Int, name: String)]] = [:]
+  for value in fresh { positions[value.key, default: []].append((position: value.position, name: value.name)) }
+  var matches: [Int: String] = [:]
+  for (key, items) in positions {
+    guard let same = olds[key], same.count == items.count else { continue }
+    let newNames = Dictionary(grouping: items, by: { $0.name }).mapValues(\.count)
+    let oldNames = Dictionary(grouping: same, by: { $0.name }).mapValues(\.count)
+    var byName: [String: Int] = [:]
+    for (index, old) in same.enumerated() where oldNames[old.name] == 1 { byName[old.name] = index }
+    var taken = Set<Int>()
+    var rest: [Int] = []
+    for item in items {
+      if newNames[item.name] == 1, let index = byName[item.name] {
+        matches[item.position] = same[index].id
+        taken.insert(index)
+      } else {
+        rest.append(item.position)
+      }
+    }
+    for (position, index) in zip(rest, same.indices.filter { !taken.contains($0) }) { matches[position] = same[index].id }
+  }
+  return matches
+}

@@ -226,8 +226,12 @@ func (proxy xrayShareLink) shadowsocksOutbound() (*conf.OutboundDetourConfig, er
 	outbound.Settings = &settingsRawMessage
 
 	if plugin := proxy.link.Query().Get("plugin"); plugin != "" {
-		outbound.StreamSetting, err = shadowsocksPluginStream(plugin)
-		return outbound, err
+		stream, err := shadowsocksPluginStream(plugin)
+		if err != nil {
+			return nil, err
+		}
+		outbound.StreamSetting = stream
+		return outbound, nil
 	}
 	streamSettings, err := proxy.streamSettings(proxy.link)
 	if err != nil {
@@ -237,10 +241,13 @@ func (proxy xrayShareLink) shadowsocksOutbound() (*conf.OutboundDetourConfig, er
 	return outbound, nil
 }
 
-// shadowsocksPluginStream maps SIP002 "name;key=value;flag" options. Only
-// v2ray-plugin's websocket mode exists in Xray, as on the Clash import path.
+// shadowsocksPluginStream maps SIP002 "name;key=value;flag" options. Of v2ray-plugin only the
+// websocket mode exists in Xray, as on the Clash import path, and of simple-obfs only the HTTP mode.
 func shadowsocksPluginStream(plugin string) (*conf.StreamConfig, error) {
 	options := strings.Split(plugin, ";")
+	if options[0] == "obfs-local" || options[0] == "simple-obfs" {
+		return simpleObfsStream(options[1:])
+	}
 	if options[0] != "v2ray-plugin" {
 		return nil, fmt.Errorf("unsupported shadowsocks plugin")
 	}
@@ -269,6 +276,55 @@ func shadowsocksPluginStream(plugin string) (*conf.StreamConfig, error) {
 		stream.TLSSettings = &conf.TLSConfig{ServerName: ws.Host}
 	}
 	return stream, nil
+}
+
+// simpleObfsStream maps simple-obfs options. Its HTTP mode is a raw stream behind one HTTP request
+// header, which is what 3x-ui writes for a Shadowsocks inbound with Xray's HTTP header. Its TLS mode
+// fakes a TLS session Xray has no transport for.
+func simpleObfsStream(options []string) (*conf.StreamConfig, error) {
+	// obfs-local's own default host.
+	httpMode, host, uri := false, "cloudfront.net", ""
+	for _, option := range options {
+		key, value, _ := strings.Cut(option, "=")
+		switch key {
+		case "obfs":
+			switch value {
+			case "http":
+				httpMode = true
+			case "tls":
+				return nil, fmt.Errorf("simple-obfs TLS mode has no Xray equivalent")
+			default:
+				return nil, fmt.Errorf("unsupported shadowsocks plugin mode")
+			}
+		case "obfs-host":
+			if value != "" {
+				host = value
+			}
+		case "obfs-uri":
+			uri = value
+		case "fast-open", "mptcp", "t", "i", "a", "v", "V", "6":
+			// obfs-local's client-side flags (timeout, interface, user, verbose, VPN mode, IPv6 first):
+			// what it sends stays the same.
+		default:
+			return nil, fmt.Errorf("unsupported shadowsocks plugin option")
+		}
+	}
+	if !httpMode {
+		return nil, fmt.Errorf("unsupported shadowsocks plugin mode")
+	}
+	// obfs-server takes a request as obfs only with "Upgrade: websocket", which obfs-local sends with
+	// "Connection: Upgrade"; an Xray server with an HTTP header reads only the path.
+	request := XrayRawSettingsHeaderRequest{Headers: &XrayRawSettingsHeaderRequestHeaders{
+		Host: strings.Split(host, ","), Upgrade: []string{"websocket"}, Connection: []string{"Upgrade"},
+	}}
+	if uri != "" {
+		request.Path = strings.Split(uri, ",")
+	}
+	header, err := convertJsonToRawMessage(XrayRawSettingsHeader{Type: "http", Request: &request})
+	if err != nil {
+		return nil, err
+	}
+	return &conf.StreamConfig{Network: new(conf.TransportProtocol("raw")), Security: "none", RAWSettings: &conf.TCPConfig{HeaderConfig: header}}, nil
 }
 
 func parseShadowsocksUserInfo(user *url.Userinfo) (string, string, error) {
@@ -477,11 +533,20 @@ func (proxy xrayShareLink) hysteriaOutbound() (*conf.OutboundDetourConfig, error
 	streamSettings.HysteriaSettings = hysteriaSettings
 
 	query := proxy.link.Query()
-	// v2rayN names the hop range and interval mport and mportHopInt.
-	for key, alias := range map[string]string{"ports": "mport", "hop-interval": "mportHopInt"} {
-		if !query.Has(key) && query.Has(alias) {
-			query.Set(key, query.Get(alias))
+	// v2rayN names the hop range and interval mport and mportHopInt, PasarGuard the range mports.
+	for key, aliases := range map[string][]string{"ports": {"mport", "mports"}, "hop-interval": {"mportHopInt"}} {
+		for _, alias := range aliases {
+			if !query.Has(key) && query.Has(alias) {
+				query.Set(key, query.Get(alias))
+			}
 		}
+	}
+	// The official URI names no gecko packet sizes: Hysteria's own client defaults stand for them
+	// (geckoPacketSize), unless the link's "fm" names them. The link's layer then says gecko of no size.
+	obfs := query.Get("obfs")
+	unsizedGecko := obfs == "gecko" && query.Get("minPacketSize") == "" && query.Get("maxPacketSize") == "" && query.Get("fm") != ""
+	if unsizedGecko {
+		obfs = "salamander"
 	}
 	var hopInterval conf.Int32Range
 	if hopStr := query.Get("hop-interval"); hopStr != "" {
@@ -497,7 +562,7 @@ func (proxy xrayShareLink) hysteriaOutbound() (*conf.OutboundDetourConfig, error
 	}
 	finalMask, mErr := buildHy2FinalMask(
 		query.Get("up"), query.Get("down"), query.Get("ports"),
-		hopInterval, query.Get("obfs"), query.Get("obfs-password"),
+		hopInterval, obfs, query.Get("obfs-password"),
 		query.Get("minPacketSize"), query.Get("maxPacketSize"),
 	)
 	if mErr != nil {
@@ -507,19 +572,19 @@ func (proxy xrayShareLink) hysteriaOutbound() (*conf.OutboundDetourConfig, error
 	if rawMask := query.Get("fm"); rawMask != "" {
 		var explicit map[string]any
 		if err := json.Unmarshal([]byte(rawMask), &explicit); err != nil || explicit == nil {
-			return nil, fmt.Errorf("invalid Hysteria2 FinalMask")
+			return nil, errHy2MaskInvalid
+		}
+		if err := moveLegacyUDPHop(explicit); err != nil {
+			return nil, err
 		}
 		if finalMask != nil {
-			encoded, _ := json.Marshal(finalMask)
-			var legacy map[string]any
-			_ = json.Unmarshal(encoded, &legacy)
-			if err := mergeMaskFields(explicit, legacy); err != nil {
+			if err := mergeHy2Masks(explicit, finalMask, unsizedGecko); err != nil {
 				return nil, err
 			}
 		}
 		encoded, _ := json.Marshal(explicit)
 		if err := json.Unmarshal(encoded, &streamSettings.FinalMask); err != nil {
-			return nil, fmt.Errorf("invalid Hysteria2 FinalMask")
+			return nil, errHy2MaskInvalid
 		}
 	}
 
@@ -570,12 +635,29 @@ func (proxy xrayShareLink) httpOutbound() (*conf.OutboundDetourConfig, error) {
 	return outbound, nil
 }
 
-// The Hysteria 2 URI may list hopping ports in the authority (host:443,5000-6000),
-// which net/url refuses as a port; dial the first one and hop over the list.
 func parseClientLink(line string) (*url.URL, error) {
 	if link, ok := legacyShadowsocksLink(line); ok {
 		return link, nil
 	}
+	return parseShareURL(line)
+}
+
+// withoutServerDescription is a name without the server description 3x-ui appends to it as
+// "?serverDescription=" and Base64, which Happ shows apart and other clients do not read. The
+// naming step of an import (ImportClientProfiles, skippedMembers.add) applies it to every format.
+func withoutServerDescription(name string) string {
+	const marker = "?serverDescription="
+	if index := strings.LastIndex(name, marker); index >= 0 {
+		if text, err := decodeBase64Text(name[index+len(marker):]); err == nil && utf8.ValidString(text) {
+			return name[:index]
+		}
+	}
+	return name
+}
+
+// The Hysteria 2 URI may list hopping ports in the authority (host:443,5000-6000),
+// which net/url refuses as a port; dial the first one and hop over the list.
+func parseShareURL(line string) (*url.URL, error) {
 	link, err := url.Parse(line)
 	scheme, rest, _ := strings.Cut(line, "://")
 	if err == nil || !(strings.EqualFold(scheme, "hy2") || strings.EqualFold(scheme, "hysteria2")) {
@@ -641,6 +723,24 @@ func keepSemicolons(link *url.URL) *url.URL {
 	return link
 }
 
+// plusKeptQueryValue is the value url.Values.Get(key) reads from rawQuery, parsed, with a bare "+"
+// kept as "+". Base64 keys and secrets hold "+" and never a space, and a panel that writes one
+// unescaped (Hiddify's WireGuard keys) means the character, not the space a form's "+" stands for.
+func plusKeptQueryValue(rawQuery, key, parsed string) string {
+	for _, part := range strings.Split(rawQuery, "&") {
+		name, raw, _ := strings.Cut(part, "=")
+		// url.ParseQuery leaves out a part it cannot unescape.
+		unescaped, err := url.QueryUnescape(name)
+		if err != nil || unescaped != key {
+			continue
+		}
+		if kept, err := url.QueryUnescape(strings.ReplaceAll(raw, "+", "%2B")); err == nil {
+			return kept
+		}
+	}
+	return parsed
+}
+
 func clientPort(link *url.URL) (uint16, error) {
 	// An unbracketed IPv6 host would split at its last colon into another host and port.
 	if link.Hostname() == "" || len(link.Hostname()) > 253 || (strings.Contains(link.Hostname(), ":") && !strings.HasPrefix(link.Host, "[")) {
@@ -662,31 +762,4 @@ func clientPort(link *url.URL) (uint16, error) {
 		return 0, fmt.Errorf("invalid endpoint port")
 	}
 	return uint16(port), nil
-}
-
-func mergeMaskFields(target, additions map[string]any) error {
-	for key, value := range additions {
-		if value == nil {
-			continue
-		}
-		old, exists := target[key]
-		if !exists || old == nil {
-			target[key] = value
-			continue
-		}
-		left, leftObject := old.(map[string]any)
-		right, rightObject := value.(map[string]any)
-		if leftObject && rightObject {
-			if err := mergeMaskFields(left, right); err != nil {
-				return err
-			}
-		} else {
-			a, _ := json.Marshal(old)
-			b, _ := json.Marshal(value)
-			if string(a) != string(b) {
-				return fmt.Errorf("conflicting Hysteria2 FinalMask settings")
-			}
-		}
-	}
-	return nil
 }

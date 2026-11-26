@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:math';
 
+import 'connection_diagnostics.dart' show wintunFailure;
 import 'platform_services.dart';
 
 import 'tunnel_channel.dart';
@@ -67,6 +68,9 @@ PlatformException desktopError(
       'Another Elarni VPN is connected on this computer, by another user or the system service. Disconnect it, then retry.',
     'vpn_guard_stale' =>
       'DNS is blocked by a crashed tunnel. Use Repair VPN setup to remove the block.',
+    _ when wintunFailure(code) =>
+      'The Windows network driver (Wintun) could not be loaded, or its network adapter could not be created. '
+          'Antivirus software or a device installation policy can cause this. Reinstall Elarni, or use System proxy mode.',
     'invalid_backup_password' => 'Backup passwords need 12 to 1024 characters.',
     'invalid_backup' =>
       'The backup could not be opened. Check the password and the file.',
@@ -592,6 +596,7 @@ final class DesktopCatalog {
             'format',
             'fallbackHosts',
             'fetchOptions',
+            'notices',
           ])
             key: source[key],
           'isLocal': source['url'] == null,
@@ -799,6 +804,42 @@ final class DesktopCatalog {
       );
       if (index >= 0) matches[i] = available.removeAt(index);
     }
+    // 3x-ui picks a REALITY server's shortId and serverName per fetch and
+    // writes the traffic left into the remark, which defeats the stages before
+    // and after this one. Without those values a still unmatched identity that
+    // occurs as often on both sides pairs (see pairByStableIdentity); other
+    // counts are left to the name stages.
+    final unmatched = [
+      for (var i = 0; i < parsed.length; i++)
+        if (!matches.containsKey(i)) i,
+    ];
+    if (unmatched.isNotEmpty && available.isNotEmpty) {
+      String stableKey(CatalogMap node) =>
+          '${node['format']}\n${domain('catalogStableIdentity', catalogMap(node['config']))['identity']}';
+      final left = Set<CatalogMap>.identity()..addAll(available);
+      final paired = pairByStableIdentity(
+        [
+          for (final i in unmatched)
+            (position: i, key: stableKey(parsed[i]), name: parsed[i]['name']),
+        ],
+        [
+          // A server stored before feedIndex keeps its place in the list.
+          for (final (index, old) in previous.indexed)
+            if (left.contains(old))
+              (
+                value: old,
+                key: stableKey(old),
+                name: old['name'],
+                order: old['feedIndex'] is int
+                    ? old['feedIndex']! as int
+                    : index,
+              ),
+        ],
+      );
+      matches.addAll(paired);
+      final taken = Set<CatalogMap>.identity()..addAll(paired.values);
+      available.removeWhere(taken.contains);
+    }
     final parsedKeys = counts(parsed.map(logicalKey)),
         parsedNames = counts(parsed.map((item) => item['name'])),
         previousNames = counts(previous.map((item) => item['name']));
@@ -865,6 +906,8 @@ final class DesktopCatalog {
       result.add({
         ...item,
         'id': old?['id'] ?? desktopID(),
+        // Its place in this feed, the order the next refresh pairs in.
+        'feedIndex': i,
         'config': config,
         'favorite': old?['favorite'] == true,
         'configurationRevision': old != null && unchanged
@@ -881,6 +924,71 @@ final class DesktopCatalog {
       });
     }
     return result;
+  }
+
+  /// Pairs a refresh's unmatched [fresh] positions with [stale] stored servers
+  /// by their stable identity key: a key that occurs as often on both sides
+  /// pairs, any other count is left to the later stages. Within a key, a name
+  /// that occurs once on each side pairs first: a provider that lists one
+  /// server twice, with two SNIs, names the copies apart and may swap them.
+  /// The rest pair in feed order, the stored servers in the order of the feed
+  /// they came from ([order]), not the order of the visible and hidden lists.
+  static Map<int, T> pairByStableIdentity<T>(
+    List<({int position, String key, Object? name})> fresh,
+    List<({T value, String key, Object? name, int order})> stale,
+  ) {
+    final ordered = [...stale.indexed]
+      ..sort(
+        (a, b) => a.$2.order != b.$2.order
+            ? a.$2.order.compareTo(b.$2.order)
+            : a.$1.compareTo(b.$1),
+      );
+    final olds = <String, List<({T value, Object? name})>>{};
+    for (final (_, old) in ordered) {
+      (olds[old.key] ??= []).add((value: old.value, name: old.name));
+    }
+    final news = <String, List<({int position, Object? name})>>{};
+    for (final item in fresh) {
+      (news[item.key] ??= []).add((position: item.position, name: item.name));
+    }
+    Map<Object?, int> counts(Iterable<Object?> names) {
+      final counts = <Object?, int>{};
+      for (final name in names) {
+        counts.update(name, (count) => count + 1, ifAbsent: () => 1);
+      }
+      return counts;
+    }
+
+    final matches = <int, T>{};
+    for (final MapEntry(:key, value: items) in news.entries) {
+      final same = olds[key];
+      if (same == null || same.length != items.length) continue;
+      final newNames = counts(items.map((item) => item.name)),
+          oldNames = counts(same.map((old) => old.name));
+      final byName = <Object?, int>{
+        for (var k = 0; k < same.length; k++)
+          if (oldNames[same[k].name] == 1) same[k].name: k,
+      };
+      final taken = <int>{};
+      final rest = <int>[];
+      for (final item in items) {
+        final k = newNames[item.name] == 1 ? byName[item.name] : null;
+        if (k == null) {
+          rest.add(item.position);
+        } else {
+          matches[item.position] = same[k].value;
+          taken.add(k);
+        }
+      }
+      final left = [
+        for (var k = 0; k < same.length; k++)
+          if (!taken.contains(k)) same[k].value,
+      ];
+      for (var k = 0; k < rest.length; k++) {
+        matches[rest[k]] = left[k];
+      }
+    }
+    return matches;
   }
 
   /// The selected server and a subscription's last one stay. A provider's
@@ -1211,14 +1319,24 @@ final class DesktopCatalog {
       },
     });
     final migratedURL = imported['newSourceURL'] as String?;
+    // The core takes a public feed's message lines ("📊 10GB left", "Device
+    // limit reached") out of its servers and returns the ones to show.
+    final profiles = catalogList(imported['profiles']);
+    final notices = [
+      for (final notice in imported['notices'] as List? ?? const [])
+        if (notice is String) notice,
+    ];
     // Hidden servers match like the rest, and stay hidden while the provider lists them.
     final hidden = {
       for (final node in catalogList(current['hiddenNodes'] ?? [])) node['id'],
     };
-    final merged = parseNodes(imported, [
-      ...catalogList(current['nodes']),
-      ...catalogList(current['hiddenNodes'] ?? []),
-    ]);
+    // A feed of messages alone leaves the subscription without servers.
+    final merged = profiles.isEmpty && notices.isNotEmpty
+        ? <CatalogMap>[]
+        : parseNodes(imported, [
+            ...catalogList(current['nodes']),
+            ...catalogList(current['hiddenNodes'] ?? []),
+          ]);
     final nodes = [
       for (final node in merged)
         if (!hidden.contains(node['id'])) node,
@@ -1342,7 +1460,10 @@ final class DesktopCatalog {
         current['providerName'] ??
         Uri.parse(feed['url']! as String).host;
     putSource({
-      ...current,
+      // Each refresh replaces the messages; a feed without any leaves none.
+      for (final MapEntry(:key, :value) in current.entries)
+        if (key != 'notices') key: value,
+      if (notices.isNotEmpty) 'notices': notices,
       if (migratedURL != null) ...{
         'url': migratedURL,
         'shareLink': migratedURL,

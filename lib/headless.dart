@@ -468,6 +468,7 @@ Future<void> runHeadless({
       corePath: corePath,
       domainPath: domainPath,
       unattended: true,
+      transferTargets: DesktopProxy.defaultTransferTargets,
       platformIO: (method, args) async {
         if (method == 'systemInfo')
           return {

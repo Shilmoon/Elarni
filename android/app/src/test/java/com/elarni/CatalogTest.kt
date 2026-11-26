@@ -93,6 +93,44 @@ class CatalogTest {
         assertFalse("Nothing was selected before", catalog("b", "b").replacedSelection(""))
     }
 
+    // A refresh's servers still unmatched after the exact identity pair with the stored ones by the
+    // identity without the REALITY values 3x-ui rotates, when it occurs as often on both sides.
+    @Test fun stableIdentityPairsOnlyEqualCountsInFeedOrder() {
+        fun fresh(vararg items: Triple<Int, String, String>) = items.map { Catalog.Pairing(it.first, it.second, it.third) }
+        fun stale(vararg items: Triple<String, String, String>) = items.mapIndexed { order, it -> Catalog.Pairing(it.first, it.second, it.third, order) }
+        assertEquals("A unique identity on both sides", mapOf(0 to "a", 2 to "c"),
+            Catalog.pairByStableIdentity(fresh(Triple(0, "A", "a"), Triple(2, "C", "c")), stale(Triple("a", "A", "a"), Triple("c", "C", "c"))))
+        assertEquals("One host listed three times pairs in order", mapOf(1 to "x1", 3 to "x2", 4 to "x3"),
+            Catalog.pairByStableIdentity(fresh(Triple(1, "X", "X 9GB"), Triple(3, "X", "X 9GB"), Triple(4, "X", "X 9GB")),
+                stale(Triple("x1", "X", "X 8GB"), Triple("x2", "X", "X 8GB"), Triple("x3", "X", "X 8GB"))))
+        assertEquals("Fewer in the refresh is left to the name stages", emptyMap<Int, String>(),
+            Catalog.pairByStableIdentity(fresh(Triple(0, "X", "X")), stale(Triple("x1", "X", "X"), Triple("x2", "X", "X"))))
+        assertEquals("More in the refresh too; other identities still pair", mapOf(3 to "b"),
+            Catalog.pairByStableIdentity(fresh(Triple(0, "X", "X"), Triple(1, "X", "X"), Triple(2, "X", "X"), Triple(3, "B", "B")),
+                stale(Triple("x1", "X", "X"), Triple("x2", "X", "X"), Triple("b", "B", "B"))))
+        assertEquals("A key on one side only", emptyMap<Int, String>(),
+            Catalog.pairByStableIdentity(fresh(Triple(0, "xrayProfile\nX", "X")), stale(Triple("t", "telegram\nX", "X"))))
+        assertEquals(emptyMap<Int, String>(), Catalog.pairByStableIdentity(emptyList(), stale(Triple("a", "A", "A"))))
+    }
+
+    // A provider lists one inbound twice, names the copies apart and swaps them (156.2); the user hid one DE-1 and
+    // favorited the other, so the stored lists hold them out of feed order (156.1).
+    @Test fun stableIdentityPairsANameOnceOnEachSideFirstAndTheRestInThePreviousFeedOrder() {
+        fun pairing(value: String, key: String, name: String, order: Int) = Catalog.Pairing(value, key, name, order)
+        assertEquals("Swapped servers with their own names pair by name", mapOf(0 to "wa", 1 to "yt"),
+            Catalog.pairByStableIdentity(listOf(Catalog.Pairing(0, "X", "WhatsApp"), Catalog.Pairing(1, "X", "YouTube")),
+                listOf(pairing("yt", "X", "YouTube", 0), pairing("wa", "X", "WhatsApp", 1))))
+        assertEquals("A repeated name is no name to pair by; the rest keep their order", mapOf(0 to "d1", 1 to "d2", 2 to "solo"),
+            Catalog.pairByStableIdentity(listOf(Catalog.Pairing(0, "X", "DE"), Catalog.Pairing(1, "X", "DE"), Catalog.Pairing(2, "X", "Solo")),
+                listOf(pairing("solo", "X", "Solo", 0), pairing("d1", "X", "DE", 1), pairing("d2", "X", "DE", 2))))
+        assertEquals("Stored servers pair in the order of their feed", mapOf(0 to "id0", 1 to "id1", 2 to "nl"),
+            Catalog.pairByStableIdentity(listOf(Catalog.Pairing(0, "X", "DE-1"), Catalog.Pairing(1, "X", "DE-1"), Catalog.Pairing(2, "N", "NL-1")),
+                listOf(pairing("id1", "X", "DE-1", 1), pairing("nl", "N", "NL-1", 2), pairing("id0", "X", "DE-1", 0))))
+        assertEquals("The same place keeps the list order", mapOf(0 to "second", 1 to "first"),
+            Catalog.pairByStableIdentity(listOf(Catalog.Pairing(0, "X", "A"), Catalog.Pairing(1, "X", "A")),
+                listOf(pairing("second", "X", "A", 5), pairing("first", "X", "A", 5))))
+    }
+
     @Test fun probeKeyNamesTheHandshakeSNI() {
         fun node(security: String, serverName: String? = null, address: String = "1.2.3.4") = obj("config" to obj("outbounds" to JSONArray(listOf(obj(
             "protocol" to "vless", "settings" to obj("vnext" to JSONArray(listOf(obj("address" to address, "port" to 443)))),

@@ -28,7 +28,8 @@ std::wstring TrayState(const std::string& state) {
       {"connecting", L"подключение"}, {"connected", L"подключено"}, {"disconnecting", L"отключение"},
       {"reasserting", L"восстановление связи"}, {"reconnecting", L"переподключение"},
       {"invalid", L"требуется настройка"}, {"failed", L"ошибка подключения"},
-      {"connected, no traffic", L"подключено, нет трафика"}};
+      {"connected, no traffic", L"подключено, нет трафика"},
+      {"connected, transfers cut off", L"подключено, передача обрывается"}};
   const auto found = russian.find(state);
   return RussianInterface() && found != russian.end() ? std::wstring(found->second) : std::wstring(winrt::to_hstring(state));
 }
@@ -98,6 +99,18 @@ void RegisterProfileLinks() {
   }
 }
 
+// Whether the Run value starts this copy, and in *hidden whether hidden in the tray: the value is
+// the only store of that choice.
+bool LaunchesAtLogin(bool* hidden) {
+  wchar_t login[32768]{};
+  DWORD bytes = sizeof(login);
+  const auto status = RegGetValueW(HKEY_CURRENT_USER,
+      L"Software\\Microsoft\\Windows\\CurrentVersion\\Run", L"Elarni",
+      RRF_RT_REG_SZ, nullptr, login, &bytes);
+  *hidden = false;
+  return status == ERROR_SUCCESS && IsLaunchCommand(login, AppPath(), hidden);
+}
+
 flutter::EncodableMap SystemInfo() {
   using flutter::EncodableValue;
   SYSTEM_INFO info{};
@@ -105,18 +118,15 @@ flutter::EncodableMap SystemInfo() {
   MEMORYSTATUSEX memory{};
   memory.dwLength = sizeof(memory);
   GlobalMemoryStatusEx(&memory);
-  wchar_t login[32768]{};
-  DWORD bytes = sizeof(login);
-  const auto status = RegGetValueW(HKEY_CURRENT_USER,
-      L"Software\\Microsoft\\Windows\\CurrentVersion\\Run", L"Elarni",
-      RRF_RT_REG_SZ, nullptr, login, &bytes);
-  const bool enabled = status == ERROR_SUCCESS && IsLaunchCommand(login, AppPath());
+  bool hidden = false;
+  const bool enabled = LaunchesAtLogin(&hidden);
   return {{EncodableValue("os"), EncodableValue("Windows")},
       {EncodableValue("architecture"), EncodableValue("x86_64")},
       {EncodableValue("processorCount"), EncodableValue(static_cast<int32_t>(info.dwNumberOfProcessors))},
       {EncodableValue("activeProcessorCount"), EncodableValue(static_cast<int32_t>(GetActiveProcessorCount(ALL_PROCESSOR_GROUPS)))},
       {EncodableValue("physicalMemoryBytes"), EncodableValue(static_cast<int64_t>(memory.ullTotalPhys))},
-      {EncodableValue("launchAtLoginStatus"), EncodableValue(enabled ? "enabled" : "notRegistered")}};
+      {EncodableValue("launchAtLoginStatus"), EncodableValue(enabled ? "enabled" : "notRegistered")},
+      {EncodableValue("launchHidden"), EncodableValue(enabled && hidden)}};
 }
 
 
@@ -140,8 +150,8 @@ bool UnregisterProfileLinks() {
   return removed;
 }
 
-FlutterWindow::FlutterWindow(const flutter::DartProject& project)
-    : project_(project) {}
+FlutterWindow::FlutterWindow(const flutter::DartProject& project, bool start_hidden)
+    : project_(project), start_hidden_(start_hidden) {}
 
 FlutterWindow::~FlutterWindow() {}
 
@@ -361,12 +371,17 @@ bool FlutterWindow::OnCreate() {
         const auto entry = args->find(EncodableValue("enabled"));
         const auto* enabled = entry == args->end() ? nullptr : std::get_if<bool>(&entry->second);
         if (!enabled || AppPath().empty()) { result->Error("invalid_settings", "Invalid login setting."); return; }
+        const auto hidden_entry = args->find(EncodableValue("hidden"));
+        const auto* hidden = hidden_entry == args->end() ? nullptr : std::get_if<bool>(&hidden_entry->second);
+        // Without "hidden", as from elarni-cli, the current choice of the hidden start stays.
+        bool current = false;
+        const bool start_hidden = hidden ? *hidden : (LaunchesAtLogin(&current) && current);
         HKEY key = nullptr;
         auto status = RegCreateKeyExW(HKEY_CURRENT_USER,
             L"Software\\Microsoft\\Windows\\CurrentVersion\\Run", 0, nullptr, 0,
             KEY_SET_VALUE, nullptr, &key, nullptr);
         if (status == ERROR_SUCCESS) {
-          const std::wstring command = L"\"" + AppPath() + L"\"";
+          const std::wstring command = LaunchCommand(AppPath(), start_hidden);
           status = *enabled ? RegSetValueExW(key, L"Elarni", 0, REG_SZ,
               reinterpret_cast<const BYTE*>(command.c_str()), static_cast<DWORD>((command.size() + 1) * sizeof(wchar_t)))
               : RegDeleteValueW(key, L"Elarni");
@@ -448,7 +463,13 @@ bool FlutterWindow::OnCreate() {
   });
 
   flutter_controller_->engine()->SetNextFrameCallback([&]() {
-    if (!headless_) this->Show();
+    if (headless_) return;
+    // A start hidden in the tray shows the window only when no tray icon could bring it up.
+    if (!start_hidden_ || !tray_added_) { this->Show(); return; }
+    // The engine sends no state for a window Windows never showed, and Dart would take the app as
+    // shown: it would poll traffic rates for nobody.
+    SendLifecycle("AppLifecycleState.hidden");
+    lifecycle_hidden_ = true;
   });
 
   // Flutter can complete the first frame before the "show window" callback is
@@ -471,6 +492,12 @@ void FlutterWindow::OnDestroy() {
   }
 
   Win32Window::OnDestroy();
+}
+
+void FlutterWindow::SendLifecycle(const std::string& state) {
+  if (!flutter_controller_ || !flutter_controller_->engine()) return;
+  flutter_controller_->engine()->messenger()->Send("flutter/lifecycle",
+      reinterpret_cast<const uint8_t*>(state.data()), state.size());
 }
 
 void ShowAppWindow(HWND window) {
@@ -498,6 +525,12 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
     ShowWindow(hwnd, SW_HIDE);
     if (desktop_channel_) desktop_channel_->InvokeMethod("action", std::make_unique<flutter::EncodableValue>("closedToTray"));
     return 0;
+  }
+  // The first show after a start hidden in the tray. The engine counts its own view as shown but
+  // unfocused from the start, so it sends nothing for this show until focus comes.
+  if (message == WM_SHOWWINDOW && wparam && lifecycle_hidden_) {
+    lifecycle_hidden_ = false;
+    SendLifecycle("AppLifecycleState.inactive");
   }
   // Give Flutter, including plugins, an opportunity to handle window messages.
   if (flutter_controller_) {

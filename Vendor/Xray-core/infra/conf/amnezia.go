@@ -53,11 +53,14 @@ func validateAmneziaSettings(settings map[string]string) error {
 			return fmt.Errorf("invalid AmneziaWG %s", key)
 		}
 	}
+	// The engine sizes junk as Jmin plus a random share of Jmax-Jmin and refuses Jmin above Jmax. A
+	// missing Jmax is Jmin, as fillAmneziaJmax sets it (Elarni).
 	min, _ := strconv.ParseUint(settings["jmin"], 10, 32)
-	max, _ := strconv.ParseUint(settings["jmax"], 10, 32)
-	count, _ := strconv.ParseUint(settings["jc"], 10, 32)
-	// The engine sizes junk as Jmin plus a random share of Jmax-Jmin, a missing Jmax as 0.
-	if _, present := settings["jmax"]; (present || count > 0) && min > max {
+	max := min
+	if value, present := settings["jmax"]; present {
+		max, _ = strconv.ParseUint(value, 10, 32)
+	}
+	if min > max {
 		return fmt.Errorf("AmneziaWG Jmin exceeds Jmax")
 	}
 	// The engine sorts each packet by the header range its type falls in and refuses
@@ -78,6 +81,18 @@ func validateAmneziaSettings(settings map[string]string) error {
 		}
 	}
 	return nil
+}
+
+// fillAmneziaJmax gives a profile that names Jmin but no Jmax a Jmax equal to Jmin. amneziawg-go
+// v3.1.20261116 counts a missing Jmax as 0 and refuses Jmin above it, as other clients on that engine
+// do; Build fills it in where the settings came from, so an imported profile stores, and a connect
+// sends, the same Jmax (Elarni).
+func fillAmneziaJmax(settings map[string]string) {
+	if jmin, present := settings["jmin"]; present {
+		if _, present := settings["jmax"]; !present {
+			settings["jmax"] = jmin
+		}
+	}
 }
 
 // The engine allocates the length tags of an I-packet on every handshake and

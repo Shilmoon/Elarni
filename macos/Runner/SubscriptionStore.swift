@@ -213,10 +213,9 @@ final class SubscriptionStore {
   func registerProfiles(_ content: String) throws -> String {
     let input = try normalizeClientInput(content)
     let text = input.text
-    if let url = URL(string: text), ["https", "http"].contains(url.scheme?.lowercased()),
-       url.user == nil, !url.path.isEmpty, url.path != "/",
-       !( ["t.me", "telegram.me"].contains(url.host?.lowercased()) && url.path == "/proxy" ),
-       !text.contains(where: { $0.isWhitespace }) {
+    // The core tells a subscription from a proxy link, as on every platform: an http(s) URL is an HTTP
+    // proxy at a root path unless it is a panel's https://host/#Name.
+    if input.kind == "subscription" {
       return try register(urlText: content)
     }
     let data = Data(text.utf8)
@@ -410,13 +409,13 @@ final class SubscriptionStore {
         }
       }
       let index = try requireRefresh(id, generation)
-      let imported: (nodes: [ParsedNode], directives: [String], hideURL: Bool, newSourceURL: String?, systemResolverDNS: Bool, fallbackURL: String?, skippedCount: Int, skippedKinds: String)
+      let imported: (nodes: [ParsedNode], directives: [String], hideURL: Bool, newSourceURL: String?, systemResolverDNS: Bool, fallbackURL: String?, skippedCount: Int, skippedKinds: String, notices: [String])
       if catalog.subscriptions[index].isLocal == true,
          let container = try? JSONSerialization.jsonObject(with: fetched.data) as? [String: Any],
          let nodes = container["elarniLocalNodes"] as? [[String: Any]] {
         // shortcut: a joined local import forgets the provider DNS notice; carry it in the container if local groups need it.
         imported = (try nodes.map(parseBackupNode), container["elarniDirectives"] as? [String] ?? [], false, nil, false, nil,
-          container["elarniSkippedCount"] as? Int ?? 0, container["elarniSkippedKinds"] as? String ?? "")
+          container["elarniSkippedCount"] as? Int ?? 0, container["elarniSkippedKinds"] as? String ?? "", [])
       } else {
         imported = try parseImport(fetched.data, sourceURL: migrationSource,
           migrationHeaders: fetched.migrationHeaders.merging(initialMigrationHeaders) { _, first in first })
@@ -440,7 +439,8 @@ final class SubscriptionStore {
         fetched.metadata?.dnsNotice = "The provider's DNS asks this device's resolver, outside the tunnel. Elarni uses its own DNS for these servers."
       }
       let parsed = imported.nodes
-      guard !parsed.isEmpty else { throw SubscriptionError.noSupportedNodes }
+      // A feed of messages alone leaves the subscription without servers.
+      guard !parsed.isEmpty || !imported.notices.isEmpty else { throw SubscriptionError.noSupportedNodes }
       let old = catalog.subscriptions[index]
       if let migrated = imported.newSourceURL {
         fetched.links.urls["refresh"] = migrated
@@ -460,7 +460,7 @@ final class SubscriptionStore {
       }
       let routingContent = providerRouting.content
       if let routingContent { _ = try routing.stageProvider(routingContent, subscriptionID: id) }
-      var replacement = try buildReplacement(old: old, parsed: parsed, fetched: fetched)
+      var replacement = try buildReplacement(old: old, parsed: parsed, fetched: fetched, notices: imported.notices)
       replacement.record.preferredFormat = imported.newSourceURL == nil ? requestedFormat : "source"
       replacement.record.isLocal = old.isLocal
       newRefs = replacement.newSecretRefs
@@ -1308,16 +1308,19 @@ final class SubscriptionStore {
     old: SubscriptionRecord,
     parsed: [ParsedNode],
     fetched: FeedResponse,
+    notices: [String] = [],
     preservingNodeIDs: Bool = false
   ) throws -> (record: SubscriptionRecord, newSecretRefs: [String]) {
     var oldIdentities: [String: [String]] = [:]
     var oldConfigurations: [String: Data] = [:]
+    var oldOutbounds: [String: Data] = [:]
     // Hidden servers are matched too, so that a refresh keeps them out.
     for node in old.allNodes {
       let data = try readSecret(ref: node.outboundRef)
       let identity = try outboundIdentity(data)
       oldIdentities[identity, default: []].append(node.id)
       oldConfigurations[node.id] = try runtimeConfiguration(data)
+      oldOutbounds[node.id] = data
     }
     if let selected = catalog.selectedNodeID {
       for identity in Array(oldIdentities.keys) {
@@ -1345,6 +1348,25 @@ final class SubscriptionStore {
         if let id = oldIdentities[identity]?.first {
           exactIDs[position] = id
           oldIdentities[identity]?.removeFirst()
+          usedOldIDs.insert(id)
+        }
+      }
+      // 3x-ui picks a REALITY server's shortId and serverName per fetch and writes the traffic left into the
+      // remark, which defeats the stage before and the ones after this one. Without those values a still
+      // unmatched identity of the same format that occurs as often on both sides pairs in feed order.
+      let unmatched = parsed.indices.filter { exactIDs[$0] == nil }
+      let unused = old.allNodes.enumerated().filter { !usedOldIDs.contains($0.element.id) }
+      if !unmatched.isEmpty, !unused.isEmpty {
+        let fresh = try unmatched.map {
+          (position: $0, key: try parsed[$0].format + "\n" + stableIdentity(parsed[$0].outbound), name: parsed[$0].name)
+        }
+        // A server stored before feedIndex keeps its place in the list.
+        let stale = try unused.map { offset, node in
+          (id: node.id, key: try (node.format ?? "xrayOutbound") + "\n" + stableIdentity(oldOutbounds[node.id] ?? Data()),
+           name: node.name, order: node.feedIndex ?? offset)
+        }
+        for (position, id) in pairedByStableIdentity(fresh: fresh, stale: stale) {
+          exactIDs[position] = id
           usedOldIDs.insert(id)
         }
       }
@@ -1415,10 +1437,11 @@ final class SubscriptionStore {
           lastSuccessAt: previous?.lastSuccessAt,
           lastSuccessRevision: previous?.lastSuccessRevision,
           lastSuccessSession: previous?.lastSuccessSession,
-          probeKey: probeKey(outbound: parsedNode.outbound)
+          probeKey: probeKey(outbound: parsedNode.outbound),
+          feedIndex: position
         ))
       }
-      guard !nodes.isEmpty else { throw SubscriptionError.noSupportedNodes }
+      guard !nodes.isEmpty || !notices.isEmpty else { throw SubscriptionError.noSupportedNodes }
       // A group choice rebuilds the shown servers only, and keeps the hidden ones as they are.
       let hiddenIDs = Set((old.hiddenNodes ?? []).map(\.id))
       let hidden = preservingNodeIDs ? old.hiddenNodes ?? [] : nodes.filter { hiddenIDs.contains($0.id) }
@@ -1449,7 +1472,8 @@ final class SubscriptionStore {
           fetchOptions: old.fetchOptions,
           importedName: old.importedName,
           hiddenNodes: hidden.isEmpty ? nil : hidden,
-          deviceSalt: old.deviceSalt
+          deviceSalt: old.deviceSalt,
+          notices: notices.isEmpty ? nil : notices
         ),
         refs
       )
@@ -1483,7 +1507,7 @@ final class SubscriptionStore {
     }
   }
 
-  func normalizeClientInput(_ text: String) throws -> (text: String, name: String?, shareLink: String?) {
+  func normalizeClientInput(_ text: String) throws -> (text: String, name: String?, shareLink: String?, kind: String?) {
     guard text.utf8.count <= Self.maxFeedBytes else { throw SubscriptionError.feedTooLarge }
     let data = try JSONSerialization.data(withJSONObject: ["apiVersion": 1,
       "method": "normalizeClientInput", "payload": ["text": text]])
@@ -1499,10 +1523,13 @@ final class SubscriptionStore {
           let value = envelope["data"] as? [String: Any], let content = value["text"] as? String else {
       throw SubscriptionError.invalidFeed
     }
-    return (content, value["name"] as? String, value["shareLink"] as? String)
+    return (content, value["name"] as? String, value["shareLink"] as? String, value["kind"] as? String)
   }
 
-  func parseImport(_ data: Data, sourceURL: String? = nil, migrationHeaders: [String: String] = [:]) throws -> (nodes: [ParsedNode], directives: [String], hideURL: Bool, newSourceURL: String?, systemResolverDNS: Bool, fallbackURL: String?, skippedCount: Int, skippedKinds: String) {
+  /// A feed's servers. `sourceURL` names the feed a refresh fetched; the core then returns a public feed's message
+  /// lines ("📊 10GB left", "Device limit reached") as `notices` instead of servers. An import without it, such as a
+  /// link pasted by hand, has none.
+  func parseImport(_ data: Data, sourceURL: String? = nil, migrationHeaders: [String: String] = [:]) throws -> (nodes: [ParsedNode], directives: [String], hideURL: Bool, newSourceURL: String?, systemResolverDNS: Bool, fallbackURL: String?, skippedCount: Int, skippedKinds: String, notices: [String]) {
     guard let text = String(data: data, encoding: .utf8) else {
       throw SubscriptionError.invalidFeed
     }
@@ -1542,6 +1569,7 @@ final class SubscriptionStore {
     var skippedKinds = (imported["skipped"] as? [[String: Any]] ?? []).compactMap { $0["kind"] as? String }
     var skippedCount = imported["skippedCount"] as? Int ?? 0
     var refusal: SubscriptionError?
+    let notices = imported["notices"] as? [String] ?? []
     let nodes = try profiles.compactMap { profile -> ParsedNode? in
       guard let format = profile["format"] as? String else { throw SubscriptionError.invalidFeed }
       if format == "telegram" {
@@ -1587,7 +1615,7 @@ final class SubscriptionStore {
     var kinds: [String] = []
     for kind in skippedKinds where !kind.isEmpty && !kinds.contains(kind) && kinds.count < 5 { kinds.append(kind) }
     return (nodes, imported["directives"] as? [String] ?? [], imported["hideURL"] as? Bool == true, imported["newSourceURL"] as? String,
-      imported["systemResolverDNS"] as? Bool == true, imported["fallbackURL"] as? String, skippedCount, kinds.joined(separator: ", "))
+      imported["systemResolverDNS"] as? Bool == true, imported["fallbackURL"] as? String, skippedCount, kinds.joined(separator: ", "), notices)
   }
 
   private func profileGroups(_ config: [String: Any]) throws -> [ProfileGroupSelection]? {
@@ -1653,7 +1681,8 @@ final class SubscriptionStore {
     let generation = UUID()
     refreshGenerations[record.id] = generation
     defer { if refreshGenerations[record.id] == generation { refreshGenerations.removeValue(forKey: record.id) } }
-    var replacement = try buildReplacement(old: record, parsed: parsed, fetched: fetched, preservingNodeIDs: true)
+    var replacement = try buildReplacement(old: record, parsed: parsed, fetched: fetched, notices: record.notices ?? [],
+      preservingNodeIDs: true)
     replacement.record.refreshSchedule = record.refreshSchedule
     replacement.record.refreshInterval = record.refreshInterval
     replacement.record.lastSuccessfulFetch = record.lastSuccessfulFetch
@@ -1717,7 +1746,8 @@ final class SubscriptionStore {
       lastSuccessAt: old.lastSuccessAt,
       lastSuccessRevision: old.lastSuccessRevision,
       lastSuccessSession: old.lastSuccessSession,
-      probeKey: probeKey(outbound: edit.outbound)
+      probeKey: probeKey(outbound: edit.outbound),
+      feedIndex: old.feedIndex
     )
     record.retiredSecretRefs = (record.retiredSecretRefs ?? []) + [old.outboundRef]
     record.publishedRevision = UUID().uuidString.lowercased()
@@ -1758,6 +1788,15 @@ final class SubscriptionStore {
   private func outboundIdentity(_ data: Data) throws -> String {
     guard let outbound = try JSONSerialization.jsonObject(with: data) as? [String: Any],
           let identity = try RoutingDomainDecoder.request("catalogIdentity", payload: outbound)["identity"] as? String else {
+      throw SubscriptionError.invalidFeed
+    }
+    return identity
+  }
+
+  /// The identity without the REALITY values a panel rotates per fetch.
+  private func stableIdentity(_ data: Data) throws -> String {
+    guard let outbound = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+          let identity = try RoutingDomainDecoder.request("catalogStableIdentity", payload: outbound)["identity"] as? String else {
       throw SubscriptionError.invalidFeed
     }
     return identity
@@ -1829,6 +1868,7 @@ final class SubscriptionStore {
       "fallbackHosts": record.fallbackHosts ?? [],
       "fetchOptions": record.fetchOptions ?? [:],
       "hiddenNodes": (record.hiddenNodes ?? []).map { ["id": $0.id, "name": $0.displayName] },
+      "notices": record.notices ?? [],
       "nodes": record.nodes.map { node in
         let revision = scope.flatMap { try? nodeRevision(node, scope: $0) }
         return [
@@ -2140,6 +2180,8 @@ private struct SubscriptionRecord: Codable {
   var allNodes: [SubscriptionNode] { nodes + (hiddenNodes ?? []) }
   /// Set by a device ID reset; without it the ID is the one this install always sent.
   var deviceSalt: String? = nil
+  /// The provider's message lines of the last refresh, such as the traffic left; each refresh replaces them.
+  var notices: [String]? = nil
 }
 
 private struct SubscriptionNode: Codable {
@@ -2161,6 +2203,8 @@ private struct SubscriptionNode: Codable {
   var lastSuccessSession: String? = nil
   /// The SNI its probes send; nil for records saved before 0.3.7 until their next refresh.
   var probeKey: String? = nil
+  /// Its place in the feed it came from, the order the next refresh pairs in; nil until a refresh.
+  var feedIndex: Int? = nil
   var displayName: String { manualName ?? name }
 }
 

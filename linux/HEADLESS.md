@@ -19,7 +19,30 @@ under `/var/lib/elarni`. Keep the password, keyring and catalog together when
 moving to another machine. Starting the service doesn't connect until you set a
 profile up.
 
-Before enabling a full-tunnel VPN on a remote server, make sure SSH stays reachable.
+A full-tunnel VPN takes the replies of incoming connections too, so SSH and the
+ports the server publishes stop answering from outside its network. Before the
+first `connect` on a remote server, turn on the setting that answers them outside
+the tunnel:
+
+```sh
+echo '{"answerInbound":true}' | sudo elarni-cli settings -
+```
+
+With it, a connection that reaches the server from outside (SSH, a web server, a
+published container port) is answered through the network it came from, and
+sessions that were open before the tunnel keep working. A UDP service is answered
+outside only when it replies from the address the request reached: bound to that
+address, or choosing it per packet, as dnsmasq and unbound do with interface
+binding. One that listens on all addresses (`0.0.0.0`) and lets the kernel pick
+the source sends its answers into the tunnel, and the client does not get them.
+Under Block traffic without VPN the server's own services still answer, but ports
+forwarded to containers and virtual machines stay blocked, as all forwarded
+traffic outside the tunnel is. Everything the server opens itself still goes
+through the VPN, and so do its answers to what came in through the tunnel. It is
+off by default: on a desktop it would let a program that accepts
+connections, such as a torrent client, answer them outside the VPN. It needs the
+kernel's reverse-path filter in loose mode or off (`rp_filter` 2 or 0, the
+default on Debian, Ubuntu and Fedora).
 
 `journalctl -u elarni` shows the service's notices and connection states, and
 `sudo elarni-cli call readLogs` prints the core's log. `sudo elarni-cli shutdown`

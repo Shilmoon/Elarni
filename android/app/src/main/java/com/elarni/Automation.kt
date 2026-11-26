@@ -163,6 +163,154 @@ class CrashRestarts {
     }
 }
 
+/** A start by boot or always-on that failed because the network could not look its server up yet: both come as the device
+ *  starts, often before Wi-Fi or mobile data works, and with recovery off nothing else tries again. The next try comes
+ *  2, 4, 8 and 16 s after a failure and then every 30 s, at once when a network comes, until 2 minutes after the first
+ *  failure. Times are [Automation.clock] seconds. */
+class StartRetry {
+    private var since: Double? = null
+    private var attempts = 0
+    /** When the next try is due, or null while none waits. */
+    var retryAt: Double? = null
+        private set
+    /** Counts a start that failed at [time]; true when another try waits, due at [retryAt]. */
+    fun failed(time: Double): Boolean {
+        val first = since ?: time.also { since = it }
+        val next = time + delays[minOf(attempts, delays.lastIndex)]
+        if (next > first + WINDOW) { reset(); return false }
+        attempts++; retryAt = next
+        return true
+    }
+    fun due(time: Double) = retryAt.let { it != null && time >= it }
+    /** A network came: the waiting try runs now, within the same 2 minutes. */
+    fun networkAvailable(time: Double) { retryAt = retryAt?.let { minOf(it, time) } }
+    fun reset() { since = null; attempts = 0; retryAt = null }
+    companion object {
+        const val WINDOW = 120.0
+        private val delays = listOf(2.0, 4.0, 8.0, 16.0, 30.0)
+        /** Without a network, a download for the start or the core's own start fails as well. */
+        private val offlineFailures = setOf("connection_failed", "fetch_failed")
+        /** Whether a start that failed with [error] may work once the network is up: the server's name had no answer
+         *  (Engine marks it), a download's lookup failed or a network change cancelled it, or no network is there at all
+         *  ([offline]). A refused setting, a missing VPN consent or a damaged catalog fails the same way again. */
+        fun retryable(error: Exception, offline: Boolean): Boolean {
+            val code = (error as? AppFailure)?.code ?: return false
+            return error.cause is java.net.UnknownHostException || code == "dns_failed" || code == "fetch_cancelled" || offline && code in offlineFailures
+        }
+    }
+}
+
+/** Some hosting networks' paths freeze each connection after about 16 KB (11 KB on mobile), so a small probe passes while
+ *  pages hang. The transfer check fetches a body of at least 128 KB over one connection and passes at 96 KB received. As on
+ *  desktop, the running core is checked 5 s after it came up and again 10 s later when that one stalled, then every 15 min
+ *  while its uplink grew or a stall was seen (pages that hang send nothing, and only a passing check clears the stall), and
+ *  at once when liveness finds no traffic. Two stalls in a row are [confirmed]; an inconclusive
+ *  check neither counts as one nor ends a run of them. A check takes up to about 20 s, so it runs beside the tick, one at a
+ *  time: the tick [begin]s it and reads its verdict with [takeVerdict] on a later pass, and never waits for it.
+ *  Recovery restarts a server once per stall episode ([mayRestart]). Times are [Automation.clock] seconds. */
+class TransferCheck {
+    private var dueAt: Double? = null
+    private var uplink: Long? = null
+    private var now = false
+    var stalls = 0
+        private set
+    val confirmed get() = stalls >= 2
+    /** The check in flight, and whether its verdict belongs to a core that stopped since it began. */
+    private var inFlight: Pending? = null
+    private var stale = false
+    /** The server recovery restarted for a confirmed stall; null once a check passes, another server runs or the network
+     *  path changes. */
+    private var restarted: String? = null
+    /** A core of [server] (its id and revision) came up at [time]. */
+    fun started(time: Double, server: String) {
+        dueAt = time + delay; uplink = null; stalls = 0; now = false; stale = inFlight != null
+        if (server != restarted) restarted = null
+    }
+    /** The core stopped: nothing is checked until the next one. */
+    fun stopped() { dueAt = null; uplink = null; stalls = 0; now = false; stale = inFlight != null }
+    /** Liveness found no traffic: the next tick checks. */
+    fun noTraffic() { if (dueAt != null) now = true }
+    /** Whether a check runs at [time]. A 15 min check with no stall seen reads [uplink] and, finding no new traffic, waits
+     *  another interval. None runs while one is in flight. */
+    fun due(time: Double, uplink: () -> Long): Boolean {
+        val at = dueAt ?: return false
+        if (inFlight != null) return false
+        if (now) return true
+        if (time < at) return false
+        val last = this.uplink
+        if (stalls == 0 && last != null) {
+            val value = uplink()
+            if (value <= last) { dueAt = time + interval; this.uplink = value; return false }
+        }
+        return true
+    }
+    /** Records the [verdict] of a check that ended at [time], with the uplink counter after it; true when it confirmed a stall. */
+    fun record(verdict: String, time: Double, uplink: Long): Boolean {
+        now = false
+        if (verdict == OK) { stalls = 0; restarted = null }
+        if (verdict == STALLED) stalls++
+        dueAt = time + if (verdict == STALLED && stalls == 1) recheck else interval
+        this.uplink = uplink
+        return verdict == STALLED && stalls == 2
+    }
+    /** Starts a check: whatever runs it hands its verdict over through the returned [Pending]. */
+    fun begin(): Pending = Pending().also { inFlight = it; stale = false }
+    /** The verdict of the check in flight once it ended, for [record]: null while it runs, with none, or when the core it
+     *  checked has stopped since. Taking it ends the check. */
+    fun takeVerdict(): String? {
+        val verdict = inFlight?.take() ?: return null
+        inFlight = null
+        return verdict.takeUnless { stale }
+    }
+    /** Whether recovery may restart [server] for its confirmed stall: once per episode. A frozen network still carries small
+     *  exchanges, and a restart in a loop would cut those too; moving to another server is not held back. */
+    fun mayRestart(server: String) = server != restarted
+    /** Recovery restarts [server] for its confirmed stall. */
+    fun restarting(server: String) { restarted = server }
+    /** The network path changed: a stall seen on the last one says nothing about it. */
+    fun pathChanged() { restarted = null }
+    /** A check in flight; the thread that runs it calls [finish] once. */
+    class Pending {
+        private val verdict = java.util.concurrent.atomic.AtomicReference<String?>()
+        fun finish(value: String) = verdict.set(value)
+        internal fun take(): String? = verdict.getAndSet(null)
+    }
+    companion object {
+        const val OK = "ok"
+        const val STALLED = "stalled"
+        const val INCONCLUSIVE = "inconclusive"
+        /** Seconds from a core's start to its first check, from a first stall to the next, and between later checks;
+         *  tests shorten them. */
+        @Volatile var delay = 5.0
+        @Volatile var recheck = 10.0
+        @Volatile var interval = 900.0
+        /** The core's 4 s limit without a byte unless a test shortens it. */
+        @Volatile var idleMs: Int? = null
+        val defaultTargets: JSONArray get() = JSONArray(listOf(
+            obj("id" to "googleapis", "url" to "https://ajax.googleapis.com/ajax/libs/jquery/3.7.1/jquery.js"),
+            obj("id" to "cdnjs", "url" to "https://cdnjs.cloudflare.com/ajax/libs/jquery/3.7.1/jquery.js")))
+        /** Bodies the check fetches, next to [Automation.livenessTargets]; instrumentation points them at its fixture. */
+        @Volatile var targets: JSONArray = defaultTargets
+        /** One check over its targets' [verdicts]: one ok wins, and it stalled only when each target that answered stalled. */
+        fun combine(verdicts: List<String>) = when { OK in verdicts -> OK; STALLED in verdicts -> STALLED; else -> INCONCLUSIVE }
+        /** Checks [targets] in turn with [check] until one passes, and [combine]s the verdicts. A target the check could not
+         *  reach says nothing about a freeze; a cancelled check ends them all. */
+        fun over(targets: List<JSONObject>, check: (JSONObject) -> String): String {
+            val verdicts = mutableListOf<String>()
+            for (target in targets) {
+                val verdict = try { check(target) } catch (error: Exception) {
+                    if ((error as? AppFailure)?.code == "cancelled") throw error
+                    INCONCLUSIVE
+                }
+                // One ok decides; another target is fetched only when this one did not pass.
+                if (verdict == OK) return verdict
+                verdicts += verdict
+            }
+            return combine(verdicts)
+        }
+    }
+}
+
 /** As on desktop, a server that passed a liveness check since its core started and then failed two in a row gets a new
  *  core. One that never passed (its exit may refuse the check targets) is only reported, so it cannot restart forever;
  *  the restart [reset]s the pass, so only a new one allows the next. */

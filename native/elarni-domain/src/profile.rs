@@ -441,7 +441,10 @@ pub fn compile_profile(
         let (forwarder, forward) = (format!("{prefix}dns"), format!("{prefix}dns-forward"));
         for outbound in owned["outbounds"].as_array_mut().unwrap() {
             if outbound["tag"] == forwarder.as_str() {
-                outbound["settings"] = crate::compiler::dns_forward_settings(&dns["servers"]);
+                outbound["settings"] = crate::compiler::dns_forward_settings(
+                    &dns["servers"],
+                    owned_runtime.preferred_ip,
+                );
             } else if outbound["tag"] == forward.as_str() {
                 outbound["settings"]["inboundTag"] = dns
                     .get("tag")
@@ -556,7 +559,7 @@ pub fn compile_profile(
     }
     crate::compiler::close_with_app(&mut owned);
     crate::compiler::apply_per_app_routing(&mut owned, runtime, &prefix)?;
-    crate::compiler::block_tun_own_subnets(&mut owned, &format!("{prefix}block"));
+    crate::compiler::block_tun_own_subnets(&mut owned, &format!("{prefix}block"), backend);
     let endpoints = profile_endpoints(&owned)?;
     Ok(CompiledProfile {
         config: serde_json::to_vec(&owned).map_err(|_| CompileError::InvalidOutbound)?,

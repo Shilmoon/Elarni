@@ -46,6 +46,8 @@
   "issueVpnGuardBusy": "Another Elarni VPN is connected on this computer.",
   "issueVpnFirewallUnavailableRemedy": "Install nftables (the nft command), then retry.",
   "issueVpnFirewallUnavailable": "The VPN firewall tool is missing.",
+  "issueWintunFailedRemedy": "Antivirus software or a device installation policy can cause this. Reinstall Elarni, or use System proxy mode.",
+  "issueWintunFailed": "The Windows network driver (Wintun) could not be loaded, or its network adapter could not be created.",
   "issueDisconnectUnconfirmedRemedy": "Refresh status before reconnecting, or use Repair VPN setup.",
   "issueDisconnectUnconfirmed": "Disconnection could not be confirmed.",
   "issueProviderUnavailableRemedy": "Retry the selected server. If the problem continues, use Repair VPN setup.",
@@ -851,6 +853,7 @@
   "loginStateUnavailable": "Registration state is unavailable.",
   "loginApprovalRequired": "Approval is required in macOS Login Items settings.",
   "launchAtLogin": "Launch app at login",
+  "startHiddenInTray": "Start hidden in the tray",
   "windowsWifiLocationHelp": "Windows keeps the Wi-Fi name from Elarni. Turn on Location services and Let desktop apps access your location in Settings › Privacy & security › Location. Until then every Wi-Fi network counts as untrusted.",
   "linuxWifiNameHelp": "Elarni cannot read the Wi-Fi name on this system: it needs NetworkManager's nmcli or iw. Until then every Wi-Fi network counts as untrusted.",
   "noTrustedWifi": "None. Every Wi-Fi network connects.",
@@ -1098,6 +1101,7 @@
   "stateReconnecting": "Reconnecting…",
   "stateDisconnecting": "Disconnecting…",
   "stateConnectedNoTraffic": "Connected · no traffic",
+  "stateConnectedStalled": "Connected · transfers cut off",
   "stateConnected": "Connected",
   "stateConnecting": "Connecting…",
   "statePreparing": "Preparing…",
@@ -1235,6 +1239,7 @@
       }
     }
   },
+  "serverCutsTransfersOff": "Connected, but this server’s network cuts transfers off. Pages will not load; choose another server.",
   "connectionCheckUnavailable": "Connection check unavailable for this routing setup",
   "checkingConnection": "Checking connection…",
   "lastKnownState": "Last known state: {state}",
@@ -1371,6 +1376,15 @@
       }
     }
   },
+  "providerMessageLine": "Provider: {message}",
+  "@providerMessageLine": {
+    "description": "A message line of a subscription's provider, such as the traffic left, shown under the subscription's name.",
+    "placeholders": {
+      "message": {
+        "type": "String"
+      }
+    }
+  },
   "runtime": "Runtime",
   "failureFetch": "Download failed",
   "failureFetchText": "The download failed. Check this device’s network, then retry.",
@@ -1415,6 +1429,15 @@
   "failureLinkRemoved": "Link removed",
   "failureLinkRemovedText": "{provider} removed or changed this link. Ask the provider for a new one.",
   "@failureLinkRemovedText": {
+    "placeholders": {
+      "provider": {
+        "type": "String"
+      }
+    }
+  },
+  "failureEncrypted": "Encrypted for another app",
+  "failureEncryptedText": "{provider} encrypted this subscription for another app, such as Happ, and Elarni cannot read it. Ask the provider for a link without encryption.",
+  "@failureEncryptedText": {
     "placeholders": {
       "provider": {
         "type": "String"

@@ -4,6 +4,7 @@ import (
 	"context"
 	go_errors "errors"
 	"io"
+	"math"
 	"strings"
 	"sync"
 	"time"
@@ -19,7 +20,9 @@ import (
 	"github.com/xtls/xray-core/common/task"
 	"github.com/xtls/xray-core/core"
 	"github.com/xtls/xray-core/features/dns"
+	"github.com/xtls/xray-core/features/outbound"
 	"github.com/xtls/xray-core/features/policy"
+	"github.com/xtls/xray-core/features/routing"
 	"github.com/xtls/xray-core/transport"
 	"github.com/xtls/xray-core/transport/internet"
 	"github.com/xtls/xray-core/transport/internet/stat"
@@ -36,6 +39,14 @@ func init() {
 			return h.Init(config.(*Config), dnsClient, policyManager)
 		}); err != nil {
 			return nil, err
+		}
+		if instance := core.FromContext(ctx); instance != nil && config.(*Config).CheckIpv6 {
+			if err := core.RequireFeatures(ctx, func(router routing.Router, handlers outbound.Manager) error {
+				h.ipv6 = newIPv6Check(dialThrough(instance), routeThrough(router, handlers), publicIPv6Services())
+				return nil
+			}); err != nil {
+				return nil, err
+			}
 		}
 		return h, nil
 	}))
@@ -78,6 +89,8 @@ type Handler struct {
 	rewriteServer   net.Destination
 	timeout         time.Duration
 	rules           []*DNSRule
+	// Elarni: set with checkIPv6, see ipv6_check.go
+	ipv6 *ipv6Check
 }
 
 func (h *Handler) Init(config *Config, dnsClient dns.Client, policyManager policy.Manager) error {
@@ -115,11 +128,26 @@ func (h *Handler) Init(config *Config, dnsClient dns.Client, policyManager polic
 	return nil
 }
 
+// Close implements common.Closable (Elarni): the IPv6 check ends with the handler's core.
+func (h *Handler) Close() error {
+	if h.ipv6 != nil {
+		h.ipv6.close()
+	}
+	return nil
+}
+
 func (h *Handler) isOwnLink(ctx context.Context) bool {
 	return h.ownLinkVerifier != nil && h.ownLinkVerifier.IsOwnLink(ctx)
 }
 
-func parseQuery(b []byte) (id uint16, qType dnsmessage.Type, domain string, ok bool) {
+// fromHosts reports whether the client answers domain from its static hosts.
+func (h *Handler) fromHosts(domain string) bool {
+	hosts, ok := h.client.(dns.HostsLookup)
+	return ok && len(hosts.LookupHosts(domain)) != 0
+}
+
+// parseQuery also returns the UDP payload size the query's OPT record announces, 0 without one.
+func parseQuery(b []byte) (id uint16, qType dnsmessage.Type, domain string, ednsSize uint16, ok bool) {
 	var parser dnsmessage.Parser
 	header, err := parser.Start(b)
 	if err != nil {
@@ -135,7 +163,28 @@ func parseQuery(b []byte) (id uint16, qType dnsmessage.Type, domain string, ok b
 	qType = q.Type
 	domain = q.Name.String()
 	ok = true
-	return
+	if parser.SkipAllQuestions() != nil || parser.SkipAllAnswers() != nil || parser.SkipAllAuthorities() != nil {
+		return
+	}
+	for {
+		h, err := parser.AdditionalHeader()
+		if err != nil {
+			return
+		}
+		if h.Type == dnsmessage.TypeOPT {
+			ednsSize = uint16(h.Class)
+			return
+		}
+		if parser.SkipAdditional() != nil {
+			return
+		}
+	}
+}
+
+// udpAnswerLimit is the largest answer a UDP asker takes: 512 bytes, or the size its OPT record
+// announces within 512..1232 (RFC 6891 counts less than 512 as 512; 1232 avoids fragmentation).
+func udpAnswerLimit(ednsSize uint16) int {
+	return min(max(int(ednsSize), 512), 1232)
 }
 
 func (h *Handler) applyRules(qType dnsmessage.Type, domain string) (RuleAction, dnsmessage.RCode) {
@@ -161,6 +210,10 @@ func (h *Handler) Process(ctx context.Context, link *transport.Link, d internet.
 	ob.Name = "dns"
 
 	srcNetwork := ob.Target.Network
+	inboundTag := ""
+	if inbound := session.InboundFromContext(ctx); inbound != nil {
+		inboundTag = inbound.Tag
+	}
 
 	dest := ob.Target
 	if h.rewriteServer.Network != net.Network_Unknown {
@@ -246,7 +299,7 @@ func (h *Handler) Process(ctx context.Context, link *transport.Link, d internet.
 				continue
 			}
 
-			id, qType, domain, ok := parseQuery(b.Bytes())
+			id, qType, domain, ednsSize, ok := parseQuery(b.Bytes())
 			if !ok {
 				b.Release()
 				continue
@@ -271,7 +324,11 @@ func (h *Handler) Process(ctx context.Context, link *transport.Link, d internet.
 						return err
 					}
 				} else {
-					go h.handleIPQuery(id, qType, domain, writer, timer)
+					limit := math.MaxUint16 // TCP carries the whole answer that its length counts
+					if srcNetwork != net.Network_TCP {
+						limit = udpAnswerLimit(ednsSize)
+					}
+					go h.handleIPQuery(id, qType, domain, inboundTag, writer, timer, limit)
 				}
 			case RuleAction_Direct:
 				if err := connWriter.WriteMessage(b); err != nil {
@@ -314,7 +371,8 @@ func (h *Handler) Process(ctx context.Context, link *transport.Link, d internet.
 	return nil
 }
 
-func (h *Handler) handleIPQuery(id uint16, qType dnsmessage.Type, domain string, writer dns_proto.MessageWriter, timer *signal.ActivityTimer) {
+// handleIPQuery answers an A or AAAA query in at most limit bytes; 0 leaves the answer whole.
+func (h *Handler) handleIPQuery(id uint16, qType dnsmessage.Type, domain string, inboundTag string, writer dns_proto.MessageWriter, timer *signal.ActivityTimer, limit int) {
 	var ips []net.IP
 	var ttl uint32
 	var err error
@@ -332,6 +390,10 @@ func (h *Handler) handleIPQuery(id uint16, qType dnsmessage.Type, domain string,
 			IPv6Enable: true,
 			FakeEnable: true,
 		})
+		// The static hosts are what the user or the provider set on purpose: they stay as written.
+		if h.ipv6 != nil && !h.fromHosts(domain) {
+			ips = h.ipv6.reachable(inboundTag, domain, ips)
+		}
 	}
 
 	rCode := dns.RCodeFromError(err)
@@ -343,45 +405,69 @@ func (h *Handler) handleIPQuery(id uint16, qType dnsmessage.Type, domain string,
 
 	b := buf.New()
 	rawBytes := b.Extend(buf.Size)
-	builder := dnsmessage.NewBuilder(rawBytes[:0], dnsmessage.Header{
-		ID:                 id,
-		RCode:              dnsmessage.RCode(rCode),
-		RecursionAvailable: true,
-		RecursionDesired:   true,
-		Response:           true,
-		Authoritative:      true,
-	})
-	builder.EnableCompression()
-	common.Must(builder.StartQuestions())
-	common.Must(builder.Question(dnsmessage.Question{
-		Name:  dnsmessage.MustNewName(domain),
-		Class: dnsmessage.ClassINET,
-		Type:  qType,
-	}))
-	common.Must(builder.StartAnswers())
+	// pack builds the answer into rawBytes with at most the given number of addresses, in order,
+	// and returns how many it took.
+	pack := func(records int) (msg []byte, packed int, err error) {
+		builder := dnsmessage.NewBuilder(rawBytes[:0], dnsmessage.Header{
+			ID:                 id,
+			RCode:              dnsmessage.RCode(rCode),
+			RecursionAvailable: true,
+			RecursionDesired:   true,
+			Response:           true,
+			Authoritative:      true,
+		})
+		builder.EnableCompression()
+		common.Must(builder.StartQuestions())
+		common.Must(builder.Question(dnsmessage.Question{
+			Name:  dnsmessage.MustNewName(domain),
+			Class: dnsmessage.ClassINET,
+			Type:  qType,
+		}))
+		common.Must(builder.StartAnswers())
 
-	rHeader := dnsmessage.ResourceHeader{Name: dnsmessage.MustNewName(domain), Class: dnsmessage.ClassINET, TTL: ttl}
-	switch qType {
-	case dnsmessage.TypeA:
+		rHeader := dnsmessage.ResourceHeader{Name: dnsmessage.MustNewName(domain), Class: dnsmessage.ClassINET, TTL: ttl}
 		for _, ip := range ips {
-			ip = ip.To4()
-			if len(ip) == net.IPv4len {
+			if packed == records {
+				break
+			}
+			switch qType {
+			case dnsmessage.TypeA:
+				ip = ip.To4()
+				if len(ip) != net.IPv4len {
+					continue
+				}
 				var r dnsmessage.AResource
 				copy(r.A[:], ip)
 				common.Must(builder.AResource(rHeader, r))
-			}
-		}
-	case dnsmessage.TypeAAAA:
-		for _, ip := range ips {
-			ip = ip.To16()
-			if len(ip) == net.IPv6len {
+			case dnsmessage.TypeAAAA:
+				ip = ip.To16()
+				if len(ip) != net.IPv6len {
+					continue
+				}
 				var r dnsmessage.AAAAResource
 				copy(r.AAAA[:], ip)
 				common.Must(builder.AAAAResource(rHeader, r))
 			}
+			packed++
 		}
+		msg, err = builder.Finish()
+		return
 	}
-	msgBytes, err := builder.Finish()
+	msgBytes, packed, err := pack(len(ips))
+	// Elarni: a UDP asker takes no more than limit bytes, so the answer keeps the addresses that fit.
+	// No truncated bit: the shorter answer is complete and usable, and the bit would only send the
+	// asker to TCP for nothing.
+	if err == nil && limit > 0 && len(msgBytes) > limit && packed > 0 {
+		full := len(msgBytes)
+		empty, _, _ := pack(0)
+		// Every record has the same size: the name is a pointer to the question's.
+		fit := max((limit-len(empty))/((full-len(empty))/packed), 0)
+		for msgBytes, _, err = pack(fit); err == nil && len(msgBytes) > limit && fit > 0; {
+			fit--
+			msgBytes, _, err = pack(fit)
+		}
+		errors.LogDebug(context.Background(), "DNS answer for ", domain, " keeps ", fit, " of ", packed, " addresses within ", limit, " bytes")
+	}
 	if err != nil {
 		errors.LogInfoInner(context.Background(), err, "pack message")
 		b.Release()
@@ -390,6 +476,14 @@ func (h *Handler) handleIPQuery(id uint16, qType dnsmessage.Type, domain string,
 	}
 	if len(msgBytes) > buf.Size {
 		b.Release()
+		// Elarni: a TCP answer is one message in as many buffers as it takes; a UDP one never gets here.
+		if w, ok := writer.(interface{ WriteMultiMessage(buf.MultiBuffer) error }); ok {
+			if err := w.WriteMultiMessage(buf.MergeBytes(nil, msgBytes)); err != nil {
+				errors.LogInfoInner(context.Background(), err, "write IP answer")
+				timer.SetTimeout(0)
+			}
+			return
+		}
 		timer.SetTimeout(0)
 		errors.LogError(context.Background(), "DNS response message too large")
 		return

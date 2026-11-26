@@ -2,6 +2,7 @@ package wireguard
 
 import (
 	"context"
+	"encoding/hex"
 	"fmt"
 	awg "github.com/amnezia-vpn/amneziawg-go/v3/device"
 	gonet "net"
@@ -48,8 +49,9 @@ type Handler struct {
 	tun          tun.Device
 	tnet         *Net
 	dev          tunnelDevice
-	configured   bool // dev accepted the config; until then each dial retries IpcSet
-	stopRebind   func()
+	configured   bool        // dev accepted the config; until then each dial retries IpcSet
+	sleep        *sleepWatch // expires dev's keys after a sleep (sleep.go)
+	stopWatchers func()      // ends the rebind and sleep watchers of dev
 	mu           sync.Mutex
 	diagnosticID uint64
 }
@@ -288,9 +290,9 @@ func (h *Handler) Process(ctx context.Context, link *transport.Link, dialer inte
 func (h *Handler) Close() (err error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if h.stopRebind != nil {
-		h.stopRebind()
-		h.stopRebind = nil
+	if h.stopWatchers != nil {
+		h.stopWatchers()
+		h.stopWatchers = nil
 	}
 	if h.dev != nil {
 		h.dev.Close()
@@ -369,11 +371,21 @@ func (h *Handler) newDevice(ctx context.Context) tunnelDevice {
 	}
 	var dev tunnelDevice
 	if h.conf.Amnezia {
-		dev = awg.NewDevice(adaptAmneziaTUN(h.tun), &amneziaBind{bind}, &awg.Logger{Verbosef: logger.Verbosef, Errorf: logger.Errorf})
+		dev = amneziaDevice{awg.NewDevice(adaptAmneziaTUN(h.tun), &amneziaBind{bind}, &awg.Logger{Verbosef: logger.Verbosef, Errorf: logger.Errorf})}
 	} else {
-		dev = device.NewDevice(h.tun, bind, logger)
+		dev = wireguardDevice{device.NewDevice(h.tun, bind, logger)}
 	}
 	bind.downFunc = dev.Down
+	// Elarni: after a sleep the server may have dropped the keys the engine still thinks fresh.
+	var peers [][32]byte
+	for _, peer := range h.conf.Peers {
+		var key [32]byte
+		if n, err := hex.Decode(key[:], []byte(peer.PublicKey)); err == nil && n == len(key) {
+			peers = append(peers, key)
+		}
+	}
+	watch := newSleepWatch(readClocks, dev.IpcGet, dev.ExpireKeys, peers)
+	bind.sleep, h.sleep = watch, watch
 	// The socket keeps the interface it was bound to; reopen it on the new one.
 	moves, done := make(chan struct{}, 1), make(chan struct{})
 	remove := internet.OnSocketPathChange(func() {
@@ -382,7 +394,7 @@ func (h *Handler) newDevice(ctx context.Context) tunnelDevice {
 		default:
 		}
 	})
-	h.stopRebind = func() { remove(); close(done) }
+	h.stopWatchers = func() { remove(); close(done); watch.stop() }
 	go coalesce(moves, done, rebindGap, func() {
 		if dev.BindUpdate() != nil {
 			dev.Down() // the next dial retries Up, as after a failed start
@@ -418,7 +430,13 @@ func (h *Handler) init(ctx context.Context) error {
 		return errors.New("closed")
 	}
 	if h.configured {
-		return h.dev.Up()
+		if err := h.dev.Up(); err != nil {
+			return err
+		}
+		// Elarni: a dial after a long sleep waits for a new handshake instead of sending with keys
+		// the server may have dropped.
+		h.sleep.dialing()
+		return nil
 	}
 	if h.dev == nil {
 		h.dev = h.newDevice(context.WithoutCancel(ctx)) // the device outlives the dial that starts it

@@ -592,6 +592,181 @@ void main() {
       },
     );
 
+    // N3-69: Not now hid the notice, and the next start installed the release.
+    test(
+      'Not now keeps a downloaded release from installing by itself',
+      () async {
+        for (final kind in ['msi', 'appimage']) {
+          stored = [
+            jsonEncode({'updateFeedURL': feedURL, 'dismissedUpdate': '0.7.0'}),
+          ];
+          quits = [];
+          control = FakeTunnelControl()
+            ..updateStatusValue = {
+              'kind': kind,
+              'silent': true,
+              'ready': '0.7.0',
+            }
+            ..installUpdateValue = kind == 'msi'
+                ? const {'exit': true}
+                : const {'restart': true};
+          final desktop = await start();
+          expect(control.installRelaunches, isEmpty, reason: kind);
+          expect(quits, isEmpty, reason: kind);
+          expect(saved()['updateAttempted'], isNot('0.7.0'), reason: kind);
+          expect(desktop.updateStage, UpdateStage.ready, reason: kind);
+          expect(desktop.updateVersion, '0.7.0', reason: kind);
+          // The feed still names it: nothing installs on a later check either.
+          desktop.appVersion = '0.6.1+1';
+          await pumpEventQueue();
+          expect(control.installRelaunches, isEmpty, reason: kind);
+          // Update, from the window, still installs it.
+          await desktop.installUpdate(reconnect: false);
+          expect(control.installRelaunches, [true], reason: kind);
+        }
+      },
+    );
+
+    test(
+      'Not now stops the download of that release; the next one downloads',
+      () async {
+        stored = [
+          jsonEncode({'updateFeedURL': feedURL, 'dismissedUpdate': '0.7.0'}),
+        ];
+        control.updateStatusValue = {'kind': 'msi', 'silent': true};
+        final desktop = await start();
+        expect(desktop.availableUpdate?.version, '0.7.0');
+        expect(control.downloadedAssets, isEmpty);
+        expect(desktop.updateStage, UpdateStage.none);
+        updateFeedFetch = (url) async => release.replaceAll('0.7.0', '0.7.1');
+        control.downloadUpdateValue = {...downloaded, 'version': '0.7.1'};
+        desktop.appVersion = '0.6.1+1';
+        await pumpEventQueue();
+        expect(control.downloadedAssets, hasLength(1));
+        expect(desktop.updateStage, UpdateStage.ready);
+        expect(desktop.updateVersion, '0.7.1');
+      },
+    );
+
+    test(
+      'Not now during an AppImage download holds back only that version',
+      () async {
+        final downloading = Completer<void>();
+        control
+          ..updateStatusValue = {'kind': 'appimage', 'silent': true}
+          ..installUpdateValue = {'restart': true}
+          ..onDownloadUpdate = () => downloading.future;
+        final desktop = await start();
+        expect(desktop.updateStage, UpdateStage.downloading);
+        await desktop.update(dismissedUpdate: '0.7.0');
+        downloading.complete();
+        await pumpEventQueue();
+        expect(desktop.updateStage, UpdateStage.ready);
+        expect(control.installRelaunches, isEmpty);
+        // The downloaded release does not hide the next one, which swaps by itself.
+        updateFeedFetch = (url) async => release.replaceAll('0.7.0', '0.7.1');
+        control.downloadUpdateValue = {...downloaded, 'version': '0.7.1'};
+        desktop.appVersion = '0.6.1+1';
+        await pumpEventQueue();
+        expect(control.downloadedAssets, hasLength(2));
+        expect(control.installRelaunches, [true]);
+        expect(desktop.updateStage, UpdateStage.installed);
+        expect(desktop.updateVersion, '0.7.1');
+        expect(quits, isEmpty);
+      },
+    );
+
+    // PR #145 review: a feed that named an older release (mirror lag, a
+    // rollback) dropped the put-off one and downloaded the older over it.
+    test(
+      'Not now on a downloaded release gives way to a newer one, not an older',
+      () async {
+        for (final kind in ['msi', 'appimage']) {
+          stored = [
+            jsonEncode({'updateFeedURL': feedURL, 'dismissedUpdate': '0.7.1'}),
+          ];
+          quits = [];
+          control = FakeTunnelControl()
+            ..updateStatusValue = {
+              'kind': kind,
+              'silent': true,
+              'ready': '0.7.1',
+            }
+            ..installUpdateValue = kind == 'msi'
+                ? const {'exit': true}
+                : const {'restart': true};
+          final desktop = await start();
+          expect(desktop.availableUpdate?.version, '0.7.0', reason: kind);
+          expect(control.downloadedAssets, isEmpty, reason: kind);
+          expect(control.installRelaunches, isEmpty, reason: kind);
+          expect(desktop.updateStage, UpdateStage.ready, reason: kind);
+          expect(desktop.updateVersion, '0.7.1', reason: kind);
+          // A release newer than the put-off one downloads in its place.
+          updateFeedFetch = (url) async => release.replaceAll('0.7.0', '0.7.2');
+          control.downloadUpdateValue = {...downloaded, 'version': '0.7.2'};
+          desktop.appVersion = '0.6.1+1';
+          await pumpEventQueue();
+          expect(control.downloadedAssets, hasLength(1), reason: kind);
+          expect(
+            control.downloadedAssets.single.first.name,
+            'Elarni-0.7.2-x64.msi',
+            reason: kind,
+          );
+          expect(desktop.updateVersion, '0.7.2', reason: kind);
+          updateFeedFetch = (url) async => release;
+        }
+      },
+    );
+
+    // PR #145 review: Not now during a download held a newer release the
+    // check saw meanwhile until the next day's check.
+    for (final afterDownload in [false, true]) {
+      test(
+        'a newer release seen while the put-off one downloads downloads next '
+        '(Not now ${afterDownload ? 'after' : 'during'} the download)',
+        () async {
+          final first = Completer<void>();
+          control
+            ..updateStatusValue = {'kind': 'msi', 'silent': true}
+            // The core answers with the version of the release it was handed.
+            ..onDownloadUpdate = () async {
+              final version = control.downloadedAssets.last.first.name.split(
+                '-',
+              )[1];
+              control.downloadUpdateValue = {...downloaded, 'version': version};
+              if (version == '0.7.0') await first.future;
+            };
+          final desktop = await start();
+          expect(desktop.updateStage, UpdateStage.downloading);
+          expect(desktop.updateVersion, '0.7.0');
+          if (!afterDownload) await desktop.update(dismissedUpdate: '0.7.0');
+          updateFeedFetch = (url) async => release.replaceAll('0.7.0', '0.7.1');
+          desktop.appVersion = '0.6.1+1';
+          await pumpEventQueue();
+          expect(desktop.availableUpdate?.version, '0.7.1');
+          expect(control.downloadedAssets, hasLength(1));
+          first.complete();
+          await pumpEventQueue();
+          if (afterDownload) {
+            // Not held: the downloaded release stays ready until Not now.
+            expect(desktop.updateStage, UpdateStage.ready);
+            expect(desktop.updateVersion, '0.7.0');
+            expect(control.downloadedAssets, hasLength(1));
+            await desktop.update(dismissedUpdate: '0.7.0');
+            await pumpEventQueue();
+          }
+          expect(control.downloadedAssets, hasLength(2));
+          expect(
+            control.downloadedAssets.last.first.name,
+            'Elarni-0.7.1-x64.msi',
+          );
+          expect(desktop.updateStage, UpdateStage.ready);
+          expect(desktop.updateVersion, '0.7.1');
+          expect(control.installRelaunches, isEmpty);
+        },
+      );
+    }
+
     testWidgets('Home offers Install for a package that was tried at start', (
       tester,
     ) async {

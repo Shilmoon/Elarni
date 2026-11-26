@@ -295,6 +295,17 @@ extension _ProxyAutomation on DesktopProxy {
   }
 
   Future<void> _automaticHealth(DesktopCatalog catalog) async {
+    // A running server whose transfers stalled twice in a row fails the check
+    // whatever its small probes do.
+    if (_transferStalls >= 2 && _state == 'connected') {
+      _automation.observe(
+        catalog.selected!,
+        false,
+        _russianEntry(catalog.selected!),
+      );
+      _automation.cooldown[catalog.selected!] = _now + 60;
+      throw desktopError('endpointFailure');
+    }
     var qualifying = 0;
     var invalidTarget = false;
     final targets = catalogList(_automationConfig['targets']);
@@ -431,6 +442,21 @@ extension _ProxyAutomation on DesktopProxy {
       verifyRuntime: (candidate) async {
         await _automaticHealth(candidate);
         _checkAutomation(epoch);
+        // The server failover is about to keep must pass transfers too.
+        final verdict = await _transferCheck(
+          candidate,
+          candidate.selected!,
+          _generation,
+        );
+        _checkAutomation(epoch);
+        if (verdict == 'stalled') {
+          _automation.observe(
+            candidate.selected!,
+            false,
+            _russianEntry(candidate.selected!),
+          );
+          throw desktopError('stalled');
+        }
       },
       next: (error) {
         _checkAutomation(epoch);
@@ -521,6 +547,115 @@ extension _ProxyAutomation on DesktopProxy {
     if (result == 'ok') _trafficServer = _serverRevision(catalog);
     _livenessAt = _now;
     _livenessUplink = counter('uplinkBytes');
+    if (result == 'noTraffic') _transferNow = true;
+  }
+
+  // One transfer check of a server: 'ok' when a target passed, 'stalled' when
+  // every target that answered stalled, else 'inconclusive'. The selected
+  // server is checked through its running tunnel, another through a probe core.
+  Future<String> _transferCheck(
+    DesktopCatalog catalog,
+    String id,
+    int generation,
+  ) async {
+    var stalled = false;
+    for (final target in _transferTargets) {
+      try {
+        final result = await _ping(
+          {
+            ...target,
+            'nodeId': id,
+            'protocol': id == catalog.selected ? 'activeProxy' : 'proxy',
+            'method': 'GET',
+            'timeout': 8,
+            'transfer': true,
+            'transferIdleMs': ?_transferIdleMs,
+          },
+          generation,
+          usingCatalog: catalog,
+          automatic: true,
+        );
+        if (result['verdict'] == 'ok') return 'ok';
+        if (result['verdict'] == 'stalled') stalled = true;
+      } on PlatformException catch (error) {
+        if (error.code == 'cancelled') rethrow;
+        // A check that could not run says nothing about a freeze.
+      }
+    }
+    return stalled ? 'stalled' : 'inconclusive';
+  }
+
+  // Checks the running server's transfers 5 s after it came up (10 s later
+  // again after a first stall), then every 15 min while traffic leaves or a
+  // stall was seen, and at once when liveness finds no traffic. Two stalls in
+  // a row make the connection 'stalled', which the health check counts as a
+  // failure.
+  Future<void> _transferTick() async {
+    if (_transferBusy ||
+        _disposed ||
+        _state != 'connected' ||
+        _operation != null ||
+        _automationBusy ||
+        _livenessBusy ||
+        _disconnecting != null ||
+        _catalog == null ||
+        _transferTargets.isEmpty ||
+        _transferAt == null ||
+        !_transferNow && _now < _transferAt!)
+      return;
+    final uplink = (_latestMetrics['uplinkBytes'] as num?)?.toInt();
+    // The 15 min checks wait for traffic while no stall was seen; the first
+    // one and those after a stall do not: pages that hang send nothing, and
+    // only a passing check clears the stall.
+    if (!_transferNow &&
+        _transferStalls == 0 &&
+        _transferUplink != null &&
+        !(uplink != null && uplink > _transferUplink!)) {
+      _transferAt = _now + _transferSeconds;
+      _transferUplink = uplink;
+      return;
+    }
+    _transferBusy = true;
+    _transferNow = false;
+    // Like a health check it holds the operation slot, so no other probe
+    // competes with its download, and the user's edits wait for it.
+    _automationBusy = true;
+    final done = _operation = Completer<void>();
+    final generation = _generation, catalog = _catalog!, runtime = _connectedAt;
+    String verdict;
+    try {
+      verdict = await _transferCheck(catalog, catalog.selected!, generation);
+    } on Object {
+      return;
+    } finally {
+      _operation = null;
+      done.complete();
+      _automationBusy = false;
+      _transferBusy = false;
+    }
+    // A restart during the check starts the schedule over for the new core.
+    if (generation != _generation ||
+        _state != 'connected' ||
+        _connectedAt != runtime)
+      return;
+    // An inconclusive check neither counts as a stall nor ends a run of them.
+    if (verdict == 'ok') {
+      _transferStalls = 0;
+      _stallRestart = null;
+    }
+    if (verdict == 'stalled') _transferStalls++;
+    _transferAt =
+        _now +
+        (verdict == 'stalled' && _transferStalls == 1
+            ? _transferRecheck
+            : _transferSeconds);
+    _transferUplink = (_latestMetrics['uplinkBytes'] as num?)?.toInt();
+    // Recovery takes a confirmed stall at its next health check, now.
+    if (verdict == 'stalled' &&
+        _transferStalls == 2 &&
+        _automation.healthAt != null &&
+        _automation.healthAt! > _now)
+      _automation.healthAt = _now;
   }
 
   Future<void> _automationTick() async {
@@ -567,8 +702,9 @@ extension _ProxyAutomation on DesktopProxy {
       // Each read costs about a millisecond; a running session needs fewer.
       if (_state != 'connected' || _now - _pathReadAt >= 5) {
         _pathReadAt = _now;
-        final path = await _physicalPath();
+        final path = await _physicalPath(), before = _automation.path;
         _automation.pathChanged(path, path.isNotEmpty, _now);
+        if (_automation.path != before) _stallRestart = null;
       }
       if (!_automation.online) {
         _automation.status = 'offline';
@@ -618,6 +754,8 @@ extension _ProxyAutomation on DesktopProxy {
         return;
       }
       var healthy = false;
+      // The check below fails for a confirmed stall whatever else it sees.
+      final stalled = _transferStalls >= 2 && _state == 'connected';
       final done = _operation = Completer<void>();
       try {
         await _automaticHealth(_catalog!);
@@ -714,9 +852,52 @@ extension _ProxyAutomation on DesktopProxy {
           healthy,
           _now,
         );
+        // The round's winner must pass transfers too before the switch; one
+        // that stalls is skipped like a failed measurement.
+        for (
+          var skipped = false;
+          _transferTargets.isNotEmpty && chosen != null && chosen != current;
+          skipped = true
+        ) {
+          // The next winner, unchecked, does not replace a working server.
+          if (skipped && _now >= deadline) {
+            chosen = current;
+            break;
+          }
+          if (_operation != null) return;
+          final done = _operation = Completer<void>();
+          String verdict;
+          try {
+            verdict = await _transferCheck(_catalog!, chosen, _generation);
+          } finally {
+            _operation = null;
+            done.complete();
+          }
+          _checkAutomation(epoch);
+          if (verdict != 'stalled') break;
+          _automation.observe(chosen, false, _russianEntry(chosen));
+          _automation.cooldown[chosen] = _now + 60;
+          _candidateFailures[chosen] = 'stalled';
+          scores.remove(chosen);
+          chosen = _automation.choose(
+            policy,
+            order,
+            current,
+            scores,
+            healthy,
+            _now,
+          );
+        }
       }
       // Restarting the selected server after failed checks is no failover.
       final switching = chosen != current;
+      // One restart per stall episode (see _stallRestart): after it the
+      // server keeps running, still stalled, while the retries go on.
+      if (!healthy && !switching && stalled) {
+        final server = _serverRevision(_catalog!);
+        if (_stallRestart == server) throw desktopError('endpointFailure');
+        _stallRestart = server;
+      }
       if ((!healthy || switching) && chosen != null) {
         _automation.status = 'replacing';
         await _mutate(

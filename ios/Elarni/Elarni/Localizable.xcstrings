@@ -50,6 +50,16 @@
         }
       }
     },
+    "%@ encrypted this subscription for another app, such as Happ, and Elarni cannot read it. Ask the provider for a link without encryption." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Провайдер «%@» зашифровал эту подписку для другого приложения, например Happ, и Elarni не может её прочитать. Попросите у провайдера ссылку без шифрования."
+          }
+        }
+      }
+    },
     "%@ is gone from %@. Connected to %@." : {
       "localizations" : {
         "ru" : {
@@ -1281,12 +1291,32 @@
         }
       }
     },
+    "Connected · transfers cut off" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Подключено · передача обрывается"
+          }
+        }
+      }
+    },
     "Connected, awaiting check" : {
       "localizations" : {
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Подключено, ожидание проверки"
+          }
+        }
+      }
+    },
+    "Connected, but this server’s network cuts transfers off. Pages will not load; choose another server." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Подключено, но сеть этого сервера обрывает передачу данных. Страницы не загрузятся; выберите другой сервер."
           }
         }
       }
@@ -4370,6 +4400,16 @@
         }
       }
     },
+    "Provider: %@" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Провайдер: %@"
+          }
+        }
+      }
+    },
     "Proxy" : {
       "localizations" : {
         "ru" : {
@@ -6101,6 +6141,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Провайдер не разрешает просматривать конфигурацию этого сервера."
+          }
+        }
+      }
+    },
+    "The provider encrypted this subscription for another app, such as Happ, and Elarni cannot read it. Ask the provider for a link without encryption." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Провайдер зашифровал эту подписку для другого приложения, например Happ, и Elarni не может её прочитать. Попросите у провайдера ссылку без шифрования."
           }
         }
       }

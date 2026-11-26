@@ -109,7 +109,8 @@ type sealingManager interface {
 
 type frameSource interface {
 	HasData() bool
-	Append([]ackhandler.Frame, []ackhandler.StreamFrame, protocol.ByteCount, monotime.Time, protocol.Version) ([]ackhandler.Frame, []ackhandler.StreamFrame, protocol.ByteCount)
+	AppendControlFrames([]ackhandler.Frame, protocol.ByteCount, monotime.Time, protocol.Version) ([]ackhandler.Frame, protocol.ByteCount)
+	AppendStreamFrames([]ackhandler.Frame, []ackhandler.StreamFrame, protocol.ByteCount, protocol.Version) ([]ackhandler.Frame, []ackhandler.StreamFrame, protocol.ByteCount)
 }
 
 type ackFrameSource interface {
@@ -733,35 +734,20 @@ func (p *packetPacker) composeNextPacket(
 		}
 	}
 
-	if p.datagramQueue != nil {
-		if f := p.datagramQueue.Peek(); f != nil {
-			size := f.Length(v)
-			if size <= maxPayloadSize-pl.length { // DATAGRAM frame fits
-				pl.frames = append(pl.frames, ackhandler.Frame{Frame: f})
-				pl.length += size
-				p.datagramQueue.Pop()
-				p.peekTimes = 0
-			} else if pl.ack == nil {
-				// The DATAGRAM frame doesn't fit, and the packet doesn't contain an ACK.
-				// Discard this frame. There's no point in retrying this in the next packet,
-				// as it's unlikely that the available packet size will increase.
-				p.datagramQueue.Pop()
-				p.peekTimes = 0
-			}
-			// If the DATAGRAM frame was too large and the packet contained an ACK, we'll try to send it out later.
-			p.peekTimes++
-			if p.peekTimes > DatagramFrameMaxPeekTimes {
-				if p.datagramQueue.logger != nil && p.datagramQueue.logger.Debug() {
-					p.datagramQueue.logger.Debugf("Discarded DATAGRAM frame (%d bytes payload)", size)
-				}
-				p.datagramQueue.Pop()
-				p.peekTimes = 0
-			}
-		}
+	// Elarni: a DATAGRAM frame that control frames and retransmissions kept out of
+	// DatagramFrameMaxPeekTimes packets goes ahead of them, instead of being dropped, so that
+	// UDP traffic is not lost while a stream recovers from loss.
+	datagramFirst := p.peekTimes >= DatagramFrameMaxPeekTimes
+	if datagramFirst {
+		p.appendDatagramFrame(&pl, maxPayloadSize, v)
 	}
 
-	if pl.ack != nil && !hasData && !hasRetransmission {
-		return pl
+	// Control frames and retransmissions go ahead of DATAGRAM frames, so that application data
+	// can't starve the connection (quic-go/quic-go#5970).
+	if hasData {
+		var lengthAdded protocol.ByteCount
+		pl.frames, lengthAdded = p.framer.AppendControlFrames(pl.frames, maxPayloadSize-pl.length, now, v)
+		pl.length += lengthAdded
 	}
 
 	if hasRetransmission {
@@ -779,27 +765,68 @@ func (p *packetPacker) composeNextPacket(
 		}
 	}
 
+	if !datagramFirst {
+		p.appendDatagramFrame(&pl, maxPayloadSize, v)
+	}
+
+	if pl.ack != nil && !hasData && !hasRetransmission {
+		return pl
+	}
+
 	if hasData {
 		var lengthAdded protocol.ByteCount
-		startLen := len(pl.frames)
-		pl.frames, pl.streamFrames, lengthAdded = p.framer.Append(pl.frames, pl.streamFrames, maxPayloadSize-pl.length, now, v)
+		pl.frames, pl.streamFrames, lengthAdded = p.framer.AppendStreamFrames(pl.frames, pl.streamFrames, maxPayloadSize-pl.length, v)
 		pl.length += lengthAdded
-		// add handlers for the control frames that were added
-		for i := startLen; i < len(pl.frames); i++ {
-			if pl.frames[i].Handler != nil {
-				continue
-			}
-			switch pl.frames[i].Frame.(type) {
-			case *wire.PathChallengeFrame, *wire.PathResponseFrame:
-				// Path probing is currently not supported, therefore we don't need to set the OnAcked callback yet.
-				// PATH_CHALLENGE and PATH_RESPONSE are never retransmitted.
-			default:
-				// we might be packing a 0-RTT packet, but we need to use the 1-RTT ack handler anyway
-				pl.frames[i].Handler = p.retransmissionQueue.AckHandler(protocol.Encryption1RTT)
-			}
+	}
+
+	// add handlers for the control frames that were added
+	for i := range pl.frames {
+		if pl.frames[i].Handler != nil {
+			continue
+		}
+		switch pl.frames[i].Frame.(type) {
+		case *wire.DatagramFrame:
+			// DATAGRAM frames are never retransmitted.
+		case *wire.PathChallengeFrame, *wire.PathResponseFrame:
+			// Path probing is currently not supported, therefore we don't need to set the OnAcked callback yet.
+			// PATH_CHALLENGE and PATH_RESPONSE are never retransmitted.
+		default:
+			// we might be packing a 0-RTT packet, but we need to use the 1-RTT ack handler anyway
+			pl.frames[i].Handler = p.retransmissionQueue.AckHandler(protocol.Encryption1RTT)
 		}
 	}
 	return pl
+}
+
+// appendDatagramFrame appends the next DATAGRAM frame, if it fits. One that does not fit waits
+// for a later packet when this one carries an ACK or other frames, and is dropped when it would
+// be alone: it can't fit into any packet then. One that waited DatagramFrameMaxPeekTimes packets
+// goes right after the ACK; if the ACK leaves too little room for it, it is dropped, as one that
+// waits beside ACKs always was.
+func (p *packetPacker) appendDatagramFrame(pl *payload, maxPayloadSize protocol.ByteCount, v protocol.Version) {
+	if p.datagramQueue == nil {
+		return
+	}
+	f := p.datagramQueue.Peek()
+	if f == nil {
+		return
+	}
+	size := f.Length(v)
+	switch {
+	case size <= maxPayloadSize-pl.length: // DATAGRAM frame fits
+		pl.frames = append(pl.frames, ackhandler.Frame{Frame: f})
+		pl.length += size
+		p.datagramQueue.Pop()
+		p.peekTimes = 0
+	case len(pl.frames) == 0 && (pl.ack == nil || p.peekTimes >= DatagramFrameMaxPeekTimes):
+		if p.datagramQueue.logger != nil && p.datagramQueue.logger.Debug() {
+			p.datagramQueue.logger.Debugf("Discarded DATAGRAM frame (%d bytes payload)", size)
+		}
+		p.datagramQueue.Pop()
+		p.peekTimes = 0
+	default:
+		p.peekTimes++
+	}
 }
 
 func (p *packetPacker) PackPTOProbePacket(

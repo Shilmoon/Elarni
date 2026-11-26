@@ -10,6 +10,7 @@ import (
 	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
@@ -794,6 +795,48 @@ func TestDeviceLimitOnAnEmptySuccessfulResponse(t *testing.T) {
 			}
 		} else if err != nil || value.(map[string]any)["body"] != test.body {
 			t.Errorf("%s with body %q: %v, %v", test.header, test.body, value, err)
+		}
+		server.Close()
+	}
+}
+
+// Happ decrypts a feed that has an Encrypt-Tag header when its URL names a key, as ?key=key02, and
+// uses the body as it is otherwise (probe N10-13). Elarni has no such key: it says the feed is
+// encrypted for another app, not that it is invalid.
+func TestHappEncryptedFeedIsNamed(t *testing.T) {
+	ciphertext := base64.StdEncoding.EncodeToString([]byte("\x8f\x02ciphertext\xff"))
+	for _, test := range []struct {
+		name, query, tag, body, want string
+	}{
+		{"tag and key", "?key=key02", "YWJjZGVmZ2hpamtsbW5vcA==", ciphertext, "encrypted_feed"},
+		{"raw ciphertext", "?key=key90", "YWJjZGVmZ2hpamtsbW5vcA==", "\x8f\x02\xff", "encrypted_feed"},
+		{"key among other parameters", "?token=a&key=key02", "YWJjZGVmZ2hpamtsbW5vcA==", ciphertext, "encrypted_feed"},
+		{"redirect to the keyed URL", "?to=key", "YWJjZGVmZ2hpamtsbW5vcA==", ciphertext, "encrypted_feed"},
+		{"tag without a key", "", "YWJjZGVmZ2hpamtsbW5vcA==", "trojan://pw@127.0.0.1:443#kept", ""},
+		{"key without a tag", "?key=key02", "", "trojan://pw@127.0.0.1:443#kept", ""},
+		{"blank tag", "?key=key02", " ", "trojan://pw@127.0.0.1:443#kept", ""},
+		{"empty key", "?key=", "YWJjZGVmZ2hpamtsbW5vcA==", "trojan://pw@127.0.0.1:443#kept", ""},
+		{"binary body without a tag", "?key=key02", "", "\x8f\x02\xff", "invalid_feed"},
+	} {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Query().Get("to") == "key" {
+				http.Redirect(w, r, "/sub?key=key02", http.StatusFound)
+				return
+			}
+			if test.tag != "" {
+				w.Header()["encrypt-tag"] = []string{test.tag}
+			}
+			_, _ = w.Write([]byte(test.body))
+		}))
+		target := server.URL + "/sub" + test.query
+		request := SubscriptionFetchRequest{URL: target, ApprovedChain: loopbackApprovals(target, server.URL+"/sub?key=key02")}
+		value, err := fetchFeedUsing(request, net.DefaultResolver.LookupNetIP, func() *http.Transport { return &http.Transport{} })
+		if test.want != "" {
+			if err == nil || err.Error() != test.want {
+				t.Errorf("%s: %v, %v; want %s", test.name, value, err, test.want)
+			}
+		} else if err != nil || value.(map[string]any)["body"] != test.body {
+			t.Errorf("%s: %v, %v", test.name, value, err)
 		}
 		server.Close()
 	}

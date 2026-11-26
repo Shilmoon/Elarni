@@ -193,6 +193,11 @@ func guardMarker() string {
 	return filepath.Join(root, ".dns-guard")
 }
 
+// currentGuardMarker is the marker with the fallback routes it names.
+func currentGuardMarker() guardMarkerFile {
+	return guardMarkerFile{path: guardMarker()}
+}
+
 // A static session: its objects outlive this process until they are deleted,
 // BFE stops or Windows restarts.
 func openWFP() (uintptr, error) {
@@ -242,8 +247,8 @@ func releaseGuard() error {
 	if code, _, _ := wfpCommit.Call(engine); code != 0 {
 		return syscall.Errno(code)
 	}
-	_ = os.Remove(guardMarker())
-	return nil
+	// The fallback routes of Block traffic without VPN go with it, then the marker that names them.
+	return clearFallbackRoutes(helperFallbackRoutes, currentGuardMarker())
 }
 
 // Only an elevated helper can give the event this owner; any user may wait on
@@ -339,8 +344,11 @@ func clearVPNGuard() (any, error) {
 
 // The guard outlives a crashed helper, so a crash blocks DNS instead of leaking
 // it until a helper removes it or Windows restarts. Physical DNS settings stay intact.
-// The caller holds claimGuard's owner handle for as long as the guard may exist.
-func protectDNS(luid uint64, protected []netip.Prefix) error {
+// The caller holds claimGuard's owner handle for as long as the guard may exist, and has put
+// the fallback routes of Block traffic without VPN in place. named are the fallback routes the
+// marker names (placeFallbackRoutes): those, and without the kill switch an earlier tunnel's that
+// could not be removed.
+func protectDNS(luid uint64, protected, named []netip.Prefix) error {
 	failed := errors.New("dns_guard_failed")
 	if unsafe.Sizeof(wfpFilter{}) != 200 || unsafe.Sizeof(wfpSession{}) != 72 || unsafe.Sizeof(wfpCondition{}) != 40 {
 		return failed
@@ -398,6 +406,8 @@ func protectDNS(luid uint64, protected []netip.Prefix) error {
 	protocol := wfpGUID("3971ef2b-623e-4f9a-8cb1-6e79b806b9a7")
 	localInterface := wfpGUID("4cd62a49-59c3-4969-b7f3-bda5d32890a4")
 	application := wfpGUID("d78e1e87-8644-4ea5-9437-d809ecefc971")
+	remoteAddress := wfpGUID("b235ae9a-1d64-49b8-a44c-5ff3d9095045")
+	layers := [2]windows.GUID{wfpGUID("c38d57d1-05a7-4c33-904f-7fbceee60e82"), wfpGUID("4a72393b-319f-44bc-84c3-ba54dcb3b6b4")}
 	var pinned runtime.Pinner
 	pinned.Pin(&luid)
 	defer pinned.Unpin()
@@ -413,69 +423,56 @@ func protectDNS(luid uint64, protected []netip.Prefix) error {
 		next++
 		return nil
 	}
-	for _, layer := range []windows.GUID{wfpGUID("c38d57d1-05a7-4c33-904f-7fbceee60e82"), wfpGUID("4a72393b-319f-44bc-84c3-ba54dcb3b6b4")} {
-		if len(protected) > 0 {
-			for _, id := range outside {
-				if err := add(layer, []wfpCondition{{Field: application, Value: wfpValue{Type: 12, Value: uintptr(unsafe.Pointer(id))}}}, 0x1002, 2); err != nil {
-					return err
-				}
-			}
+	for _, filter := range guardFilters(len(outside), protected) {
+		layer := layers[0]
+		if filter.v6 {
+			layer = layers[1]
 		}
-		for _, proto := range []uintptr{6, 17} {
-			for _, permit := range []bool{true, false} {
-				conditions := []wfpCondition{{Field: remotePort, Value: wfpValue{Type: 2, Value: 53}},
-					{Field: protocol, Value: wfpValue{Type: 1, Value: proto}}}
-				action, weight := uint32(0x1001), uintptr(1)
-				if permit {
-					action = 0x1002
-					weight = 2
-					conditions = append(conditions, wfpCondition{Field: application, Value: wfpValue{Type: 12, Value: uintptr(unsafe.Pointer(appID))}})
-				} else {
-					conditions = append(conditions, wfpCondition{Field: localInterface, Match: 10 /* FWP_MATCH_NOT_EQUAL */, Value: wfpValue{Type: 4, Value: uintptr(unsafe.Pointer(&luid))}})
-				}
-				if err := add(layer, conditions, action, weight); err != nil {
-					return err
-				}
-			}
+		var conditions []wfpCondition
+		if filter.dns != 0 {
+			conditions = append(conditions, wfpCondition{Field: remotePort, Value: wfpValue{Type: 2, Value: 53}},
+				wfpCondition{Field: protocol, Value: wfpValue{Type: 1, Value: filter.dns}})
 		}
-	}
-	for _, prefix := range protected {
-		layer := wfpGUID("c38d57d1-05a7-4c33-904f-7fbceee60e82")
+		if filter.program > 0 {
+			conditions = append(conditions, wfpCondition{Field: application, Value: wfpValue{Type: 12, Value: uintptr(unsafe.Pointer(outside[filter.program-1]))}})
+		}
 		var v4 [2]uint32
 		var v6 struct {
 			Address [16]byte
 			Bits    uint8
 		}
 		var pin runtime.Pinner
-		value := wfpValue{Type: 0x100}
-		if prefix.Addr().Is4() {
-			address := prefix.Addr().As4()
-			v4 = [2]uint32{binary.BigEndian.Uint32(address[:]), ^uint32(0) << (32 - prefix.Bits())}
-			pin.Pin(&v4)
-			value.Value = uintptr(unsafe.Pointer(&v4))
-		} else {
-			layer = wfpGUID("4a72393b-319f-44bc-84c3-ba54dcb3b6b4")
-			v6.Address, v6.Bits = prefix.Addr().As16(), uint8(prefix.Bits())
-			pin.Pin(&v6)
-			value.Type, value.Value = 0x101, uintptr(unsafe.Pointer(&v6))
+		if prefix := filter.remote; prefix.IsValid() {
+			value := wfpValue{Type: 0x100} // FWP_V4_ADDR_MASK
+			if prefix.Addr().Is4() {
+				address := prefix.Addr().As4()
+				v4 = [2]uint32{binary.BigEndian.Uint32(address[:]), ^uint32(0) << (32 - prefix.Bits())}
+				pin.Pin(&v4)
+				value.Value = uintptr(unsafe.Pointer(&v4))
+			} else {
+				v6.Address, v6.Bits = prefix.Addr().As16(), uint8(prefix.Bits())
+				pin.Pin(&v6)
+				value.Type, value.Value = 0x101 /* FWP_V6_ADDR_MASK */, uintptr(unsafe.Pointer(&v6))
+			}
+			conditions = append(conditions, wfpCondition{Field: remoteAddress, Value: value})
 		}
-		conditions := []wfpCondition{
-			{Field: wfpGUID("b235ae9a-1d64-49b8-a44c-5ff3d9095045"), Value: value},
-			{Field: localInterface, Match: 10, Value: wfpValue{Type: 4, Value: uintptr(unsafe.Pointer(&luid))}},
+		if filter.offLink {
+			conditions = append(conditions, wfpCondition{Field: localInterface, Match: 10 /* FWP_MATCH_NOT_EQUAL */, Value: wfpValue{Type: 4, Value: uintptr(unsafe.Pointer(&luid))}})
 		}
-		err := add(layer, conditions, 0x1001, 1)
+		action := uint32(0x1001) // FWP_ACTION_BLOCK
+		if filter.permit {
+			action = 0x1002 // FWP_ACTION_PERMIT
+		}
+		err := add(layer, conditions, action, filter.weight)
 		pin.Unpin()
 		if err != nil {
 			return err
 		}
 	}
 	runtime.KeepAlive(outside)
-	// Written first, so a crash right after the commit still leaves it for Repair.
-	// Rewriting an empty marker left by an earlier boot may keep its old time.
-	if marker := guardMarker(); os.WriteFile(marker, nil, 0o644) == nil {
-		now := time.Now()
-		_ = os.Chtimes(marker, now, now)
-	}
+	// Written first, so a crash right after the commit still leaves it for Repair. It keeps
+	// naming the fallback routes; without them it is empty, as before them.
+	_ = currentGuardMarker().write(named)
 	code, _, _ = wfpCommit.Call(engine)
 	if code != 0 {
 		return syscall.Errno(code)

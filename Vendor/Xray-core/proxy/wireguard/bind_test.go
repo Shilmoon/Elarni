@@ -2,14 +2,18 @@ package wireguard
 
 import (
 	"bytes"
+	goerrors "errors"
 	"net"
 	"net/netip"
+	"os"
 	"runtime"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
 
+	"github.com/xtls/xray-core/common/retry"
 	"golang.zx2c4.com/wireguard/conn"
 )
 
@@ -249,4 +253,128 @@ func BenchmarkBindReceiveBatched(b *testing.B) {
 
 func BenchmarkBindReceivePerDatagram(b *testing.B) {
 	benchmarkBindReceive(b, func(c net.PacketConn) net.PacketConn { return plainSocket{c} })
+}
+
+var errFailingSocket = goerrors.New("the socket keeps failing")
+
+// scriptedSocket answers each read with what the test hands it, an error or (nil) a datagram, until
+// it is closed. A read waits for its answer, so the test sees whether the bind reads again at once.
+type scriptedSocket struct {
+	net.PacketConn // only the methods below are called
+	answers        chan error
+	closed         chan struct{}
+	once           sync.Once
+}
+
+func newScriptedSocket() *scriptedSocket {
+	return &scriptedSocket{answers: make(chan error), closed: make(chan struct{})}
+}
+
+func (s *scriptedSocket) ReadFrom(p []byte) (int, net.Addr, error) {
+	select {
+	case <-s.closed:
+		return 0, nil, net.ErrClosed
+	case err := <-s.answers:
+		if err != nil {
+			return 0, nil, err
+		}
+		return copy(p, []byte{4, 0, 0, 0, 1}), &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 51820}, nil
+	}
+}
+
+func (s *scriptedSocket) LocalAddr() net.Addr {
+	return &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 1}
+}
+
+func (s *scriptedSocket) Close() error {
+	s.once.Do(func() { close(s.closed) })
+	return nil
+}
+
+// answer hands the next read err; the bind must read within 5 s, which no wait but an hour's misses.
+func (s *scriptedSocket) answer(t *testing.T, err error, after string) {
+	t.Helper()
+	select {
+	case s.answers <- err:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("the bind did not read again at once after %s", after)
+	}
+}
+
+type received struct {
+	n   int
+	err error
+}
+
+// openScripted opens a bind on socket whose waits between failed reads last an hour, which no test
+// outlasts: only Close ends one. It starts one call of the receive function.
+func openScripted(t *testing.T, socket *scriptedSocket) (*bind, [][]byte, []int, <-chan received) {
+	t.Helper()
+	b := &bind{listenFunc: func() (net.PacketConn, error) { return socket, nil }, receiveRetry: retry.Backoff{Min: time.Hour, Max: time.Hour}}
+	fns, _, err := b.Open(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { b.Close() })
+	bufs, sizes, eps := [][]byte{make([]byte, 2048)}, make([]int, 1), make([]conn.Endpoint, 1)
+	done := make(chan received, 1)
+	go func() {
+		n, err := fns[0](bufs, sizes, eps)
+		done <- received{n, err}
+	}()
+	return b, bufs, sizes, done
+}
+
+// A socket error that repeats at once spun the receive loop on a whole core. The first error is read
+// again at once, as a one-off error is; from the second the loop waits, and Close ends the wait
+// instead of sleeping through it.
+func TestBindBacksOffASocketThatKeepsFailing(t *testing.T) {
+	socket := newScriptedSocket()
+	b, _, _, done := openScripted(t, socket)
+	socket.answer(t, errFailingSocket, "the start")
+	socket.answer(t, errFailingSocket, "one error")
+	select {
+	case socket.answers <- errFailingSocket:
+		t.Fatal("the bind read a socket that keeps failing again at once")
+	case <-time.After(50 * time.Millisecond):
+	}
+	b.Close()
+	select {
+	case r := <-done:
+		if !goerrors.Is(r.err, net.ErrClosed) {
+			t.Fatalf("receive after Close: %v, want net.ErrClosed", r.err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Close did not end the wait for the next read")
+	}
+}
+
+// Regression: an error that answers one datagram, as an ICMP port unreachable for a handshake sent
+// while the peer was down does, counted as a failing socket, so the peer's reply once it was back
+// waited in the socket for up to a second. Such errors are read past at once, even after a socket
+// error made the next wait long, and the datagram after them comes through.
+func TestBindReadsPastPerPacketErrorsAtOnce(t *testing.T) {
+	if len(perPacketErrors) == 0 {
+		t.Skip("this system reports no read error that answers one datagram")
+	}
+	for _, perPacket := range perPacketErrors {
+		t.Run(perPacket.Error(), func(t *testing.T) {
+			socket := newScriptedSocket()
+			_, bufs, sizes, done := openScripted(t, socket)
+			socket.answer(t, errFailingSocket, "the start")
+			for range 5 {
+				// as the net package gives it
+				socket.answer(t, &net.OpError{Op: "read", Net: "udp", Err: os.NewSyscallError("recvfrom", perPacket)}, "a socket error")
+			}
+			socket.answer(t, nil, "an error that answers one datagram")
+			select {
+			case r := <-done:
+				if r.err != nil || r.n != 1 || !bytes.Equal(bufs[0][:sizes[0]], []byte{4, 0, 0, 0, 1}) {
+					t.Fatalf("receive after the errors: %d datagrams, %v, %v", r.n, r.err, bufs[0][:sizes[0]])
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("the datagram after the errors never came")
+			}
+		})
+	}
 }

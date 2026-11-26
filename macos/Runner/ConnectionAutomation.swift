@@ -32,6 +32,20 @@ struct AutomationConfiguration: Codable, Equatable {
   /// Allowed servers labelled as entering through Russia; absent from older saves.
   var russianEntryNodeIDs: [String]?
 
+  /// Public bodies of at least 128 KB that the transfer check fetches from the server a failover or
+  /// "lowest latency" round is about to switch to, as the provider's `ProviderTransferCheck` does for
+  /// the running one; tests point them at a fixture.
+  static var transferTargets = ["https://ajax.googleapis.com/ajax/libs/jquery/3.7.1/jquery.js",
+                                "https://cdnjs.cloudflare.com/ajax/libs/jquery/3.7.1/jquery.js"]
+  /// The core's 4 s limit without a byte unless a test shortens it.
+  static var transferIdleMs: Int?
+
+  /// One transfer check over its targets' verdicts: one "ok" wins, and it is "stalled" only when
+  /// each target that answered stalled.
+  static func transferVerdict(_ verdicts: [String]) -> String {
+    verdicts.contains("ok") ? "ok" : verdicts.contains("stalled") ? "stalled" : "inconclusive"
+  }
+
   func validate() throws {
     guard schemaVersion == 1, subscriptionID.count <= 128, nodeIDs.count <= 1000,
           Set(nodeIDs).count == nodeIDs.count, (russianEntryNodeIDs ?? []).allSatisfy(nodeIDs.contains),
@@ -204,6 +218,13 @@ struct AutomationPolicy {
   // server passes after two foreign-entry ones failed, cleared by a foreign pass.
   private(set) var whitelist = false
   private var foreignFailures: Set<String> = []
+  // One restart per stall episode, as on desktop and Android: the server (node and revision) recovery
+  // restarted for its confirmed stall. A frozen network still carries small exchanges, which restarting
+  // in a loop would cut too, so it is not restarted for one again until a transfer check passes, another
+  // server runs or the network path changes. Moving to another server is not held back.
+  private(set) var stallRestart: String?
+  // The provider session whose confirmed stall made the health check due: once per confirmation.
+  private var stallSession: String?
 
   init(savedEpisode: Episode? = nil) {
     if var savedEpisode {
@@ -258,6 +279,7 @@ struct AutomationPolicy {
   mutating func pathChanged(_ signature: String, available: Bool, now: Double) -> Bool {
     guard path != signature || online != available else { return false }
     let initial = path == nil, returned = available && !online
+    if path != signature { stallRestart = nil }
     path = signature
     online = available
     invalidate()
@@ -447,6 +469,28 @@ struct AutomationPolicy {
     return best
   }
 
+  /// What the provider says of the running server's transfer checks, at each read of it: true when it newly
+  /// confirmed a stall, which makes the health check due now, as desktop and Android do. A passing check,
+  /// or another server running, ends the hold of `restartForStall`.
+  mutating func transferRead(server: String, session: String, stalled: Bool, passed: Bool, now: Double) -> Bool {
+    if passed || server != stallRestart { stallRestart = nil }
+    guard stalled else {
+      stallSession = nil
+      return false
+    }
+    guard stallSession != session else { return false }
+    stallSession = session
+    if let healthAt, healthAt > now { self.healthAt = now }
+    return true
+  }
+
+  /// Whether recovery may restart `server` for its confirmed stall: once per stall episode.
+  mutating func restartForStall(server: String) -> Bool {
+    guard stallRestart != server else { return false }
+    stallRestart = server
+    return true
+  }
+
   mutating func beginOptimization(now: Double) -> Bool {
     guard now - (lastOptimization ?? -.infinity) >= 300,
           now - (lastSwitch ?? -.infinity) >= 60 else { return false }
@@ -456,6 +500,7 @@ struct AutomationPolicy {
 
   mutating func switched(now: Double) {
     lastSwitch = now
+    stallRestart = nil
     // Nested candidate measurements depend on the active node too.
     invalidate()
   }

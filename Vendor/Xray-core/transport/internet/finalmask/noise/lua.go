@@ -48,7 +48,7 @@ func RegisterLua(L *lua.LState) {
 				L.RaiseError("noise.RandomBetween requires 0 <= from <= to <= %d", valueLimit)
 				return 0
 			}
-			xlua.PushNumber(L, crypto.RandBetween(int64(from), int64(to)+1))
+			xlua.PushNumber(L, crypto.RandBetween(int64(from), int64(to)))
 			return 1
 		}))
 

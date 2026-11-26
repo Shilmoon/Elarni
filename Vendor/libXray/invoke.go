@@ -65,7 +65,7 @@ func InvokeRequest(request LibXrayInvokeRequest) string {
 		if err != nil {
 			return encodeInvokeResponse(nil, errors.New("invalid client import payload"))
 		}
-		result, err := share.ImportClientProfiles(payload.Text)
+		result, err := share.ImportFeedProfiles(payload.Text, payload.SourceURL)
 		if err == nil && payload.SourceURL != "" {
 			// An invalid move hint is ignored so the parsed servers still apply.
 			if newURL, hintErr := share.SubscriptionMigrationURL(payload.SourceURL, result.Migration, payload.MigrationHeaders); hintErr == nil {
@@ -350,7 +350,11 @@ func invokeProbeOperation(method LibXrayMethod, payload json.RawMessage) string 
 		if op != nil || len(probeOperations.items) >= maxConcurrentProbes || request.Timeout < 1 || request.Timeout > 15 {
 			return encodeInvokeResponse(nil, errors.New("probe_admission_failed"))
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), time.Duration(request.Timeout)*time.Second)
+		limit := time.Duration(request.Timeout) * time.Second
+		if request.Transfer {
+			limit += transferStartMargin
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), limit)
 		probeOperations.items[request.OperationID] = &probeOperation{ctx: ctx, cancel: cancel}
 	} else if op != nil {
 		op.cancel()
@@ -366,14 +370,24 @@ func invokePing(payload json.RawMessage) string {
 	if err != nil {
 		return encodeInvokeResponse(nil, err)
 	}
-	if request.ExpectedStatus < 200 || request.ExpectedStatus >= 300 || request.ExpectedBody == nil ||
+	if request.Transfer {
+		if request.Method != "GET" || request.Trace || request.Timeout < 1 || request.Timeout > 15 ||
+			request.TransferIdleMs != 0 && (request.TransferIdleMs < 100 || request.TransferIdleMs > 4000 ||
+				request.TransferIdleMs >= request.Timeout*1000) {
+			return encodeInvokeResponse(nil, errors.New("invalid_transfer_check"))
+		}
+	} else if request.ExpectedStatus < 200 || request.ExpectedStatus >= 300 || request.ExpectedBody == nil ||
 		len(*request.ExpectedBody) > 4096 || request.Timeout < 1 || request.Timeout > 15 ||
 		(request.Method != "GET" && request.Method != "HEAD") ||
 		(request.Method == "HEAD" && *request.ExpectedBody != "") ||
 		(request.Trace && request.Method != "GET") {
 		return encodeInvokeResponse(nil, errors.New("invalid_response_contract"))
 	}
-	expected := &nodep.ExpectedResponse{Status: request.ExpectedStatus, Body: *request.ExpectedBody}
+	// A transfer check names no response contract.
+	expected := &nodep.ExpectedResponse{Status: request.ExpectedStatus}
+	if request.ExpectedBody != nil {
+		expected.Body = *request.ExpectedBody
+	}
 	if request.Trace {
 		expected.Trace = &nodep.Exit{}
 	}
@@ -384,7 +398,12 @@ func invokePing(payload json.RawMessage) string {
 		}
 		return expected.Trace
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(request.Timeout)*time.Second)
+	limit := time.Duration(request.Timeout) * time.Second
+	if request.Transfer {
+		// The check keeps its whole limit; a temporary core starts within the margin.
+		limit += transferStartMargin
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), limit)
 	defer cancel()
 	if request.OperationID != "" {
 		probeOperations.Lock()
@@ -408,6 +427,9 @@ func invokePing(payload json.RawMessage) string {
 	}
 	if err := ctx.Err(); err != nil {
 		return encodeInvokeResponse(nil, errors.New(probe.Code(err)))
+	}
+	if request.Transfer {
+		return invokeTransfer(ctx, request)
 	}
 	if request.RunningCore {
 		if request.ConfigJSON != "" || request.Proxy != "" || request.PacketPath {
@@ -446,6 +468,42 @@ func invokePing(payload json.RawMessage) string {
 		err = fmt.Errorf("%s", diagnostic.Code)
 	}
 	return encodeInvokeResponse(&PingResponse{Delay: delay, Diagnostics: diagnostic, Exit: exit(err)}, err)
+}
+
+const transferStartMargin = 2 * time.Second
+
+// invokeTransfer runs a transfer check on the probe path the request names: the running core, the
+// device's packet path, or a temporary core. A check that ran answers with its verdict, whatever it is.
+func invokeTransfer(ctx context.Context, request PingRequest) string {
+	limits := nodep.DefaultTransferLimits
+	limits.Total = time.Duration(request.Timeout) * time.Second
+	if request.TransferIdleMs > 0 {
+		limits.Idle = time.Duration(request.TransferIdleMs) * time.Millisecond
+	}
+	respond := func(result nodep.TransferResult, diagnostic *xray.ProbeDiagnostics, err error) string {
+		return encodeInvokeResponse(&PingResponse{Delay: result.Elapsed, Diagnostics: diagnostic,
+			Verdict: result.Verdict, TransferBytes: result.Bytes}, err)
+	}
+	if request.RunningCore {
+		if request.ConfigJSON != "" || request.Proxy != "" || request.PacketPath {
+			return encodeInvokeResponse(nil, errors.New("invalid_running_core_probe"))
+		}
+		result, err := xray.TransferRunningCore(ctx, request.URL, limits)
+		return respond(result, nil, err)
+	}
+	if request.PacketPath {
+		if request.ConfigJSON != "" || request.Proxy != "" {
+			return encodeInvokeResponse(nil, errors.New("invalid_packet_probe"))
+		}
+		return respond(nodep.MeasureTransferContext(ctx, request.URL, "", limits), nil, nil)
+	}
+	result, diagnostic, err := xray.TransferJSONWithPreparation(ctx, request.ConfigJSON,
+		request.Timeout+int(transferStartMargin/time.Second), request.URL, request.Proxy, limits,
+		func() (func(), error) { return prepareProbeAssets(request.AndroidAssetDirectory) })
+	if err != nil {
+		err = fmt.Errorf("%s", diagnostic.Code)
+	}
+	return respond(result, diagnostic, err)
 }
 
 func packetProbeFailure(err error) (string, string) {

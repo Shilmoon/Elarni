@@ -11,8 +11,9 @@ client for the Xray core (`Vendor/Xray-core/proxy/shadowquic`).
 The "Unreleased" section of `CHANGELOG.md` lists them: 0-RTT requests that the server
 rejects are sent again, a ClientHello spanning several packets, address-family changes
 of the server name, bounded UDP state, UDP over stream with many destinations, SOCKS
-replies and malformed input, and the handshake queue of the inbounds. They change no
-wire format: a patched client or server works with a stock v0.4.12 peer.
+replies and malformed input, the handshake queue of the inbounds, and a device that
+refuses a UDP socket for both address families. They change no wire format: a patched
+client or server works with a stock v0.4.12 peer.
 
 ## Changes made for Elarni
 
@@ -30,20 +31,31 @@ wire format: a patched client or server works with a stock v0.4.12 peer.
   (`src/lib.rs`).
 - `SocksServer::bound_addr` publishes the address the SOCKS listener got, so that a
   program can bind port 0 and read the port (`src/socks/inbound.rs`).
+- `UdpSocketFactory::create_socket_with` takes the call that binds a socket to a device, so
+  that `native/elarni-shadowquic/tests/device_bind.rs` can refuse the binding of the socket
+  for both families, as Windows does on an adapter with IPv6 switched off, and check that
+  the client falls back to a socket of the server's family (`src/utils/socket_opt.rs`).
+- On Windows a dual-stack socket whose IPv4 interface option (`IP_UNICAST_IF`) fails no
+  longer counts as bound: its IPv4 traffic would leave by the default route. The bind
+  fails and the fallback above opens an IPv4 socket (`src/utils/platform/windows.rs`).
 - Left out: `src/main.rs` (the command-line program), `build.rs` (only for jemalloc on
   Android), `tests/`, `examples/`, `config_examples/` and the other crates and files of the
   upstream repository. The unit tests inside `src/` are unchanged; some read
-  `config_examples/` and need the upstream tree to run.
+  `config_examples/` and need the upstream tree to run, and the workspace runs none of
+  them (cargo does not test a package outside the workspace that has dev-dependencies).
+  The device fallback above is tested from `native/elarni-shadowquic` instead: an upstream
+  sync that drops the fix fails that test.
 
 ## Tests
 
 Elarni tests the client it builds: `cargo test -p elarni-shadowquic` (TCP and UDP through
-a loopback ShadowQUIC server made from this source, in both UDP modes) and
+a loopback ShadowQUIC server made from this source, in both UDP modes, and the UDP socket
+bound to a device with an injected binding) and
 `go test ./Vendor/Xray-core/proxy/shadowquic` (the same through a core). The full upstream
 suite ran against this source, as a patch on the upstream tree, before it was copied.
 
 ## Updating
 
-Take the new upstream `shadowquic/src` and `shadowquic-macros`, reapply the three source
+Take the new upstream `shadowquic/src` and `shadowquic-macros`, reapply the four source
 changes above, compare the dependency versions in `shadowquic/Cargo.toml` with upstream's
 workspace manifest, and run the two test commands.

@@ -86,11 +86,11 @@ func TestWireGuardRetriesFailedStart(t *testing.T) {
 				var server tunnelDevice
 				settings := map[string]string{}
 				if amnezia {
-					server = awg.NewDevice(adaptAmneziaTUN(serverTun), &amneziaBind{serverBind}, &awg.Logger{Verbosef: func(string, ...any) {}, Errorf: t.Logf})
+					server = amneziaDevice{Device: awg.NewDevice(adaptAmneziaTUN(serverTun), &amneziaBind{serverBind}, &awg.Logger{Verbosef: func(string, ...any) {}, Errorf: t.Logf})}
 					// Headers must match the server's, so a retry that skipped the config could not handshake.
 					settings = map[string]string{"jc": "2", "jmin": "10", "jmax": "20", "h1": "100000-100100", "h2": "200000-200100", "h3": "300000-300100", "h4": "400000-400100"}
 				} else {
-					server = device.NewDevice(serverTun, serverBind, &device.Logger{Verbosef: func(string, ...any) {}, Errorf: t.Logf})
+					server = wireguardDevice{Device: device.NewDevice(serverTun, serverBind, &device.Logger{Verbosef: func(string, ...any) {}, Errorf: t.Logf})}
 				}
 				defer serverSocket.Close()
 				defer server.Close()
@@ -354,6 +354,87 @@ func TestWireGuardRebindsWhenTheSocketPathChanges(t *testing.T) {
 			t.Fatal("WireGuard stayed on the old path after it changed")
 		}
 	}
+}
+
+// BenchmarkWireGuardBulkTransfer sends 64 MiB up and then receives 64 MiB through the outbound's
+// gVisor netstack and WireGuard engine to a loopback peer with its own netstack. Compare a gVisor or
+// engine update with -bench=WireGuardBulkTransfer -benchtime=1x, one process per run.
+func BenchmarkWireGuardBulkTransfer(b *testing.B) {
+	const size = 64 << 20
+	f := newTunnelFixture(b, fixtureOptions{mtu: tunnelMTU(1420, false), dns: offlineDNS{&atomic.Bool{}}})
+	clientNet, serverStack := f.clientNet, f.serverStack
+	if err := f.handler.init(context.Background()); err != nil {
+		b.Fatal(err)
+	}
+	// The sink answers one byte once the upload ends; the source sends size bytes and closes.
+	serve := func(port uint16, handle func(net.Conn)) {
+		full, family := convertToFullAddr(netip.AddrPortFrom(netip.MustParseAddr("10.29.0.1"), port))
+		listener, err := gonet.ListenTCP(serverStack, full, family)
+		if err != nil {
+			b.Fatal(err)
+		}
+		b.Cleanup(func() { listener.Close() })
+		go func() {
+			for {
+				conn, err := listener.Accept()
+				if err != nil {
+					return
+				}
+				go func() { defer conn.Close(); handle(conn) }()
+			}
+		}()
+	}
+	serve(18185, func(conn net.Conn) {
+		if n, _ := io.Copy(io.Discard, conn); n == size {
+			conn.Write([]byte{1})
+		}
+	})
+	chunk := make([]byte, 64<<10)
+	serve(18186, func(conn net.Conn) {
+		for sent := 0; sent < size; sent += len(chunk) {
+			if _, err := conn.Write(chunk); err != nil {
+				return
+			}
+		}
+	})
+	dial := func(port uint16) net.Conn {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		conn, err := clientNet.DialContextTCPAddrPort(ctx, netip.AddrPortFrom(netip.MustParseAddr("10.29.0.1"), port))
+		if err != nil {
+			b.Fatal(err)
+		}
+		conn.SetDeadline(time.Now().Add(2 * time.Minute))
+		return conn
+	}
+	var up, down time.Duration
+	b.SetBytes(2 * size)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		started := time.Now()
+		upload := dial(18185)
+		for sent := 0; sent < size; sent += len(chunk) {
+			if _, err := upload.Write(chunk); err != nil {
+				b.Fatal(err)
+			}
+		}
+		upload.(*gonet.TCPConn).CloseWrite()
+		if _, err := io.ReadFull(upload, make([]byte, 1)); err != nil {
+			b.Fatalf("upload not confirmed: %v", err)
+		}
+		upload.Close()
+		up += time.Since(started)
+		started = time.Now()
+		download := dial(18186)
+		if n, err := io.Copy(io.Discard, download); err != nil || n != size {
+			b.Fatalf("downloaded %d bytes: %v", n, err)
+		}
+		download.Close()
+		down += time.Since(started)
+	}
+	b.StopTimer()
+	b.ReportMetric(float64(b.N)*size/(1<<20)/up.Seconds(), "up-MiB/s")
+	b.ReportMetric(float64(b.N)*size/(1<<20)/down.Seconds(), "down-MiB/s")
 }
 
 // Platforms report a network change as a burst of signals; each rebind loses the datagrams in flight.

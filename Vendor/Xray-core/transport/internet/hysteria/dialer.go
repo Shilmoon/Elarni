@@ -76,10 +76,13 @@ func (c *connection) idle() bool {
 	return c.streams.Load() == 0 && (c.udpSM == nil || c.udpSM.sessions() == 0)
 }
 
+// close closes the packet conn before the transport: a transport stops its read loop through a read
+// deadline and waits for it, and the packet conn of a dialerProxy ignores deadlines, so closing the
+// transport first would wait, with the client lock held, until the tunnel under it ended on its own.
 func (c *connection) close() {
 	c.CloseWithError(closeErrCodeOK, "")
-	c.tr.Close()
 	c.pktConn.Close()
+	c.tr.Close()
 }
 
 // answers reports whether the server acknowledges probes within bound. A reset unidirectional
@@ -146,8 +149,20 @@ func newQuicConfig(quicParams *internet.QuicParams) *quic.Config {
 	return quicConfig
 }
 
-// dial opens a QUIC connection and authenticates on it.
-func (c *client) dial(ctx context.Context) (*connection, error) {
+// dial opens a QUIC connection and authenticates on it, racing the addresses of a server name
+// within budget. A connection authenticated, so its server answered: its address is remembered
+// at once.
+func (c *client) dial(ctx context.Context, budget time.Duration) (*connection, error) {
+	candidates, err := internet.UDPCandidates(ctx, c.dest, c.socketConfig, c.finalMask)
+	if err != nil {
+		return nil, errors.New("failed to dial to dest").Base(err)
+	}
+	return internet.DialUDPCandidates(ctx, c.dest, candidates, budget, c.dialAddress, (*connection).close, nil)
+}
+
+// dialAddress opens a QUIC connection to dest and authenticates on it. A refused password
+// ends the dial: the server answered.
+func (c *client) dialAddress(ctx context.Context, dest net.Destination) (*connection, error) {
 	quicParams := c.quicParams
 	if quicParams == nil {
 		quicParams = &internet.QuicParams{
@@ -159,14 +174,14 @@ func (c *client) dial(ctx context.Context) (*connection, error) {
 	var pktConn net.PacketConn
 	var udpAddr net.Addr
 	if c.finalMask != nil {
-		conn, err := c.finalMask.DialUDP(ctx, c.dest)
+		conn, err := c.finalMask.DialUDP(ctx, dest)
 		if err != nil {
 			return nil, errors.New("failed to dial to dest").Base(err)
 		}
 		pktConn = conn.(*net.PacketConnWrapper).PacketConn
 		udpAddr = conn.RemoteAddr()
 	} else {
-		conn, err := internet.DialSystem(ctx, c.dest, c.socketConfig)
+		conn, err := internet.DialSystem(ctx, dest, c.socketConfig)
 		if err != nil {
 			return nil, errors.New("failed to dial to dest").Base(err)
 		}
@@ -223,8 +238,8 @@ func (c *client) dial(ctx context.Context) (*connection, error) {
 		if conn != nil {
 			_ = conn.CloseWithError(closeErrCodeProtocolError, "")
 		}
-		_ = tr.Close()
 		_ = pktConn.Close()
+		_ = tr.Close()
 		return nil, err
 	}
 	_ = resp.Body.Close()
@@ -232,13 +247,14 @@ func (c *client) dial(ctx context.Context) (*connection, error) {
 	if resp.StatusCode != StatusAuthOK {
 		_ = rt.Close()
 		_ = conn.CloseWithError(closeErrCodeProtocolError, "")
-		_ = tr.Close()
 		_ = pktConn.Close()
-		return nil, errors.New("auth failed code ", resp.StatusCode)
+		_ = tr.Close()
+		return nil, internet.UDPServerAnswered(errors.New("auth failed code ", resp.StatusCode))
 	}
 
 	// udp, _ := strconv.ParseBool(resp.Header.Get(ResponseHeaderUDPEnabled))
-	down, _ := strconv.ParseUint(resp.Header.Get(CommonHeaderCCRX), 10, 64)
+	remoteRx, _ := strconv.ParseUint(resp.Header.Get(CommonHeaderCCRX), 10, 64)
+	tx := quicParams.BrutalUp
 	errors.LogDebug(context.Background(), "ECHAccepted ", conn.ConnectionState().TLS.ECHAccepted)
 
 	switch quicParams.Congestion {
@@ -246,10 +262,14 @@ func (c *client) dial(ctx context.Context) (*connection, error) {
 	case "bbr":
 		congestion.UseBBR(conn, bbr.Profile(quicParams.BbrProfile))
 	case "", "brutal":
-		if quicParams.BrutalUp == 0 || down == 0 {
+		// as official Hysteria: the client's up rate turns Brutal on, the server's rx only caps it
+		if tx == 0 {
 			congestion.UseBBR(conn, bbr.Profile(quicParams.BbrProfile))
 		} else {
-			congestion.UseBrutal(conn, min(quicParams.BrutalUp, down), quicParams.BrutalDisableLossCompensation)
+			if remoteRx > 0 {
+				tx = min(tx, remoteRx)
+			}
+			congestion.UseBrutal(conn, tx, quicParams.BrutalDisableLossCompensation)
 		}
 	case "force-brutal":
 		congestion.UseBrutal(conn, quicParams.BrutalUp, quicParams.BrutalDisableLossCompensation)
@@ -293,10 +313,11 @@ func (c *client) connection(ctx context.Context) (*connection, error) {
 	}
 	d := c.dialing
 	if d == nil || d.moves != c.moves { // one from before a path change keeps only its callers
-		dialCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), dialTimeout)
+		budget := dialTimeout
+		dialCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), budget)
 		d = &dialing{done: make(chan struct{}), cancel: cancel, moves: c.moves}
 		c.dialing = d
-		go c.complete(dialCtx, d)
+		go c.complete(dialCtx, d, budget)
 	}
 	c.unlock()
 	select {
@@ -307,8 +328,8 @@ func (c *client) connection(ctx context.Context) (*connection, error) {
 	}
 }
 
-func (c *client) complete(ctx context.Context, d *dialing) {
-	conn, err := c.dial(ctx)
+func (c *client) complete(ctx context.Context, d *dialing, budget time.Duration) {
+	conn, err := c.dial(ctx, budget)
 	d.cancel()
 	c.lock <- struct{}{}
 	switch {

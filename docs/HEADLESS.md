@@ -93,7 +93,7 @@ your user. Nothing listens on the network.
 | `readLogs` | Optional `after`, the last `seq` you read; returns the log `level` and the `entries` after it, each with its `seq`. Linux and Windows keep the last 1000 lines and return the newest `seq` as `last`. |
 | `connect`, `disconnect`, `repairTunnel` | None |
 | `systemInfo`, `routeTable` | None |
-| `setLaunchAtLogin` | `enabled` (boolean); controls desktop login registration. Not exposed by the Linux standalone service: manage it with systemd. |
+| `setLaunchAtLogin` | `enabled` (boolean); controls desktop login registration. Optional `hidden` (boolean, Windows and Linux) starts the app at login with only its tray icon; without it the current choice stays. Returns what `systemInfo` does: `launchAtLoginStatus` and, on Windows and Linux, `launchHidden`. macOS ignores `hidden`. Not exposed by the Linux standalone service: manage it with systemd. |
 | `importClientProfiles` | `content` (profile text or subscription URL); imports always use supplied text, without a picker/camera. |
 | `addSubscription` | `url` |
 | `refreshSubscription` | `id`, optional `challenge`, `format` |

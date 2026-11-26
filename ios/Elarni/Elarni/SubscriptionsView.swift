@@ -18,6 +18,7 @@ struct SubscriptionsView: View {
                 else if source.attention.needed { Text("\(count) · \(Text(source.statusText).fontWeight(.medium).foregroundStyle(source.attention.severe ? Color.red : AppPalette.warning))") }
                 else { Text(count) }
               }.font(.subheadline).foregroundStyle(AppPalette.secondary)
+              ProviderNoticeLines(notices: source.notices)
               if !source.local { QuotaView(source: source) }
             }
           }.padding(.vertical, 6)

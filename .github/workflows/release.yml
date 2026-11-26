@@ -61,6 +61,7 @@ jobs:
             set -e
             flutter build linux --release --target=lib/main.dart
             rm -rf .build/release-candidate .build/release-source .build/release-dependencies .build/android-release
+            # The image keeps the source packages of the tray libraries the AppImage carries: no package archive needed.
             python scripts/package-linux --output .build/release-candidate
             python scripts/package-source --output .build/release-source
             python scripts/package-dependencies --output .build/release-dependencies
@@ -140,7 +141,7 @@ jobs:
           {
             echo 'subjects<<EOF'
             ls "$L"/release-candidate/*.deb "$L"/release-candidate/*.AppImage "$L"/release-candidate/*.tar.gz \
-               "$W"/release-candidate/*.msi "$W"/release-candidate/*.zip "$L"/release-source/*-project-source.tar.gz \
+               "$L"/release-candidate/*-linux-bundled-sources.tar "$W"/release-candidate/*.msi "$W"/release-candidate/*.zip "$L"/release-source/*-project-source.tar.gz \
                "$L"/release-dependencies/elarni-go-module-sources.tar.gz "$L"/android-release/*.apk
             echo EOF
           } >> "$GITHUB_OUTPUT"

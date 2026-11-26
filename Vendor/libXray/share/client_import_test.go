@@ -13,6 +13,10 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/xtls/xray-core/infra/conf"
+	"github.com/xtls/xray-core/transport/internet"
+	"github.com/xtls/xray-core/transport/internet/kcp"
 )
 
 // Xray refuses a VLESS or Trojan server without TLS, REALITY or VLESS encryption unless its
@@ -440,11 +444,11 @@ func zlibBytes(t *testing.T, data []byte) []byte {
 func TestHappAddLinksUnwrapLikeIncy(t *testing.T) {
 	const target = "https://sub.example.com/feed/token?key=a%2Bb"
 	for input, want := range map[string]ClientInput{
-		"happ://add/" + target:                  {Text: target},
-		"happ://add/" + target + "#Happ%20name": {Text: target, Name: "Happ name"},
-		"happ://add/" + url.PathEscape(target):  {Text: target},
-		"happ://routing/onadd/fixture":          {Text: "happ://routing/onadd/fixture"},
-		"happ://crypt3/fixture":                 {Text: "happ://crypt3/fixture"},
+		"happ://add/" + target:                  {Text: target, Kind: ClientInputSubscription},
+		"happ://add/" + target + "#Happ%20name": {Text: target, Name: "Happ name", Kind: ClientInputSubscription},
+		"happ://add/" + url.PathEscape(target):  {Text: target, Kind: ClientInputSubscription},
+		"happ://routing/onadd/fixture":          {Text: "happ://routing/onadd/fixture", Kind: ClientInputLink},
+		"happ://crypt3/fixture":                 {Text: "happ://crypt3/fixture", Kind: ClientInputLink},
 	} {
 		got, err := NormalizeClientInput(input)
 		if err != nil || got != want {
@@ -510,6 +514,342 @@ func TestWireGuardRepeatedListsAccumulate(t *testing.T) {
 	}
 	if _, err := ImportClientProfiles(strings.Replace(config, "Endpoint", "PublicKey = "+key+"\nEndpoint", 1)); err == nil {
 		t.Error("accepted a repeated peer PublicKey")
+	}
+}
+
+// Hiddify writes "/" before a WireGuard link's query and repeats the private key there, beside its
+// noise packets as ifp; 3x-ui and v2rayN carry the server's FinalMask as fm (probe N10-04).
+func TestWireGuardLinkVariantsFromPanels(t *testing.T) {
+	const key = "xZirRKTxA325fjhUvhxuztg6m%2F7tMLYe80RV0DcxqsU%3D"
+	const other = "%2BcdBAlUKFi4b5U9jac58v0fK1kNFW1w%2FTILhJsV%2B1V4%3D"
+	const peer = "publickey=TgNJhyP2BguxwtnHSwW0jLnqtqMMXQFgDPolsdOAjv8%3D&address=10.0.0.2/32&mtu=1380&reserved=0,0,0"
+	fm := func(mask string) string { return "&fm=" + url.QueryEscape(mask) }
+	for _, test := range []struct {
+		link, name string
+		masks      int
+		err        string
+	}{
+		{link: "wireguard://" + key + "@example.com:51820/?" + peer + "#wg-slash", name: "wg-slash"},
+		{link: "wireguard://" + key + "@example.com:51820/?" + peer + "&presharedkey=obtmjnnvEuzlJqNw%2F%2By7Hu73jATWN9Qu0u%2Fj1V5c9OE%3D&privatekey=" + key + "&ifp=0-0#wg-hiddify-keys", name: "wg-hiddify-keys"},
+		{link: "wireguard://@example.com:51820?" + peer + "&privatekey=" + key + "&ifp=0", name: "Wireguard"},
+		{link: "wireguard://" + key + "@example.com:51820?" + peer + fm(`{"udp":[{"type":"mkcp-legacy","settings":{"header":"wireguard"}}]}`) + "#wg-fm", name: "wg-fm", masks: 1},
+		{link: "wireguard://" + key + "@example.com:51820?" + peer + fm(`{}`) + "#DE-1?serverDescription=U3ViIHRpdGxl", name: "DE-1"},
+		{link: "wireguard://" + key + "@example.com:51820?" + peer + "&privatekey=" + other, err: "conflicting WireGuard private keys"},
+		{link: "wireguard://" + key + "@example.com:51820?" + peer + "&ifp=5-10", err: "WireGuard noise packets (ifp) are not supported"},
+		{link: "wireguard://" + key + "@example.com:51820?" + peer + fm(`{"tcp":[{"type":"fragment"}]}`), err: "WireGuard FinalMask takes only UDP masks"},
+		{link: "wireguard://" + key + "@example.com:51820?" + peer + fm(`{"quicParams":{"congestion":"bbr"}}`), err: "WireGuard FinalMask takes only UDP masks"},
+		{link: "wireguard://" + key + "@example.com:51820?" + peer + fm(`{"udp":[{"type":"header-wireguard"}]}`), err: "unsupported WireGuard FinalMask"},
+		{link: "wireguard://" + key + "@example.com:51820?" + peer + fm(`[]`), err: "invalid WireGuard FinalMask"},
+		{link: "wireguard://" + key + "@example.com:51820/x?" + peer, err: "invalid WireGuard credentials or path"},
+		{link: "wireguard://@example.com:51820?" + peer, err: "invalid WireGuard credentials or path"},
+	} {
+		profile, err := importWireGuardLink(test.link)
+		if test.err != "" {
+			if err == nil || !strings.HasPrefix(err.Error(), test.err) {
+				t.Errorf("%s: got %v, want %q", test.link, err, test.err)
+			}
+			continue
+		}
+		if err != nil {
+			t.Errorf("%s: %v", test.link, err)
+			continue
+		}
+		imported, err := ImportClientProfiles(test.link)
+		if err != nil || len(imported.Profiles) != 1 || imported.Profiles[0].Name != test.name {
+			t.Errorf("%s: imported %+v, %v", test.link, imported, err)
+			continue
+		}
+		if !bytes.Equal(imported.Profiles[0].Config, profile.Config) {
+			t.Errorf("%s: the import and the link differ", test.link)
+		}
+		var root struct {
+			Outbounds []struct {
+				Settings struct {
+					SecretKey string `json:"secretKey"`
+					MTU       int    `json:"mtu"`
+				} `json:"settings"`
+			} `json:"outbounds"`
+		}
+		if json.Unmarshal(profile.Config, &root) != nil || root.Outbounds[0].Settings.SecretKey != "xZirRKTxA325fjhUvhxuztg6m/7tMLYe80RV0DcxqsU=" || root.Outbounds[0].Settings.MTU != 1380 {
+			t.Errorf("%s: imported as %s", test.link, profile.Config)
+		}
+		if masks := builtOutbound(t, profile.Config).stream.(*internet.StreamConfig).Udpmasks; len(masks) != test.masks {
+			t.Errorf("%s: %d masks, want %d: %s", test.link, len(masks), test.masks, profile.Config)
+		}
+	}
+	// Hiddify writes the Base64 key raw, "+" and all, in the userinfo and in privatekey: one key, not
+	// two (146.6). An escaped "+" and a "+" read as the space it would be in a form stay other keys.
+	const raw = "+cdBAlUKFi4b5U9jac58v0fK1kNFW1w%2FTILhJsV+1V4="
+	for _, link := range []string{
+		"wireguard://" + raw + "@example.com:51820/?" + peer + "&privatekey=" + raw + "#raw",
+		"wireguard://" + raw + "@example.com:51820/?" + peer + "&privatekey=" + other + "#raw",
+		"wireguard://" + other + "@example.com:51820/?" + peer + "&PrivateKey=" + raw + "#raw",
+		"wireguard://@example.com:51820/?" + peer + "&privatekey=" + raw + "#raw",
+	} {
+		imported, err := ImportClientProfiles(link)
+		var root struct {
+			Outbounds []struct {
+				Settings struct {
+					SecretKey string `json:"secretKey"`
+				} `json:"settings"`
+			} `json:"outbounds"`
+		}
+		if err != nil || json.Unmarshal(imported.Profiles[0].Config, &root) != nil ||
+			root.Outbounds[0].Settings.SecretKey != "+cdBAlUKFi4b5U9jac58v0fK1kNFW1w/TILhJsV+1V4=" {
+			t.Errorf("%s: imported %+v, %v", link, imported, err)
+		}
+	}
+	if _, err := importWireGuardLink("wireguard://" + raw + "@example.com:51820/?" + peer + "&privatekey=" + key); err == nil ||
+		err.Error() != "conflicting WireGuard private keys" {
+		t.Errorf("two keys: %v", err)
+	}
+	// The peer's keys are Base64 too, written the same way.
+	const rawPublic, rawShared = "+gNJhyP2BguxwtnHSwW0jLnqtqMMXQFgDPolsdOAjv8=", "obtmjnnvEuzlJqNw/+y7Hu73jATWN9Qu0u/j1V5c9OE="
+	for _, link := range []string{
+		"wireguard://" + key + "@example.com:51820/?publickey=" + rawPublic + "&presharedkey=" + rawShared + "&address=10.0.0.2/32#raw",
+		"wireguard://" + key + "@example.com:51820/?PublicKey=" + url.QueryEscape(rawPublic) + "&PresharedKey=" + url.QueryEscape(rawShared) + "&address=10.0.0.2/32#raw",
+	} {
+		imported, err := ImportClientProfiles(link)
+		var root struct {
+			Outbounds []struct {
+				Settings struct {
+					Peers []struct {
+						PublicKey    string `json:"publicKey"`
+						PreSharedKey string `json:"preSharedKey"`
+					} `json:"peers"`
+				} `json:"settings"`
+			} `json:"outbounds"`
+		}
+		if err != nil || len(imported.Profiles) != 1 || json.Unmarshal(imported.Profiles[0].Config, &root) != nil ||
+			len(root.Outbounds[0].Settings.Peers) != 1 || root.Outbounds[0].Settings.Peers[0].PublicKey != rawPublic ||
+			root.Outbounds[0].Settings.Peers[0].PreSharedKey != rawShared {
+			t.Errorf("%s: imported %+v, %v", link, imported, err)
+		}
+	}
+}
+
+// An ECH config list is standard Base64 or "name+https://resolver"; a panel that writes the "+" bare
+// means it, not a space, and an escaped one stays as it is.
+func TestLinkECHConfigListKeepsItsPlus(t *testing.T) {
+	const link = "vless://00000000-0000-4000-8000-000000000001@example.com:443?encryption=none&security=tls&sni=example.com&ech="
+	for ech, want := range map[string]string{
+		"AEX+DQBB/w==":                          "AEX+DQBB/w==",
+		"AEX%2BDQBB%2Fw%3D%3D":                  "AEX+DQBB/w==",
+		"example.com+https://dns.example/query": "example.com+https://dns.example/query",
+		"AA%3D%3D":                              "AA==",
+	} {
+		imported, err := ImportClientProfiles(link + ech + "#ech")
+		var profile struct {
+			Outbounds []struct {
+				StreamSettings struct {
+					TLSSettings struct {
+						ECHConfigList string `json:"echConfigList"`
+					} `json:"tlsSettings"`
+				} `json:"streamSettings"`
+			} `json:"outbounds"`
+		}
+		if err != nil || len(imported.Profiles) != 1 || json.Unmarshal(imported.Profiles[0].Config, &profile) != nil ||
+			profile.Outbounds[0].StreamSettings.TLSSettings.ECHConfigList != want {
+			t.Errorf("ech=%s: imported %+v, %v; want %q", ech, imported, err, want)
+		}
+	}
+}
+
+// 3x-ui writes an AmneziaWG server's IPv6 Endpoint without brackets (probe N10-05). The port follows
+// the last colon only when what is before it is an IPv6 address.
+func TestWireGuardUnbracketedIPv6Endpoint(t *testing.T) {
+	const config = "[Interface]\nPrivateKey = xZirRKTxA325fjhUvhxuztg6m/7tMLYe80RV0DcxqsU=\nAddress = 10.0.0.2/32\n" +
+		"[Peer]\nPublicKey = TgNJhyP2BguxwtnHSwW0jLnqtqMMXQFgDPolsdOAjv8=\nAllowedIPs = 0.0.0.0/0\nEndpoint = "
+	for endpoint, want := range map[string]string{
+		"2001:db8::1:51820":   "[2001:db8::1]:51820",
+		"[2001:db8::1]:51820": "[2001:db8::1]:51820",
+		"::ffff:192.0.2.1:80": "[::ffff:192.0.2.1]:80",
+		"192.0.2.1:51820":     "192.0.2.1:51820",
+		"example.com:51820":   "example.com:51820",
+		// Each of these is no endpoint, which the core refuses.
+		"2001:db8::1":   "",
+		"2001:db8::1:0": "",
+		// A whole address with the port left out, not a host and a port (146.5).
+		"2001:db8::1:5182":     "",
+		"2001:db8::1:443":      "",
+		"2001:db8::1:65536":    "",
+		"fe80::1%eth0:51820":   "",
+		"192.0.2.1:2001:51820": "",
+	} {
+		result, err := ImportClientProfiles(config + endpoint)
+		if want == "" {
+			if err == nil {
+				t.Errorf("%s imported as %s", endpoint, result.Profiles[0].Config)
+			}
+			continue
+		}
+		if err != nil {
+			t.Errorf("%s: %v", endpoint, err)
+			continue
+		}
+		var root struct {
+			Outbounds []struct {
+				Settings struct {
+					Peers []struct {
+						Endpoint string `json:"endpoint"`
+					} `json:"peers"`
+				} `json:"settings"`
+			} `json:"outbounds"`
+		}
+		if json.Unmarshal(result.Profiles[0].Config, &root) != nil || root.Outbounds[0].Settings.Peers[0].Endpoint != want {
+			t.Errorf("%s imported as %s, want %s", endpoint, result.Profiles[0].Config, want)
+		}
+	}
+}
+
+// 3x-ui v3.11.0 appends a server's description to its name as "?serverDescription=" and Base64, which
+// Happ shows apart (probe N10-09). Other text after a "?" is the name's own.
+func TestLinkNamesLeaveOutTheServerDescription(t *testing.T) {
+	const uuid = "11111111-2222-3333-4444-555555555555"
+	const vless = "vless://" + uuid + "@example.com:443?type=ws&security=tls&sni=example.com&path=%2F#"
+	description := "?serverDescription=" + base64.StdEncoding.EncodeToString([]byte("Sub title 🇩🇪"))
+	vmess := "vmess://" + base64.StdEncoding.EncodeToString([]byte(`{"v":"2","ps":"VMess`+description+
+		`","add":"example.com","port":"443","id":"`+uuid+`","net":"tcp","tls":"tls","sni":"example.com"}`))
+	legacy := "ss://" + base64.StdEncoding.EncodeToString([]byte("aes-256-gcm:pw@192.0.2.1:8388")) + "#SS" + description
+	// Formats with their own name sources (146.8): AmneziaVPN keys, WireGuard links and Xray JSON remarks.
+	key := base64.StdEncoding.EncodeToString(make([]byte, 32))
+	wireguard := "[Interface]\nPrivateKey=" + key + "\nAddress=10.20.0.2/32\n[Peer]\nPublicKey=" + key + "\nEndpoint=127.0.0.1:51820\nAllowedIPs=0.0.0.0/0\n"
+	amnezia := "vpn://" + base64.RawURLEncoding.EncodeToString([]byte(wireguard)) + "#AWG" + description
+	wireguardLink := "wireguard://" + url.QueryEscape(key) + "@127.0.0.1:51820?publickey=" + url.QueryEscape(key) + "&address=10.20.0.2/32#WG" + description
+	xray := `{"remarks":"JSON` + description + `","outbounds":[{"protocol":"trojan","settings":{"servers":[{"address":"example.com","port":443,"password":"pw"}]},` +
+		`"streamSettings":{"security":"tls","tlsSettings":{"serverName":"example.com"}}}]}`
+	for link, want := range map[string]string{
+		vless + "DE-1?serverDescription=U3ViIHRpdGxl":       "DE-1",
+		vless + "DE%201" + description:                      "DE 1",
+		vless + "DE%201%3FserverDescription%3DU3ViIHRpdGxl": "DE 1",
+		vless + "What?": "What?",
+		vless + "Q?serverDescription=not%20base64":                             "Q?serverDescription=not base64",
+		vless + "Q?serverDescription=":                                         "Q?serverDescription=",
+		"trojan://secret@example.com:443?sni=example.com#Trojan" + description: "Trojan",
+		vmess:         "VMess",
+		legacy:        "SS",
+		amnezia:       "AWG",
+		wireguardLink: "WG",
+		xray:          "JSON",
+	} {
+		imported, err := ImportClientProfiles(link)
+		if err != nil || len(imported.Profiles) != 1 || imported.Profiles[0].Name != want {
+			t.Errorf("%s: imported %+v, %v; want the name %q", link, imported, err, want)
+		}
+	}
+	imported, err := ImportClientProfiles(vless + "Good\nvless://broken#Bad" + description)
+	if err != nil || imported.SkippedCount != 1 || imported.Skipped[0].Name != "Bad" {
+		t.Errorf("skipped %+v, %v", imported, err)
+	}
+}
+
+// Links name a browser fingerprint with its version, as "chrome_120", which Xray does not know by that
+// name; the browser's preset stands for it (probe N10-14). A name that is no browser stays refused.
+func TestVersionedFingerprintNamesTakeTheBrowsersPreset(t *testing.T) {
+	const uuid = "11111111-2222-3333-4444-555555555555"
+	const reality = "&security=reality&pbk=FCNsCTRerqst97Y-_Pc32LnnBu0g_hw-LhJYlaeiEVs&sid=c2d3"
+	for _, test := range []struct{ fp, want string }{
+		{"chrome_120", "chrome"}, {"Firefox_148", "firefox"}, {"safari_26_3", "safari"}, {"ios_14", "ios"}, {"edge_106", "edge"},
+		{"360_11_0", "360"}, {"qq_11_1", "qq"}, {"android_11_okhttp", "android"},
+		{"chrome", "chrome"}, {"randomized", "randomized"}, {"hellochrome_120", "hellochrome_120"}, {"HelloFirefox_120", "HelloFirefox_120"},
+		{"chrome_x", ""}, {"opera_100", ""}, {"chrome_", ""},
+	} {
+		for _, security := range []string{"&security=tls", reality} {
+			link := "vless://" + uuid + "@example.com:443?type=tcp&sni=example.com&fp=" + test.fp + security + "#fp-versioned"
+			imported, err := ImportClientProfiles(link)
+			if test.want == "" {
+				if err == nil {
+					t.Errorf("%s imported as %s", link, imported.Profiles[0].Config)
+				}
+				continue
+			}
+			if err != nil {
+				t.Errorf("%s: %v", link, err)
+				continue
+			}
+			var profile conf.Config
+			if err := json.Unmarshal(imported.Profiles[0].Config, &profile); err != nil {
+				t.Fatal(err)
+			}
+			stream := profile.OutboundConfigs[0].StreamSetting
+			got := ""
+			if stream.TLSSettings != nil {
+				got = stream.TLSSettings.Fingerprint
+			} else if stream.REALITYSettings != nil {
+				got = stream.REALITYSettings.Fingerprint
+			}
+			if got != test.want {
+				t.Errorf("%s: fingerprint %q, want %q", link, got, test.want)
+			}
+		}
+	}
+	qr := `{"v":"2","ps":"m","add":"example.com","port":"443","id":"` + uuid + `","net":"tcp","tls":"tls","sni":"example.com","fp":"chrome_120"}`
+	imported, err := ImportClientProfiles("vmess://" + base64.StdEncoding.EncodeToString([]byte(qr)))
+	if err != nil || !strings.Contains(string(imported.Profiles[0].Config), `"fingerprint":"chrome"`) {
+		t.Errorf("VMess QR fp: %+v, %v", imported, err)
+	}
+}
+
+// Remnawave writes mKCP's mtu and tti in links (probe N10-14); the core checks their range.
+func TestMKCPLinkMTUAndTTI(t *testing.T) {
+	const link = "ss://YWVzLTI1Ni1nY206cHc@example.com:8388?type=kcp&headerType=wireguard&seed=fixture"
+	for _, test := range []struct {
+		query    string
+		mtu, tti uint32
+		refused  bool
+	}{
+		{query: "&mtu=1350&tti=20", mtu: 1350, tti: 20},
+		{query: "&mtu=1200", mtu: 1200, tti: 50},
+		{query: "&tti=100", mtu: 1350, tti: 100},
+		{query: "", mtu: 1350, tti: 50},
+		{query: "&mtu=abc", refused: true},
+		{query: "&tti=-1", refused: true},
+		{query: "&tti=5", refused: true},
+		{query: "&mtu=20", refused: true},
+	} {
+		imported, err := ImportClientProfiles(link + test.query + "#kcp")
+		if test.refused {
+			if err == nil {
+				t.Errorf("%q imported as %s", test.query, imported.Profiles[0].Config)
+			}
+			continue
+		}
+		if err != nil {
+			t.Errorf("%q: %v", test.query, err)
+			continue
+		}
+		stream := builtOutbound(t, imported.Profiles[0].Config).stream.(*internet.StreamConfig)
+		settings, err := stream.TransportSettings[0].Settings.GetInstance()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if config := settings.(*kcp.Config); config.GetMtu() != test.mtu || config.GetTti() != test.tti {
+			t.Errorf("%q: mtu %d, tti %d", test.query, config.GetMtu(), config.GetTti())
+		}
+	}
+}
+
+// Marzban writes a VMess REALITY server as "tls": "reality" in the VMess JSON, with pbk, sid and spx
+// (probe N10-14). Without the public key no handshake can be made.
+func TestVMessQRWithREALITY(t *testing.T) {
+	const fields = `"v":"2","ps":"r","add":"example.com","port":"443","id":"11111111-2222-3333-4444-555555555555","net":"tcp","tls":"reality","sni":"example.com","fp":"chrome"`
+	imported, err := ImportClientProfiles("vmess://" + base64.StdEncoding.EncodeToString([]byte(
+		`{`+fields+`,"pbk":"FCNsCTRerqst97Y-_Pc32LnnBu0g_hw-LhJYlaeiEVs","sid":"c2d3","spx":"/fixture"}`)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var profile conf.Config
+	if err := json.Unmarshal(imported.Profiles[0].Config, &profile); err != nil {
+		t.Fatal(err)
+	}
+	stream := profile.OutboundConfigs[0].StreamSetting
+	if reality := stream.REALITYSettings; stream.Security != "reality" || stream.TLSSettings != nil || reality == nil || reality.Fingerprint != "chrome" ||
+		reality.ServerName != "example.com" || reality.PublicKey != "FCNsCTRerqst97Y-_Pc32LnnBu0g_hw-LhJYlaeiEVs" || reality.ShortId != "c2d3" || reality.SpiderX != "/fixture" {
+		t.Fatalf("imported as %s", imported.Profiles[0].Config)
+	}
+	builtOutbound(t, imported.Profiles[0].Config)
+	if _, err := parseVMessQrCode(`{` + fields + `,"sid":"c2d3"}`); err == nil || err.Error() != "VMess REALITY server without a public key" {
+		t.Errorf("without a public key: %v", err)
 	}
 }
 
@@ -631,6 +971,163 @@ func TestSkippedTextLinesAreNotNamedAsSchemes(t *testing.T) {
 	want := []SkippedProfile{{Kind: "link"}, {Kind: "ssh"}}
 	if err != nil || len(result.Profiles) != 1 || !reflect.DeepEqual(result.Skipped, want) {
 		t.Fatalf("%+v, %v; want skipped %+v", result, err, want)
+	}
+}
+
+// Providers write a message into the remark of a line whose server cannot be theirs: a loopback,
+// unspecified, documentation or well-known resolver address, or port 0 or 1. In a public feed such
+// a profile is a notice instead of a server.
+func TestProviderMessageLinesAreMarkedAsNotices(t *testing.T) {
+	const id = "00000000-0000-4000-8000-000000000001"
+	notice := func(text string) bool {
+		t.Helper()
+		result, err := ImportFeedProfiles(text, "https://sub.example/feed")
+		if err != nil || len(result.Profiles)+len(result.Notices) != 1 {
+			t.Fatalf("%s: %+v, %v", text, result, err)
+		}
+		if encoded, err := json.Marshal(result); err != nil || strings.Contains(string(encoded), `"notice"`) {
+			t.Errorf("%s: encoded as %s, %v", text, encoded, err)
+		}
+		return len(result.Notices) == 1
+	}
+	// A Trojan server at 1.1.1.1 with TLS that names no serverName, and the given transport.
+	cdn := func(stream string) string {
+		return `{"outbounds":[{"protocol":"trojan","settings":{"servers":[{"address":"1.1.1.1","port":443,"password":"pw"}]},` +
+			`"streamSettings":{"security":"tls",` + stream + `}}]}`
+	}
+	for _, line := range []string{
+		// The three lines of the report.
+		"socks://127.0.0.1:1080#📊 10GB left",
+		"socks://192.0.2.1:1#Device limit reached",
+		"trojan://1@1.1.1.1#✖ Package Ended",
+		"vless://" + id + "@0.0.0.0:443?encryption=none&security=tls&sni=a.example#Expires 2026-12-01",
+		"vless://" + id + "@[::1]:443?encryption=none&security=none#Renew",
+		"vless://" + id + "@[2001:db8::7]:443?encryption=none&security=tls&sni=a.example#Renew",
+		"vless://" + id + "@198.51.100.9:443?encryption=none&security=tls&sni=a.example#Renew",
+		"vless://" + id + "@203.0.113.9:443?encryption=none&security=tls&sni=a.example#Renew",
+		"trojan://pw@server.example:1?security=tls&sni=a.example#Renew",
+		// A resolver address that names no host, or only itself.
+		"socks://8.8.8.8:1080#Notice",
+		"trojan://pw@1.0.0.1:443?security=tls#Renew",
+		"trojan://pw@8.8.4.4:443?security=tls&sni=8.8.4.4#Renew",
+		"vless://" + id + "@1.1.1.1:443?encryption=none&security=tls&type=ws#Renew",
+		`{"outbounds":[{"protocol":"socks","settings":{"servers":[{"address":"::ffff:127.0.0.1","port":1080}]}}]}`,
+		// localhost is loopback in any case.
+		"socks://localhost:1080#📊 10GB left",
+		"socks://LocalHost:1080#📊 10GB left",
+	} {
+		if !notice(line) {
+			t.Errorf("%s: not marked", line)
+		}
+	}
+	for _, line := range []string{
+		"vless://" + id + "@server.example:443?encryption=none&security=reality&type=tcp&fp=chrome" +
+			"&pbk=FCNsCTRerqst97Y-_Pc32LnnBu0g_hw-LhJYlaeiEVs&sni=www.example.com&sid=0a1b#DE-1 9.52GB",
+		"vless://" + id + "@10.0.0.1:443?encryption=none&security=none#Lan",
+		"trojan://pw@1.1.1.2:443?security=tls&sni=a.example#Near a resolver",
+		"vless://" + id + "@192.0.3.1:443?encryption=none&security=tls&sni=a.example#Past the range",
+		"socks://127.0.0.1.example:1080#A name",
+		"socks://localhost.example:1080#A name",
+		// 1.1.1.1 and 1.0.0.1 are also Cloudflare's edge: a server behind it names its own host.
+		"trojan://pw@1.0.0.1:443?security=tls&sni=a.example#Renew",
+		"trojan://pw@8.8.8.8:443?security=tls&sni=a.example#Renew",
+		"trojan://pw@8.8.4.4:443?security=tls&sni=a.example#Renew",
+		"vless://" + id + "@1.1.1.1:443?encryption=none&security=tls&type=ws&host=cdn.example&sni=cdn.example#CDN",
+		"vless://" + id + "@1.1.1.1:443?encryption=none&security=tls&type=ws&host=cdn.example#CDN",
+		"vless://" + id + "@1.1.1.1:443?encryption=none&security=reality&type=tcp&fp=chrome" +
+			"&pbk=FCNsCTRerqst97Y-_Pc32LnnBu0g_hw-LhJYlaeiEVs&sni=cdn.example&sid=0a1b#CDN",
+		// The host header alone, without TLS.
+		`{"outbounds":[{"protocol":"vmess","settings":{"vnext":[{"address":"1.1.1.1","port":80,"users":[{"id":"` + id + `"}]}]},` +
+			`"streamSettings":{"network":"ws","wsSettings":{"host":"cdn.example"}}}]}`,
+		cdn(`"network":"ws","wsSettings":{"headers":{"Host":"cdn.example"}}`),
+		cdn(`"network":"httpupgrade","httpupgradeSettings":{"host":"cdn.example"}`),
+		cdn(`"network":"xhttp","xhttpSettings":{"host":"cdn.example"}`),
+		cdn(`"network":"splithttp","splithttpSettings":{"host":"cdn.example"}`),
+		cdn(`"network":"grpc","grpcSettings":{"authority":"cdn.example","serviceName":"s"}`),
+		cdn(`"network":"tcp","tcpSettings":{"header":{"type":"http","request":{"headers":{"Host":["cdn.example"]}}}}`),
+		cdn(`"network":"raw","rawSettings":{"header":{"type":"http","request":{"headers":{"host":"cdn.example"}}}}`),
+		// One real server among them makes the profile a server.
+		`{"outbounds":[{"protocol":"socks","settings":{"servers":[{"address":"127.0.0.1","port":1080}]}},` +
+			`{"protocol":"socks","settings":{"servers":[{"address":"server.example","port":1080}]}}]}`,
+		// No server at all is no notice either.
+		`{"outbounds":[{"protocol":"freedom"}]}`,
+	} {
+		if notice(line) {
+			t.Errorf("%s: marked as a notice", line)
+		}
+	}
+}
+
+// A feed's message lines are notices only in a feed whose own host is public: a feed from this
+// device or a documentation address (a test or lab feed) lists real servers there. Host names are
+// not resolved, whatever they look like; Go parses the host, so one with "_" is a name too (156.3).
+func TestFeedNoticesApplyOnlyToAPublicHost(t *testing.T) {
+	for _, url := range []string{
+		"https://sub.example/feed", "https://SUB.example:8443/feed?token=1", "http://192.0.3.1/feed", "http://10.0.0.1:2096/feed",
+		"https://[2001:db9::1]/feed", "https://127.0.0.1.example/feed", "https://localhost.example/feed",
+		"https://sub_1.provider.example/feed",
+	} {
+		if !noticesApply(url) {
+			t.Errorf("%s does not count as a public feed", url)
+		}
+	}
+	for _, url := range []string{
+		"http://127.0.0.1:8080/feed", "http://127.1.2.3/feed", "http://[::1]:8080/feed", "http://localhost/feed", "http://LocalHost:8080/feed",
+		"http://0.0.0.0/feed", "http://[::]/feed", "http://192.0.2.1/feed", "http://198.51.100.7/feed", "http://203.0.113.255/feed",
+		"http://[2001:db8::1]/feed", "http://[2001:DB8:ffff::1]/feed", "http://[::ffff:127.0.0.1]/feed", "http://[::ffff:192.0.2.1]/feed",
+		"not a link", "", "%zz",
+	} {
+		if noticesApply(url) {
+			t.Errorf("%s counts as a public feed", url)
+		}
+	}
+}
+
+// Go takes a public feed's notices out of its profiles, so every platform shows the same ones: the
+// first five usable texts, trimmed, each once, in feed order (156.3, 156.6).
+func TestFeedNoticesAreTheFirstFiveTextsEachOnce(t *testing.T) {
+	const servers = "trojan://pw@de.example:443?security=tls&sni=de.example#DE-1\ntrojan://pw@nl.example:443?security=tls&sni=nl.example#NL-1"
+	message := func(port int, name string) string {
+		return fmt.Sprintf("socks://127.0.0.1:%d#%s", 1080+port, url.PathEscape(name))
+	}
+	mixed := strings.Join([]string{
+		message(0, "📊 10GB left"), "trojan://pw@de.example:443?security=tls&sni=de.example#DE-1", message(1, "Device limit reached"),
+		message(2, "📊 10GB left"), message(3, " ✖ Package Ended "), message(4, strings.Repeat("x", 257)), message(5, "bell\a"),
+		// Format characters: a right-to-left override that shows "📊 10GB left" backwards, a zero-width space.
+		message(9, "\u202etfel BG01 📊"), message(10, "Renew\u200b now"),
+		// A joiner inside an emoji sequence is kept.
+		message(11, "👨\u200d💻 Support"),
+		"trojan://pw@nl.example:443?security=tls&sni=nl.example#NL-1", message(6, "Four"), message(7, "Five"), message(8, "Six"),
+	}, "\n")
+	names := func(result *ClientImport) []string {
+		var names []string
+		for _, profile := range result.Profiles {
+			names = append(names, profile.Name)
+		}
+		return names
+	}
+	result, err := ImportFeedProfiles(mixed, "https://sub.example/feed")
+	if err != nil || !slices.Equal(names(result), []string{"DE-1", "NL-1"}) ||
+		!slices.Equal(result.Notices, []string{"📊 10GB left", "Device limit reached", "✖ Package Ended", "👨\u200d💻 Support", "Four"}) {
+		t.Fatalf("public feed: %v, %+v, %v", names(result), result, err)
+	}
+	for _, source := range []string{"http://127.0.0.1:2096/feed", ""} {
+		result, err := ImportFeedProfiles(mixed, source)
+		if err != nil || len(result.Profiles) != 14 || result.Notices != nil {
+			t.Errorf("%q: %v, %+v, %v", source, names(result), result, err)
+		}
+	}
+	if result, err := ImportFeedProfiles(servers, "https://sub.example/feed"); err != nil || len(result.Profiles) != 2 || result.Notices != nil {
+		t.Errorf("servers alone: %+v, %v", result, err)
+	}
+	// A feed of messages alone imports: no servers, and its notices.
+	result, err = ImportFeedProfiles(message(0, "✖ Package Ended")+"\n"+message(1, "Device limit reached"), "https://sub.example/feed")
+	if err != nil || !slices.Equal(result.Notices, []string{"✖ Package Ended", "Device limit reached"}) {
+		t.Fatalf("messages alone: %+v, %v", result, err)
+	}
+	if encoded, err := json.Marshal(result); err != nil || !strings.Contains(string(encoded), `"profiles":[]`) ||
+		!strings.Contains(string(encoded), `"notices":["✖ Package Ended","Device limit reached"]`) {
+		t.Errorf("messages alone encode as %s, %v", encoded, err)
 	}
 }
 

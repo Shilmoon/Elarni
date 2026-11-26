@@ -172,18 +172,24 @@ def dns_server(server):
         server.sendto(response, peer)
 
 
-def dns_probe(allowed):
+def dns_answers(address):
     labels = b''.join(bytes([len(label)]) + label.encode('ascii') for label in fixture_name.split('.')) + b'\0'
     packet = struct.pack('!HHHHHH', 4321, 0x0100, 1, 0, 0, 0) + labels + struct.pack('!HH', 1, 1)
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as client:
         client.settimeout(1)
         try:
-            client.sendto(packet, ('127.0.0.1', 53))
+            client.sendto(packet, (address, 53))
             reply, _ = client.recvfrom(65536)
-            received = reply[:2] == packet[:2]
+            return reply[:2] == packet[:2]
         except OSError:
-            received = False
-    assert received == allowed, 'DNS guard or cleanup did not match the required state'
+            return False
+
+
+def dns_probe(allowed):
+    # The guard blocks a resolver outside the tunnel, here on this PC's physical address; a
+    # resolver on loopback, such as dnscrypt-proxy, answers in every state.
+    assert dns_answers(physical_address) == allowed, 'DNS guard or cleanup did not match the required state'
+    assert dns_answers('127.0.0.1'), 'The DNS guard blocked a resolver on loopback'
 
 
 def wait_clean(adapter, dns=True):
@@ -214,6 +220,76 @@ def wait_parked(adapter):
             return state['index']
         time.sleep(0.2)
     raise RuntimeError('Stopped adapter was not parked clean: ' + json.dumps(state))
+
+
+# Block traffic without VPN puts each tunnel prefix on the loopback interface too, with this route
+# metric, so that traffic this PC forwards (WSL2, Hyper-V, Mobile Hotspot) has nowhere to go once the
+# adapter is gone. These are the tunnel's prefixes of the block policy below.
+fallback_metric = 9500
+block_fallback = {'0.0.0.0/1', '128.0.0.0/1', '::/1', '8000::/1'}
+
+
+def loopback_fallback():
+    # The loopback interface holds 127.0.0.1; its index is not fixed.
+    return set(json.loads(powershell("$i = @(Get-NetIPAddress -IPAddress '127.0.0.1' -ErrorAction Stop)[0].InterfaceIndex; "
+        'ConvertTo-Json -Compress -InputObject @(Get-NetRoute -InterfaceIndex $i -ErrorAction SilentlyContinue | '
+        'Where-Object RouteMetric -eq ' + str(fallback_metric) + ' | ForEach-Object DestinationPrefix)')))
+
+
+def chosen_interfaces(address, adapter):
+    # The interfaces whose route to address Windows picks, as the discovery check below does it: the
+    # longest matching prefix, then the lowest route plus interface metric. Windows reports no
+    # interface metric for the adapter, which the core sets to 0.
+    table = json.loads(powershell('ConvertTo-Json -Compress -InputObject @(Get-NetRoute -ErrorAction SilentlyContinue | '
+        'Select-Object DestinationPrefix,InterfaceAlias,RouteMetric,InterfaceMetric)'))
+    def metric(row):
+        interface = 0 if row['InterfaceAlias'] == adapter and row['InterfaceMetric'] is None else row['InterfaceMetric']
+        return None if row['RouteMetric'] is None or interface is None else row['RouteMetric'] + interface
+    matches = [(ipaddress.ip_network(row['DestinationPrefix']).prefixlen, -metric(row), row['InterfaceAlias'])
+               for row in table if metric(row) is not None
+               and ipaddress.ip_address(address) in ipaddress.ip_network(row['DestinationPrefix'])]
+    if not matches:
+        return []
+    best = max(matches)[:2]
+    return sorted({alias for length, weight, alias in matches if (length, weight) == best})
+
+
+def assert_fallback(adapter, tunnel_up):
+    # While the adapter exists its routes win; without it the fallback routes take its traffic.
+    loopback = powershell("@(Get-NetIPAddress -IPAddress '127.0.0.1' -ErrorAction Stop)[0].InterfaceAlias")
+    want = [adapter] if tunnel_up else [loopback]
+    for _ in range(15):
+        present = loopback_fallback()
+        chosen = {address: chosen_interfaces(address, adapter) for address in ('203.0.113.9', '2a00::1')}
+        if present == block_fallback and all(value == want for value in chosen.values()):
+            return
+        time.sleep(0.2)
+    raise AssertionError('Fallback routes ' + str(sorted(present)) + ', want ' + str(sorted(block_fallback)) +
+        '; routes chosen ' + str(chosen) + ', want ' + str(want))
+
+
+def assert_next_hops(adapter):
+    # The capture routes go to a next hop inside the adapter's own subnet. Without one a route is
+    # on-link, which WSL in mirrored mode shows Linux as "scope link", and Docker gives no network
+    # a subnet inside such a route: under the tunnel's wide routes it had none left in its pools.
+    # The subnet and the hop come from the address Windows reports for the adapter: the hop is a
+    # host address of that subnet other than the adapter's own.
+    addresses = json.loads(powershell("ConvertTo-Json -Compress -InputObject @(Get-NetIPAddress -InterfaceAlias '" + adapter +
+        "' -AddressFamily IPv4 -ErrorAction Stop | Select-Object IPAddress,PrefixLength)"))
+    assert len(addresses) == 1, 'The adapter has not one IPv4 address: ' + str(addresses)
+    own = ipaddress.ip_interface(addresses[0]['IPAddress'] + '/' + str(addresses[0]['PrefixLength']))
+    hop = next((str(host) for host in own.network.hosts() if host != own.ip), None)
+    assert hop, 'The adapter subnet ' + str(own.network) + ' has no address for a next hop'
+    routes = json.loads(powershell("ConvertTo-Json -Compress -InputObject @(Get-NetRoute -InterfaceAlias '" + adapter +
+        "' -AddressFamily IPv4 | Select-Object DestinationPrefix,NextHop)"))
+    def on_link(network):
+        # By the whole range a route covers: routes inside the adapter's subnet, and those wholly in
+        # multicast or to the limited broadcast, which no gateway carries. Anything else gets the hop.
+        return network.subnet_of(own.network) or network.is_multicast or network == ipaddress.ip_network('255.255.255.255/32')
+    wrong = [(row['DestinationPrefix'], row['NextHop']) for row in routes
+             if row['NextHop'] != ('0.0.0.0' if on_link(ipaddress.ip_network(row['DestinationPrefix'])) else hop)]
+    assert routes and not wrong, 'Routes with the wrong next hop (want ' + hop + ' outside ' + str(own.network) + \
+        ', none for multicast and the limited broadcast): ' + str(wrong or routes)
 
 
 def kill_pid(pid):
@@ -253,9 +329,6 @@ dns = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 dns.bind(('127.0.0.1', 0))
 dns_port = dns.getsockname()[1]
 threading.Thread(target=dns_server, args=(dns,), daemon=True).start()
-guard_probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-guard_probe.bind(('127.0.0.1', 53))
-threading.Thread(target=dns_server, args=(guard_probe,), daemon=True).start()
 upstream_port, socks_port = free_port(), free_port()
 # The ShadowQUIC peer's requests leave through the upstream core, whose rules lead to the fixtures.
 upstream_socks = [{'listen': '127.0.0.1', 'port': free_port(), 'protocol': 'socks', 'settings': {'udp': True}}] if arguments.protocol == 'shadowquic' else []
@@ -264,6 +337,11 @@ with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as route_probe:
     route_probe.connect(('192.0.2.1', 9))
     physical_address = route_probe.getsockname()[0]
 assert not ipaddress.ip_address(physical_address).is_loopback
+guard_probe, loopback_probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM), socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+guard_probe.bind((physical_address, 53))
+loopback_probe.bind(('127.0.0.1', 53))
+for probe in (guard_probe, loopback_probe):
+    threading.Thread(target=dns_server, args=(probe,), daemon=True).start()
 physical_index = int(powershell("Get-NetIPAddress -AddressFamily IPv4 -IPAddress '" + physical_address + "' | Select-Object -First 1 -ExpandProperty InterfaceIndex"))
 def physical_connection():
     client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -351,6 +429,8 @@ try:
         if mode == 'block-broker-death':
             options['routePolicy'] = {'includedRoutes': ['0.0.0.0/0', '::/0'], 'excludedRoutes': [], 'includeAllNetworks': False,
                 'enforceRoutes': False, 'hideVPNIcon': False, 'blockWithoutVPN': True}
+            # As the app sends it: a restart's stop, a disconnect and the next connect go through this session.
+            options['reuseSession'] = True
         if mode == 'session-limits':
             options.update(tcpMaxConnections=1, udpMaxConnections=1, streamMetrics=True)
             options['routePolicy'] = {'includedRoutes': ['198.18.0.0/16', '2001:db8::/32'],
@@ -403,6 +483,7 @@ try:
                 adapter + "' | ForEach-Object {$_.ServerAddresses}) | ConvertTo-Json -Compress")
             assert '127.0.0.1' in remaining and '198.51.100.253' not in remaining and 'fd76:6f75:7465::1' not in remaining, 'Admission fixture still owns OS DNS queries: ' + remaining
         routes = json.loads(powershell("@(Get-NetRoute -InterfaceAlias '" + adapter + "' | Select-Object -ExpandProperty DestinationPrefix) | ConvertTo-Json -Compress"))
+        assert_next_hops(adapter)
         if mode == 'route-enforcement':
             prefixes = [ipaddress.ip_network(value) for value in routes]
             assert any(ipaddress.ip_address('198.18.0.1') in p for p in prefixes)
@@ -509,6 +590,8 @@ try:
                     assert restarted['helperPid'] == ready['helperPid'], 'Reconnect replaced the elevated owner'
                     # The identity is fixed per Windows session, so NLA keeps one profile.
                     assert restarted['adapter'] == adapter, 'Reconnect changed the adapter identity'
+                    # The parked adapter gets its addresses and routes anew, the next hops with them.
+                    assert_next_hops(adapter)
                     http_target('198.18.0.1', http_server.server_port)
                     assert powershell("(Get-NetAdapter -IncludeHidden -Name '" + adapter + "').ifIndex") == str(parked), 'Reconnect replaced the parked adapter'
                     http_target('2001:db8::1', http_server.server_port)
@@ -588,6 +671,29 @@ try:
             dns_probe(False)
             http_target('198.18.0.1', http_server.server_port)
             kill_pid(ready['helperPid'])
+        elif mode == 'block-broker-death':
+            # The tunnel's routes win over their fallback routes on the loopback interface...
+            assert_fallback(adapter, True)
+            # ...which take what this PC forwards while a restart's stop holds the guard without a tunnel.
+            request(broker, 'stopVPN', {'hold': True})
+            wait_parked(adapter)
+            assert_fallback(adapter, False)
+            try:
+                with physical_connection():
+                    raise AssertionError('Traffic left outside the tunnel during a restart')
+            except OSError:
+                pass
+            # A disconnect releases the guard and its fallback routes; the next connect puts both back.
+            request(broker, 'stopVPN', {})
+            assert not loopback_fallback(), 'A disconnect kept fallback routes: ' + str(sorted(loopback_fallback()))
+            with physical_connection():
+                pass
+            restarted = request(broker, 'runVPN', {'configJSON': json.dumps(current), **options})
+            assert restarted['adapter'] == adapter, 'Unexpected owned adapter identity: ' + restarted['adapter']
+            http_target('198.18.0.1', http_server.server_port)
+            http_target('2001:db8::1', http_server.server_port)
+            assert_fallback(adapter, True)
+            broker.kill()
         else:
             broker.kill()
         broker.wait(timeout=15)
@@ -616,9 +722,26 @@ try:
                     raise AssertionError('Traffic left outside the dead tunnel')
             except OSError:
                 pass
+            # ...and so do its fallback routes, now that the adapter is gone...
+            assert_fallback(adapter, False)
             assert native('staleVPNGuard', {}) == {'stale': True}, 'The kept block was not reported'
             # ...until the next connect or Repair VPN setup clears it.
             native('clearVPNGuard', {})
+            assert not loopback_fallback(), 'Clearing the kept block kept fallback routes: ' + str(sorted(loopback_fallback()))
+            with physical_connection():
+                pass
+            # The same after another crash, cleared by the helper's own --clear-guard.
+            broker = start_process([str(core)])
+            ready = request(broker, 'runVPN', {'configJSON': json.dumps(current), **options})
+            assert ready['adapter'] == adapter, 'Unexpected owned adapter identity: ' + ready['adapter']
+            assert_fallback(adapter, True)
+            broker.kill()
+            broker.wait(timeout=15)
+            wait_clean(adapter, dns=False)
+            assert_fallback(adapter, False)
+            assert subprocess.run([str(core), '--clear-guard'], stdin=subprocess.DEVNULL, timeout=30).returncode == 0, 'Clearing the kept block failed'
+            assert not loopback_fallback(), '--clear-guard kept fallback routes: ' + str(sorted(loopback_fallback()))
+            assert native('staleVPNGuard', {}) == {'stale': False}, 'The cleared block was still reported'
             with physical_connection():
                 pass
         wait_clean(adapter)
@@ -641,5 +764,6 @@ finally:
         wait_clean(adapter)
     dns.close()
     guard_probe.close()
+    loopback_probe.close()
     http_server.shutdown()
     http_server.server_close()

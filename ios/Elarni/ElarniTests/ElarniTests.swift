@@ -342,6 +342,22 @@ final class ElarniTests: XCTestCase {
     XCTAssertEqual(vpn.stateLabel, "Connected")
   }
 
+  // Small probes pass on a server whose network cuts transfers off; the extension's transfer checks say so.
+  func testConnectedServerWhoseNetworkCutsTransfersOffSaysSo() async throws {
+    let vpn = IOSVPNController()
+    let tunnel = FixtureTunnel(plan: Data())
+    tunnel.session.liveness = "stalled"
+    vpn.manager = tunnel
+    try await vpn.refreshProvider()
+    XCTAssertTrue(vpn.stalled)
+    XCTAssertFalse(vpn.noTraffic)
+    XCTAssertEqual(vpn.stateLabel, "Connected · transfers cut off")
+    tunnel.session.liveness = "ok"
+    try await vpn.refreshProvider()
+    XCTAssertFalse(vpn.stalled)
+    XCTAssertEqual(vpn.stateLabel, "Connected")
+  }
+
   // Home's speed line: the bytes between two samples over the time between them, none across a restarted core.
   func testTrafficRateComesFromTwoSamplesAndStartsAgainAfterACounterReset() {
     var rate = TrafficRate()
@@ -531,6 +547,28 @@ final class ElarniTests: XCTestCase {
     XCTAssertEqual(cache.visible.map(\.id), ["b", "d"])
     XCTAssertTrue(cache.sources.isEmpty && cache.countries.isEmpty)
     XCTAssertEqual(cache.builds, 6)
+  }
+
+  // A provider's message lines are shown under its subscription and are never servers: a feed of
+  // messages alone keeps its header in the list by subscription and adds nothing anywhere else.
+  func testServerListShowsProviderMessagesUnderTheirSubscriptionOnly() {
+    let sources = [
+      ServerSubscription(raw: ["id": "s", "name": "Provider", "notices": ["📊 10GB left", "Device limit reached"],
+        "nodes": [["id": "a", "name": "🇩🇪 DE-1", "protocol": "vless"]]]),
+      ServerSubscription(raw: ["id": "t", "name": "Ended", "notices": ["✖ Package Ended"], "nodes": [[String: Any]]()]),
+      ServerSubscription(raw: ["id": "u", "name": "Empty", "nodes": [[String: Any]]()]),
+    ]
+    XCTAssertEqual(ServerSubscription(raw: ["id": "old"]).notices, [])
+    let cache = ServerListCache()
+    var key = ServerListCache.Key(catalog: 1, filter: "all", order: "provider", favoritesFirst: true, pinned: [], latencies: [:])
+    cache.update(key, subscriptions: sources, probes: [:])
+    XCTAssertEqual(cache.sources.map(\.name), ["Provider", "Ended"])
+    XCTAssertEqual(cache.sources.map(\.notices), [["📊 10GB left", "Device limit reached"], ["✖ Package Ended"]])
+    XCTAssertTrue(cache.sources[1].countries.isEmpty)
+    XCTAssertEqual(cache.visible.map(\.id), ["a"])
+    key.filter = "country"
+    cache.update(key, subscriptions: sources, probes: [:])
+    XCTAssertEqual(cache.visible.map(\.id), ["a"])
   }
 
   // A closed subscription or country is remembered; what a removed subscription left is not.

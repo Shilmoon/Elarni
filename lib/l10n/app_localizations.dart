@@ -374,6 +374,18 @@ abstract class AppLocalizations {
   /// **'The VPN firewall tool is missing.'**
   String get issueVpnFirewallUnavailable;
 
+  /// No description provided for @issueWintunFailedRemedy.
+  ///
+  /// In en, this message translates to:
+  /// **'Antivirus software or a device installation policy can cause this. Reinstall Elarni, or use System proxy mode.'**
+  String get issueWintunFailedRemedy;
+
+  /// No description provided for @issueWintunFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'The Windows network driver (Wintun) could not be loaded, or its network adapter could not be created.'**
+  String get issueWintunFailed;
+
   /// No description provided for @issueDisconnectUnconfirmedRemedy.
   ///
   /// In en, this message translates to:
@@ -3188,6 +3200,12 @@ abstract class AppLocalizations {
   /// **'Launch app at login'**
   String get launchAtLogin;
 
+  /// No description provided for @startHiddenInTray.
+  ///
+  /// In en, this message translates to:
+  /// **'Start hidden in the tray'**
+  String get startHiddenInTray;
+
   /// No description provided for @windowsWifiLocationHelp.
   ///
   /// In en, this message translates to:
@@ -3932,6 +3950,12 @@ abstract class AppLocalizations {
   /// **'Connected · no traffic'**
   String get stateConnectedNoTraffic;
 
+  /// No description provided for @stateConnectedStalled.
+  ///
+  /// In en, this message translates to:
+  /// **'Connected · transfers cut off'**
+  String get stateConnectedStalled;
+
   /// No description provided for @stateConnected.
   ///
   /// In en, this message translates to:
@@ -4394,6 +4418,12 @@ abstract class AppLocalizations {
   /// **'The server passed no traffic at {time}. Checking again each minute.'**
   String serverPassedNoTraffic(Object time);
 
+  /// No description provided for @serverCutsTransfersOff.
+  ///
+  /// In en, this message translates to:
+  /// **'Connected, but this server’s network cuts transfers off. Pages will not load; choose another server.'**
+  String get serverCutsTransfersOff;
+
   /// No description provided for @connectionCheckUnavailable.
   ///
   /// In en, this message translates to:
@@ -4604,6 +4634,12 @@ abstract class AppLocalizations {
   /// **'{count, plural, =1{1 server} other{{count} servers}}'**
   String serverCount(int count);
 
+  /// A message line of a subscription's provider, such as the traffic left, shown under the subscription's name.
+  ///
+  /// In en, this message translates to:
+  /// **'Provider: {message}'**
+  String providerMessageLine(String message);
+
   /// No description provided for @runtime.
   ///
   /// In en, this message translates to:
@@ -4693,6 +4729,18 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'{provider} removed or changed this link. Ask the provider for a new one.'**
   String failureLinkRemovedText(String provider);
+
+  /// No description provided for @failureEncrypted.
+  ///
+  /// In en, this message translates to:
+  /// **'Encrypted for another app'**
+  String get failureEncrypted;
+
+  /// No description provided for @failureEncryptedText.
+  ///
+  /// In en, this message translates to:
+  /// **'{provider} encrypted this subscription for another app, such as Happ, and Elarni cannot read it. Ask the provider for a link without encryption.'**
+  String failureEncryptedText(String provider);
 
   /// No description provided for @failureUnsupported.
   ///

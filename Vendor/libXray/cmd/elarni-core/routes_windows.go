@@ -268,6 +268,10 @@ func (c *physicalNetworkCache) bind(network, address string, conn syscall.RawCon
 
 // Exclude our capture adapters on every refresh, including after TUN startup.
 // Retain longest-prefix routing for LAN/overlay destinations and normal metrics.
+// The loopback interface is left out too: Block traffic without VPN keeps its fallback routes
+// there, more specific than the physical default route, and a socket bound to it reaches nothing
+// (bind leaves loopback destinations alone). Without a physical network the snapshot has no
+// routes: the tunnel still starts, and each dial fails with route_unavailable until one is up.
 func readPhysicalNetwork(control func(string, string, syscall.RawConn) error) (*physicalNetworkSnapshot, error) {
 	rows, err := winipcfg.GetIPForwardTable2(windows.AF_UNSPEC)
 	if err != nil {
@@ -279,7 +283,7 @@ func readPhysicalNetwork(control func(string, string, syscall.RawConn) error) (*
 	}
 	available := make(map[uint32]bool, len(interfaces))
 	for _, iface := range interfaces {
-		available[uint32(iface.Index)] = iface.Flags&net.FlagUp != 0 && !strings.HasPrefix(strings.ToLower(iface.Name), "elarni-")
+		available[uint32(iface.Index)] = iface.Flags&net.FlagUp != 0 && iface.Flags&net.FlagLoopback == 0 && !strings.HasPrefix(strings.ToLower(iface.Name), "elarni-")
 	}
 	routes := []physicalRoute{}
 	metrics := map[[2]uint32]uint64{}
@@ -304,9 +308,6 @@ func readPhysicalNetwork(control func(string, string, syscall.RawConn) error) (*
 		}
 		routes = append(routes, physicalRoute{prefix, row.InterfaceIndex, uint64(row.Metric) + metric, row.InterfaceLUID})
 	}
-	if len(routes) == 0 {
-		return nil, errors.New("route_unavailable")
-	}
 	servers, err := readPhysicalDNSServers()
 	if err != nil {
 		return nil, err
@@ -325,4 +326,72 @@ func readPhysicalNetwork(control func(string, string, syscall.RawConn) error) (*
 		flightrecorder.Record(flightrecorder.Event{Name: "windows_physical_routes", Values: values})
 	}
 	return &physicalNetworkSnapshot{routes: routes, dns: physicalResolver(servers, control)}, nil
+}
+
+// loopbackRoutes is the loopback interface's part of the route table, where Block traffic
+// without VPN keeps its fallback routes. The interface is looked up on first use: its index
+// is not fixed, and a release without fallback routes needs none.
+type loopbackRoutes struct{ luid winipcfg.LUID }
+
+// helperFallbackRoutes is the loopback interface's part of the route table as this process knows
+// it (placedFallbackRoutes). vpnChild forgets it when it gives up the guard's claim.
+var helperFallbackRoutes = &placedFallbackRoutes{table: &loopbackRoutes{}}
+
+func (r *loopbackRoutes) loopback() (winipcfg.LUID, error) {
+	if r.luid != 0 {
+		return r.luid, nil
+	}
+	adapters, err := winipcfg.GetAdaptersAddresses(windows.AF_UNSPEC, winipcfg.GAAFlagDefault)
+	if err != nil {
+		return 0, err
+	}
+	for _, adapter := range adapters {
+		if adapter.IfType == winipcfg.IfTypeSoftwareLoopback {
+			r.luid = adapter.LUID
+			return r.luid, nil
+		}
+	}
+	return 0, windows.ERROR_NOT_FOUND
+}
+
+// onLink is the unspecified next hop of a route to prefix, which stays on the interface.
+func onLink(prefix netip.Prefix) netip.Addr {
+	if prefix.Addr().Is4() {
+		return netip.IPv4Unspecified()
+	}
+	return netip.IPv6Unspecified()
+}
+
+func (r *loopbackRoutes) add(prefix netip.Prefix) error {
+	luid, err := r.loopback()
+	if err != nil {
+		return err
+	}
+	// A route that is there already, this helper's from an earlier tunnel or Windows' own, leads nowhere too.
+	if err := luid.AddRoute(prefix, onLink(prefix), fallbackRouteMetric); err != nil && !errors.Is(err, windows.ERROR_OBJECT_ALREADY_EXISTS) {
+		return err
+	}
+	return nil
+}
+
+func (r *loopbackRoutes) remove(prefix netip.Prefix) error {
+	luid, err := r.loopback()
+	if err != nil {
+		return err
+	}
+	row, err := luid.Route(prefix, onLink(prefix))
+	if errors.Is(err, windows.ERROR_NOT_FOUND) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	// Only the metric tells this helper's route from Windows' own one to the same prefix.
+	if row.Metric != fallbackRouteMetric {
+		return nil
+	}
+	if err := row.Delete(); err != nil && !errors.Is(err, windows.ERROR_NOT_FOUND) {
+		return err
+	}
+	return nil
 }

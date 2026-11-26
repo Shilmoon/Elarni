@@ -147,10 +147,10 @@ func (c *cubicSender) OnPacketSent(
 	bytes protocol.ByteCount,
 	isRetransmittable bool,
 ) {
-	c.pacer.SentPacket(sentTime, bytes)
 	if !isRetransmittable {
 		return
 	}
+	c.pacer.SentPacket(sentTime, bytes)
 	c.largestSentPacketNumber = packetNumber
 	c.hybridSlowStart.OnPacketSent(packetNumber)
 }
@@ -321,6 +321,17 @@ func (c *cubicSender) SetMaxDatagramSize(s protocol.ByteCount) {
 	if s < c.maxDatagramSize {
 		panic(fmt.Sprintf("congestion BUG: decreased max datagram size from %d to %d", c.maxDatagramSize, s))
 	}
+	c.setMaxDatagramSize(s)
+}
+
+// Elarni: FallBackToMinDatagramSize is the one decrease the sender takes: the connection drops
+// to 1200 bytes before its handshake is confirmed when the interface refused a packet of the
+// initial size (quic-go/quic-go#5911).
+func (c *cubicSender) FallBackToMinDatagramSize() {
+	c.setMaxDatagramSize(protocol.MinInitialPacketSize)
+}
+
+func (c *cubicSender) setMaxDatagramSize(s protocol.ByteCount) {
 	cwndIsMinCwnd := c.congestionWindow == c.minCongestionWindow()
 	c.maxDatagramSize = s
 	if cwndIsMinCwnd {

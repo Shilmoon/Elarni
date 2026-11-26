@@ -304,6 +304,13 @@ extension _ProxyRuntime on DesktopProxy {
     _connectedAt = DateTime.now();
     _liveness = _livenessAt = null;
     _livenessFailures = 0;
+    // Each tunnel gets its first transfer check a few seconds after it is up.
+    _transferAt = _now + _transferDelay;
+    _transferUplink = null;
+    _transferStalls = 0;
+    _transferNow = false;
+    if (_stallRestart != _ProxyAutomation._serverRevision(catalog))
+      _stallRestart = null;
   }
 
   Future<void> _startCore(DesktopCatalog catalog, String config) => _native(
@@ -328,6 +335,7 @@ extension _ProxyRuntime on DesktopProxy {
         'blockWithoutVPN': catalog.settings.blockWithoutVPN,
         'enforceRoutes': catalog.settings.enforceRoutes,
         'hideVPNIcon': catalog.settings.hideVPNIcon,
+        'answerInbound': catalog.settings.answerInbound,
       },
     },
     ...DesktopProxy._runtimeAssets(catalog),
@@ -511,60 +519,7 @@ extension _ProxyRuntime on DesktopProxy {
       ], eagerError: true);
       final reply = catalogMap(values.first);
       if (reply['success'] != true) {
-        final code = reply['error'];
-        const safe = {
-          'invalid_assets',
-          'invalid_geodata',
-          'input_too_large',
-          'missing_geodata',
-          'assets_missing',
-          'assets_unavailable',
-          'approval_required',
-          'invalid_target',
-          'storage_busy',
-          'storage_corrupt',
-          'storage_unavailable',
-          'storage_conflict',
-          'invalid_catalog',
-          'invalid_configuration',
-          'unsupported_profile',
-          'unencrypted_server',
-          'connection_failed',
-          'elevation_denied',
-          'elevation_failed',
-          'vpn_firewall_unavailable',
-          'vpn_guard_busy',
-          'invalid_url',
-          'fetch_failed',
-          'dns_failed',
-          'provider_unreachable',
-          'provider_error',
-          'rate_limited',
-          'subscription_denied',
-          'subscription_unavailable',
-          'hwid_limit',
-          'hwid_required',
-          'invalid_qr_image',
-          'invalid_request',
-          'invalid_backup',
-          'invalid_backup_password',
-          'recording_empty',
-          'recording_failed',
-          'update_unsigned',
-          'update_signature_invalid',
-          'update_invalid',
-          'update_package_missing',
-          'update_not_newer',
-          'update_checksum_mismatch',
-          'update_unsupported',
-          'update_unavailable',
-          'update_failed',
-        };
-        final failure = safe.contains(code)
-            ? code! as String
-            : runtime
-            ? 'connection_failed'
-            : 'operation_failed';
+        final failure = desktopFailureCode(reply['error'], runtime: runtime);
         // The helper answered, so its elevated owner lives on for the next
         // command; if it exits instead, its exit clears the session.
         if (session) retained = true;
@@ -872,4 +827,61 @@ extension _ProxyRuntime on DesktopProxy {
     _state = 'disconnected';
     await _syncSystemProxy();
   }
+}
+
+/// The code a core's failed reply surfaces as: the app words these codes itself;
+/// any other is the generic failure of a connection or of another operation.
+String desktopFailureCode(Object? code, {required bool runtime}) {
+  const safe = {
+    'invalid_assets',
+    'invalid_geodata',
+    'input_too_large',
+    'missing_geodata',
+    'assets_missing',
+    'assets_unavailable',
+    'approval_required',
+    'invalid_target',
+    'storage_busy',
+    'storage_corrupt',
+    'storage_unavailable',
+    'storage_conflict',
+    'invalid_catalog',
+    'invalid_configuration',
+    'unsupported_profile',
+    'unencrypted_server',
+    'connection_failed',
+    'elevation_denied',
+    'elevation_failed',
+    'vpn_firewall_unavailable',
+    'vpn_guard_busy',
+    'invalid_url',
+    'encrypted_feed',
+    'fetch_failed',
+    'dns_failed',
+    'provider_unreachable',
+    'provider_error',
+    'rate_limited',
+    'subscription_denied',
+    'subscription_unavailable',
+    'hwid_limit',
+    'hwid_required',
+    'invalid_qr_image',
+    'invalid_request',
+    'invalid_backup',
+    'invalid_backup_password',
+    'recording_empty',
+    'recording_failed',
+    'update_unsigned',
+    'update_signature_invalid',
+    'update_invalid',
+    'update_package_missing',
+    'update_not_newer',
+    'update_checksum_mismatch',
+    'update_unsupported',
+    'update_unavailable',
+    'update_failed',
+  };
+  if (code is String && (safe.contains(code) || wintunFailure(code)))
+    return code;
+  return runtime ? 'connection_failed' : 'operation_failed';
 }

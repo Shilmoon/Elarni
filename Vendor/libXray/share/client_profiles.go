@@ -8,9 +8,11 @@ import (
 	dnsapp "github.com/xtls/xray-core/app/dns"
 	dnsfeature "github.com/xtls/xray-core/features/dns"
 	"net"
+	"net/netip"
 	"net/url"
 	"reflect"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"unicode"
@@ -24,6 +26,9 @@ type ClientProfile struct {
 	Name   string          `json:"name"`
 	Config json.RawMessage `json:"config,omitempty"`
 	URL    string          `json:"url,omitempty"`
+	// notice: every server the profile names is one no provider runs (see noticeOutbounds), so its
+	// name is a provider's message rather than a server's. ImportFeedProfiles moves it to Notices.
+	notice bool
 }
 
 type ClientImport struct {
@@ -38,6 +43,9 @@ type ClientImport struct {
 	// Skipped lists the first maxSkippedListed members that could not be imported; SkippedCount counts them all.
 	Skipped      []SkippedProfile `json:"skipped,omitempty"`
 	SkippedCount int              `json:"skippedCount,omitempty"`
+	// Notices are a public feed's message lines ("📊 10GB left", "Device limit reached"), taken out of
+	// Profiles: the first maxNotices usable texts, each once, in feed order.
+	Notices []string `json:"notices,omitempty"`
 }
 
 // SkippedProfile names a feed member that was not imported: its display name when it has a safe one,
@@ -88,6 +96,7 @@ func (s *skippedMembers) add(name, kind, fallback string, err error) {
 	if len(s.list) >= maxSkippedListed {
 		return
 	}
+	name = withoutServerDescription(name)
 	// Provider text: shown only when it is short, valid text without control characters.
 	if !utf8.ValidString(name) || utf8.RuneCountInString(name) > 128 || strings.IndexFunc(name, unicode.IsControl) >= 0 {
 		name = ""
@@ -147,6 +156,135 @@ func systemResolverDNS(config json.RawMessage) bool {
 	return false
 }
 
+// Addresses no provider runs a server at: providers put a message ("📊 10GB left", "Device limit
+// reached") into the remark of a line that points at one of them.
+var (
+	noticePrefixes = []netip.Prefix{
+		netip.MustParsePrefix("192.0.2.0/24"), netip.MustParsePrefix("198.51.100.0/24"),
+		netip.MustParsePrefix("203.0.113.0/24"), netip.MustParsePrefix("2001:db8::/32"),
+	}
+	// 1.1.1.1 and 1.0.0.1 are also Cloudflare's edge, which a CDN-fronted server can list as its
+	// address; such a server names its own host (see streamHosts).
+	noticeResolvers = []netip.Addr{
+		netip.MustParseAddr("1.1.1.1"), netip.MustParseAddr("1.0.0.1"),
+		netip.MustParseAddr("8.8.8.8"), netip.MustParseAddr("8.8.4.4"),
+	}
+)
+
+// noticeOutbounds reports a profile whose proxy outbounds name at least one server and only servers
+// at a loopback (localhost included), unspecified or documentation address or at port 0 or 1, or
+// at a well-known resolver address when the outbound's stream settings name no host for it (no TLS
+// or REALITY serverName, no host or authority of the transport): a CDN-fronted server at 1.1.1.1
+// names its own domain there.
+func noticeOutbounds(outbounds []conf.OutboundDetourConfig) bool {
+	found := false
+	for index := range outbounds {
+		outbound := &outbounds[index]
+		servers, ok := outboundServers(outbound)
+		if !ok {
+			continue
+		}
+		hosts := streamHosts(outbound.StreamSetting)
+		for _, server := range servers {
+			if server == nil || !noticeServer(server, hosts) {
+				return false
+			}
+			found = true
+		}
+	}
+	return found
+}
+
+func noticeServer(server *outboundServer, hosts []string) bool {
+	if server.Port == 0 || server.Port == 1 {
+		return true
+	}
+	if server.Address != nil && server.Address.Family().IsDomain() {
+		// The one name that is loopback without a lookup.
+		return strings.EqualFold(server.Address.Domain(), "localhost")
+	}
+	if server.Address == nil || !server.Address.Family().IsIP() {
+		return false
+	}
+	address, ok := netip.AddrFromSlice(server.Address.IP())
+	if !ok {
+		return false
+	}
+	address = address.Unmap()
+	if address.IsLoopback() || address.IsUnspecified() {
+		return true
+	}
+	for _, prefix := range noticePrefixes {
+		if prefix.Contains(address) {
+			return true
+		}
+	}
+	if !slices.Contains(noticeResolvers, address) {
+		return false
+	}
+	// A host the stream names makes it a server; a name that is the address itself is none.
+	for _, host := range hosts {
+		if named, err := netip.ParseAddr(host); err != nil || named.Unmap() != address {
+			return false
+		}
+	}
+	return true
+}
+
+// streamHosts lists the host names a stream sends its server: the TLS or REALITY serverName and
+// the transport's host or authority. Empty ones are left out.
+func streamHosts(stream *conf.StreamConfig) []string {
+	if stream == nil {
+		return nil
+	}
+	var hosts []string
+	if stream.TLSSettings != nil {
+		hosts = append(hosts, stream.TLSSettings.ServerName)
+	}
+	if stream.REALITYSettings != nil {
+		hosts = append(hosts, stream.REALITYSettings.ServerName)
+	}
+	if stream.WSSettings != nil {
+		hosts = append(hosts, stream.WSSettings.Host)
+		for key, value := range stream.WSSettings.Headers {
+			if strings.EqualFold(key, "host") {
+				hosts = append(hosts, value)
+			}
+		}
+	}
+	if stream.HTTPUPGRADESettings != nil {
+		hosts = append(hosts, stream.HTTPUPGRADESettings.Host)
+	}
+	for _, xhttp := range []*conf.SplitHTTPConfig{stream.XHTTPSettings, stream.SplitHTTPSettings} {
+		if xhttp != nil {
+			hosts = append(hosts, xhttp.Host)
+		}
+	}
+	if stream.GRPCSettings != nil {
+		hosts = append(hosts, stream.GRPCSettings.Authority)
+	}
+	// rawSettings is the newer name of tcpSettings.
+	for _, raw := range []*conf.TCPConfig{stream.TCPSettings, stream.RAWSettings} {
+		if raw == nil || len(raw.HeaderConfig) == 0 {
+			continue
+		}
+		var header struct {
+			Request struct {
+				Headers map[string]conf.StringList `json:"headers"`
+			} `json:"request"`
+		}
+		if json.Unmarshal(raw.HeaderConfig, &header) != nil {
+			continue
+		}
+		for key, values := range header.Request.Headers {
+			if strings.EqualFold(key, "host") {
+				hosts = append(hosts, values...)
+			}
+		}
+	}
+	return slices.DeleteFunc(hosts, func(host string) bool { return strings.TrimSpace(host) == "" })
+}
+
 // ImportClientProfiles imports every member of a feed it can and reports the rest in Skipped:
 // one unsupported line used to cost the user every server of the subscription. A feed with
 // nothing left to import fails with its first member's error; one Xray object, one WireGuard
@@ -159,8 +297,10 @@ func ImportClientProfiles(text string) (*ClientImport, error) {
 	text = input.Text
 	result, err := importClientProfiles(text)
 	if err == nil {
-		for _, profile := range result.Profiles {
+		for index, profile := range result.Profiles {
 			result.SystemResolverDNS = result.SystemResolverDNS || systemResolverDNS(profile.Config)
+			// The naming step of every format.
+			result.Profiles[index].Name = withoutServerDescription(profile.Name)
 		}
 		result.Migration = make(map[string]string)
 		for _, line := range strings.Split(text, "\n") {
@@ -181,6 +321,67 @@ func ImportClientProfiles(text string) (*ClientImport, error) {
 		}
 	}
 	return result, err
+}
+
+const maxNotices = 5
+
+// ImportFeedProfiles imports a feed fetched from sourceURL, or text the user gave when sourceURL is
+// empty, as ImportClientProfiles does. In a feed from a public host the profiles that are a
+// provider's messages (see noticeOutbounds) leave Profiles for Notices; a feed served from this
+// device or a documentation address (a test or lab feed) lists real servers there.
+func ImportFeedProfiles(text, sourceURL string) (*ClientImport, error) {
+	result, err := ImportClientProfiles(text)
+	if err != nil || !noticesApply(sourceURL) {
+		return result, err
+	}
+	servers := make([]ClientProfile, 0, len(result.Profiles))
+	for _, profile := range result.Profiles {
+		if !profile.notice {
+			servers = append(servers, profile)
+			continue
+		}
+		// Provider text, shown as it is: short, valid text without control or format characters (Cf:
+		// bidi controls and zero-width characters, which can make a message read as another). The
+		// zero-width joiner and non-joiner stay: emoji sequences and Persian words need them.
+		text := strings.TrimSpace(profile.Name)
+		if text != "" && utf8.ValidString(text) && utf8.RuneCountInString(text) <= 256 &&
+			strings.IndexFunc(text, func(r rune) bool {
+				return unicode.IsControl(r) || unicode.Is(unicode.Cf, r) && r != '\u200c' && r != '\u200d'
+			}) < 0 &&
+			len(result.Notices) < maxNotices && !slices.Contains(result.Notices, text) {
+			result.Notices = append(result.Notices, text)
+		}
+	}
+	result.Profiles = servers
+	return result, nil
+}
+
+// noticesApply reports whether the message lines of a feed fetched from feedURL are messages: its
+// host is a name (not resolved; localhost aside) or an address other than a loopback, unspecified
+// or documentation one.
+func noticesApply(feedURL string) bool {
+	u, err := url.Parse(feedURL)
+	if err != nil {
+		return false
+	}
+	host := strings.ToLower(u.Hostname())
+	if host == "" || host == "localhost" {
+		return false
+	}
+	address, err := netip.ParseAddr(host)
+	if err != nil {
+		return true
+	}
+	address = address.Unmap()
+	if address.IsLoopback() || address.IsUnspecified() {
+		return false
+	}
+	for _, prefix := range noticePrefixes {
+		if prefix.Contains(address) {
+			return false
+		}
+	}
+	return true
 }
 
 func importClientProfiles(text string) (*ClientImport, error) {
@@ -233,7 +434,8 @@ func importClientProfiles(text string) (*ClientImport, error) {
 			if _, ok := root["protocol"]; ok {
 				raw, _ = json.Marshal(map[string]any{"outbounds": []json.RawMessage{raw}})
 			}
-			if err := validateClientProfile(raw); err != nil {
+			notice, err := checkClientProfile(raw)
+			if err != nil {
 				unencrypted := errors.Is(err, ErrUnencryptedServer)
 				err := fmt.Errorf("profile %d has invalid or unsupported outbound settings", index+1)
 				if unencrypted {
@@ -248,7 +450,7 @@ func importClientProfiles(text string) (*ClientImport, error) {
 			if name == "" {
 				name = fmt.Sprintf("Profile %d", index+1)
 			}
-			result.Profiles = append(result.Profiles, ClientProfile{Format: "xrayProfile", Name: name, Config: raw})
+			result.Profiles = append(result.Profiles, ClientProfile{Format: "xrayProfile", Name: name, Config: raw, notice: notice})
 		}
 	} else if hasTopLevelClashProxiesKey(text) {
 		return importClashProfiles(text)
@@ -289,8 +491,9 @@ func importClientProfiles(text string) (*ClientImport, error) {
 			outbound.SendThrough = nil // URI remarks are metadata, never a bind address.
 			outbound.Tag = "proxy"
 			raw, err := json.Marshal(map[string]any{"outbounds": []conf.OutboundDetourConfig{*outbound}})
+			notice := false
 			if err == nil {
-				err = validateClientProfile(raw)
+				notice, err = checkClientProfile(raw)
 			}
 			if err != nil {
 				if !errors.Is(err, ErrUnencryptedServer) {
@@ -299,7 +502,7 @@ func importClientProfiles(text string) (*ClientImport, error) {
 				skipped.addLink(line, err)
 				continue
 			}
-			result.Profiles = append(result.Profiles, ClientProfile{Format: "xrayProfile", Name: name, Config: raw})
+			result.Profiles = append(result.Profiles, ClientProfile{Format: "xrayProfile", Name: name, Config: raw, notice: notice})
 		}
 	}
 	if len(result.Profiles) == 0 && skipped.first != nil {
@@ -313,26 +516,35 @@ func importClientProfiles(text string) (*ClientImport, error) {
 }
 
 func validateClientProfile(raw json.RawMessage) error {
+	_, err := checkClientProfile(raw)
+	return err
+}
+
+// checkClientProfile validates a profile as validateClientProfile does and reports, from the same
+// decode, whether it is a provider's message (noticeOutbounds).
+func checkClientProfile(raw json.RawMessage) (notice bool, err error) {
 	if err := ValidateClientFileAccess(raw); err != nil {
-		return err
+		return false, err
 	}
 	var config conf.Config
 	if err := json.Unmarshal(raw, &config); err != nil {
-		return err
+		return false, err
 	}
 	if len(config.OutboundConfigs) == 0 || len(config.OutboundConfigs) > 1024 {
-		return fmt.Errorf("invalid outbound count")
+		return false, fmt.Errorf("invalid outbound count")
 	}
 	restoreNilRawMessages(reflect.ValueOf(&config))
+	// Before Build, which moves stream settings between their old and new keys.
+	notice = noticeOutbounds(config.OutboundConfigs)
 	if err := config.ValidateTUICChains(); err != nil {
-		return err
+		return false, err
 	}
 	for index := range config.OutboundConfigs {
 		if err := buildOutbound(&config.OutboundConfigs[index]); err != nil {
-			return err
+			return false, err
 		}
 	}
-	return nil
+	return notice, nil
 }
 
 // ValidateClientFileAccess also guards runtime startup of profiles saved by older

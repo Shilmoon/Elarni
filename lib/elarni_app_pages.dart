@@ -35,6 +35,10 @@ typedef _CountryGroup = ({
         l10n.failureLinkRemoved,
         l10n.failureLinkRemovedText(provider),
       ),
+      'encrypted_feed' => (
+        l10n.failureEncrypted,
+        l10n.failureEncryptedText(provider),
+      ),
       'unsupported_profile' => (
         l10n.failureUnsupported,
         l10n.failureUnsupportedText(provider),
@@ -55,6 +59,12 @@ extension _HomePages on _ElarniHomeState {
       _stateAvailable &&
       _state == TunnelState.connected &&
       _liveness == 'noTraffic';
+
+  // Small probes pass, but the server's network cuts longer transfers off.
+  bool get _stalled =>
+      _stateAvailable &&
+      _state == TunnelState.connected &&
+      _liveness == 'stalled';
 
   String get _healthLabel {
     final label = _checkLabel;
@@ -96,6 +106,7 @@ extension _HomePages on _ElarniHomeState {
       ).formatTimeOfDay(TimeOfDay.fromDateTime(_noTrafficAt!));
       return l10n.serverPassedNoTraffic(time);
     }
+    if (_stalled) return l10n.serverCutsTransfersOff;
     if (_automation['enabled'] == true) {
       final status = _automation['status'];
       if (_automation['policySupported'] == false)
@@ -258,6 +269,7 @@ extension _HomePages on _ElarniHomeState {
     'provider_error',
     'subscription_denied',
     'subscription_unavailable',
+    'encrypted_feed',
     'hwid_required',
     'hwid_limit',
   };
@@ -1000,7 +1012,7 @@ extension _HomePages on _ElarniHomeState {
         : const Color(0xff854d0e);
     final iconColor = failed
         ? scheme.error
-        : _noTraffic
+        : _noTraffic || _stalled
         ? warning
         : scheme.onSurfaceVariant.withValues(alpha: .7);
     final disconnect =
@@ -1017,7 +1029,11 @@ extension _HomePages on _ElarniHomeState {
             TunnelState.preparing => l10n.statePreparing,
             TunnelState.connecting => l10n.stateConnecting,
             TunnelState.connected =>
-              _noTraffic ? l10n.stateConnectedNoTraffic : l10n.stateConnected,
+              _noTraffic
+                  ? l10n.stateConnectedNoTraffic
+                  : _stalled
+                  ? l10n.stateConnectedStalled
+                  : l10n.stateConnected,
             TunnelState.disconnecting => l10n.stateDisconnecting,
             TunnelState.reasserting ||
             TunnelState.reconnecting => l10n.stateReconnecting,
@@ -1038,6 +1054,7 @@ extension _HomePages on _ElarniHomeState {
               end:
                   !failed &&
                       !_noTraffic &&
+                      !_stalled &&
                       _stateAvailable &&
                       _state == TunnelState.connected
                   ? 1.0
@@ -1089,7 +1106,7 @@ extension _HomePages on _ElarniHomeState {
               style: TextStyle(
                 fontSize: 18,
                 fontWeight: FontWeight.w600,
-                color: _noTraffic ? warning : null,
+                color: _noTraffic || _stalled ? warning : null,
               ),
             ),
           ),
@@ -1705,6 +1722,27 @@ extension _HomePages on _ElarniHomeState {
   Widget _serverSubscriptionHeader(
     SubscriptionGroup group, {
     required bool open,
+  }) => Column(
+    crossAxisAlignment: CrossAxisAlignment.stretch,
+    children: [
+      _serverSubscriptionTile(group, open: open),
+      // The provider's message lines, such as the traffic left: text only.
+      for (final notice in group.notices)
+        Padding(
+          padding: const EdgeInsets.fromLTRB(20, 0, 20, 4),
+          child: Text(
+            l10n.providerMessageLine(notice),
+            style: TextStyle(
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
+            ),
+          ),
+        ),
+    ],
+  );
+
+  Widget _serverSubscriptionTile(
+    SubscriptionGroup group, {
+    required bool open,
   }) => Semantics(
     expanded: open,
     child: ListTile(
@@ -1927,7 +1965,12 @@ extension _HomePages on _ElarniHomeState {
     final countries = _countryGroups(subscription);
     return [
       if (_subscriptions.subscriptions.isEmpty) () => _gettingStarted(scheme),
-      if (countries.isEmpty && _subscriptions.subscriptions.isNotEmpty)
+      if (countries.isEmpty &&
+          _subscriptions.subscriptions.isNotEmpty &&
+          // A feed of messages alone has no servers: its notices say why.
+          !(subscription != null &&
+              subscription.nodes.isEmpty &&
+              subscription.notices.isNotEmpty))
         () => Padding(
           padding: const EdgeInsets.all(28),
           child: Column(

@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/xtls/xray-core/infra/conf"
+	"google.golang.org/protobuf/proto"
 )
 
 // Convert XrayJson to share links.
@@ -78,6 +79,10 @@ func shareLink(proxy conf.OutboundDetourConfig) (*url.URL, error) {
 		if err != nil {
 			return nil, err
 		}
+		if plugin := simpleObfsPlugin(proxy.StreamSetting); plugin != "" {
+			shareUrl.RawQuery = "plugin=" + url.QueryEscape(plugin)
+			return shareUrl, nil
+		}
 	case "vmess":
 		err := vmessLink(proxy, shareUrl)
 		if err != nil {
@@ -120,7 +125,55 @@ func linkLoses(outbound *conf.OutboundDetourConfig) bool {
 	if outbound.TargetStrategy != "" && !strings.EqualFold(outbound.TargetStrategy, "asis") {
 		return true
 	}
-	return userLoses(outbound) || streamLoses(outbound.StreamSetting)
+	stream := outbound.StreamSetting
+	if outbound.Protocol == "shadowsocks" && simpleObfsPlugin(stream) != "" {
+		// The plugin says all of the stream.
+		stream = nil
+	}
+	return userLoses(outbound) || streamLoses(stream)
+}
+
+// simpleObfsPlugin is the SIP002 plugin that says a Shadowsocks stream behind simple-obfs's HTTP
+// request, as simpleObfsStream imports it, or "" for a stream the plugin does not say all of.
+func simpleObfsPlugin(stream *conf.StreamConfig) string {
+	if stream == nil {
+		return ""
+	}
+	raw := stream.RAWSettings
+	if raw == nil {
+		raw = stream.TCPSettings
+	}
+	if raw == nil {
+		return ""
+	}
+	var header struct {
+		Type    string                     `json:"type"`
+		Request *conf.AuthenticatorRequest `json:"request"`
+	}
+	if json.Unmarshal(raw.HeaderConfig, &header) != nil || header.Type != "http" || header.Request == nil || header.Request.Headers["Host"] == nil {
+		return ""
+	}
+	plugin := "obfs-local;obfs=http;obfs-host=" + strings.Join(*header.Request.Headers["Host"], ",")
+	if len(header.Request.Path) > 0 {
+		plugin += ";obfs-uri=" + strings.Join(header.Request.Path, ",")
+	}
+	said, err := simpleObfsStream(strings.Split(plugin, ";")[1:])
+	if err != nil {
+		return ""
+	}
+	// Build a copy: Build moves settings between the old and new keys.
+	text, err := json.Marshal(stream)
+	var copied conf.StreamConfig
+	if err != nil || json.Unmarshal(text, &copied) != nil {
+		return ""
+	}
+	restoreNilRawMessages(reflect.ValueOf(&copied))
+	want, wantErr := copied.Build()
+	got, gotErr := said.Build()
+	if wantErr != nil || gotErr != nil || !proto.Equal(want, got) {
+		return ""
+	}
+	return plugin
 }
 
 // userLoses reports user settings the vless:// and vmess:// links have no parameter for: a VLESS reverse
@@ -189,10 +242,6 @@ func streamLoses(stream *conf.StreamConfig) bool {
 		return true
 	}
 	if grpc := stream.GRPCSettings; grpc != nil && (grpc.UserAgent != "" || grpc.IdleTimeout > 0) {
-		return true
-	}
-	// Xray's own mKCP defaults.
-	if kcp := stream.KCPSettings; kcp != nil && ((kcp.Mtu != nil && *kcp.Mtu != 1350) || (kcp.Tti != nil && *kcp.Tti != 50)) {
 		return true
 	}
 	for _, raw := range []*conf.TCPConfig{stream.RAWSettings, stream.TCPSettings} {
@@ -598,6 +647,13 @@ func streamSettingsQuery(proxy conf.OutboundDetourConfig, link *url.URL) {
 		seed := streamSettings.KCPSettings.Seed
 		if seed != nil && len(*seed) > 0 {
 			query = addQuery(query, "seed", *seed)
+		}
+		// Links say mtu and tti as v2rayN and Xray's own share links do.
+		if mtu := streamSettings.KCPSettings.Mtu; mtu != nil {
+			query = addQuery(query, "mtu", strconv.FormatUint(uint64(*mtu), 10))
+		}
+		if tti := streamSettings.KCPSettings.Tti; tti != nil {
+			query = addQuery(query, "tti", strconv.FormatUint(uint64(*tti), 10))
 		}
 
 		headerConfig := streamSettings.KCPSettings.HeaderConfig

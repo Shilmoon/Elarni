@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/netip"
 	"net/url"
 	"strconv"
@@ -129,7 +130,7 @@ func importWireGuard(text string, forceAmnezia bool, name string) (ClientProfile
 			case "presharedkey":
 				peer.PreSharedKey = value
 			case "endpoint":
-				peer.Endpoint = value
+				peer.Endpoint = bracketIPv6Endpoint(value)
 			case "allowedips":
 				peer.AllowedIPs = append(peer.AllowedIPs, commaValues(value)...)
 			case "persistentkeepalive":
@@ -175,6 +176,30 @@ func importWireGuard(text string, forceAmnezia bool, name string) (ClientProfile
 		name = strings.ToUpper(protocol[:1]) + protocol[1:]
 	}
 	return ClientProfile{Format: "xrayProfile", Name: name, Config: raw}, nil
+}
+
+// bracketIPv6Endpoint brackets an IPv6 endpoint written without brackets, as 3x-ui writes an AmneziaWG
+// server's ("2001:db8::1:51820"): the port follows the last colon when the rest is an IPv6 address. An
+// endpoint that is an IPv6 address whole ("2001:db8::1:5182") names no port, which the core refuses: its
+// last group may as well be the address's.
+func bracketIPv6Endpoint(endpoint string) string {
+	if _, _, err := net.SplitHostPort(endpoint); err == nil {
+		return endpoint
+	}
+	if _, err := netip.ParseAddr(endpoint); err == nil {
+		return endpoint
+	}
+	colon := strings.LastIndexByte(endpoint, ':')
+	if colon < 0 {
+		return endpoint
+	}
+	host, port := endpoint[:colon], endpoint[colon+1:]
+	number, err := strconv.ParseUint(port, 10, 16)
+	address, addressErr := netip.ParseAddr(host)
+	if err != nil || number == 0 || addressErr != nil || !address.Is6() || address.Zone() != "" {
+		return endpoint
+	}
+	return net.JoinHostPort(host, port)
 }
 
 func commaValues(value string) []string {
@@ -301,7 +326,8 @@ func importWireGuardLink(text string) (ClientProfile, error) {
 	if u.Scheme != "wireguard" || u.User == nil {
 		return ClientProfile{}, fmt.Errorf("invalid WireGuard link")
 	}
-	if _, password := u.User.Password(); password || u.Path != "" || strings.ContainsAny(u.User.Username(), "\r\n#;") {
+	// Hiddify writes "/" before the query, as other link types may.
+	if _, password := u.User.Password(); password || (u.Path != "" && u.Path != "/") {
 		return ClientProfile{}, fmt.Errorf("invalid WireGuard credentials or path")
 	}
 	q, err := url.ParseQuery(u.RawQuery)
@@ -309,17 +335,83 @@ func importWireGuardLink(text string) (ClientProfile, error) {
 		return ClientProfile{}, fmt.Errorf("invalid WireGuard query")
 	}
 	fields := map[string]string{"address": "Address", "dns": "DNS", "mtu": "MTU", "publickey": "PublicKey", "presharedkey": "PresharedKey", "persistentkeepalive": "PersistentKeepalive", "keepalive": "PersistentKeepalive", "allowedips": "AllowedIPs", "reserved": "Reserved"}
-	iface, peer := "[Interface]\nPrivateKey="+u.User.Username()+"\n", "[Peer]\nEndpoint="+u.Host+"\n"
+	privateKey := u.User.Username()
+	var mask *conf.FinalMask
+	iface, peer := "", "[Peer]\nEndpoint="+u.Host+"\n"
 	for key, values := range q {
+		if len(values) != 1 || strings.ContainsAny(values[0], "\r\n") {
+			return ClientProfile{}, fmt.Errorf("unsupported WireGuard query field")
+		}
+		value := values[0]
+		switch strings.ToLower(key) {
+		case "privatekey", "publickey", "presharedkey":
+			// Base64 keys, which Hiddify writes unescaped as in the userinfo: a "+" is the key's.
+			value = plusKeptQueryValue(u.RawQuery, key, value)
+		}
+		switch strings.ToLower(key) {
+		case "privatekey":
+			// Hiddify repeats the key here for its apps before 2026-02.
+			if privateKey != "" && privateKey != value {
+				return ClientProfile{}, fmt.Errorf("conflicting WireGuard private keys")
+			}
+			privateKey = value
+			continue
+		case "ifp":
+			// Hiddify's noise packets before the handshake have no Xray equivalent; none is nothing lost.
+			if values[0] != "0" && values[0] != "0-0" {
+				return ClientProfile{}, fmt.Errorf("WireGuard noise packets (ifp) are not supported")
+			}
+			continue
+		case "fm":
+			// 3x-ui and v2rayN carry the server's FinalMask; WireGuard dials UDP, so only UDP masks apply.
+			if err := json.Unmarshal([]byte(values[0]), &mask); err != nil || mask == nil {
+				return ClientProfile{}, fmt.Errorf("invalid WireGuard FinalMask")
+			}
+			if len(mask.Tcp) > 0 || mask.QuicParams != nil {
+				return ClientProfile{}, fmt.Errorf("WireGuard FinalMask takes only UDP masks")
+			}
+			continue
+		}
 		name, ok := fields[strings.ToLower(key)]
-		if !ok || len(values) != 1 || strings.ContainsAny(values[0], "\r\n") {
+		if !ok {
 			return ClientProfile{}, fmt.Errorf("unsupported WireGuard query field")
 		}
 		if name == "Address" || name == "DNS" || name == "MTU" || name == "Reserved" {
-			iface += name + "=" + values[0] + "\n"
+			iface += name + "=" + value + "\n"
 		} else {
-			peer += name + "=" + values[0] + "\n"
+			peer += name + "=" + value + "\n"
 		}
 	}
-	return importWireGuard(iface+peer, false, u.Fragment)
+	if privateKey == "" || strings.ContainsAny(privateKey, "\r\n#;") {
+		return ClientProfile{}, fmt.Errorf("invalid WireGuard credentials or path")
+	}
+	profile, err := importWireGuard("[Interface]\nPrivateKey="+privateKey+"\n"+iface+peer, false, u.Fragment)
+	if err != nil || mask == nil || len(mask.Udp) == 0 {
+		return profile, err
+	}
+	return wireGuardWithMask(profile, mask)
+}
+
+// wireGuardWithMask adds a FinalMask to a WireGuard profile's outbound and checks that the core builds it.
+func wireGuardWithMask(profile ClientProfile, mask *conf.FinalMask) (ClientProfile, error) {
+	var root map[string]json.RawMessage
+	var outbounds []map[string]json.RawMessage
+	if json.Unmarshal(profile.Config, &root) != nil || json.Unmarshal(root["outbounds"], &outbounds) != nil || len(outbounds) != 1 {
+		return ClientProfile{}, fmt.Errorf("invalid WireGuard profile")
+	}
+	stream, err := json.Marshal(map[string]json.RawMessage{"finalmask": setJSON(mask)})
+	if err == nil {
+		outbounds[0]["streamSettings"] = stream
+		root["outbounds"], err = json.Marshal(outbounds)
+	}
+	if err == nil {
+		profile.Config, err = json.Marshal(root)
+	}
+	if err != nil {
+		return ClientProfile{}, err
+	}
+	if err := validateClientProfile(profile.Config); err != nil {
+		return ClientProfile{}, fmt.Errorf("unsupported WireGuard FinalMask: %w", err)
+	}
+	return profile, nil
 }

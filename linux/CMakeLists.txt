@@ -54,7 +54,9 @@ add_subdirectory(${FLUTTER_MANAGED_DIR})
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(GTK REQUIRED IMPORTED_TARGET gtk+-3.0)
 pkg_check_modules(INDICATOR REQUIRED IMPORTED_TARGET ayatana-appindicator3-0.1)
+# Only the camera module (lib/libelarni_camera.so) links GStreamer; the runner opens it with GModule.
 pkg_check_modules(GSTREAMER REQUIRED IMPORTED_TARGET gstreamer-app-1.0)
+pkg_check_modules(GMODULE REQUIRED IMPORTED_TARGET gmodule-no-export-2.0)
 pkg_check_modules(EPOXY REQUIRED IMPORTED_TARGET epoxy)
 
 # Application build; see runner/CMakeLists.txt.
@@ -140,6 +142,7 @@ install(PROGRAMS "${ELARNI_SHADOWQUIC}" DESTINATION "${CMAKE_INSTALL_PREFIX}" CO
 install(PROGRAMS "${ELARNI_CLI}" DESTINATION "${CMAKE_INSTALL_PREFIX}" COMPONENT Runtime)
 install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/elarni.png" DESTINATION "${INSTALL_BUNDLE_DATA_DIR}" COMPONENT Runtime)
 install(FILES "${ELARNI_DOMAIN}" DESTINATION "${INSTALL_BUNDLE_LIB_DIR}" COMPONENT Runtime)
+install(TARGETS elarni_camera LIBRARY DESTINATION "${INSTALL_BUNDLE_LIB_DIR}" COMPONENT Runtime)
 install(FILES "${ELARNI_ROOT}/LICENSE" "${ELARNI_ROOT}/NOTICE"
   "${ELARNI_ROOT}/THIRD_PARTY_NOTICES"
   "${ELARNI_ROOT}/windows/GOZXING_LICENSE.txt"

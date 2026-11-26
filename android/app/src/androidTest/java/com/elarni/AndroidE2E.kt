@@ -50,8 +50,13 @@ class AndroidE2E {
         snapshot().routes.forEach { call("deleteRouting", obj("id" to it.getString("id"))) }
         call("settings", obj("settings" to Settings.defaults()))
         if (emptyBackup == null) emptyBackup = call("backup", obj("password" to EMPTY_BACKUP_PASSWORD)).getString("text")
+        // The transfer check's targets are public CDNs; no test here checks transfers.
+        TransferCheck.targets = JSONArray()
     }
-    @After fun stop() { repo.requestStop(); ui.waitUntil(10_000) { repo.state.value.connection == "disconnected" } }
+    @After fun stop() {
+        TransferCheck.targets = TransferCheck.defaultTargets
+        repo.requestStop(); ui.waitUntil(10_000) { repo.state.value.connection == "disconnected" }
+    }
 
     @Test fun a_uiImportQRAndEncryptedRestart() {
         ui.runOnIdle { ui.activity.copy(link()) }
@@ -828,6 +833,73 @@ class AndroidE2E {
             assertEquals(ids, snapshot().nodes.map { it.getString("id") }.toSet())
             assertEquals("ws", network(snapshot().node(ws)))
             assertTrue(snapshot().node(ws).getBoolean("favorite"))
+        }
+    }
+    // A 3x-ui panel picks each REALITY server's sid and sni per fetch and writes the traffic left into its remark;
+    // a refresh that changed both made every server new and lost what the user set on them (N10-06).
+    @Test fun e_remarkChangedWithRealityValuesKeepsServers() {
+        HTTPFixture().use { feed ->
+            fun servers(sid: String, sni: String, left: String) = listOf("DE-1", "DE-2", "NL-1").mapIndexed { i, name ->
+                "vless://00000000-0000-4000-8000-00000000001$i@127.0.0.1:${18080 + i}?encryption=none&flow=xtls-rprx-vision" +
+                    "&security=reality&type=tcp&fp=chrome&pbk=FCNsCTRerqst97Y-_Pc32LnnBu0g_hw-LhJYlaeiEVs&sni=$sni&sid=$sid$i#$name%20$left"
+            }.joinToString("\n")
+            feed.body = servers("a1b2c3d", "www.example.com", "9.52GB")
+            val id = subscribe(feed)
+            val ids = snapshot().nodes.map { it.getString("id") }
+            assertEquals(3, ids.size)
+            call("favorite", obj("id" to ids[0], "value" to true))
+            call("renameNode", obj("id" to ids[0], "name" to "My Frankfurt"))
+            call("select", obj("id" to ids[2]))
+            call("deleteNode", obj("id" to ids[1]))
+            call("automation", obj("configuration" to Automation.defaults().put("enabled", true).put("policy", "orderedFallback")
+                .put("subscriptionID", id).put("nodeIDs", JSONArray(listOf(ids[2], ids[0])))
+                .put("targets", JSONArray(listOf(obj("id" to "fixture", "url" to "http://127.0.0.1:9/health", "expectedStatus" to 204, "expectedBody" to ""))))))
+            for ((sid, sni, left) in listOf(Triple("e5f6a7b", "www.example.com", "9.47GB"), Triple("e5f6a7b", "cdn.example.org", "9.41GB"),
+                    Triple("0c1d2e3", "www.example.net", "9.30GB"))) {
+                feed.body = servers(sid, sni, left)
+                call("refresh", obj("id" to id))
+                val catalog = snapshot()
+                assertEquals(left, listOf(ids[0], ids[2]), catalog.nodes.map { it.getString("id") })
+                assertEquals(left, listOf(ids[1]), catalog.sources.single().objects("hiddenNodes").map { it.getString("id") })
+                assertTrue(catalog.node(ids[0]).getBoolean("favorite"))
+                assertEquals("My Frankfurt", catalog.node(ids[0]).string("name"))
+                assertEquals("NL-1 $left", catalog.node(ids[2]).string("name"))
+                assertEquals(ids[2], catalog.selected)
+                val automation = catalog.data.mapObject("automation")
+                assertTrue(automation.optBoolean("enabled"))
+                assertEquals(listOf(ids[2], ids[0]), automation.strings("nodeIDs"))
+            }
+        }
+    }
+    // Providers write a message into the remark of a line no server answers (N10-07). The real importer returns a public
+    // feed's message lines as notices and never servers, a host with "_" included (156.3); a feed served from this device
+    // keeps all five as servers.
+    @Test fun e_providerMessageLinesAreNoticesOnlyInAPublicFeed() {
+        val messages = listOf("socks://127.0.0.1:1080#📊 10GB left", "socks://192.0.2.1:1#Device limit reached", "trojan://1@1.1.1.1#✖ Package Ended")
+        val servers = listOf("vless://00000000-0000-4000-8000-000000000001@de.example:443?encryption=none&security=reality&type=tcp&fp=chrome" +
+            "&pbk=FCNsCTRerqst97Y-_Pc32LnnBu0g_hw-LhJYlaeiEVs&sni=www.example.com&sid=0a1b#DE-1", "trojan://fixture@nl.example:443?security=tls&sni=nl.example#NL-1")
+        val mixed = listOf(messages[0], servers[0], messages[1], servers[1], messages[2]).joinToString("\n")
+        fun imported(text: String, source: String): Pair<List<String>, List<String>> {
+            val result = Native.call("importClientProfiles", obj("text" to text, "sourceURL" to source))
+            return result.objects("profiles").map { it.string("name") } to result.strings("notices")
+        }
+        for (source in listOf("https://sub.example/feed", "https://sub_1.provider.example/feed")) {
+            val (kept, notices) = imported(mixed, source)
+            assertEquals(source, listOf("DE-1", "NL-1"), kept)
+            assertEquals(source, listOf("📊 10GB left", "Device limit reached", "✖ Package Ended"), notices)
+        }
+        val (local, none) = imported(mixed, "http://127.0.0.1:2096/feed")
+        assertEquals(listOf("📊 10GB left", "DE-1", "Device limit reached", "NL-1", "✖ Package Ended"), local)
+        assertTrue(none.isEmpty())
+        val (alone, ended) = imported(messages.joinToString("\n"), "https://sub.example/feed")
+        assertTrue(alone.isEmpty())
+        assertEquals(3, ended.size)
+        HTTPFixture().use { feed ->
+            feed.body = mixed
+            subscribe(feed)
+            val catalog = snapshot()
+            assertEquals(5, catalog.nodes.size)
+            assertFalse(catalog.sources.single().has("notices"))
         }
     }
     @Test fun e_renamedServerKeepsItsNameAcrossRefresh() {

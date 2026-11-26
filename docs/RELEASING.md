@@ -1,7 +1,8 @@
 # Releasing
 
 Releases are direct downloads: an unsigned Windows ZIP and MSI, a Linux `.deb`,
-AppImage and portable archive, a signed Android APK and the source archives. Their
+AppImage and portable archive, a signed Android APK and the source archives, among them
+`elarni-<version>-linux-bundled-sources.tar`. Their
 integrity comes from build provenance and a signed `SHA256SUMS`, not from platform
 code signing. No macOS or iOS build is published; the macOS and Windows signing
 commands below are for builds signed by hand.
@@ -147,6 +148,10 @@ python3 scripts/package-source --output .build/release-source
 python3 scripts/package-dependencies --output .build/release-dependency-source
 ```
 
+`scripts/package-linux` writes the third, `elarni-<version>-linux-bundled-sources.tar`: the
+AppImage carries five tray libraries (`THIRD_PARTY_NOTICES`) under GPL and LGPL terms, which
+require their exact source packages to be published with it.
+
 ## macOS
 
 Needs a Developer ID identity with the app's Network Extension, App Group and
@@ -190,7 +195,12 @@ Elarni), and delete the folder.
 
 ## Linux
 
-On Ubuntu 22.04:
+On Ubuntu 22.04 with `patchelf` installed. The build container of
+`scripts/check-linux-container` keeps the source packages of the AppImage's libraries
+(`/usr/src/elarni-bundled-sources`), fetched when its image is built; elsewhere
+`package-linux` fetches them with `apt-get source`, which needs the `deb-src` entries enabled
+and a current `sudo apt-get update`. It stops when `THIRD_PARTY_NOTICES` names other versions
+of those libraries than the system has: update the notices first.
 
 ```sh
 flutter build linux --release --target=lib/main.dart

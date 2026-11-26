@@ -35,8 +35,7 @@ class EncryptedStore(private val context: Context, name: String = "catalog") {
                 input.readBounded(16 * 1024 * 1024)
             }
             return JSONObject(String(unseal(bytes, aad) { key(false) }, Charsets.UTF_8))
-        } catch (error: AppFailure) { throw error }
-        catch (_: Exception) { throw AppFailure("storage_corrupt") }
+        } catch (error: Exception) { throw if (error is AppFailure) error else AppFailure(openFailure(error)) }
     }
     @Synchronized fun save(value: JSONObject) {
         val plain = value.toString().toByteArray(Charsets.UTF_8)
@@ -56,6 +55,17 @@ class EncryptedStore(private val context: Context, name: String = "catalog") {
          *  fails is unavailable, not a lost key, so it never offers the reset a lost key does. */
         fun existingKey(find: () -> SecretKey?): SecretKey? =
             try { find() ?: find() } catch (error: AppFailure) { throw error } catch (_: Exception) { throw AppFailure("storage_unavailable") }
+        /** The code of a saved catalog that failed to open with [error]. Only a file that is damaged, or whose key is gone for
+         *  good, offers the reset, which deletes the subscriptions. A Keystore or provider that fails, which also happens for a
+         *  moment (keystore2 busy or restarting), is unavailable: the file is kept and opening it again may work. */
+        fun openFailure(error: Exception): String = when (error) {
+            is AppFailure -> error.code
+            // The tag does not match the file, or it opened to something that is not a catalog.
+            is javax.crypto.AEADBadTagException, is org.json.JSONException -> "storage_corrupt"
+            // Android invalidated the key itself; as for a key that is gone, nothing brings it back.
+            is android.security.keystore.KeyPermanentlyInvalidatedException -> "storage_locked"
+            else -> "storage_unavailable"
+        }
         /** "RVAD1", the cipher's 12-byte IV, then the AES-GCM ciphertext and tag; [aad] binds it to one store. */
         fun seal(plain: ByteArray, aad: ByteArray, key: SecretKey): ByteArray {
             val cipher = Cipher.getInstance("AES/GCM/NoPadding")

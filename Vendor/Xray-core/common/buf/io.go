@@ -96,6 +96,10 @@ func WriteAllBytes(writer io.Writer, payload []byte, c stats.Counter) error {
 		if err != nil {
 			return err
 		}
+		if n == 0 {
+			// a writer that takes nothing and reports no error would be asked again forever
+			return io.ErrShortWrite
+		}
 		payload = payload[n:]
 	}
 	return nil

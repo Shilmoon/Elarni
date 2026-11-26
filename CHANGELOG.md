@@ -4,6 +4,250 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
 
 ## Unreleased
 
+## 0.6.5 - 2026-11-26
+
+### Added
+
+- **Windows and Linux: start at login hidden in the tray.** Under "Launch app at login", "Start
+  hidden in the tray" starts Elarni at login with only its tray icon; the tray icon, opening
+  Elarni again or a link shows the window. On Linux, when no tray has shown the icon within
+  20 seconds of the login, the window starts minimized instead.
+- **Linux: a server keeps answering incoming connections while the VPN is on.** With the new
+  `answerInbound` setting (`elarni-cli settings`, off by default), a connection that reaches the
+  machine from outside (SSH, a web server, a published container port) is answered through the
+  network it came from instead of the tunnel, and sessions opened before the tunnel keep working.
+  A UDP service is answered outside only when it replies from the address the request reached
+  (bound to that address, or per packet as dnsmasq and unbound do with interface binding). Under
+  the kill switch the machine's own services answer; ports forwarded to containers stay blocked.
+  What the machine opens itself, and its answers to what came in through the tunnel, still go
+  through the VPN. `linux/HEADLESS.md` has the command.
+
+### Fixed
+
+- **Windows: "Block traffic without VPN" now also holds WSL2, Hyper-V and Mobile Hotspot traffic.**
+  What this PC passed on for them left outside the VPN for a few seconds while Elarni switched
+  servers or after the tunnel was lost; it is now dropped until the tunnel is back.
+- **Hysteria2, TUIC and XHTTP over HTTP/3 servers given by name try the name's other
+  addresses.** When the first address did not answer, for example an IPv6 address on a network
+  without IPv6, the connection waited for it until the time ran out. Now the next of up to four
+  addresses starts when one fails or after 2 seconds, while the earlier ones keep waiting, and
+  the first that answers is used and tried first next time, until the network changes.
+- **Linux: the AppImage starts on Debian 13, Fedora, Arch and openSUSE.** It stopped at once
+  on systems without the ayatana tray libraries or GStreamer. The AppImage now carries the
+  tray libraries (their source code is a
+  separate download of each release), and without GStreamer only scanning QR codes with a
+  camera is unavailable. The AppImage and the portable archive need glibc 2.34 or newer.
+- **A server whose network cuts transfers off no longer looks healthy.** Some hosting networks
+  stop each connection after its first 16 KB or so: the quick server checks passed while pages
+  never loaded. Elarni now also downloads about 100 KB through the connected server after
+  connecting, every 15 minutes while you use it or after a download stalled, and when it stops
+  passing traffic. When two
+  such downloads in a row stall, the app shows "Connected, but this server's network cuts
+  transfers off", and automatic recovery and "lowest latency" move to another server; a backup
+  whose downloads stall is skipped. With no other server to move to, recovery reconnects the
+  stalled one once and then keeps it until a download passes or the network changes.
+- **Servers keep favorites, names and the selection when a 3x-ui panel rotates REALITY
+  values.** A refresh in which the panel changed a server's remark (the traffic left) together
+  with its REALITY short ID or SNI made every server new: favorites, renamed and hidden servers,
+  the automation list and the selected server were lost. Such a server is now found again by
+  its address, credentials and keys, on every platform; a server the panel lists more than once
+  is told apart by a name of its own, otherwise by its place in the previous list.
+- **A provider's messages are no longer servers.** Some providers put the traffic left, a device
+  limit or "Package Ended" into the name of a line that points nowhere (a local or documentation
+  address, a public DNS resolver, port 0 or 1). From a subscription's own public address these
+  lines now show as "Provider: ..." under the subscription's name instead of as servers that
+  fail every test, and a subscription that sends only such lines is added without an error and
+  shows just those lines. Every platform applies the same rule, including Android for addresses
+  with `_` in the host name.
+- **Android: "Connect after device restart" waits for the network.** A server given by name
+  was looked up once as the phone started, often before Wi-Fi or mobile data worked; the
+  start failed and, with "Reconnect automatically" off, the phone stayed without VPN. A start
+  at boot or by Always-on VPN that fails because the name has no answer or no network is up
+  now tries again after 2, 4, 8 and 16 s, then every 30 s and at once when a network comes,
+  for 2 minutes. Other failures, such as a refused setting, still end the start at once.
+- **Android: per-app routing on Xiaomi (HyperOS, MIUI) and Honor phones.** Their systems show
+  an app no other installed apps until their own permission allows it, so the list said "No
+  other installed apps." Elarni now declares that permission, so its app settings can allow
+  it. While it is denied, the list says so with a button to those settings, also when the
+  system still shows some of its own apps, and the list is read again on return.
+- **Android: no crash where Android has no file picker or settings screen.** Opening or saving
+  a file on a device without a document picker (some TV boxes), and opening Android's VPN,
+  location or app settings, the share sheet or the VPN permission dialog where the system has
+  none, closed the app. Elarni now says that the device has no app or screen for it.
+- **Android: a Keystore that fails for a moment offers Retry before a reset.** Any failure to
+  decrypt the saved data read as damaged data, and the offered reset deletes the
+  subscriptions. A failing Keystore now keeps the data and offers **Retry**, which opens it
+  again and then makes the connection the failure stopped: at boot, by Always-on VPN, or one
+  Android ended along with the app. For a fault that does not clear, Troubleshooting keeps
+  **Reset Elarni** below Retry. A file that does not match its key, or a key Android removed,
+  offers the reset as before.
+- **REALITY with a randomized fingerprint could not connect on about half of the app starts.**
+  The randomized hello carried the post-quantum key share that REALITY servers since Xray 26.9.8
+  require only half the time; it now takes the hello that "random" picks, which always has it.
+  With `randomizednoalpn` that hello carries no ALPN, and the log names the hello once.
+- **The "Firefox" fingerprint failed with "invalid server key share" against servers that pick
+  the P-256 key exchange**; uTLS now keeps a key for each share the hello offers.
+- **AmneziaWG no longer loses a handshake retry or a keepalive timer change.** It moves to
+  amneziawg-go v3.1.20261116, and a profile that names Jmin without Jmax still connects: it now
+  imports, also with junk packets (Jc above 0), and is stored with Jmax equal to Jmin.
+  WireGuard and AmneziaWG take gVisor's fix for TCP connections that retried a busy connection
+  without yielding the processor.
+- **The tunnel could stop carrying traffic after one read error of its network adapter**, while
+  the app still showed it connected. Elarni reads on after such an error and stops reading only
+  when the tunnel stops or its adapter is gone. An error that repeats is logged once a minute,
+  with how many times it came.
+- **WireGuard could keep a CPU core busy while its socket kept failing.** It now waits longer
+  after each error, up to a second, instead of retrying at once. An error that only reports a
+  packet the server did not take, as while it is briefly down, does not delay its next answer.
+- **Hysteria2 uses the upload speed you set, as the official client does.** Brutal congestion
+  control starts whenever the up speed is set, capped by the server's limit if it has one; it
+  needed a server limit too. "100 mbps" now means 100,000,000 bits per second, not 104,857,600.
+  For server operators: a Hysteria2 inbound of this core without `brutalUp` now sends to each
+  client with Brutal at the download speed that client asks for, with no limit, as official
+  Hysteria does without `ignoreClientBandwidth`; set `brutalUp` to cap it, or
+  `"congestion": "bbr"` to keep BBR.
+- **A Hysteria2, MASQUE, XDRIVE or HTTP/3 XHTTP server, or an XDNS resolver over DNS over
+  HTTP/3, chained through another one could freeze when a connection closed.** The socket under
+  it is closed first now, so the close no longer waits for the outer connection to end. A failed
+  XDNS connection over HTTP/3 no longer leaves its socket open.
+- **An XHTTP `scMaxEachPostBytes` of 0 or less, such as `"0-1000000"`, crashed the core** at
+  the first connection. The profile is refused with an error that names the setting.
+- **Mux uses its configured concurrency again (8 by default).** Every outbound had been raised
+  to 128 connections per mux; only XDRIVE, which needs it, still is.
+- **Server tests left a connection open for every server that accepted but stalled in TLS.**
+  The test's own timeout now ends the TLS handshake and the wait for an answer too.
+- **XDNS with a TCP resolver did not work**: its queries went out without the length that DNS
+  over TCP needs. The resolver now sends and answers them on a pool of connections; a query left
+  without an answer gives its connection up after 5 s.
+- **DNS answers over TCP could arrive broken when several were sent at once**, and an answer read
+  while the DNS cache was cleaned could lose its addresses.
+- **Connections of a stopped tunnel no longer run on in the background**: stopping the tunnel
+  cancels the connections it handed to the core.
+- **Ranges in profiles now include their upper end.** Fragment, noise, padding and XHTTP size
+  ranges never took their largest value, so "1-2" was always 1.
+- **A Hysteria2, TUIC, XHTTP/3, MASQUE, XDRIVE or DNS over HTTP/3 connection no longer closes
+  over one packet it could not send.** A full send buffer, frequent on Mac and iPhone, closed any
+  of these but TUIC, and a moment without a network, route or local address while the device
+  moved between Wi-Fi and mobile data closed all of them, so every app on them reconnected. Such
+  a packet is now resent like a lost one. When sends keep failing for 5 seconds, the connection
+  closes as before, so apps reconnect instead of waiting for the idle timeout; a connection
+  attempt to a server the device has no route to (an IPv6 address without IPv6) still fails at
+  once. All platforms.
+- **A long-lived Hysteria2, TUIC, XHTTP/3, MASQUE or XDRIVE connection no longer runs out of
+  streams.** A stream
+  that either side stopped while an app was still sending on it never gave its slot back, so
+  after many such streams (a video or download closed mid-transfer) the connection refused new
+  ones with "too many open streams". All platforms.
+- **Servers with a long certificate chain or a post-quantum key exchange connect over
+  Hysteria2, TUIC, XHTTP/3, MASQUE, XDRIVE and DNS over HTTP/3.** A server's first handshake reply larger than 16 KiB failed the
+  connection with CRYPTO_BUFFER_EXCEEDED. All platforms.
+- **A UDP packet over Hysteria2, TUIC or MASQUE is no longer delivered twice on a path that
+  reorders packets.** After more than 64 gaps in what had arrived, a late copy of an old packet was taken
+  as new. All platforms.
+- **Hysteria2, TUIC, XHTTP/3, XDRIVE and DNS over HTTP/3 connect on networks that do not take
+  1,280-byte packets** (some tunnels and mobile networks): the connection attempt ran into its
+  timeout and now falls back to 1,200-byte packets. On these connections and MASQUE, game and
+  call traffic no longer delays flow-control updates and resent data, UDP packets are no longer
+  dropped while lost data is resent, and sending no longer pauses when the send buffer frees up
+  at the wrong moment. TUIC with BBR takes SagerNet's changes to how periods with nothing to
+  send reach BBR. All platforms.
+- **WireGuard drops a malformed IPv6 packet instead of passing on part of it**: a packet whose
+  length field was near 65,535 bytes went to the tunnel cut short. A handshake reply that
+  arrived twice at once while a new handshake started could also set up keys of the old
+  handshake. All platforms.
+- **A DNS resolver running on the computer works in VPN mode.** On Windows the DNS guard blocked
+  every lookup to port 53 that did not go through the tunnel, including lookups to 127.0.0.1
+  and ::1, so apps that used a local resolver (dnscrypt-proxy, Acrylic, AdGuard Home) got no
+  answers. On Linux such lookups went to Elarni's DNS instead of the resolver. Lookups to
+  loopback now reach the resolver. Its own plain lookups to its upstream servers still go
+  through the tunnel (Linux) or are blocked (Windows), as are lookups to the router or another
+  resolver on the local network. On Linux, systemd-resolved (127.0.0.53, 127.0.0.54) is still
+  answered by Elarni, because its own lookups would leave outside the tunnel.
+- **Linux: the VPN puts its firewall rules back when another program removes them.** A program
+  that ran `nft flush ruleset` removed Elarni's DNS redirect and kill switch rules, so DNS
+  lookups went around the tunnel until the next Connect. Elarni checks once a second, also for a
+  flushed table or a removed chain, puts the rules back and logs it. If it cannot put them back,
+  it logs why and the VPN disconnects.
+- **Windows: a Wintun failure says what went wrong.** When the Windows network driver (Wintun)
+  could not be loaded or could not create its network adapter, Elarni showed a generic
+  connection failure and switched to backup servers, which failed the same way. The message now
+  names the driver, says that antivirus software or a device installation policy can cause this,
+  and suggests reinstalling Elarni or using System proxy mode; no backup server is tried. The
+  diagnostics export keeps the Windows error code.
+- **Not now on an update keeps that version from installing by itself.** With automatic updates
+  on, a release you put off with **Not now** was still downloaded and installed at the next
+  check or start. Now it waits until you press **Update**. A newer release is offered and
+  downloaded as usual.
+- **More panel and app links import.** Hysteria2 links with `obfs=salamander` next to a
+  FinalMask (`fm`) that says the same, `mports` port hopping and an old `fm` with
+  `quicParams.udpHop`; Hysteria2 Gecko without packet sizes (Hysteria's 512 and 1200), in links
+  and Clash profiles; Shadowsocks with `plugin=obfs-local;obfs=http` (simple-obfs HTTP mode;
+  client-only options such as `fast-open` are left out) and Clash `plugin: obfs`;
+  WireGuard links with a `/` before the query, `privatekey`, a UDP `fm` and `ifp=0`, and keys
+  written with a bare `+` (also in an `ech` config list); WireGuard configurations with an IPv6
+  `Endpoint` written without brackets; TUIC links with `congestion_control=BBR`, `reduce_rtt`
+  or `fp`; versioned fingerprints such as `fp=chrome_120` (the browser's preset); mKCP `mtu` and
+  `tti`, which a shared link now keeps; VMess QR JSON with `"tls":"reality"`. What still cannot work says why: simple-obfs TLS mode,
+  a link whose `obfs` says Salamander and its `fm` Gecko (or the other way round), WireGuard
+  noise packets (`ifp`), TUIC `disable_sni=1`, VMess REALITY without a public key.
+- **Server names no longer end in `?serverDescription=…`.** 3x-ui appends a server's
+  description to its name this way for Happ; Elarni leaves it out in every link and profile
+  format.
+- **A subscription at a panel's root named in its link, `https://host/#Name`, is added under
+  that name** on every platform, instead of failing or importing as an HTTP proxy. An
+  `http://` link at a root path stays an HTTP proxy, as before.
+- **A subscription encrypted for Happ says so.** A feed that only Happ can decrypt (an
+  `Encrypt-Tag` header and `?key=` in its link) failed as an invalid or unsupported feed; the
+  message now says it is encrypted for another app and to ask the provider for another link.
+- **WireGuard and AmneziaWG carry traffic again right after the device wakes**, instead of
+  after about 15 s: after a sleep of a minute or more since the last key exchange, the next
+  packet starts a new one. A tunnel that sends nothing does nothing on waking.
+  Names with many addresses resolve again in apps that take small DNS answers or ask over TCP,
+  a name without an IPv6 address no longer waits for the next DNS server, and on the Mac and
+  iPhone a probe to the tunnel's own addresses ends at once instead of hanging until its timeout.
+- **iPhone: encryption uses the phone's AES and SHA instructions.** The iPhone core ran
+  AES-GCM and SHA-256 without them, costing battery and heat on every connection that uses
+  them. In the iPhone simulator, AES-128-GCM went from 146 to 9,115 MB/s and SHA-256 from 458
+  to 3,247 MB/s; the phone itself was not measured. A Release build also compiles its packet
+  path and ShadowQUIC client with full optimization.
+- **Windows: Docker in WSL can create networks while Elarni is connected.** With WSL in mirrored
+  networking mode, `docker network create` and `docker compose up` failed with "all predefined
+  address pools have been fully subnetted". The tunnel's routes had no next hop, WSL showed them
+  to Linux as directly connected networks, and Docker gives no network a subnet inside one. The
+  routes now go through an address of the tunnel adapter's own subnet, which routes the same
+  traffic and leaves Docker's address pools free.
+- **Windows: ShadowQUIC did not connect on a network adapter with IPv6 switched off.** With
+  "Internet Protocol Version 6 (TCP/IPv6)" unticked in the adapter's properties, every
+  connection through a ShadowQUIC server failed at once, and the log repeated "bind socket to
+  interface (IPv6 Unicast) failed ... os error 10022". The client opened its socket for IPv4
+  and IPv6 together and Windows refused to bind it to an adapter without IPv6, although the
+  server address was IPv4. When the adapter refuses that socket, the client now opens one for
+  the server's address family alone. The log still shows the refused IPv6 binding, followed by
+  a line saying that the client uses a socket for IPv4 only. Since 0.6.2.
+- **A server without IPv6 no longer gets apps' IPv6 traffic through DNS answers.** With the IP
+  type "Automatic" (the default for subscription profiles) Elarni's DNS handed apps IPv6
+  addresses whatever the server could reach. A server without IPv6 resets such TCP connections
+  a round trip later and drops such UDP without a word, so an app with no IPv4 fallback waited
+  out its own timeout, 5 s for QUIC. Elarni now finds out whether the server reaches public
+  IPv6 (a TLS hello to Cloudflare's and Google's resolvers over IPv6, and over IPv4 to tell a
+  missing IPv6 from a tunnel that is down), on the first IPv6 answer, again when the result is
+  old, and on Android, the iPhone and the Mac after a change of network. While the server has no
+  IPv6, IPv6 answers for names that go through it hold no public address and apps use IPv4;
+  names that routing sends elsewhere (direct or to another server), LAN addresses, addresses
+  set in hosts, and the IP types "IPv4" and "IPv6" are not affected. This also applies on
+  Windows and Linux in TUN mode. Apps that resolve names themselves (DNS over HTTPS in a
+  browser) or dial IPv6 addresses directly still reach the server with IPv6.
+
+### Security
+
+- **Two dependencies with published security advisories are updated**: the packet parser of
+  the tunnel stack (etherparse 0.20.4, RUSTSEC-2026-0596) and the WebSocket library
+  (gorilla/websocket, GO-2026-6278: the mask key now comes from the system's random source).
+  No release of the WebSocket library has the fix yet, so Elarni uses the upstream commit that
+  has it, with the library's other changes since v1.5.3; among them, a WebSocket inbound
+  answers a request that is not a WebSocket upgrade with "426 Upgrade Required" instead of
+  "400 Bad Request". All platforms.
+
 ## 0.6.4 - 2026-11-23
 
 ### Added

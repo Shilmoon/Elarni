@@ -676,18 +676,26 @@ pub(crate) fn apply_outbound_runtime(
 /// address, along the route of Xray's own queries: the forward loopback re-enters as its
 /// DNS tag. HTTPS records stay empty because their address hints bypass FakeDNS. An empty
 /// network keeps each query's own, so a TCP retry of a truncated answer is not truncated again.
-pub(crate) fn dns_forward_settings(servers: &Value) -> Value {
+///
+/// Automatic follows the server: with `checkIPv6` the outbound finds out whether the route of
+/// the apps reaches public IPv6, and leaves public addresses out of AAAA answers while it does
+/// not. A server without IPv6 would only drop what apps send to them.
+pub(crate) fn dns_forward_settings(servers: &Value, preferred_ip: PreferredIp) -> Value {
     let (address, port, network) = servers
         .as_array()
         .into_iter()
         .flatten()
         .find_map(dns_forward_target)
         .unwrap_or_else(|| ("1.1.1.1".to_owned(), 53, ""));
-    json!({"address": address, "port": port, "network": network, "rules": [
+    let mut settings = json!({"address": address, "port": port, "network": network, "rules": [
         {"action": "hijack", "qType": "1,28"},
         {"action": "return", "qType": "64,65"},
         {"action": "direct"}
-    ]})
+    ]});
+    if preferred_ip == PreferredIp::Automatic {
+        settings["checkIPv6"] = json!(true);
+    }
+    settings
 }
 
 // A server's IP address, or the IP host of a DoH or DoQ URL on port 53, where the public
@@ -1017,7 +1025,7 @@ pub(crate) fn compile_owned_config(
         "tag": "elarni-dns",
         "protocol": "dns",
         "streamSettings": {"sockopt": {"dialerProxy": "elarni-dns-forward"}},
-        "settings": dns_forward_settings(&json!(dns_servers))
+        "settings": dns_forward_settings(&json!(dns_servers), runtime.preferred_ip)
     }));
     routing_rules.insert(
         0,
@@ -1071,38 +1079,59 @@ pub(crate) fn compile_owned_config(
     });
     close_with_app(&mut config);
     apply_per_app_routing(&mut config, runtime, "elarni-")?;
-    block_tun_own_subnets(&mut config, "elarni-block");
+    block_tun_own_subnets(&mut config, "elarni-block", packet_backend);
     serde_json::to_vec(&config).map_err(|_| CompileError::InvalidRoute)
 }
 
 /// The TUN's own subnets: Android's VpnService (Platform.kt) and the desktop TUN
-/// (windows_tun_config.go) hold their resolver there. Nothing else answers in them, so a
+/// (windows_tun_config.go) hold their resolver there, and the Mac and iPhone tunnel
+/// (TunnelSettingsFactory.swift) its addresses. Nothing else answers in them, so a
 /// Private DNS probe on 853 or a subnet broadcast (NetBIOS, Spotify discovery) would
 /// leave by a rule for private ranges and hang until its timeout.
-const TUN_OWN_SUBNETS: [&str; 3] = [
+const TUN_OWN_SUBNETS: [&str; 5] = [
     "198.51.100.252/30",
     "fdfe:dcba:9876::/126",
     "fd76:6f75:7465::/126",
+    APPLE_TUNNEL_SUBNETS[0],
+    APPLE_TUNNEL_SUBNETS[1],
 ];
 
-/// Ends TUN traffic to its own subnets, except DNS, ahead of every other rule, the
-/// per-app gate included.
-pub(crate) fn block_tun_own_subnets(config: &mut Value, block_tag: &str) {
-    let Some(tun_tag) = config["inbounds"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .find(|inbound| inbound["protocol"] == "tun")
-        .and_then(|inbound| inbound["tag"].as_str())
-        .map(str::to_owned)
-    else {
+/// The Mac and iPhone tunnel's own subnets. With the native backend (the iPhone always, the
+/// Mac by default) tun2proxy carries the tunnel's packets into the SOCKS inbound, so its
+/// probes and broadcasts arrive there and not at a TUN inbound.
+const APPLE_TUNNEL_SUBNETS: [&str; 2] = ["192.0.2.0/30", "2001:db8::/126"];
+
+/// Ends tunnel traffic to its own subnets, except DNS, ahead of every other rule, the
+/// per-app gate included: at the TUN inbound, or with the native backend at the SOCKS
+/// inbound that tun2proxy feeds.
+pub(crate) fn block_tun_own_subnets(
+    config: &mut Value,
+    block_tag: &str,
+    packet_backend: PacketBackend,
+) {
+    let inbound_tag = |protocol: &str| {
+        config["inbounds"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .find(|inbound| inbound["protocol"] == protocol)
+            .and_then(|inbound| inbound["tag"].as_str())
+            .map(str::to_owned)
+    };
+    let block = match packet_backend {
+        PacketBackend::XrayTun => inbound_tag("tun").map(|tag| (tag, TUN_OWN_SUBNETS.as_slice())),
+        PacketBackend::NativeTun2Proxy => {
+            inbound_tag("socks").map(|tag| (tag, APPLE_TUNNEL_SUBNETS.as_slice()))
+        }
+    };
+    let Some((inbound, subnets)) = block else {
         return;
     };
     if let Some(rules) = config["routing"]["rules"].as_array_mut() {
         rules.insert(
             0,
-            json!({"type": "field", "inboundTag": [tun_tag], "network": "tcp,udp",
-                "ip": TUN_OWN_SUBNETS, "port": "1-52,54-65535", "outboundTag": block_tag}),
+            json!({"type": "field", "inboundTag": [inbound], "network": "tcp,udp",
+                "ip": subnets, "port": "1-52,54-65535", "outboundTag": block_tag}),
         );
     }
 }

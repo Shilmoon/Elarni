@@ -198,6 +198,12 @@ func TestShareLinksKeepWhatALinkCanSay(t *testing.T) {
 		{"Shadowsocks without stream settings", `{"outbounds":[{"protocol":"shadowsocks","settings":{"address":"10.0.0.9","port":8388,"method":"aes-256-gcm","password":"pw"}}]}`},
 		{"VMess without stream settings", `{"outbounds":[{"protocol":"vmess","settings":{"address":"10.0.0.9","port":443,"id":"` + id + `"}}]}`},
 		{"VLESS without stream settings", `{"outbounds":[{"protocol":"vless","settings":{"address":"10.0.0.9","port":443,"id":"` + id + `","encryption":"none"}}]}`},
+		{"mKCP mtu and tti", "vless://" + id + "@10.0.0.9:443?encryption=none&type=kcp&seed=s&mtu=1200&tti=20#kcp"},
+		// simple-obfs's request says Upgrade, which only its plugin says.
+		{"Shadowsocks behind simple-obfs", "ss://YWVzLTI1Ni1nY206cHc@10.0.0.9:8388?plugin=obfs-local%3Bobfs%3Dhttp%3Bobfs-host%3Dcdn.example%3Bobfs-uri%3D%2Fp%3Bfast-open#ss"},
+		{"Shadowsocks behind Mihomo's simple-obfs", "proxies:\n  - {name: S, type: ss, server: 10.0.0.9, port: 8388, cipher: aes-256-gcm, password: pw, plugin: obfs, plugin-opts: {mode: http}}\n"},
+		{"mKCP mtu and tti in Xray JSON", `{"outbounds":[{"protocol":"vless","settings":{"address":"10.0.0.9","port":443,"id":"` + id + `","encryption":"none"},` +
+			`"streamSettings":{"network":"kcp","kcpSettings":{"mtu":1000,"tti":30,"seed":"s"}}}]}`},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			imported, err := ImportClientProfiles(test.source)
@@ -267,8 +273,9 @@ func TestShareLinkThatWouldLoseSettingsIsNotWritten(t *testing.T) {
 			plain("httpupgrade", `"httpupgradeSettings":{"path":"/u","host":"cdn.example","headers":{}},`)},
 		{"gRPC user agent", plain("grpc", `"grpcSettings":{"serviceName":"s","user_agent":"fixture"},`), plain("grpc", `"grpcSettings":{"serviceName":"s","user_agent":""},`)},
 		{"gRPC idle timeout", plain("grpc", `"grpcSettings":{"serviceName":"s","idle_timeout":60},`), plain("grpc", `"grpcSettings":{"serviceName":"s","idle_timeout":0},`)},
-		{"mKCP MTU", plain("kcp", `"kcpSettings":{"mtu":1200},`), plain("kcp", `"kcpSettings":{"mtu":1350},`)},
-		{"mKCP TTI", plain("mkcp", `"kcpSettings":{"tti":20},`), plain("mkcp", `"kcpSettings":{"tti":50},`)},
+		// A link says mKCP's mtu and tti (146.0b).
+		{"mKCP MTU", "", plain("kcp", `"kcpSettings":{"mtu":1200},`)},
+		{"mKCP TTI", "", plain("mkcp", `"kcpSettings":{"tti":20},`)},
 		{"HTTP header method", plain("raw", `"rawSettings":{"header":{"type":"http","request":{"method":"POST","path":["/"]}}},`),
 			plain("raw", `"rawSettings":{"header":{"type":"http","request":{"method":"","path":["/"]}}},`)},
 		{"HTTP header version", plain("tcp", `"tcpSettings":{"header":{"type":"http","request":{"version":"1.0"}}},`),
@@ -439,8 +446,38 @@ func TestHysteriaLinkPrefersItsOwnParameters(t *testing.T) {
 	}
 }
 
+// The official Hysteria URI writes gecko without packet sizes (probe N10-12): Hysteria's own client
+// defaults, 512 and 1200, stand for a size the link leaves out.
+func TestHysteria2GeckoWithoutSizesTakesHysteriasDefaults(t *testing.T) {
+	const base = "hysteria2://pw@example.com:443/?sni=example.com&obfs=gecko&obfs-password=abc"
+	for _, test := range []struct {
+		sizes    string
+		min, max int32
+	}{
+		{"", 512, 1200},
+		{"&minPacketSize=600", 600, 1200},
+		{"&maxPacketSize=1000", 512, 1000},
+		{"&minPacketSize=100&maxPacketSize=2048", 100, 2048},
+	} {
+		imported, err := ImportClientProfiles(base + test.sizes + "#hy2-gecko-nosize")
+		if err != nil {
+			t.Errorf("%q: %v", test.sizes, err)
+			continue
+		}
+		masks := builtOutbound(t, imported.Profiles[0].Config).stream.(*internet.StreamConfig).Udpmasks
+		if len(masks) != 1 {
+			t.Errorf("%q: %d masks: %s", test.sizes, len(masks), imported.Profiles[0].Config)
+			continue
+		}
+		mask, err := masks[0].GetInstance()
+		if gecko, ok := mask.(*salamander.GeckoConfig); err != nil || !ok || gecko.Password != "abc" || gecko.MinPacketSize != test.min || gecko.MaxPacketSize != test.max {
+			t.Errorf("%q: mask %T %v (%v)", test.sizes, mask, mask, err)
+		}
+	}
+}
+
 // 3x-ui and v2rayN write Xray's gecko mask, salamander with a packet size range, as obfs=gecko with
-// minPacketSize and maxPacketSize. Without the sizes the mask cannot be built.
+// minPacketSize and maxPacketSize.
 func TestHysteria2GeckoObfuscationImportsAndShares(t *testing.T) {
 	const base = "hysteria2://pw@203.0.113.9:443?sni=h.example&obfs=gecko&obfs-password=secret"
 	imported, err := ImportClientProfiles(base + "&minPacketSize=512&maxPacketSize=1200#g")
@@ -475,8 +512,8 @@ func TestHysteria2GeckoObfuscationImportsAndShares(t *testing.T) {
 	if got := builtOutbound(t, again.Profiles[0].Config); !proto.Equal(want.proxy, got.proxy) || !proto.Equal(want.stream, got.stream) {
 		t.Errorf("server changed through %s", links)
 	}
-	for _, sizes := range []string{"", "&minPacketSize=512", "&maxPacketSize=1200", "&minPacketSize=0&maxPacketSize=1200",
-		"&minPacketSize=1200&maxPacketSize=512", "&minPacketSize=512&maxPacketSize=2049", "&minPacketSize=a&maxPacketSize=1200"} {
+	for _, sizes := range []string{"&minPacketSize=0&maxPacketSize=1200", "&minPacketSize=1200&maxPacketSize=512",
+		"&minPacketSize=512&maxPacketSize=2049", "&minPacketSize=a&maxPacketSize=1200", "&minPacketSize=1300", "&maxPacketSize=2049", "&maxPacketSize=100"} {
 		if result, err := ImportClientProfiles(base + sizes); err == nil {
 			t.Errorf("%q imported as %s", sizes, result.Profiles[0].Config)
 		}

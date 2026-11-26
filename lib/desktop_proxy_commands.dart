@@ -92,7 +92,7 @@ extension _ProxyCommands on DesktopProxy {
       case 'state':
         return {
           'state': _state,
-          if (_state == 'connected') 'liveness': _liveness,
+          if (_state == 'connected') 'liveness': _reportedLiveness,
         };
       case 'subscriptions':
         return _catalog!.snapshot();
@@ -652,16 +652,13 @@ extension _ProxyCommands on DesktopProxy {
             ),
           });
           final content = input['text']! as String;
-          final url = DesktopCatalog.safeURL(content.trim());
-          final parsed = url == null ? null : Uri.parse(url);
           if (candidate.isRoutingInput(content)) {
             candidate.importRouting(content);
-          } else if (parsed != null &&
-              parsed.path.isNotEmpty &&
-              parsed.path != '/' &&
-              !({'t.me', 'telegram.me'}.contains(parsed.host) &&
-                  parsed.path == '/proxy')) {
-            await refresh(addSource({...input, 'text': url!}));
+          } else if (input['kind'] == 'subscription') {
+            // The core tells a subscription from a proxy link, as on every
+            // platform: an http(s) URL is an HTTP proxy at a root path
+            // unless it is a panel's https://host/#Name.
+            await refresh(addSource({...input, 'text': content.trim()}));
           } else {
             final local = await candidate.importLocal(content);
             try {
@@ -1064,6 +1061,6 @@ extension _ProxyCommands on DesktopProxy {
         ? _connectedAt?.millisecondsSinceEpoch
         : null,
     'counters': _state == 'connected' ? _latestMetrics : <String, Object?>{},
-    'liveness': _state == 'connected' ? _liveness : null,
+    'liveness': _state == 'connected' ? _reportedLiveness : null,
   };
 }

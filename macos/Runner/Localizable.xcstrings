@@ -395,6 +395,16 @@
         }
       }
     },
+    "connected, transfers cut off" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "подключено, передача обрывается"
+          }
+        }
+      }
+    },
     "connecting" : {
       "localizations" : {
         "ru" : {

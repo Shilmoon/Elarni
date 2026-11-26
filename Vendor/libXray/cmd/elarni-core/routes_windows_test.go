@@ -169,6 +169,70 @@ func TestPhysicalRouteSelectionPreservesPrefixMetricAndZone(t *testing.T) {
 	}
 }
 
+// Block traffic without VPN keeps the tunnel's prefixes on the loopback interface too. They are
+// more specific than the physical default route, and the core's own sockets bound there would
+// reach nothing. The snapshot leaves the loopback interface out, so they keep the physical route,
+// and the default route keeps its interface.
+func TestPhysicalNetworkLeavesOutTheLoopbackInterface(t *testing.T) {
+	// What the snapshot keeps of a table with fallback routes: the physical interface's routes, with
+	// the choices the loopback rows were once skipped for.
+	routes := []physicalRoute{
+		{prefix: netip.MustParsePrefix("0.0.0.0/0"), index: 7, metric: 25},
+		{prefix: netip.MustParsePrefix("::/0"), index: 7, metric: 25},
+		{prefix: netip.MustParsePrefix("192.168.1.0/24"), index: 7, metric: 281},
+	}
+	for _, address := range []string{"9.9.9.9", "203.0.113.9", "192.168.1.20", "2001:db8::7", "fd00::7"} {
+		if got := selectPhysicalRoute(routes, netip.MustParseAddr(address)); got == nil || got.index != 7 {
+			t.Errorf("route for %s = %+v, want the physical interface", address, got)
+		}
+	}
+	cache := &physicalNetworkCache{load: func() (*physicalNetworkSnapshot, error) { return &physicalNetworkSnapshot{routes: routes}, nil }}
+	if got := cache.defaults(); got != [2]uint32{7, 7} {
+		t.Fatalf("default routes on interfaces %v, want the physical one", got)
+	}
+	// The real table: no route of the loopback interface is kept, 127.0.0.0/8 and ::1/128 included,
+	// so none is ever chosen.
+	snapshot, err := readPhysicalNetwork(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	interfaces, err := net.Interfaces()
+	if err != nil {
+		t.Fatal(err)
+	}
+	loopback := map[uint32]bool{}
+	for _, iface := range interfaces {
+		if iface.Flags&net.FlagLoopback != 0 {
+			loopback[uint32(iface.Index)] = true
+		}
+	}
+	if len(loopback) == 0 {
+		t.Fatal("loopback interface missing")
+	}
+	for _, route := range snapshot.routes {
+		if loopback[route.index] {
+			t.Errorf("the snapshot kept route %s of the loopback interface %d", route.prefix, route.index)
+		}
+	}
+	for _, address := range []string{"127.0.0.1", "9.9.9.9", "224.0.0.251", "::1", "2001:db8::7", "ff02::fb"} {
+		if route := selectPhysicalRoute(snapshot.routes, netip.MustParseAddr(address)); route != nil && loopback[route.index] {
+			t.Errorf("route for %s is on the loopback interface", address)
+		}
+	}
+	// Without a physical network the snapshot has no routes, which fails no connect: each dial
+	// fails instead, until a network is up.
+	offline := &physicalNetworkCache{load: func() (*physicalNetworkSnapshot, error) { return &physicalNetworkSnapshot{}, nil }}
+	if _, err := offline.get(true); err != nil {
+		t.Fatal("an empty snapshot failed:", err)
+	}
+	if got := offline.defaults(); got != [2]uint32{} {
+		t.Fatalf("default routes on interfaces %v without a physical network", got)
+	}
+	if err := offline.bind("tcp4", "9.9.9.9:443", nil); err == nil || err.Error() != "route_unavailable" {
+		t.Fatalf("a dial without a physical network: %v, want route_unavailable", err)
+	}
+}
+
 // Regression: WireGuard kept its socket on the adapter that carried the default
 // route when it started, so a move to another adapter left the tunnel dead.
 func TestPhysicalDefaultRouteMoveReopensSockets(t *testing.T) {

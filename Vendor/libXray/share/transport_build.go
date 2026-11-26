@@ -2,7 +2,9 @@ package share
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/url"
+	"strconv"
 	"strings"
 
 	"github.com/xtls/xray-core/infra/conf"
@@ -15,6 +17,8 @@ type shareTransportFields struct {
 	Path            string
 	Host            string
 	Seed            string // KCP seed (URL query or VMess QR path-as-seed)
+	KCPMTU          string // KCP mtu and tti (URL only)
+	KCPTTI          string
 	GrpcAuthority   string
 	GrpcServiceName string
 	GrpcMultiMode   bool
@@ -34,6 +38,8 @@ func transportFieldsFromURLQuery(q url.Values) shareTransportFields {
 		Path:            q.Get("path"),
 		Host:            q.Get("host"),
 		Seed:            q.Get("seed"),
+		KCPMTU:          q.Get("mtu"),
+		KCPTTI:          q.Get("tti"),
 		GrpcAuthority:   q.Get("authority"),
 		GrpcServiceName: q.Get("serviceName"),
 		GrpcMultiMode:   q.Get("mode") == "multi",
@@ -108,6 +114,24 @@ func buildStreamFromTransportFields(t shareTransportFields) (*conf.StreamConfig,
 		}
 		if t.Seed != "" {
 			kcpSettings.Seed = new(t.Seed)
+		}
+		// The core checks the range of each.
+		number := func(text string) (*uint32, error) {
+			if text == "" {
+				return nil, nil
+			}
+			value, err := strconv.ParseUint(text, 10, 32)
+			if err != nil {
+				return nil, fmt.Errorf("invalid mKCP mtu or tti")
+			}
+			return new(uint32(value)), nil
+		}
+		var err error
+		if kcpSettings.Mtu, err = number(t.KCPMTU); err != nil {
+			return nil, err
+		}
+		if kcpSettings.Tti, err = number(t.KCPTTI); err != nil {
+			return nil, err
 		}
 		streamSettings.KCPSettings = kcpSettings
 	case "ws", "websocket":

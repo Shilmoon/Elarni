@@ -84,6 +84,7 @@
         "protocol": "dns",
         "settings": {
           "address": "192.0.2.53",
+          "checkIPv6": true,
           "network": "",
           "port": 53,
           "rules": [
@@ -123,6 +124,19 @@
     "routing": {
       "domainStrategy": "AsIs",
       "rules": [
+        {
+          "inboundTag": [
+            "elarni-socks"
+          ],
+          "ip": [
+            "192.0.2.0/30",
+            "2001:db8::/126"
+          ],
+          "network": "tcp,udp",
+          "outboundTag": "elarni-block",
+          "port": "1-52,54-65535",
+          "type": "field"
+        },
         {
           "inboundTag": [
             "elarni-socks",
@@ -327,7 +341,9 @@
           "ip": [
             "198.51.100.252/30",
             "fdfe:dcba:9876::/126",
-            "fd76:6f75:7465::/126"
+            "fd76:6f75:7465::/126",
+            "192.0.2.0/30",
+            "2001:db8::/126"
           ],
           "network": "tcp,udp",
           "outboundTag": "elarni-block",
@@ -493,6 +509,19 @@
       "rules": [
         {
           "inboundTag": [
+            "elarni-socks"
+          ],
+          "ip": [
+            "192.0.2.0/30",
+            "2001:db8::/126"
+          ],
+          "network": "tcp,udp",
+          "outboundTag": "elarni-block",
+          "port": "1-52,54-65535",
+          "type": "field"
+        },
+        {
+          "inboundTag": [
             "elarni-socks",
             "elarni-http",
             "elarni-tun"
@@ -646,6 +675,7 @@
         "protocol": "dns",
         "settings": {
           "address": "1.1.1.1",
+          "checkIPv6": true,
           "network": "",
           "port": 53,
           "rules": [
@@ -705,7 +735,9 @@
           "ip": [
             "198.51.100.252/30",
             "fdfe:dcba:9876::/126",
-            "fd76:6f75:7465::/126"
+            "fd76:6f75:7465::/126",
+            "192.0.2.0/30",
+            "2001:db8::/126"
           ],
           "network": "tcp,udp",
           "outboundTag": "elarni-block",
@@ -893,6 +925,7 @@
         "protocol": "dns",
         "settings": {
           "address": "192.0.2.53",
+          "checkIPv6": true,
           "network": "",
           "port": 53,
           "rules": [
@@ -939,6 +972,19 @@
     "routing": {
       "domainStrategy": "IPIfNonMatch",
       "rules": [
+        {
+          "inboundTag": [
+            "elarni-socks"
+          ],
+          "ip": [
+            "192.0.2.0/30",
+            "2001:db8::/126"
+          ],
+          "network": "tcp,udp",
+          "outboundTag": "elarni-block",
+          "port": "1-52,54-65535",
+          "type": "field"
+        },
         {
           "inboundTag": [
             "elarni-socks",
@@ -1154,7 +1200,9 @@
           "ip": [
             "198.51.100.252/30",
             "fdfe:dcba:9876::/126",
-            "fd76:6f75:7465::/126"
+            "fd76:6f75:7465::/126",
+            "192.0.2.0/30",
+            "2001:db8::/126"
           ],
           "network": "tcp,udp",
           "outboundTag": "elarni-block",
@@ -1383,7 +1431,9 @@
           "ip": [
             "198.51.100.252/30",
             "fdfe:dcba:9876::/126",
-            "fd76:6f75:7465::/126"
+            "fd76:6f75:7465::/126",
+            "192.0.2.0/30",
+            "2001:db8::/126"
           ],
           "network": "tcp,udp",
           "outboundTag": "elarni-block",
@@ -1573,6 +1623,7 @@
         "protocol": "dns",
         "settings": {
           "address": "192.0.2.53",
+          "checkIPv6": true,
           "network": "",
           "port": 53,
           "rules": [
@@ -1625,7 +1676,9 @@
           "ip": [
             "198.51.100.252/30",
             "fdfe:dcba:9876::/126",
-            "fd76:6f75:7465::/126"
+            "fd76:6f75:7465::/126",
+            "192.0.2.0/30",
+            "2001:db8::/126"
           ],
           "network": "tcp,udp",
           "outboundTag": "elarni-block",

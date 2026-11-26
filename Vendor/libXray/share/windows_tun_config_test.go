@@ -452,3 +452,47 @@ func TestWindowsTunnelDNSForwardSkipsDomainOnlyResolvers(t *testing.T) {
 		t.Fatalf("forward target %s:%d, want 1.1.1.1:53", address, port)
 	}
 }
+
+// #140: the TUN's DNS on Windows and Linux is answered by elarni-windows-dns, not by the
+// compiled elarni-dns, so it checks IPv6 exactly when the compiled one does (the IP type
+// Automatic).
+func TestWindowsTunnelDNSChecksIPv6LikeTheCompiledDNS(t *testing.T) {
+	var fixtures map[string]json.RawMessage
+	if err := json.Unmarshal(compiledRoutingJSON, &fixtures); err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		fixture string
+		check   bool
+	}{{"tun-profile", true}, {"tun", false}, {"tun-per-app", false}} {
+		compiledCheck := false
+		for _, item := range compiledRoutingFixture(t, test.fixture)["outbounds"].([]any) {
+			if outbound := item.(map[string]any); outbound["tag"] == "elarni-dns" {
+				compiledCheck = outbound["settings"].(map[string]any)["checkIPv6"] == true
+			}
+		}
+		if compiledCheck != test.check {
+			t.Fatalf("%s: the fixture's elarni-dns checks IPv6 %t, want %t", test.fixture, compiledCheck, test.check)
+		}
+		config, err := WindowsTunnelConfig(fixtures[test.fixture], "Elarni")
+		if err != nil {
+			t.Fatal(err)
+		}
+		var result struct {
+			Outbounds []struct {
+				Tag      string
+				Settings map[string]any
+			}
+		}
+		if err := json.Unmarshal(config, &result); err != nil {
+			t.Fatal(err)
+		}
+		last := result.Outbounds[len(result.Outbounds)-1]
+		if last.Tag != "elarni-windows-dns" {
+			t.Fatalf("%s: last outbound %s", test.fixture, last.Tag)
+		}
+		if got := last.Settings["checkIPv6"] == true; got != test.check {
+			t.Errorf("%s: elarni-windows-dns checks IPv6 %t, want %t (settings %v)", test.fixture, got, test.check, last.Settings)
+		}
+	}
+}

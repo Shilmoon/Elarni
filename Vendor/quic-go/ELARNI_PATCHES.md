@@ -24,6 +24,87 @@ and mock directories are left out.
   `TestXHTTP3CanceledFirstFlowKeepsTheSharedDial`.
 - `connection.go`: `Conn.Ping` queues a PING, which the peer acknowledges at once; XHTTP/3
   checks its connections this way after a network change (`TestPathChangeKeepsAnsweringConnections`).
+- `send_queue.go` (`sendErrors`), `connection.go`, `sys_conn_nobufs_{unix,windows,other}.go`,
+  `sys_conn_netchange_{unix,windows,other}.go`: a send that fails with ENOBUFS (a full socket or
+  interface queue, common on macOS and iOS) drops that packet instead of closing the connection.
+  So does a send that fails with ENETUNREACH, EHOSTUNREACH, EADDRNOTAVAIL or ENETDOWN (the
+  interface, route or local address gone while the device moves between Wi-Fi and cellular;
+  WSAE* on Windows, and the Win32 codes ERROR_NETWORK_UNREACHABLE and ERROR_HOST_UNREACHABLE an
+  overlapped send reports), but only once the handshake is complete, and only for 5 s
+  (`networkChangeGrace`) from the first failure of a streak; a successful send ends the streak.
+  The connection sets the flag in `handleHandshakeComplete`, and before that these errors still
+  fail the dial at once (an IPv6 server address without an IPv6 route). After the 5 s the next
+  such error closes the connection with it, as before, so a connection whose network does not
+  come back ends within seconds instead of at the idle timeout. The send queues and the direct
+  writes of the #5911 port below share the streak. A dropped packet is already registered with
+  the sent packet handler, so loss recovery resends it. The ENOBUFS files are SagerNet/quic-go
+  e86a8a79 as is. Test: `send_queue_transient_test.go`.
+- `send_stream.go` (`write`): quic-go/quic-go 254a5393 (issue #6136). A Write blocked when the
+  peer sent STOP_SENDING (or the stream was canceled) put its data into a new frame that was
+  never sent, so the stream never completed and its MAX_STREAMS credit never came back. Test:
+  `send_stream_reset_test.go`.
+- `crypto_stream.go`, `frame_sorter.go` (`ReadPos`), `internal/protocol/params.go`
+  (`MaxCryptoStreamBufferSize`): quic-go/quic-go PR #6265 (5ee23131). The 16 KiB limit applies to
+  out-of-order CRYPTO data past the read position, not to the stream offset, so a server flight
+  over 16 KiB (long certificate chains, post-quantum key shares) no longer fails the handshake
+  with CRYPTO_BUFFER_EXCEEDED. Test: `crypto_stream_limit_test.go`.
+- `internal/ackhandler/received_packet_history.go`: quic-go/quic-go PR #6308 (48250ad6). Past 64
+  ACK ranges the oldest one is dropped through `DeleteBelow`, so a late duplicate of a packet in
+  it is rejected instead of processed again (a DATAGRAM delivered twice). Test:
+  `internal/ackhandler/received_packet_history_limit_test.go`.
+- `connection.go` (`sendPacketsWithoutGSO`, `sendPacketsWithGSO`): quic-go/quic-go PR #6223
+  (5a6c94ec) as is. When the send queue was full, the run loop stopped sending until the next
+  timer or packet, even if the queue freed up before the loop checked it again; it now sets
+  `pacingDeadline` to send at once. Test: `send_queue_freed_test.go`.
+- `framer.go` (`AppendControlFrames`, `AppendStreamFrames`), `packet_packer.go`
+  (`composeNextPacket`): quic-go/quic-go PR #5970 (6dfb89eb), ported by hand. Frames are packed
+  in the order ACK, control frames, retransmissions, DATAGRAM, STREAM, so a steady flow of
+  DATAGRAM frames (UDP over Hysteria2) no longer delays MAX_DATA, MAX_STREAM_DATA and lost
+  frames. A DATAGRAM that does not fit waits when the packet carries an ACK or other frames, and
+  is dropped only from an otherwise empty packet; ACK-only packets leave it queued. Only the
+  order is taken: v0.61 still packs one DATAGRAM per packet, with its length (#5960 and #5961 are
+  not part of it). The fork's `peekTimes` limit stays, but a DATAGRAM that waited
+  `DatagramFrameMaxPeekTimes` (10) packets now goes first in the next one, right after the ACK,
+  instead of being dropped: during loss recovery retransmissions fill every packet, and UDP
+  packets were lost. It is dropped only if it does not fit even there. `peekTimes` is 0 again
+  once a DATAGRAM was sent or dropped (it was left at 1). Test:
+  `packet_packer_datagram_order_test.go`.
+- `connection.go` (`writeUntilInitialPacketSizeTried`, `InitialPacketSize`,
+  `SetCongestionControl`, `maxMTU`), `config.go` (`initialPacketSize`, `initialPacketSizeIsFloor`,
+  `populateConfig`), `interface.go`, `internal/congestion/cubic_sender.go`
+  (`FallBackToMinDatagramSize`), `internal/ackhandler/sent_packet_handler.go`
+  (`SetMaxDatagramSize`, `PacketRefused`, `SetCongestionControl`),
+  `internal/ackhandler/interfaces.go`: quic-go/quic-go PR #5911 (99c74363), ported by hand to
+  v0.61's structure. Until a packet of the initial size was tried (written, refused, or dropped
+  on a full buffer) and while the handshake is not confirmed, packets are written directly
+  instead of through the send queue, which drops a "message too long" error; after that they go
+  through the send queue again, so a slow write does not hold up the run loop. `SendProbe` writes
+  on the run loop too, so it never writes at the same time as the direct writes. If the
+  interface refuses a packet over 1,200 bytes that way (an MTU below 1,280 bytes, or below the
+  Chrome parrot's 1,250: some tunnels and mobile networks), the connection drops to 1,200
+  bytes: the cubic sender takes this one decrease (`FallBackToMinDatagramSize`, before the
+  handshake is confirmed; it still panics on any other decrease, as upstream's does),
+  `InitialPacketSize()` reports 1,200 (Xray-core's Hysteria congestion seeds from it), MTU
+  discovery starts there, and loss recovery resends the refused packet. The refused packet is
+  taken off the amplification limit (`PacketRefused`), so a server's resend and the rest of its
+  flight are not held back until the client sends again. `Config().InitialPacketSize` reads
+  1,280 when the application set none, as before the port; `populateConfig` records that it
+  filled in the default (`defaultInitialPacketSize`), so the default is not taken for a floor.
+  Before, every handshake packet was dropped and the dial ended at the handshake timeout. As
+  upstream, an `InitialPacketSize` the application set (MASQUE's 1,350) is the smallest size it
+  accepts: the dial fails at once with the error instead. Differences from upstream: path
+  migration starts at the size in effect, not at 1,200, and the MTU discoverer is still created
+  with the transport parameters. Where the interface takes the configured size, nothing changes.
+  Not in upstream, which has no pluggable congestion control: a controller installed with
+  `SetCongestionControl` is told every size above its seed, the largest size `InitialPacketSize()`
+  returned so far (or the size in effect, if the application did not ask), and none at or below
+  it. An early connection (0-RTT, or a server's early listener) reaches the application before
+  its first packet is written, so it may install a controller seeded with the initial size before
+  the fallback, and Hysteria's BBR and sing-quic's controllers panic on a smaller size; one
+  installed after the fallback is seeded with 1,200 bytes and learns sizes from 1,201 on.
+  `switchToNewPath` and `handleShortHeaderPacket` take the peer's limit from `maxMTU` too.
+  Tests: `mtu_fallback_test.go`, `send_queue_transient_test.go`,
+  `internal/ackhandler/installed_congestion_size_test.go`.
 - `go.mod`, `go.sum`: tidied for the copied sources, without the `tool` block, so
   the workspace does not pull upstream's test and generator dependencies.
 - `http3/{client,headers,request_writer,response_writer,server_conn}.go`: imports

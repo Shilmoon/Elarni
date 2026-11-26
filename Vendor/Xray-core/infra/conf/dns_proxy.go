@@ -66,6 +66,7 @@ type DNSOutboundConfig struct {
 	Port           uint16                   `json:"port"`
 	UserLevel      uint32                   `json:"userLevel"`
 	Rules          []*DNSOutboundRuleConfig `json:"rules"`
+	CheckIPv6      bool                     `json:"checkIPv6"`  // Elarni
 	NonIPQuery     *string                  `json:"nonIPQuery"` // todo: remove legacy
 	BlockTypes     *[]int32                 `json:"blockTypes"` // todo: remove legacy
 }
@@ -86,6 +87,7 @@ func (c *DNSOutboundConfig) Build() (proto.Message, error) {
 			Port:    uint32(c.RewritePort),
 		},
 		UserLevel: c.UserLevel,
+		CheckIpv6: c.CheckIPv6,
 	}
 	if c.RewriteAddress != nil {
 		config.RewriteServer.Address = c.RewriteAddress.Build()

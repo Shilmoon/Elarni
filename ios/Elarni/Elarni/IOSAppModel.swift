@@ -232,6 +232,7 @@ final class IOSAppModel {
   private func tick() async {
     guard loaded else { return }
     try? await vpn.refreshProvider()
+    noteTransferCheck()
     adoptUntrustedWiFiConnection()
     noteUnexpectedDisconnect()
     guard !busy, let store else { return }
@@ -424,6 +425,7 @@ final class IOSAppModel {
       case "rate_limited": String(localized: "\(name) is limiting requests. Elarni retries later; wait before refreshing again.")
       case "subscription_denied": String(localized: "\(name) refused the request. The subscription may have expired, run out of traffic or reached its device limit. Contact the provider.")
       case "subscription_unavailable": String(localized: "\(name) removed or changed this link. Ask the provider for a new one.")
+      case "encrypted_feed": String(localized: "\(name) encrypted this subscription for another app, such as Happ, and Elarni cannot read it. Ask the provider for a link without encryption.")
       default: describe(error)
       }
       throw IOSAppError.refreshFailed(text + String(localized: " The last working servers were kept."))
@@ -1169,7 +1171,9 @@ final class IOSAppModel {
   func nativeProbeReply(_ payload: [String: Any]) async throws -> [String: Any] {
     guard !probeQuarantined else { throw IOSAppError.busy }
     let operation = UUID().uuidString.lowercased()
-    _ = try NativeAPI.invoke("prepareProbe", ["operationId": operation, "timeout": payload["timeout"] as? Int ?? 5])
+    var prepare: [String: Any] = ["operationId": operation, "timeout": payload["timeout"] as? Int ?? 5]
+    if payload["transfer"] as? Bool == true { prepare["transfer"] = true }
+    _ = try NativeAPI.invoke("prepareProbe", prepare)
     defer { _ = try? NativeAPI.invoke("releaseProbe", ["operationId": operation]) }
     var request = payload; request["operationId"] = operation
     do {
@@ -1217,43 +1221,70 @@ final class IOSAppModel {
         "method": target == nil ? preferences.probeMethod : "GET", "mode": target == nil ? preferences.probeVariant : "default",
         "timeout": target == nil ? preferences.probeTimeout : 5]
       if trace { payload["trace"] = true }
-      if vpn.connected {
-        guard expectedPlan != nil || selectedID == node.id, let plan = expectedPlan ?? vpn.savedPlan else { throw IOSAppError.busy }
-        let savedPlan = vpn.savedPlan
-        try await vpn.refreshProvider()
-        let before = vpn.provider
-        let digest = Data(SHA256.hash(data: plan)).base64EncodedString()
-        guard before["state"] as? String == "connected", before["configurationDigest"] as? String == digest,
-              let instance = before["instanceID"] as? String, let generation = before["generation"] as? UInt64,
-              before["resourceRecoveryRequired"] as? Bool != true else { throw AutomationFailure.providerFailure }
-        payload["packetPath"] = true
-        let outcome: Result<[String: Any], Error>
-        do { outcome = .success(try await nativeProbeReply(payload)) } catch { outcome = .failure(error) }
-        try Task.checkCancellation()
-        try await vpn.refreshProvider()
-        guard vpn.connected, vpn.provider["state"] as? String == "connected", vpn.provider["instanceID"] as? String == instance,
-              vpn.provider["generation"] as? UInt64 == generation, vpn.provider["configurationDigest"] as? String == digest,
-              vpn.provider["resourceRecoveryRequired"] as? Bool != true, vpn.savedPlan == savedPlan else { throw AutomationFailure.staleContext }
-        let reply = try outcome.get()
-        delay = reply["delay"] as? Int ?? 0
-        exit = reply["exit"] as? [String: Any]
-      } else {
-        guard !vpn.active else { throw IOSAppError.busy }
-        let port = try IOSNetworkProbe.freePort()
-        let context = mode == "activeProxy" ? try store.routing.runtimeProbeConfiguration(subscriptionID: node.subscriptionID) : (routes: nil, assetDirectory: nil)
-        var compiled = try compile(config, routes: context.routes, preference: try store.ipPreference(nodeID: node.id), port: port, probe: true)
-        if let assets = context.assetDirectory { compiled["env"] = ["xray.location.asset": assets] }
-        payload["configJSON"] = try prettyJSON(compiled)
-        payload["proxy"] = "socks5://127.0.0.1:\(port)"
-        let reply = try await nativeProbeReply(payload)
-        delay = reply["delay"] as? Int ?? 0
-        exit = reply["exit"] as? [String: Any]
-      }
+      let reply = try await coreReply(node, payload: payload, mode: mode, expectedPlan: expectedPlan, store: store, config: config)
+      delay = reply["delay"] as? Int ?? 0
+      exit = reply["exit"] as? [String: Any]
     }
     try Task.checkCancellation()
     guard commands.revision == intentRevision, try store.configurationRevision(nodeID: node.id) == revision else { throw AutomationFailure.staleContext }
     if !["tcp", "icmp"].contains(mode) { try store.recordSuccess(nodeID: node.id, revision: revision) }
     return (delay, exit)
+  }
+
+  /// The core's reply to a ping `payload` for `node`: through the tunnel's packet path while it runs the
+  /// selected server (or `expectedPlan`), else through a probe core.
+  private func coreReply(_ node: ServerNode, payload: [String: Any], mode: String, expectedPlan: Data?,
+                         store: SubscriptionStore, config: [String: Any]) async throws -> [String: Any] {
+    var payload = payload
+    if vpn.connected {
+      guard expectedPlan != nil || selectedID == node.id, let plan = expectedPlan ?? vpn.savedPlan else { throw IOSAppError.busy }
+      let savedPlan = vpn.savedPlan
+      try await vpn.refreshProvider()
+      let before = vpn.provider
+      let digest = Data(SHA256.hash(data: plan)).base64EncodedString()
+      guard before["state"] as? String == "connected", before["configurationDigest"] as? String == digest,
+            let instance = before["instanceID"] as? String, let generation = before["generation"] as? UInt64,
+            before["resourceRecoveryRequired"] as? Bool != true else { throw AutomationFailure.providerFailure }
+      payload["packetPath"] = true
+      let outcome: Result<[String: Any], Error>
+      do { outcome = .success(try await nativeProbeReply(payload)) } catch { outcome = .failure(error) }
+      try Task.checkCancellation()
+      try await vpn.refreshProvider()
+      guard vpn.connected, vpn.provider["state"] as? String == "connected", vpn.provider["instanceID"] as? String == instance,
+            vpn.provider["generation"] as? UInt64 == generation, vpn.provider["configurationDigest"] as? String == digest,
+            vpn.provider["resourceRecoveryRequired"] as? Bool != true, vpn.savedPlan == savedPlan else { throw AutomationFailure.staleContext }
+      return try outcome.get()
+    } else {
+      guard !vpn.active else { throw IOSAppError.busy }
+      let port = try IOSNetworkProbe.freePort()
+      let context = mode == "activeProxy" ? try store.routing.runtimeProbeConfiguration(subscriptionID: node.subscriptionID) : (routes: nil, assetDirectory: nil)
+      var compiled = try compile(config, routes: context.routes, preference: try store.ipPreference(nodeID: node.id), port: port, probe: true)
+      if let assets = context.assetDirectory { compiled["env"] = ["xray.location.asset": assets] }
+      payload["configJSON"] = try prettyJSON(compiled)
+      payload["proxy"] = "socks5://127.0.0.1:\(port)"
+      return try await nativeProbeReply(payload)
+    }
+  }
+
+  /// One transfer check of `node` over `AutomationConfiguration.transferTargets`, on the path a health check takes:
+  /// "ok", "stalled" or "inconclusive".
+  private func transferCheck(_ node: ServerNode, expectedPlan: Data? = nil) async throws -> String {
+    let store = try catalog()
+    let config = try store.outbound(nodeID: node.id)
+    var verdicts: [String] = []
+    for url in AutomationConfiguration.transferTargets where !verdicts.contains("ok") {
+      var payload: [String: Any] = ["url": url, "method": "GET", "timeout": 8, "transfer": true]
+      if let idle = AutomationConfiguration.transferIdleMs { payload["transferIdleMs"] = idle }
+      do {
+        let reply = try await coreReply(node, payload: payload, mode: "activeProxy", expectedPlan: expectedPlan, store: store, config: config)
+        verdicts.append(reply["verdict"] as? String ?? "inconclusive")
+      } catch let error as IOSProbeFailure {
+        if error.cleanupPending { throw AutomationFailure.quarantine }
+        // A check that could not run says nothing about a freeze.
+        verdicts.append("inconclusive")
+      }
+    }
+    return AutomationConfiguration.transferVerdict(verdicts)
   }
 
   private func saveEpisode() throws { try write(recovery.episode, name: "ios-recovery.json") }
@@ -1281,6 +1312,17 @@ final class IOSAppModel {
     // As on macOS and desktop: every target gets its probe before the check is classified.
     var timeouts = 0, verified = 0, invalidTarget = false
     let russianEntry = preferences.automation.russianEntryNodeIDs?.contains(node.id) == true
+    // A running server whose transfers stalled twice in a row fails the check whatever its small probes do,
+    // and gets the 60 s cooldown.
+    if expectedPlan == nil, vpn.connected {
+      try? await vpn.refreshProvider()
+      if vpn.provider["transferStalled"] as? Bool == true {
+        healthFailureUnverified.remove(node.id)
+        recovery.observe(node: node.id, passed: false, russianEntry: russianEntry); whitelistMode = recovery.whitelist
+        recovery.reject(node: node.id, transient: true, now: ProcessInfo.processInfo.systemUptime)
+        throw AutomationFailure.endpointFailure
+      }
+    }
     let passedBefore = healthPassedNode == node.id
     // A server to move to, not only a policy that allows moving: with none allowed now (a list of
     // one, the others cooling down) such a failure stays indeterminate and the connection is kept.
@@ -1353,8 +1395,32 @@ final class IOSAppModel {
     for id in round {
       scores[id] = recovery.score(node: id, reference: try store.configurationRevision(nodeID: id), now: ProcessInfo.processInfo.systemUptime)
     }
-    guard let chosen = recovery.choose(policy: .lowestLatency, order: config.nodeIDs, current: current, scores: scores, healthy: false, now: ProcessInfo.processInfo.systemUptime) else {
+    guard var chosen = recovery.choose(policy: .lowestLatency, order: config.nodeIDs, current: current, scores: scores, healthy: false, now: ProcessInfo.processInfo.systemUptime) else {
       throw AutomationFailure.exhaustedCandidates
+    }
+    // The winner must pass transfers too before Connect takes it; one that stalls is skipped like a failed
+    // measurement. After a skip, the selected server stays when the time is up or no other is left.
+    var skipped = false
+    while chosen != current, !AutomationConfiguration.transferTargets.isEmpty {
+      if skipped && ProcessInfo.processInfo.systemUptime >= deadline { return current }
+      guard let node = nodes.first(where: { $0.id == chosen }) else { break }
+      testingIDs = [chosen]
+      let verdict: String
+      do { verdict = try await transferCheck(node) }
+      catch is CancellationError { throw CancellationError() }
+      catch AutomationFailure.quarantine { throw AutomationFailure.quarantine }
+      catch { break }
+      try Task.checkCancellation()
+      guard foreground, epoch == recovery.epoch else { throw CancellationError() }
+      guard verdict == "stalled" else { break }
+      recovery.observe(node: chosen, passed: false, russianEntry: config.russianEntryNodeIDs?.contains(chosen) == true)
+      whitelistMode = recovery.whitelist
+      recovery.reject(node: chosen, transient: true, now: ProcessInfo.processInfo.systemUptime)
+      scores.removeValue(forKey: chosen)
+      skipped = true
+      guard let next = recovery.choose(policy: .lowestLatency, order: config.nodeIDs, current: current, scores: scores, healthy: false,
+                                       now: ProcessInfo.processInfo.systemUptime) else { return current }
+      chosen = next
     }
     return chosen
   }
@@ -1368,6 +1434,12 @@ final class IOSAppModel {
       do {
         try await vpn.replacePlan(plan, settings: settings)
         try await activeHealth(node, expectedPlan: plan)
+        // The server failover is about to keep must pass transfers too; one that stalls is skipped with the 60 s cooldown.
+        if !AutomationConfiguration.transferTargets.isEmpty, try await transferCheck(node, expectedPlan: plan) == "stalled" {
+          recovery.observe(node: node.id, passed: false, russianEntry: preferences.automation.russianEntryNodeIDs?.contains(node.id) == true)
+          whitelistMode = recovery.whitelist
+          throw AutomationFailure.endpointFailure
+        }
         try Task.checkCancellation()
         try await vpn.persist(plan, settings: settings, allowOnDemand: commands.intent == .connected)
         try store.finishSelectionPublication(nodeID: node.id)
@@ -1383,6 +1455,19 @@ final class IOSAppModel {
         throw error
       }
     }
+  }
+
+  /// The server a restart for a stall counts for: the node and its configuration revision.
+  private func stallServer(_ node: ServerNode) -> String { "\(node.id):\(node.revision)" }
+
+  /// A newly confirmed transfer stall makes the health check due now, as on desktop, Android and macOS.
+  private func noteTransferCheck() {
+    guard vpn.connected, let node = selected, let instance = vpn.provider["instanceID"] as? String,
+          let generation = vpn.provider["generation"] as? UInt64 else { return }
+    _ = recovery.transferRead(server: stallServer(node), session: "\(instance):\(generation)",
+                              stalled: vpn.provider["transferStalled"] as? Bool == true,
+                              passed: vpn.provider["transferPassed"] as? Bool == true,
+                              now: ProcessInfo.processInfo.systemUptime)
   }
 
   private func recoverIfNeeded() async {
@@ -1419,7 +1504,11 @@ final class IOSAppModel {
         do { try self.requireRecoveryPolicy(node) }
         catch AutomationFailure.unsupportedPolicy where config.policy == .fixed { canVerifyTraffic = false }
         // Reconnecting a running server that never passed its check changes nothing; the retry checks it again.
-        if retry, !(self.healthFailureUnverified.contains(node.id) && self.vpn.connected && !failed) {
+        // One reconnect per stall episode (AutomationPolicy.restartForStall): after it the server keeps
+        // running, still stalled, while the retries go on.
+        let stalled = self.vpn.connected && !failed && self.vpn.provider["transferStalled"] as? Bool == true
+        if retry, !(self.healthFailureUnverified.contains(node.id) && self.vpn.connected && !failed),
+           !stalled || self.recovery.restartForStall(server: self.stallServer(node)) {
           try await self.changingTunnel { [self] in
             if vpn.active { try await vpn.disconnect() }
             try Task.checkCancellation()
@@ -1524,6 +1613,7 @@ final class IOSAppModel {
       case .fetchClass("rate_limited"): return String(localized: "The provider is limiting requests. Elarni retries later; wait before refreshing again.")
       case .fetchClass("subscription_denied"): return String(localized: "The provider refused the request. The subscription may have expired, run out of traffic or reached its device limit. Contact the provider.")
       case .fetchClass("subscription_unavailable"): return String(localized: "The provider removed or changed this link. Ask the provider for a new one.")
+      case .fetchClass("encrypted_feed"): return String(localized: "The provider encrypted this subscription for another app, such as Happ, and Elarni cannot read it. Ask the provider for a link without encryption.")
       case .fetchClass: return String(localized: "The subscription could not be downloaded. Check the provider address and try again.")
       default: return String(localized: "The catalog changed or could not be read. Refresh the screen and retry.")
       }

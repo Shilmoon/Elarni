@@ -172,6 +172,14 @@ class AppLocalizationsEn extends AppLocalizations {
   String get issueVpnFirewallUnavailable => 'The VPN firewall tool is missing.';
 
   @override
+  String get issueWintunFailedRemedy =>
+      'Antivirus software or a device installation policy can cause this. Reinstall Elarni, or use System proxy mode.';
+
+  @override
+  String get issueWintunFailed =>
+      'The Windows network driver (Wintun) could not be loaded, or its network adapter could not be created.';
+
+  @override
   String get issueDisconnectUnconfirmedRemedy =>
       'Refresh status before reconnecting, or use Repair VPN setup.';
 
@@ -1829,6 +1837,9 @@ class AppLocalizationsEn extends AppLocalizations {
   String get launchAtLogin => 'Launch app at login';
 
   @override
+  String get startHiddenInTray => 'Start hidden in the tray';
+
+  @override
   String get windowsWifiLocationHelp =>
       'Windows keeps the Wi-Fi name from Elarni. Turn on Location services and Let desktop apps access your location in Settings › Privacy & security › Location. Until then every Wi-Fi network counts as untrusted.';
 
@@ -2256,6 +2267,9 @@ class AppLocalizationsEn extends AppLocalizations {
   String get stateConnectedNoTraffic => 'Connected · no traffic';
 
   @override
+  String get stateConnectedStalled => 'Connected · transfers cut off';
+
+  @override
   String get stateConnected => 'Connected';
 
   @override
@@ -2519,6 +2533,10 @@ class AppLocalizationsEn extends AppLocalizations {
   }
 
   @override
+  String get serverCutsTransfersOff =>
+      'Connected, but this server’s network cuts transfers off. Pages will not load; choose another server.';
+
+  @override
   String get connectionCheckUnavailable =>
       'Connection check unavailable for this routing setup';
 
@@ -2666,6 +2684,11 @@ class AppLocalizationsEn extends AppLocalizations {
   }
 
   @override
+  String providerMessageLine(String message) {
+    return 'Provider: $message';
+  }
+
+  @override
   String get runtime => 'Runtime';
 
   @override
@@ -2720,6 +2743,14 @@ class AppLocalizationsEn extends AppLocalizations {
   @override
   String failureLinkRemovedText(String provider) {
     return '$provider removed or changed this link. Ask the provider for a new one.';
+  }
+
+  @override
+  String get failureEncrypted => 'Encrypted for another app';
+
+  @override
+  String failureEncryptedText(String provider) {
+    return '$provider encrypted this subscription for another app, such as Happ, and Elarni cannot read it. Ask the provider for a link without encryption.';
   }
 
   @override

@@ -32,6 +32,12 @@ type vmessQrCode struct {
 	Pcs      string `json:"pcs,omitempty"`
 	// Marzban writes "allowInsecure": 1; other panels a string or a boolean.
 	AllowInsecure json.RawMessage `json:"allowInsecure,omitempty"`
+
+	// Marzban's REALITY settings, beside "tls": "reality".
+	Pbk string `json:"pbk,omitempty"`
+	Sid string `json:"sid,omitempty"`
+	Spx string `json:"spx,omitempty"`
+	Pqv string `json:"pqv,omitempty"`
 }
 
 func parseVMessQrCode(text string) (*conf.OutboundDetourConfig, error) {
@@ -77,7 +83,7 @@ func (proxy vmessQrCode) outbound() (*conf.OutboundDetourConfig, error) {
 
 func (proxy vmessQrCode) parseSecurity(streamSettings *conf.StreamConfig) error {
 	tlsSettings := &conf.TLSConfig{}
-	tlsSettings.Fingerprint = proxy.Fp
+	tlsSettings.Fingerprint = shareFingerprint(proxy.Fp)
 	tlsSettings.ServerName = proxy.Sni
 	// Either key turns verification off.
 	switch string(bytes.TrimSpace(proxy.AllowInsecure)) {
@@ -111,6 +117,15 @@ func (proxy vmessQrCode) parseSecurity(streamSettings *conf.StreamConfig) error 
 	switch streamSettings.Security {
 	case "tls":
 		streamSettings.TLSSettings = tlsSettings
+	case "reality":
+		// Without the server's public key a REALITY handshake cannot be made.
+		if proxy.Pbk == "" {
+			return fmt.Errorf("VMess REALITY server without a public key")
+		}
+		streamSettings.REALITYSettings = &conf.REALITYConfig{
+			Fingerprint: tlsSettings.Fingerprint, ServerName: proxy.Sni,
+			Password: proxy.Pbk, PublicKey: proxy.Pbk, ShortId: proxy.Sid, SpiderX: proxy.Spx, Mldsa65Verify: proxy.Pqv,
+		}
 	}
 	return nil
 }

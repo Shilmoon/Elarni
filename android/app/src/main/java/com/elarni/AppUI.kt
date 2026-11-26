@@ -320,10 +320,14 @@ private val LocalReselect = compositionLocalOf { 0 }
                 // A failed refresh names its provider and offers its support link.
                 val source = state.errorSource?.let { id -> catalog.sources.firstOrNull { it.string("id") == id } }
                 if (source == null) {
-                    // Only a reset gets past a saved catalog that cannot be read, damaged or with its key gone; unavailable storage can come back by itself.
+                    // Only a reset gets past a saved catalog that cannot be read, damaged or with its key gone; unavailable storage can come
+                    // back by itself, so it offers Retry, and Troubleshooting the reset as well.
                     val unreadable = error in Repository.unreadable && activity.repository.catalogUnreadable
-                    val reset = tr(R.string.reset_elarni).takeIf { unreadable }
-                    if (snackbar.showSnackbar(errorMessage(error, unreadable), reset, withDismissAction = true) == SnackbarResult.ActionPerformed) confirmReset()
+                    val retry = !unreadable && error == "storage_unavailable" && activity.repository.catalogUnavailable
+                    val action = if (unreadable) tr(R.string.reset_elarni) else if (retry) tr(R.string.retry) else null
+                    if (snackbar.showSnackbar(errorMessage(error, unreadable), action, withDismissAction = true) == SnackbarResult.ActionPerformed) {
+                        if (unreadable) confirmReset() else activity.repository.scope.launch { activity.repository.retryOpen() }
+                    }
                 } else {
                     val support = source.mapObject("links").string("support").takeIf { error in providerFaults && it.isNotEmpty() }
                     val result = snackbar.showSnackbar(tr(R.string.the_last_working_servers_were_kept, refreshFailure(error, source.string("name"))), support?.let { tr(R.string.contact_provider) }, withDismissAction = true)
@@ -488,15 +492,18 @@ private val LocalReselect = compositionLocalOf { 0 }
             }
         }
         val noTraffic = state.connection == "connected" && state.liveness == "noTraffic"
+        // Small probes pass, but the server's network cuts longer transfers off.
+        val stalled = state.connection == "connected" && state.trafficState == "stalled"
         val warning = if (MaterialTheme.colorScheme.surface == Color(0xFF202124)) Color(0xFFFDE047) else Color(0xFF854D0E)
-        ConnectionArtwork(state.connection == "connected", state.connection == "failed", if (noTraffic) warning else null)
-        Text(when (state.connection) { "connected" -> if (noTraffic) tr(R.string.connected_no_traffic) else tr(R.string.connected); "connecting" -> tr(R.string.connecting); "paused" -> tr(R.string.paused); "failed" -> tr(R.string.connection_failed); "disconnecting" -> tr(R.string.disconnecting); else -> tr(R.string.disconnected) }, style = MaterialTheme.typography.titleMedium, textAlign = TextAlign.Center,
+        ConnectionArtwork(state.connection == "connected", state.connection == "failed", if (noTraffic || stalled) warning else null)
+        Text(when (state.connection) { "connected" -> if (noTraffic) tr(R.string.connected_no_traffic) else if (stalled) tr(R.string.connected_transfers_cut_off) else tr(R.string.connected); "connecting" -> tr(R.string.connecting); "paused" -> tr(R.string.paused); "failed" -> tr(R.string.connection_failed); "disconnecting" -> tr(R.string.disconnecting); else -> tr(R.string.disconnected) }, style = MaterialTheme.typography.titleMedium, textAlign = TextAlign.Center,
             // TalkBack hears each change; the artwork above stays decorative, as on iPhone and desktop.
-            color = if (noTraffic) warning else Color.Unspecified, modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite })
+            color = if (noTraffic || stalled) warning else Color.Unspecified, modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite })
         if (noTraffic) state.noTrafficSince?.let { since ->
             val time = android.text.format.DateFormat.getTimeFormat(LocalContext.current).format(java.util.Date(since))
             Text(tr(R.string.the_server_passed_no_traffic_at, time), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
         }
+        if (stalled) Text(tr(R.string.this_server_s_network_cuts_transfers_off), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
         Text(selected?.string("name") ?: tr(R.string.no_server_selected), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold, textAlign = TextAlign.Center, modifier = Modifier.heightIn(min = 48.dp).clickable(enabled = selected != null, onClick = scrollServers).wrapContentHeight(), color = if (selected != null) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant)
         // A subscription update has its Cancel on the update line; Connect waits for it instead of turning into Stop.
         val stoppable = state.busy && !state.refreshing
@@ -643,7 +650,8 @@ fun updatedAgo(seconds: Double): String = when {
     val nested = sourceId.isEmpty() && filter == "all"
     HomeList(sources, countries, rows,
         if (nested) sources.sortedByDescending { it.optBoolean("pinned") }.mapNotNull { source ->
-            rows.filter { it.first === source }.takeIf { it.isNotEmpty() }?.let { SourceGroup(source, countryGroups(it, source.string("id"))) }
+            // A provider whose feed holds only messages keeps its header, so the messages show.
+            rows.filter { it.first === source }.takeIf { it.isNotEmpty() || source.strings("notices").isNotEmpty() }?.let { SourceGroup(source, countryGroups(it, source.string("id"))) }
         } else emptyList(),
         if (nested || filter == "favorites") emptyList() else countryGroups(rows, sourceId))
     }
@@ -827,6 +835,7 @@ fun updatedAgo(seconds: Double): String = when {
                         var menu by remember { mutableStateOf(false) }
                         Box(Modifier.padding(start = 16.dp, end = 16.dp, top = 12.dp)) {
                         SourceMenu(catalog, source, activity, state.busy, menu) { menu = false }
+                        Column {
                         Row(Modifier.clip(MaterialTheme.shapes.medium).combinedClickable(onLongClick = { menu = true }) { toggle(id) }.heightIn(min = 48.dp)
                             .padding(start = 16.dp, end = 24.dp).testTag("source-$id"), verticalAlignment = Alignment.CenterVertically) {
                             Column(Modifier.weight(1f)) {
@@ -834,6 +843,12 @@ fun updatedAgo(seconds: Double): String = when {
                                 Text(trPlural(R.plurals.server_count, groups.sumOf { it.entries.size }), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                             }
                             RouteIcon(if (isOpen) "collapse" else "expand")
+                        }
+                        // The provider's message lines, such as the traffic left: text only, outside the header's tap target.
+                        source.strings("notices").forEach { notice ->
+                            Text(tr(R.string.provider_message_line, notice), Modifier.padding(start = 16.dp, end = 24.dp, bottom = 4.dp).testTag("source-notice-$id"),
+                                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
                         }
                         }
                     }
@@ -1422,7 +1437,14 @@ fun pingScope(result: JSONObject) = when (result.string("protocol")) { "tcp" -> 
                 // As on the error's snackbar: only an unreadable catalog needs it.
                 val unreadable = state.error in Repository.unreadable && activity.repository.catalogUnreadable
                 state.error?.let { SettingsTile(errorMessage(it, unreadable), titleColor = MaterialTheme.colorScheme.error) }
-                if (unreadable) SettingsTile(tr(R.string.reset_elarni), enabled = !state.busy, titleColor = MaterialTheme.colorScheme.error, onClick = reset)
+                // The reset stays while the catalog cannot be read, whatever error came since.
+                if (activity.repository.catalogUnreadable) SettingsTile(tr(R.string.reset_elarni), enabled = !state.busy, titleColor = MaterialTheme.colorScheme.error, onClick = reset)
+                // Storage that was unavailable may open now, whatever error came since; a reset would delete what it holds,
+                // so it comes second, for a Keystore fault that never clears (a key Android's update or reset broke).
+                else if (activity.repository.catalogUnavailable) {
+                    SettingsTile(tr(R.string.retry), enabled = !state.busy) { activity.repository.scope.launch { activity.repository.retryOpen() } }
+                    SettingsTile(tr(R.string.reset_elarni), enabled = !state.busy, titleColor = MaterialTheme.colorScheme.error, onClick = reset)
+                }
             }
             SettingsGroup {
                 SettingsTile(tr(R.string.retry_selected_server), enabled = !state.busy) { activity.connect() }
@@ -1532,10 +1554,11 @@ private fun refreshLabel(code: String) = when (code) {
     "rate_limited" -> tr(R.string.rate_limited)
     "subscription_denied" -> tr(R.string.access_refused)
     "subscription_unavailable" -> tr(R.string.link_removed)
+    "encrypted_feed" -> tr(R.string.encrypted_for_another_app)
     else -> tr(R.string.last_update_failed)
 }
 /** Failures only the provider can fix, which offer its support link. */
-private val providerFaults = setOf("provider_unreachable", "provider_error", "subscription_denied", "subscription_unavailable", "hwid_required", "hwid_limit")
+private val providerFaults = setOf("provider_unreachable", "provider_error", "subscription_denied", "subscription_unavailable", "encrypted_feed", "hwid_required", "hwid_limit")
 /** A failed download in words that name the provider, so its outages are not reported as app bugs. */
 private fun refreshFailure(code: String, provider: String) = when (code) {
     "hwid_required", "hwid_limit" -> tr(R.string.named_provider_device_limit, provider)
@@ -1544,6 +1567,7 @@ private fun refreshFailure(code: String, provider: String) = when (code) {
     "rate_limited" -> tr(R.string.named_provider_rate_limited, provider)
     "subscription_denied" -> tr(R.string.named_provider_denied, provider)
     "subscription_unavailable" -> tr(R.string.named_provider_link_removed, provider)
+    "encrypted_feed" -> tr(R.string.named_provider_encrypted_feed, provider)
     "sharing_disabled" -> tr(R.string.named_provider_sharing_disabled, provider)
     else -> errorMessage(code)
 }
@@ -1584,6 +1608,8 @@ fun errorMessage(code: String, unreadable: Boolean = false): String = when (code
     "invalid_qr_image" -> tr(R.string.no_readable_qr_code_was_found)
     "camera_unavailable" -> tr(R.string.no_camera_app_is_available_import)
     "file_unavailable" -> tr(R.string.the_file_could_not_be_read)
+    "picker_unavailable" -> tr(R.string.no_app_on_this_device_can_open)
+    "system_screen_unavailable" -> tr(R.string.android_on_this_device_cannot_open)
     "recording_empty" -> tr(R.string.nothing_is_recorded_yet_turn_on)
     "recording_failed" -> tr(R.string.the_recording_could_not_be_updated)
     "export_expired" -> tr(R.string.android_restarted_the_app_during_export)
@@ -1599,6 +1625,7 @@ fun errorMessage(code: String, unreadable: Boolean = false): String = when (code
     "rate_limited" -> tr(R.string.the_provider_is_limiting_requests_elarni)
     "subscription_denied" -> tr(R.string.the_provider_refused_the_request_the)
     "subscription_unavailable" -> tr(R.string.the_provider_removed_or_changed_this)
+    "encrypted_feed" -> tr(R.string.the_provider_encrypted_this_subscription_for)
     "not_connected" -> tr(R.string.connect_to_this_server_before_testing)
     "assets_unavailable", "invalid_assets", "invalid_geodata" -> tr(R.string.routing_data_is_missing_or_invalid)
     // RoutingAssets appends the missing codes to this code.

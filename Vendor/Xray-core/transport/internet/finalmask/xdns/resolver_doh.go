@@ -84,9 +84,13 @@ func NewDOHResolver(config *ResolverProto, dialer *finalmask.Dialer) (Resolver, 
 				}
 				qc, err := tr.Dial(ctx, conn.RemoteAddr(), tlsCfg, cfg)
 				if err != nil {
+					// Elarni: a failed dial kept both open. The packet conn first, as in the other QUIC dialers:
+					// the transport waits for its read loop, which a dialerProxy's packet conn ends only by closing
+					conn.Close()
+					tr.Close()
 					return nil, err
 				}
-				context.AfterFunc(qc.Context(), func() { tr.Close(); conn.Close() })
+				context.AfterFunc(qc.Context(), func() { conn.Close(); tr.Close() })
 				switch quicParams.Congestion {
 				case "", "reno":
 				case "bbr":

@@ -84,6 +84,75 @@ void main() {
     },
   );
 
+  testWidgets('a provider\'s message lines show under its name as text, and '
+      'a test of every server leaves them out', (tester) async {
+    await tester.binding.setSurfaceSize(const Size(1280, 900));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final fixture = countryFixture();
+    final daily = fixture.subscriptions.first;
+    final control = NoticeControl()
+      ..snapshot = SubscriptionSnapshot(
+        selectedNodeId: fixture.selectedNodeId,
+        subscriptions: [
+          SubscriptionGroup(
+            id: daily.id,
+            name: daily.name,
+            status: daily.status,
+            nodes: daily.nodes,
+            notices: const ['📊 10GB left', 'Device limit reached'],
+          ),
+          // A feed of messages alone keeps its subscription in the list.
+          const SubscriptionGroup(
+            id: 'ended',
+            name: 'Ended',
+            status: 'ready',
+            nodes: [],
+            notices: ['✖ Package Ended'],
+          ),
+        ],
+      );
+    control.onPing = (id) async => reply(id);
+    final remembered = closedGroups(tester, []);
+    await tester.pumpWidget(ElarniApp(tunnelControl: control, windows: true));
+    await tester.pumpAndSettle();
+    final header = find.byKey(const ValueKey('server-subscription:daily'));
+    final traffic = find.text('Provider: 📊 10GB left');
+    final limit = find.text('Provider: Device limit reached');
+    expect(header, findsOneWidget);
+    expect(traffic, findsOneWidget);
+    expect(limit, findsOneWidget);
+    // Under the name of its own subscription, in the provider's order.
+    expect(
+      tester.getTopLeft(traffic).dy,
+      greaterThanOrEqualTo(tester.getBottomLeft(header).dy),
+    );
+    expect(
+      tester.getTopLeft(limit).dy,
+      greaterThan(tester.getTopLeft(traffic).dy),
+    );
+    final before = remembered();
+    await tester.tap(limit);
+    await tester.pumpAndSettle();
+    expect(remembered(), before);
+    expect(control.connectCalls, 0);
+    control.pingCalls.clear();
+    await tester.tap(find.byKey(const Key('ping-all')));
+    await tester.pumpAndSettle();
+    expect(control.pingCalls.map((call) => call.nodeId).toList()..sort(), [
+      'de',
+      'nl-trojan',
+      'nl-vless',
+      'unknown',
+    ]);
+    final ended = find.text('Provider: ✖ Package Ended');
+    await reveal(tester, ended);
+    expect(ended, findsOneWidget);
+    // Its notices say why it has no servers: no pending-fetch text under them.
+    expect(find.text('No servers yet'), findsNothing);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox());
+  });
+
   testWidgets('a group opened during a test is tested when the test ends', (
     tester,
   ) async {

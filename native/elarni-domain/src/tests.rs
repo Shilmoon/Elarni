@@ -1240,7 +1240,7 @@ fn plain_udp_remote_resolver_reaches_its_server_through_the_proxy() {
     let mut request = compile_request();
     request.routes = routes.clone();
     let config = compiled(&request);
-    let rules = config["routing"]["rules"].as_array().unwrap();
+    let rules = crate::profile_tests::after_socks_own_subnet_block(&config);
     assert_eq!(rules[1], pin("1.1.1.1"), "{rules:?}");
     assert_eq!(rules.last().unwrap()["outboundTag"], "elarni-direct");
     assert!(!rules.contains(&pin("8.8.8.8")));
@@ -1281,6 +1281,14 @@ fn dns_serves_stale_answers_and_follows_an_ipv4_preference() {
         let config = compiled(&request);
         assert_eq!(config["dns"]["queryStrategy"], strategy, "{preference:?}");
         assert_eq!(config["dns"]["serveStale"], true);
+        // Automatic follows the server: IPv6 answers only while it reaches IPv6. An IPv4
+        // preference has none to check, and an IPv6 one is the user's own choice.
+        let dns_settings = &tagged(&config, "outbounds", "elarni-dns")["settings"];
+        assert_eq!(
+            dns_settings.get("checkIPv6"),
+            (preference == PreferredIp::Automatic).then_some(&json!(true)),
+            "{preference:?}"
+        );
         // Without a bound Xray never cleans its cache.
         assert_eq!(config["dns"]["serveExpiredTTL"], 3600);
         // Blackholing needs no lookup first.
@@ -1305,6 +1313,12 @@ fn dns_serves_stale_answers_and_follows_an_ipv4_preference() {
             let profile: Value = serde_json::from_slice(&profile.config).unwrap();
             assert_eq!(
                 profile["dns"]["queryStrategy"], strategy,
+                "{preference:?} {requested:?}"
+            );
+            assert_eq!(
+                tagged(&profile, "outbounds", "elarni-dns")["settings"].get("checkIPv6"),
+                (requested.unwrap_or(PreferredIp::Automatic) == PreferredIp::Automatic)
+                    .then_some(&json!(true)),
                 "{preference:?} {requested:?}"
             );
             assert_eq!(profile["dns"]["serveStale"], true);
@@ -1450,6 +1464,30 @@ fn base64_text_decodes_every_alphabet_and_padding_alike() {
     ] {
         assert_eq!(decode(invalid), None, "{invalid}");
     }
+}
+
+// Every app matches a refreshed server by this identity when the exact one changed with the remark.
+#[test]
+fn catalog_stable_identity_is_an_operation_beside_the_exact_one() {
+    let handle = FfiHandle::new();
+    let identity = |operation: &str, short_id: &str| {
+        let request = json!({"schemaVersion":1,"operation":operation,"payload":{
+            "outbounds":[{"protocol":"vless","settings":{"address":"de.example.com","port":443,
+                "id":"00000000-0000-4000-8000-000000000001","encryption":"none"},
+                "streamSettings":{"security":"reality","realitySettings":{
+                    "serverName":"www.example.com","publicKey":"key-1","shortId":short_id}}}]}});
+        let (status, response) = handle.request(&serde_json::to_vec(&request).unwrap());
+        assert_eq!(status, ELARNI_STATUS_OK, "{operation}");
+        response.unwrap()["identity"].as_str().unwrap().to_owned()
+    };
+    assert_eq!(
+        identity("catalogStableIdentity", "0a1b"),
+        identity("catalogStableIdentity", "c2d3")
+    );
+    assert_ne!(
+        identity("catalogIdentity", "0a1b"),
+        identity("catalogIdentity", "c2d3")
+    );
 }
 
 #[test]

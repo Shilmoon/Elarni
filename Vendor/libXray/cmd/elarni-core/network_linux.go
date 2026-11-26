@@ -19,6 +19,7 @@ import (
 	"os/exec"
 	"os/user"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -225,18 +226,30 @@ func linuxTunnelConfig(raw []byte, network linuxNetwork, policy *share.WindowsRo
 var errLinuxFirewallUnavailable = errors.New("vpn_firewall_unavailable")
 
 func nft(script string) error {
+	_, err := nftWithOutput(script)
+	return err
+}
+
+// nftWithOutput is nft that also returns, on one line, what nft printed about a script it
+// did not apply.
+func nftWithOutput(script string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	command := exec.CommandContext(ctx, linuxTool("nft"), "-f", "-")
 	command.Stdin = strings.NewReader(script)
+	var stderr bytes.Buffer
+	command.Stderr = &stderr
 	if err := command.Run(); err != nil {
 		var exit *exec.ExitError
 		if !errors.As(err, &exit) && ctx.Err() == nil {
-			return errLinuxFirewallUnavailable // nftables is not installed
+			return "", errLinuxFirewallUnavailable // nftables is not installed
 		}
-		return errors.New("vpn_firewall_failed")
+		if ctx.Err() != nil {
+			return "nft did not finish in 5 seconds", errors.New("vpn_firewall_failed")
+		}
+		return strings.Join(strings.Fields(stderr.String()), " "), errors.New("vpn_firewall_failed")
 	}
-	return nil
+	return "", nil
 }
 
 // The supervisor reserves an empty private firewall table before starting a
@@ -401,7 +414,7 @@ func (network linuxNetwork) install(policy *share.WindowsRoutePolicy) error {
 			return errors.New("vpn_routes_failed")
 		}
 	}
-	if err := nft(network.firewall(protected)); err != nil {
+	if err := nft(network.firewall(protected, policy != nil && policy.AnswerInbound)); err != nil {
 		return err
 	}
 	for _, family := range network.families() {
@@ -449,11 +462,51 @@ func linuxGuardedRoutes(network linuxNetwork, policy *share.WindowsRoutePolicy) 
 	return append(guarded, ipv6...), err
 }
 
-func (network linuxNetwork) firewall(protected []netip.Prefix) string {
+// The conntrack marks of answerInbound, Elarni's own values; no network's Mark equals them. They
+// outlive the table, so a connection keeps its tag through a restart and under the next supervisor.
+const (
+	// linuxInboundFlow tags a connection whose first packet came from outside, not through the
+	// tunnel, to one of this host's addresses.
+	linuxInboundFlow = 0x52560001
+	// linuxSeenFlow tags every other connection that began while the firewall was in, those that
+	// came in through the tunnel among them: they never take the core's mark.
+	linuxSeenFlow = 0x52560002
+)
+
+func (network linuxNetwork) firewall(protected []netip.Prefix, answerInbound bool) string {
 	name := network.Name
 	var script strings.Builder
+	if answerInbound {
+		// The policy rule sends every unmarked packet into the tunnel, the replies of connections
+		// that came in from outside too: SSH and the published ports stop answering. A connection is
+		// tagged where its first packet arrives: from outside to one of this host's addresses, or
+		// anything else (through the tunnel, opened here or by a container). Only the first kind
+		// takes the core's mark and with it the main table, so a peer that first writes to an app
+		// through the tunnel (full-cone UDP) is answered through the tunnel too.
+		// A connection with no tag began before the firewall: the session that starts the tunnel,
+		// which the tunnel would reset. Its replies are answered outside, as nothing came in through
+		// the tunnel before it. That holds as well for a connection that began while another
+		// program had removed the table, until the keeper put it back: one of those that came in
+		// through the tunnel then is answered outside. So is one that a tunnel without this
+		// setting let in, when a tunnel with it replaces that one.
+		fmt.Fprintf(&script, "add chain inet %s inbound { type filter hook prerouting priority mangle; policy accept; }\n", name)
+		fmt.Fprintf(&script, "add rule inet %s inbound ct state new ct mark 0 iifname != { \"lo\", %q } fib daddr type local ct mark set %d comment \"elarni inbound\"\n", name, name, linuxInboundFlow)
+		fmt.Fprintf(&script, "add rule inet %s inbound ct state new ct mark 0 ct mark set %d\n", name, linuxSeenFlow)
+		// The replies of a container or a VM behind a forwarded port are routed after prerouting;
+		// what is delivered to this host keeps its mark as it was. Under Block traffic without VPN
+		// the forward guard below still rejects forwarded traffic outside the tunnel, so there only
+		// this host's own services answer.
+		fmt.Fprintf(&script, "add rule inet %s inbound ct mark %d meta mark 0 fib daddr type != local meta mark set %d\n", name, linuxInboundFlow, network.Mark)
+		fmt.Fprintf(&script, "add rule inet %s inbound ct mark 0 ct direction reply iifname != { \"lo\", %q } meta mark 0 fib daddr type != local meta mark set %d\n", name, name, network.Mark)
+		// The host's replies are routed before the output hook; a route chain looks again. What the
+		// host opens is tagged too, so no tag means older than the firewall here as well.
+		fmt.Fprintf(&script, "add chain inet %s inbound_reply { type route hook output priority mangle; policy accept; }\n", name)
+		fmt.Fprintf(&script, "add rule inet %s inbound_reply ct state new ct mark 0 ct mark set %d comment \"elarni inbound_reply\"\n", name, linuxSeenFlow)
+		fmt.Fprintf(&script, "add rule inet %s inbound_reply ct mark %d meta mark 0 meta mark set %d\n", name, linuxInboundFlow, network.Mark)
+		fmt.Fprintf(&script, "add rule inet %s inbound_reply ct mark 0 ct direction reply meta mark 0 meta mark set %d\n", name, network.Mark)
+	}
 	fmt.Fprintf(&script, "add chain inet %s dns { type nat hook output priority -100; policy accept; }\n", name)
-	fmt.Fprintf(&script, "add rule inet %s dns meta mark %d return\n", name, network.Mark)
+	fmt.Fprintf(&script, "add rule inet %s dns meta mark %d return comment \"elarni dns\"\n", name, network.Mark)
 	// Marked bootstrap lookups can use the OS stub. Its upstream requests must
 	// remain physical; ordinary applications are intercepted before reaching it.
 	if account, err := user.Lookup("systemd-resolve"); err == nil {
@@ -461,10 +514,15 @@ func (network linuxNetwork) firewall(protected []netip.Prefix) string {
 			fmt.Fprintf(&script, "add rule inet %s dns meta skuid %d return\n", name, uid)
 		}
 	}
+	// A resolver the user runs on loopback (dnsmasq, dnscrypt-proxy, unbound) answers itself;
+	// its own plain lookups upstream are not exempt, so the rule below takes them. Lookups to
+	// the systemd-resolved stub stay redirected: its upstream lookups are exempt above.
+	fmt.Fprintf(&script, "add rule inet %s dns ip daddr 127.0.0.0/8 ip daddr != { 127.0.0.53, 127.0.0.54 } return\n", name)
+	fmt.Fprintf(&script, "add rule inet %s dns ip6 daddr ::1 return\n", name)
 	fmt.Fprintf(&script, "add rule inet %s dns meta l4proto { tcp, udp } th dport 53 redirect to :%d\n", name, network.DNSPort)
 	if len(protected) != 0 {
 		fmt.Fprintf(&script, "add chain inet %s guard { type filter hook output priority 0; policy accept; }\n", name)
-		fmt.Fprintf(&script, "add rule inet %s guard meta mark %d return\n", name, network.Mark)
+		fmt.Fprintf(&script, "add rule inet %s guard meta mark %d return comment \"elarni guard\"\n", name, network.Mark)
 		// DNS redirection can retain the tunnel's local source address. Replies
 		// to local sockets must not be rejected by the physical-route guard.
 		fmt.Fprintf(&script, "add rule inet %s guard oifname \"lo\" return\n", name)
@@ -472,7 +530,7 @@ func (network linuxNetwork) firewall(protected []netip.Prefix) string {
 		// Forwarded container/VM traffic follows the same policy rule; reject it
 		// too when it would leave outside the tunnel.
 		fmt.Fprintf(&script, "add chain inet %s forward_guard { type filter hook forward priority 0; policy accept; }\n", name)
-		fmt.Fprintf(&script, "add rule inet %s forward_guard oifname %q return\n", name, name)
+		fmt.Fprintf(&script, "add rule inet %s forward_guard oifname %q return comment \"elarni forward_guard\"\n", name, name)
 		for _, ipv4 := range []bool{true, false} {
 			prefixes := []string{}
 			for _, prefix := range protected {
@@ -499,17 +557,96 @@ func (network linuxNetwork) firewall(protected []netip.Prefix) string {
 	return script.String()
 }
 
+// firewallMarkers are the comments of the one rule in each chain of a firewall script that marks
+// the chain as Elarni's: a chain that was removed or flushed lacks its marker.
+func firewallMarkers(script string) []string {
+	var markers []string
+	for _, match := range firewallMarker.FindAllStringSubmatch(script, -1) {
+		markers = append(markers, match[1])
+	}
+	return markers
+}
+
+var firewallMarker = regexp.MustCompile(`comment "([^"]*)"`)
+
+// nftTableMissing says whether nft, failing, said the table is not there.
+func nftTableMissing(detail string) bool {
+	return strings.Contains(detail, "No such file or directory")
+}
+
+// firewallState is what nft says about this network's table, listed without the elements of its
+// sets: whether it is there, and with it the marker rule of each chain markers names. Only nft
+// saying the table is not there counts as missing; a listing that failed otherwise, timed out or
+// did not run tells nothing.
+func (network linuxNetwork) firewallState(markers []string) firewallState {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	command := exec.CommandContext(ctx, linuxTool("nft"), "-t", "list", "table", "inet", network.Name)
+	var listing, detail bytes.Buffer
+	command.Stdout, command.Stderr = &listing, &detail
+	err := command.Run()
+	return listedFirewall(err, ctx.Err() != nil, detail.String(), listing.String(), markers)
+}
+
+func listedFirewall(err error, timedOut bool, detail, listing string, markers []string) firewallState {
+	var exit *exec.ExitError
+	switch {
+	case err == nil:
+		for _, marker := range markers {
+			if !strings.Contains(listing, `comment "`+marker+`"`) {
+				return firewallIncomplete
+			}
+		}
+		return firewallWhole
+	case errors.As(err, &exit) && !timedOut && nftTableMissing(detail):
+		return firewallMissing
+	}
+	return firewallUnknown
+}
+
+// firewallCheck checks for the firewall install put in for this policy: its table, and in each of
+// its chains the marker rule.
+func (network linuxNetwork) firewallCheck(policy *share.WindowsRoutePolicy) func() firewallState {
+	var markers []string
+	// install built the same firewall, so the guarded routes do not fail here; if they did, the
+	// table alone is checked.
+	if protected, err := linuxGuardedRoutes(network, policy); err == nil {
+		markers = firewallMarkers(network.firewall(protected, policy != nil && policy.AnswerInbound))
+	}
+	return func() firewallState { return network.firewallState(markers) }
+}
+
+// restoredFirewall is the firewall that install put in, as one transaction that replaces
+// whatever is left of the table, so a table that was there after all is not doubled.
+func (network linuxNetwork) restoredFirewall(protected []netip.Prefix, answerInbound bool) string {
+	name := network.Name
+	return "add table inet " + name + "\ndelete table inet " + name + "\nadd table inet " + name + "\n" + network.firewall(protected, answerInbound)
+}
+
+func (network linuxNetwork) restoreFirewall(policy *share.WindowsRoutePolicy) error {
+	protected, err := linuxGuardedRoutes(network, policy)
+	if err != nil {
+		return err
+	}
+	detail, err := nftWithOutput(network.restoredFirewall(protected, policy != nil && policy.AnswerInbound))
+	if err != nil && detail != "" {
+		// nft repeats the rule it rejected, which can hold every guarded route.
+		if len(detail) > 512 {
+			detail = detail[:512] + "..."
+		}
+		return fmt.Errorf("%w: %s", err, detail)
+	}
+	return err
+}
+
 func (network linuxNetwork) cleanup() error {
 	var failures []error
-	// Remove interception before removing its DNS listener or tunnel.
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	listed := exec.CommandContext(ctx, linuxTool("nft"), "list", "table", "inet", network.Name).Run()
-	// A listing that timed out may hide the table.
-	present := listed == nil || errors.Is(ctx.Err(), context.DeadlineExceeded)
-	cancel()
+	// Remove interception before removing its DNS listener or tunnel. Only a table nft says is not
+	// there is left alone: a listing that failed otherwise may hide it. A table that is gone by the
+	// time of the delete, or an nft that is not installed, leaves nothing to delete.
 	redirect := false
-	if present {
-		if err := nft("delete table inet " + network.Name + "\n"); err != nil {
+	if network.firewallState(nil) != firewallMissing {
+		if detail, err := nftWithOutput("delete table inet " + network.Name + "\n"); err != nil && !errors.Is(err, errLinuxFirewallUnavailable) && !nftTableMissing(detail) {
 			failures = append(failures, err)
 			redirect = true
 		}

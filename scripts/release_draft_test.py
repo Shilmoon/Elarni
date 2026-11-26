@@ -14,6 +14,7 @@ RUN = 'https://github.com/example/elarni/actions/runs/7/attempts/1'
 OTHER_RUN = 'https://github.com/example/elarni/actions/runs/6/attempts/1'
 # The names the build attests, and the names the release machine gives two of them.
 BUILT = ['elarni_0.7.0-17_amd64.deb', 'Elarni-0.7.0-17-x86_64.AppImage', 'elarni-0.7.0-17-linux-x64.tar.gz',
+         'elarni-0.7.0-17-linux-bundled-sources.tar',
          'Elarni-0.7.0-17-windows-x64-UNSIGNED.msi', 'Elarni-0.7.0-17-windows-x64-UNSIGNED.zip',
          'Elarni-0.7.0-17-project-source.tar.gz', 'elarni-go-module-sources.tar.gz']
 RENAMED = {'elarni-go-module-sources.tar.gz': 'Elarni-0.7.0-17-go-module-sources.tar.gz'}
@@ -77,12 +78,12 @@ class Draft(unittest.TestCase):
         self.assertIn(text, str(raised.exception))
 
     def test_one_build_with_every_file_passes(self):
-        self.assertEqual(self.check(), {'run': RUN, 'version': '0.7.0', 'build': '17', 'files': 11})
+        self.assertEqual(self.check(), {'run': RUN, 'version': '0.7.0', 'build': '17', 'files': 12})
         self.assertEqual(self.fetched, [(RUN, UNSIGNED, self.subjects[UNSIGNED])])
 
     def test_a_publish_that_stopped_after_its_upload_can_run_again(self):
         (self.draft / 'SHA256SUMS.sigstore.json').write_text('{}')
-        self.assertEqual(self.check()['files'], 11)
+        self.assertEqual(self.check()['files'], 12)
 
     def test_a_package_the_build_made_must_be_in_the_draft(self):
         (self.draft / 'Elarni-0.7.0-17-windows-x64-UNSIGNED.msi').unlink()

@@ -249,7 +249,8 @@ abstract interface class TunnelControl {
   Future<String> state();
 
   /// Whether the connected server passes traffic, as of the last [state]:
-  /// ok, noTraffic, or null when not checked yet.
+  /// ok, noTraffic, stalled (the server's network cuts transfers off), or null
+  /// when not checked yet.
   String? get liveness;
   Future<PingResult> pingNode(
     String nodeId, {
@@ -282,7 +283,14 @@ abstract interface class TunnelControl {
   Future<bool> saveFile(String kind, Uint8List bytes);
   Future<Map<String, Object?>> systemInfo();
   Future<Map<String, Object?>> routeTable();
-  Future<Map<String, Object?>> setLaunchAtLogin(bool enabled);
+
+  /// Registers or removes the start at login. Windows and Linux write [hidden]
+  /// into the login entry, which then starts the app hidden in the tray, and
+  /// report it back as `launchHidden`; macOS ignores it.
+  Future<Map<String, Object?>> setLaunchAtLogin(
+    bool enabled, {
+    bool hidden = false,
+  });
 
   /// Windows: lets this account connect System-wide VPN through the Elarni VPN
   /// service, without a consent prompt each app session; changing it asks once.
@@ -450,8 +458,13 @@ final class NativeTunnelControl implements TunnelControl {
   Future<Map<String, Object?>> routeTable() => _mapResult('routeTable');
 
   @override
-  Future<Map<String, Object?>> setLaunchAtLogin(bool enabled) =>
-      _mapResult('setLaunchAtLogin', <String, Object?>{'enabled': enabled});
+  Future<Map<String, Object?>> setLaunchAtLogin(
+    bool enabled, {
+    bool hidden = false,
+  }) => _mapResult('setLaunchAtLogin', <String, Object?>{
+    'enabled': enabled,
+    'hidden': hidden,
+  });
 
   @override
   Future<Map<String, Object?>> setVPNService(bool enabled) =>
@@ -1130,6 +1143,7 @@ final class TunnelSettings {
     this.logLevel = 'warning',
     this.recordDiagnostics = false,
     this.hideVPNIcon = false,
+    this.answerInbound = false,
     this.includedRoutes = const <String>['0.0.0.0/0', '::/0'],
     this.excludedRoutes = const <String>[],
   });
@@ -1187,6 +1201,7 @@ final class TunnelSettings {
     recordDiagnostics:
         recordingBuild && (value['recordDiagnostics'] as bool? ?? false),
     hideVPNIcon: value['hideVPNIcon'] as bool? ?? false,
+    answerInbound: value['answerInbound'] as bool? ?? false,
     includedRoutes: List<String>.from(
       value['includedRoutes'] as List? ?? const <String>['0.0.0.0/0', '::/0'],
     ),
@@ -1354,6 +1369,9 @@ final class TunnelSettings {
   // in a [recordingBuild].
   final bool recordDiagnostics;
   final bool hideVPNIcon;
+  // Linux: connections that arrive from outside are answered outside the tunnel,
+  // so a server keeps SSH and its published ports while the VPN is on.
+  final bool answerInbound;
   final List<String> includedRoutes;
   final List<String> excludedRoutes;
 
@@ -1412,6 +1430,7 @@ final class TunnelSettings {
     'logLevel': logLevel,
     'recordDiagnostics': recordDiagnostics,
     'hideVPNIcon': hideVPNIcon,
+    'answerInbound': answerInbound,
     'includedRoutes': includedRoutes,
     'excludedRoutes': excludedRoutes,
   };
@@ -1455,6 +1474,7 @@ final class TunnelSettings {
     String? logLevel,
     bool? recordDiagnostics,
     bool? hideVPNIcon,
+    bool? answerInbound,
     List<String>? includedRoutes,
     List<String>? excludedRoutes,
   }) => TunnelSettings(
@@ -1500,6 +1520,7 @@ final class TunnelSettings {
     logLevel: logLevel ?? this.logLevel,
     recordDiagnostics: recordDiagnostics ?? this.recordDiagnostics,
     hideVPNIcon: hideVPNIcon ?? this.hideVPNIcon,
+    answerInbound: answerInbound ?? this.answerInbound,
     includedRoutes: includedRoutes ?? this.includedRoutes,
     excludedRoutes: excludedRoutes ?? this.excludedRoutes,
   );
@@ -1643,6 +1664,11 @@ const subscriptionFailures = <String, (String, String)>{
     'Link removed',
     'The provider removed or changed this link. Ask the provider for a new one.',
   ),
+  // A feed only Happ can decrypt (an Encrypt-Tag header and ?key= in its URL).
+  'encrypted_feed': (
+    'Encrypted for another app',
+    'The provider encrypted this subscription for another app, such as Happ, and Elarni cannot read it. Ask the provider for a link without encryption.',
+  ),
 };
 
 final class SubscriptionGroup {
@@ -1674,6 +1700,7 @@ final class SubscriptionGroup {
     this.fallbackHosts = const <String>[],
     this.fetchOptions = const <String, String>{},
     this.hiddenNodes = const [],
+    this.notices = const <String>[],
   });
 
   factory SubscriptionGroup.fromMap(Map<String, Object?> value) {
@@ -1716,6 +1743,7 @@ final class SubscriptionGroup {
         for (final item in value['hiddenNodes'] as List? ?? const [])
           (id: item['id'] as String, name: item['name'] as String),
       ],
+      notices: List<String>.from(value['notices'] as List? ?? const []),
       nodes: nodes
           .map(
             (item) => SubscriptionNode.fromMap(
@@ -1741,6 +1769,10 @@ final class SubscriptionGroup {
 
   /// Provider servers the user hid; refreshes keep them out of [nodes].
   final List<({String id, String name})> hiddenNodes;
+
+  /// The provider's message lines of the last refresh, such as the traffic
+  /// left; at most five, shown under the subscription's name.
+  final List<String> notices;
 }
 
 final class SubscriptionNode {

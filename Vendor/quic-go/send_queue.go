@@ -3,7 +3,10 @@ package quic
 import (
 	"errors"
 	"net"
+	"sync/atomic"
+	"time"
 
+	"github.com/apernet/quic-go/internal/monotime"
 	"github.com/apernet/quic-go/internal/protocol"
 )
 
@@ -28,19 +31,69 @@ type sendQueue struct {
 	runStopped  chan struct{} // runStopped when the run loop returns
 	available   chan struct{}
 	conn        sendConn
+	// Elarni: the connection's, which its direct writes during the handshake share.
+	sendErrors *sendErrors
 }
 
 var _ sender = &sendQueue{}
 
 const sendQueueCapacity = 8
 
-func newSendQueue(conn sendConn) sender {
+func newSendQueue(conn sendConn, errs *sendErrors) sender {
 	return &sendQueue{
 		conn:        conn,
 		runStopped:  make(chan struct{}),
 		closeCalled: make(chan struct{}),
 		available:   make(chan struct{}, 1),
 		queue:       make(chan queueEntry, sendQueueCapacity),
+		sendErrors:  errs,
+	}
+}
+
+// Elarni: networkChangeGrace is how long, from the first failure, sends that fail with a lost
+// interface, route or local address after the handshake lose only their packet, while a phone or
+// laptop moves between Wi-Fi and mobile data. A send that goes through ends the streak. A failure
+// past it closes the connection, as before, so that a route or address gone for good fails over
+// at once instead of at the idle timeout. A variable so that tests can shorten it.
+var networkChangeGrace = 5 * time.Second
+
+// Elarni: sendErrors tells a failed send that loses only its packet, which loss recovery resends,
+// from one that closes the connection. A connection's send queues and its direct writes during the
+// handshake share one.
+type sendErrors struct {
+	// handshakeComplete is set by the connection once its handshake is complete. Before that, a
+	// lost route or address still fails the dial at once.
+	handshakeComplete atomic.Bool
+	// networkChangeSince is the monotonic time of the first failure of the current streak of
+	// sends that failed with a lost interface, route or local address; 0 while sends go through.
+	networkChangeSince atomic.Int64
+	// grace is networkChangeGrace when the connection was set up.
+	grace time.Duration
+}
+
+// transient reports whether a send that failed with err loses only its packet: a full socket or
+// interface queue (ENOBUFS), or a lost interface, route or local address once the handshake is
+// complete, until the streak of such failures is grace old.
+func (s *sendErrors) transient(err error) bool {
+	if isNoBufferSpaceErr(err) {
+		return true
+	}
+	if !s.handshakeComplete.Load() || !isNetworkChangeErr(err) {
+		return false
+	}
+	now := int64(monotime.Now())
+	since := s.networkChangeSince.Load()
+	if since == 0 {
+		s.networkChangeSince.Store(now)
+		return true
+	}
+	return time.Duration(now-since) < s.grace
+}
+
+// sent ends a streak of failed sends.
+func (s *sendErrors) sent() {
+	if s.networkChangeSince.Load() != 0 {
+		s.networkChangeSince.Store(0)
 	}
 }
 
@@ -93,10 +146,15 @@ func (h *sendQueue) Run() error {
 				// 1. Checking for "datagram too large" message from the kernel, as such,
 				// 2. Path MTU discovery,and
 				// 3. Eventual detection of loss PingFrame.
+				// Elarni: so do a full socket or interface queue (ENOBUFS), and a route or local
+				// address that is gone during a network switch, for a while once the handshake is
+				// complete (sendErrors.transient); loss recovery resends the packet.
 				var tooLarge *DatagramTooLargeError
-				if !isSendMsgSizeErr(err) && !errors.As(err, &tooLarge) {
+				if !isSendMsgSizeErr(err) && !h.sendErrors.transient(err) && !errors.As(err, &tooLarge) {
 					return err
 				}
+			} else {
+				h.sendErrors.sent()
 			}
 			e.buf.Release()
 			select {

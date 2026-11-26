@@ -5,6 +5,7 @@
     <string name="routing_data_is_missing_or_invalid">Routing data is missing or invalid. Refresh the profile\'s geofiles before connecting.</string>
     <string name="connect_to_this_server_before_testing">Connect to this server before testing the active proxy.</string>
     <string name="the_provider_removed_or_changed_this">The provider removed or changed this link. Ask the provider for a new one.</string>
+    <string name="the_provider_encrypted_this_subscription_for">The provider encrypted this subscription for another app, such as Happ, and Elarni cannot read it. Ask the provider for a link without encryption.</string>
     <string name="the_provider_refused_the_request_the">The provider refused the request. The subscription may have expired, run out of traffic or reached its device limit. Contact the provider.</string>
     <string name="the_provider_is_limiting_requests_elarni">The provider is limiting requests. Elarni retries later; wait before refreshing again.</string>
     <string name="the_provider_s_server_reported_an">The provider\'s server reported an error. Nothing is wrong with Elarni or this device; retry later.</string>
@@ -18,6 +19,8 @@
     <string name="no_app_could_open_this_link">No app could open this link. Check the address and installed apps.</string>
     <string name="android_restarted_the_app_during_export">Android restarted the app during export. Export the file again.</string>
     <string name="the_file_could_not_be_read">The file could not be read or saved. Choose an accessible file or location.</string>
+    <string name="no_app_on_this_device_can_open">No app on this device can open or save files. Install a file manager, then try again.</string>
+    <string name="android_on_this_device_cannot_open">Android on this device cannot open this screen.</string>
     <string name="no_camera_app_is_available_import">No camera app is available. Import a QR image instead.</string>
     <string name="no_readable_qr_code_was_found">No readable QR code was found. Use a clear, well-lit image containing the entire code.</string>
     <string name="the_input_exceeds_the_supported_size">The input exceeds the supported size. Use a smaller file or profile.</string>
@@ -50,6 +53,7 @@
     <string name="operation_cancelled_your_saved_configuration_is">Operation cancelled. Your saved configuration is unchanged.</string>
     <string name="last_update_failed">Last update failed</string>
     <string name="link_removed">Link removed</string>
+    <string name="encrypted_for_another_app">Encrypted for another app</string>
     <string name="access_refused">Access refused</string>
     <string name="rate_limited">Rate limited</string>
     <string name="provider_error">Provider error</string>
@@ -277,6 +281,7 @@
     <string name="server_actions">Server actions</string>
     <string name="failed">Failed</string>
     <string name="test_failed">Test failed, %1$s</string>
+    <string name="provider_message_line">Provider: %1$s</string>
     <string name="other_locations">Other locations</string>
     <string name="all_locations">All locations</string>
     <string name="test_visible_servers">Test visible servers</string>
@@ -306,6 +311,8 @@
     <string name="no_server_selected">No server selected</string>
     <string name="the_server_passed_no_traffic_at">The server passed no traffic at %1$s. Checking again each minute.</string>
     <string name="connected_no_traffic">Connected · no traffic</string>
+    <string name="connected_transfers_cut_off">Connected · transfers cut off</string>
+    <string name="this_server_s_network_cuts_transfers_off">Connected, but this server’s network cuts transfers off. Pages will not load; choose another server.</string>
     <string name="connected">Connected</string>
     <string name="connecting">Connecting…</string>
     <string name="paused">Paused</string>
@@ -456,6 +463,8 @@
     <string name="package_profile_tools">Package &amp; profile tools</string>
     <string name="not_currently_visible_remove_unavailable_apps">Not currently visible: %1$s. Remove unavailable apps before connecting.</string>
     <string name="no_other_installed_apps">No other installed apps.</string>
+    <string name="the_system_on_this_phone_keeps">The system on this phone keeps Elarni from reading the installed apps. Allow it in Elarni\'s app settings, then come back here.</string>
+    <string name="open_app_settings">Open app settings</string>
     <string name="no_apps_match_your_search">No apps match your search.</string>
     <string name="show_more">Show more</string>
     <string name="installed_apps">Installed apps</string>
@@ -607,12 +616,14 @@
     <string name="choose_a_server_in_elarni">Choose a server in Elarni</string>
     <string name="disconnecting_2">Disconnecting</string>
     <string name="no_traffic">No traffic</string>
+    <string name="transfers_cut_off">Transfers cut off</string>
     <string name="connecting_2">Connecting</string>
     <string name="vpn_connected">VPN connected</string>
     <string name="local_proxy_running">Local proxy running</string>
     <string name="paused_while_screen_is_off">Paused while screen is off</string>
     <string name="connection_failed_open_to_review">Connection failed · open to review</string>
     <string name="server_passes_no_traffic">" · server passes no traffic"</string>
+    <string name="server_cuts_transfers_off">" · server’s network cuts transfers off"</string>
     <string name="subscription_expiry">Subscription expiry</string>
     <string name="approve_download_destination">Approve download destination</string>
     <string name="open_elarni_to_approve_where_a">Open Elarni to approve where a subscription or routing list downloads from.</string>
@@ -635,6 +646,7 @@
     <string name="named_provider_rate_limited">%1$s is limiting requests. Elarni retries later; wait before refreshing again.</string>
     <string name="named_provider_denied">%1$s refused the request. The subscription may have expired, run out of traffic or reached its device limit. Contact the provider.</string>
     <string name="named_provider_link_removed">%1$s removed or changed this link. Ask the provider for a new one.</string>
+    <string name="named_provider_encrypted_feed">%1$s encrypted this subscription for another app, such as Happ, and Elarni cannot read it. Ask the provider for a link without encryption.</string>
     <string name="named_provider_sharing_disabled">%1$s disabled sharing for this profile.</string>
     <string name="unsupported_provider_directives">Unsupported provider directives</string>
     <string name="servers_not_added">Servers not added</string>
@@ -769,6 +781,7 @@
     <string name="run_in_the_background">Run in the background</string>
     <string name="allowed">Allowed</string>
     <string name="reset_elarni">Reset Elarni</string>
+    <string name="retry">Retry</string>
     <string name="reset_elarni_2">Reset Elarni?</string>
     <string name="this_deletes_every_subscription_server_and">This deletes every subscription, server and setting on this device. It cannot be undone.</string>
     <string name="a_chosen_server_has_no_share">A chosen server has no share link that keeps all its settings. Share it from its own page.</string>

@@ -22,6 +22,20 @@ func (c *Config) maxRetryTokenAge() time.Duration {
 	return c.handshakeTimeout()
 }
 
+// initialPacketSize is the size of the first packets: the configured one, or the default.
+func (c *Config) initialPacketSize() protocol.ByteCount {
+	if c.InitialPacketSize == 0 {
+		return protocol.InitialPacketSize
+	}
+	return protocol.ByteCount(c.InitialPacketSize)
+}
+
+// initialPacketSizeIsFloor says if the application set InitialPacketSize as the smallest packet
+// size it accepts. The default and Chrome's size fall back to 1200 bytes instead.
+func (c *Config) initialPacketSizeIsFloor() bool {
+	return c.InitialPacketSize != 0 && c.InitialPacketSize != c.defaultInitialPacketSize && !c.ChromeParrot
+}
+
 func validateConfig(config *Config) error {
 	if config == nil {
 		return nil
@@ -100,9 +114,14 @@ func populateConfig(config *Config) *Config {
 	} else if maxIncomingUniStreams < 0 {
 		maxIncomingUniStreams = 0
 	}
+	// Elarni: an unset InitialPacketSize reads the default, as before, and defaultInitialPacketSize
+	// records it, so that a size the application set (the smallest it accepts,
+	// quic-go/quic-go#5911) can be told apart from the default. A Config populated before keeps it.
 	initialPacketSize := config.InitialPacketSize
+	defaultInitialPacketSize := config.defaultInitialPacketSize
 	if initialPacketSize == 0 {
 		initialPacketSize = protocol.InitialPacketSize
+		defaultInitialPacketSize = protocol.InitialPacketSize
 	}
 	enableDatagrams := config.EnableDatagrams
 	omitMaxDatagramFrameSize := config.OmitMaxDatagramFrameSize
@@ -142,6 +161,7 @@ func populateConfig(config *Config) *Config {
 		OmitMaxDatagramFrameSize:         omitMaxDatagramFrameSize,
 		AssumePeerMaxDatagramFrameSize:   config.AssumePeerMaxDatagramFrameSize,
 		InitialPacketSize:                initialPacketSize,
+		defaultInitialPacketSize:         defaultInitialPacketSize,
 		DisablePathMTUDiscovery:          config.DisablePathMTUDiscovery,
 		EnableStreamResetPartialDelivery: config.EnableStreamResetPartialDelivery,
 		Allow0RTT:                        config.Allow0RTT,

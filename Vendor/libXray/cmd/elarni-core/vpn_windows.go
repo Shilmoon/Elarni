@@ -26,6 +26,7 @@ import (
 	"github.com/xtls/libxray/share"
 	"github.com/xtls/libxray/xray"
 	"github.com/xtls/xray-core/common/flightrecorder"
+	"github.com/xtls/xray-core/common/log"
 	"github.com/xtls/xray-core/common/platform/filesystem"
 	"github.com/xtls/xray-core/proxy/tun"
 	"golang.org/x/sys/windows"
@@ -743,6 +744,8 @@ func (g *childGuard) settle() {
 	if !g.installed && g.owner != 0 {
 		windows.CloseHandle(g.owner)
 		g.owner = 0
+		// Another helper, Repair or the service may change the fallback routes from now on.
+		helperFallbackRoutes.forget()
 	}
 }
 
@@ -850,6 +853,26 @@ func reloadVPNTunnel(running *vpnCommand, next vpnCommand, adapter string) error
 	return nil
 }
 
+// vpnFailureCode is a failed start's reply error, vpn_<stage>_failed, with the Windows
+// error number err carries; native is that number, 0 without one.
+func vpnFailureCode(stage string, err error) (code string, native syscall.Errno) {
+	code = "vpn_" + stage + "_failed"
+	if errors.As(err, &native) {
+		code += "_" + strconv.FormatUint(uint64(native), 10)
+	}
+	return code, native
+}
+
+// coreStage is the stage a core that did not start reports. The TUN creates its Wintun
+// adapter inside the core's start: a refused adapter is Wintun's failure, as a DLL that
+// did not load is, so the app names the driver and does not fail over to another server.
+func coreStage(err error) string {
+	if errors.Is(err, tun.ErrAdapter) {
+		return "wintun"
+	}
+	return "core"
+}
+
 // runVPNTunnel runs one tunnel. code 0 is a requested stop; ready says the tunnel
 // was up; fatal says this process cannot run another one.
 func runVPNTunnel(pipe io.Writer, parent windows.Handle, request vpnCommand, commands <-chan vpnCommand, closed <-chan struct{}, guard *childGuard, held *heldAssets) (code int, ready, fatal bool) {
@@ -869,11 +892,7 @@ func runVPNTunnel(pipe io.Writer, parent windows.Handle, request vpnCommand, com
 		}()
 	}
 	fail := func(stage string, err error) (int, bool, bool) {
-		code := "vpn_" + stage + "_failed"
-		var native syscall.Errno
-		if errors.As(err, &native) {
-			code += "_" + strconv.FormatUint(uint64(native), 10)
-		}
+		code, native := vpnFailureCode(stage, err)
 		if flightrecorder.Enabled() {
 			flightrecorder.Record(flightrecorder.Event{Name: "windows_vpn_failure", Code: code, Values: map[string]int64{"native_error": int64(native)}})
 		}
@@ -923,7 +942,36 @@ func runVPNTunnel(pipe io.Writer, parent windows.Handle, request vpnCommand, com
 		writeFrame(pipe, map[string]any{"ready": false, "error": "invalid_vpn_config"})
 		return 1, false, false
 	}
+	// With Block traffic without VPN every prefix the tunnel takes also leads into the loopback
+	// interface, before the core adds the tunnel's own routes (see fallbackRoutes). They stay as
+	// long as the guard, which releaseGuard ends; another tunnel's that this one has not go here.
+	tunnelRoutes, err := share.WindowsRoutes(request.RoutePolicy)
+	if err != nil {
+		return fail("routes", err)
+	}
+	fallback := fallbackRoutes(tunnelRoutes, request.RoutePolicy != nil && request.RoutePolicy.BlockWithoutVPN)
+	// Taken before the routes are placed, so the app gets a warning about them with the tunnel's first lines.
 	logCursor := xray.LastLogSeq()
+	placement, err := placeFallbackRoutes(helperFallbackRoutes, currentGuardMarker(), fallback)
+	if !guard.installed {
+		// Until protectDNS puts this child's guard in place, a start that fails takes back only the
+		// fallback routes it added. A guard a crashed helper left stays, with its routes and marker:
+		// with Block traffic without VPN the app keeps it until a tunnel replaces it. Deferred
+		// before the core's stop, so it runs after the tunnel's routes are gone. Routes it cannot
+		// remove stay named in the marker, for a later start, a stop and Repair.
+		defer func() {
+			if !guard.installed {
+				_ = undoFallbackRoutes(helperFallbackRoutes, currentGuardMarker(), placement)
+			}
+		}()
+	}
+	if err != nil {
+		return fail("block_routes", err)
+	}
+	if placement.left != nil {
+		log.Record(&log.GeneralMessage{Severity: log.Severity_Warning,
+			Content: "Block traffic without VPN is off, but some of its earlier routes could not be removed; the VPN tries again when it disconnects: " + placement.left.Error()})
+	}
 	started := make(chan error, 1)
 	tun.SetSessionLimits(request.TCPMaxConnections, request.UDPMaxConnections)
 	if request.MemoryLimitMB > 0 {
@@ -962,7 +1010,7 @@ func runVPNTunnel(pipe io.Writer, parent windows.Handle, request vpnCommand, com
 		return 1, false, true
 	}
 	if err != nil {
-		return fail("core", err)
+		return fail(coreStage(err), err)
 	}
 	iface, err := tunnelInterface(tun.AdapterGUID(adapter))
 	if err != nil {
@@ -972,7 +1020,7 @@ func runVPNTunnel(pipe io.Writer, parent windows.Handle, request vpnCommand, com
 	if err != nil {
 		return fail("routes", err)
 	}
-	if err := protectDNS(uint64(iface.InterfaceLUID), protected); err != nil {
+	if err := protectDNS(uint64(iface.InterfaceLUID), protected, placement.named); err != nil {
 		return fail("dns", err)
 	}
 	// It also replaced any guard a lost tunnel kept.

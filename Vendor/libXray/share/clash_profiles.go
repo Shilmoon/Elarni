@@ -216,10 +216,14 @@ func importClashProfiles(text string) (*ClientImport, error) {
 		root["dns"] = dns
 	}
 	raw, err := json.Marshal(root)
-	if err != nil || validateClientProfile(raw) != nil {
+	notice := false
+	if err == nil {
+		notice, err = checkClientProfile(raw)
+	}
+	if err != nil {
 		return nil, fmt.Errorf("invalid Clash client settings")
 	}
-	result := &ClientImport{Profiles: []ClientProfile{{Format: "xrayProfile", Name: "Clash profile", Config: raw}}}
+	result := &ClientImport{Profiles: []ClientProfile{{Format: "xrayProfile", Name: "Clash profile", Config: raw, notice: notice}}}
 	skipped.report(result)
 	return result, nil
 }

@@ -1,20 +1,20 @@
 module github.com/xtls/xray-core
 
-go 1.27
+go 1.27.3
 
 require (
-	github.com/amnezia-vpn/amneziawg-go/v3 v3.1.20260828
+	github.com/amnezia-vpn/amneziawg-go/v3 v3.1.20261116
 	github.com/apernet/quic-go v0.61.1-0.20260806010916-184d081eef3e
 	github.com/ghodss/yaml v1.0.1-0.20220118164431-d8423dcdf344
 	github.com/google/uuid v1.6.0
-	github.com/gorilla/websocket v1.5.3
+	github.com/gorilla/websocket v1.5.4-0.20240701034025-d67f41855da4
 	github.com/klauspost/cpuid/v2 v2.4.2
 	github.com/libp2p/go-nat v1.0.1-0.20250821073202-01afc089f138
 	github.com/miekg/dns v1.1.73
 	github.com/pelletier/go-toml v1.9.5
 	github.com/pion/stun/v3 v3.1.7
 	github.com/pires/go-proxyproto v0.16.0
-	github.com/refraction-networking/utls v1.8.3-0.20261108164504-a13c59ffe98b
+	github.com/refraction-networking/utls v1.8.3-0.20261118233537-360383f893fb
 	github.com/robfig/cron/v3 v3.0.1
 	github.com/sagernet/quic-go v0.61.0-sing-box-mod.6
 	github.com/sagernet/sing v0.9.0-beta.4
@@ -34,7 +34,7 @@ require (
 	golang.zx2c4.com/wireguard/windows v1.1.1
 	google.golang.org/grpc v1.85.0
 	google.golang.org/protobuf v1.36.12
-	gvisor.dev/gvisor v0.0.0-20260122175437-89a5d21be8f0
+	gvisor.dev/gvisor v0.0.0-20261114011126-1d2425946df6
 	layeh.com/gopher-luar v1.0.11
 	lukechampine.com/blake3 v1.4.1
 )

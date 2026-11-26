@@ -221,6 +221,19 @@ fn after_own_subnet_block(config: &Value) -> &[Value] {
     let rules = config["routing"]["rules"].as_array().unwrap();
     assert_eq!(rules[0]["inboundTag"], json!(["elarni-tun"]));
     assert_eq!(rules[0]["port"], "1-52,54-65535");
+    // Android, the desktop TUN, and the Mac and iPhone tunnel (TunnelSettingsFactory.swift).
+    for subnet in [
+        "198.51.100.252/30",
+        "fdfe:dcba:9876::/126",
+        "fd76:6f75:7465::/126",
+        "192.0.2.0/30",
+        "2001:db8::/126",
+    ] {
+        assert!(
+            rules[0]["ip"].as_array().unwrap().contains(&json!(subnet)),
+            "{subnet} is not blocked"
+        );
+    }
     let block = config["outbounds"]
         .as_array()
         .unwrap()
@@ -229,6 +242,85 @@ fn after_own_subnet_block(config: &Value) -> &[Value] {
         .unwrap();
     assert_eq!(block["protocol"], "blackhole");
     &rules[1..]
+}
+
+// With the native backend the block of the Mac and iPhone tunnel's own subnets sits at the
+// SOCKS inbound (compiler.rs block_tun_own_subnets), ahead of every other rule.
+pub(crate) fn after_socks_own_subnet_block(config: &Value) -> &[Value] {
+    let rules = config["routing"]["rules"].as_array().unwrap();
+    assert_eq!(rules[0]["inboundTag"], json!(["elarni-socks"]));
+    assert_eq!(rules[0]["ip"], json!(["192.0.2.0/30", "2001:db8::/126"]));
+    assert_eq!(rules[0]["port"], "1-52,54-65535");
+    assert!(
+        rules[0]["outboundTag"]
+            .as_str()
+            .is_some_and(|tag| tag.ends_with("-block"))
+    );
+    &rules[1..]
+}
+
+// N2-36: the iPhone always, and the Mac by default, run the native backend, where tun2proxy
+// carries the tunnel's packets into the SOCKS inbound. A Private DNS probe to the tunnel's own
+// 192.0.2.1:853 or a broadcast to 192.0.2.3 arrives there, so the block of the tunnel's own
+// subnets has to sit at that inbound too, or such probes leave by the profile's rules and hang.
+#[test]
+fn native_backend_blocks_the_apple_tunnel_subnets_at_the_socks_inbound() {
+    let routes: RouteModel = serde_json::from_value(json!({"rules": [],
+        "dnsServers": ["1.1.1.1"], "fallbackAction": "proxy"}))
+    .unwrap();
+    let compile_outbound = |backend| {
+        let (config, _) = crate::compiler::compile_xray_outbound_config_with_options(
+            node("node", "edge.example.com"),
+            &routes,
+            1080,
+            backend,
+            1500,
+            &RuntimeOptions::default(),
+        )
+        .unwrap();
+        serde_json::from_slice::<Value>(&config).unwrap()
+    };
+    let profile = json!({"outbounds": [node("provider", "edge.example.com")]});
+    let block = json!({"type": "field", "inboundTag": ["elarni-socks"], "network": "tcp,udp",
+        "ip": ["192.0.2.0/30", "2001:db8::/126"], "port": "1-52,54-65535",
+        "outboundTag": "elarni-block"});
+    for config in [
+        compile_outbound(PacketBackend::NativeTun2Proxy),
+        compile(profile.clone(), Some(&routes)),
+    ] {
+        let rules = config["routing"]["rules"].as_array().unwrap();
+        assert_eq!(rules[0], block);
+        // DNS to the tunnel's resolver on 53 keeps its own route.
+        assert_eq!(rules[1]["port"], 53);
+        assert_eq!(rules[1]["outboundTag"], "elarni-dns");
+        assert!(
+            config["outbounds"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|outbound| outbound["tag"] == "elarni-block"
+                    && outbound["protocol"] == "blackhole")
+        );
+    }
+    // With the TUN backend the SOCKS inbound only serves local apps; the block is the TUN's.
+    let tun_profile = compile_profile(
+        profile,
+        Some(&routes),
+        1080,
+        PacketBackend::XrayTun,
+        1500,
+        &RuntimeOptions::default(),
+        None,
+    )
+    .unwrap();
+    for config in [
+        compile_outbound(PacketBackend::XrayTun),
+        serde_json::from_slice::<Value>(&tun_profile.config).unwrap(),
+    ] {
+        after_own_subnet_block(&config);
+        let rules = config["routing"]["rules"].as_array().unwrap();
+        assert!(!rules.contains(&block));
+    }
 }
 
 fn per_app_runtime(targets: Value) -> RuntimeOptions {
@@ -1416,7 +1508,10 @@ fn balancers_and_observatories_only_select_provider_members() {
             .iter()
             .any(|outbound| outbound["tag"] == "elarni1-dns")
     );
-    assert_eq!(config["routing"]["rules"][0]["outboundTag"], "elarni1-dns");
+    assert_eq!(
+        after_socks_own_subnet_block(&config)[0]["outboundTag"],
+        "elarni1-dns"
+    );
 }
 
 #[test]
@@ -1427,7 +1522,7 @@ fn explicit_rules_overlay_provider_policy_without_adding_a_block_fallback() {
         "routing": {"rules": [{"type": "field", "domain": ["full:provider.example.com"], "outboundTag": "provider-default"}]}}),
         Some(&routes),
     );
-    let rules = config["routing"]["rules"].as_array().unwrap();
+    let rules = after_socks_own_subnet_block(&config);
     assert_eq!(rules[1]["outboundTag"], "elarni-block");
     assert_eq!(rules[1]["inboundTag"], json!(["elarni-socks"]));
     assert_eq!(rules[2]["domain"], json!(["full:provider.example.com"]));
@@ -2084,7 +2179,10 @@ fn failed_hops_close_chains_and_empty_pools_use_their_explicit_fallback() {
             .unwrap()
             .is_empty()
     );
-    assert_eq!(prepared["routing"]["rules"][1]["outboundTag"], "fallback");
+    assert_eq!(
+        after_socks_own_subnet_block(&prepared)[1]["outboundTag"],
+        "fallback"
+    );
 }
 
 // Every endpoint copies its hints, so one huge provider list must not multiply.
@@ -2167,7 +2265,10 @@ fn direct_group_remains_usable_when_unused_proxy_names_cannot_resolve() {
         &Default::default(),
     )
     .unwrap();
-    assert_eq!(prepared["routing"]["rules"][1]["outboundTag"], "direct");
+    assert_eq!(
+        after_socks_own_subnet_block(&prepared)[1]["outboundTag"],
+        "direct"
+    );
 }
 
 // A direct rule that matches only some traffic leaves the rest blackholed.
@@ -2775,6 +2876,8 @@ fn dns_outbound_forwards_other_query_types_to_the_inherited_resolver() {
     assert_eq!(dns["settings"]["address"], "9.9.9.9");
     assert_eq!(dns["settings"]["port"], 5353);
     assert_eq!(dns["settings"]["network"], "tcp");
+    // The provider's resolvers replace the settings; the IPv6 check of Automatic stays.
+    assert_eq!(dns["settings"]["checkIPv6"], true);
     let forward = outbounds
         .iter()
         .find(|outbound| outbound["tag"] == dns["streamSettings"]["sockopt"]["dialerProxy"])

@@ -1,8 +1,8 @@
 #include "desktop_host.h"
+#include "elarni_camera.h"
 
 #include <libayatana-appindicator/app-indicator.h>
-#include <gst/app/gstappsink.h>
-#include <gst/gst.h>
+#include <gmodule.h>
 #include <gio/gdesktopappinfo.h>
 #include <glib/gstdio.h>
 #include <fcntl.h>
@@ -21,9 +21,24 @@
 #include <string>
 #include <vector>
 
+#ifndef ELARNI_BUILD
+#error "ELARNI_BUILD names the app build (linux/runner/CMakeLists.txt)."
+#endif
+
+// A start hidden in the tray waits for a status-notifier host to take the indicator's icon
+// (tray_wait_start).
+struct TrayWait {
+  gpointer indicator = nullptr;
+  guint timer = 0;
+  gulong handler = 0;
+  void (*show)(gpointer) = nullptr;
+  gpointer data = nullptr;
+};
+
 struct DesktopHost {
   GtkApplication* app;
   GtkWindow* window;
+  FlBinaryMessenger* messenger = nullptr;
   FlMethodChannel* desktop;
   FlMethodChannel* platform;
   AppIndicator* indicator = nullptr;
@@ -33,12 +48,13 @@ struct DesktopHost {
   GtkWidget* disconnect = nullptr;
   GDBusConnection* system_bus = nullptr;
   guint sleep_subscription = 0;
-  GstElement* camera = nullptr;
-  GstElement* frames = nullptr;
+  ElarniCamera* camera = nullptr;
   std::string icon;
   std::vector<std::string> links;
   // The tray's Quit or Ctrl+Q asked for the close: it quits even with a tray.
   bool quitting = false;
+  // A start hidden in the tray waits for a tray host to take the icon.
+  TrayWait tray_wait;
 };
 
 namespace {
@@ -79,7 +95,8 @@ const char* tray_state(const char* state) {
       {"connecting", "подключение"}, {"connected", "подключено"}, {"disconnecting", "отключение"},
       {"reasserting", "восстановление связи"}, {"reconnecting", "переподключение"},
       {"invalid", "требуется настройка"}, {"failed", "ошибка подключения"},
-      {"connected, no traffic", "подключено, нет трафика"}};
+      {"connected, no traffic", "подключено, нет трафика"},
+      {"connected, transfers cut off", "подключено, передача обрывается"}};
   const auto found = russian.find(state);
   return russian_interface() && found != russian.end() ? found->second : state;
 }
@@ -159,6 +176,37 @@ std::string desktop_exec(const std::string& path) {
   }
   return quoted + "\"";
 }
+// The autostart entry's Exec: the launcher, with --hidden for the start hidden in the tray.
+std::string login_exec(const std::string& path, bool hidden) {
+  return desktop_exec(path) + (hidden ? " --hidden" : "");
+}
+// How long a start hidden in the tray waits for a status-notifier host to take the icon. At login
+// the watcher (KDE, GNOME's AppIndicator extension, waybar) may come up after the autostart
+// entries, and its registration can take seconds on a loaded session.
+constexpr guint kTrayHostWaitMs = 20000;
+// Whether the autostart entry starts this copy, and whether hidden in the tray. As on Windows, an
+// entry for a moved or replaced copy, or with another argument, does not start this one. The entry
+// is the only store of the hidden start too.
+struct LoginEntry {
+  bool enabled = false;
+  bool hidden = false;
+};
+LoginEntry login_entry() {
+  g_autoptr(GKeyFile) entry = g_key_file_new();
+  if (!g_key_file_load_from_file(entry, config_path("autostart/com.elarni.Elarni.desktop").c_str(), G_KEY_FILE_NONE, nullptr) ||
+      g_key_file_get_boolean(entry, "Desktop Entry", "Hidden", nullptr))
+    return {};
+  g_autofree char* exec = g_key_file_get_string(entry, "Desktop Entry", "Exec", nullptr);
+  if (!exec) return {};
+  const std::string base = desktop_exec(launcher());
+  const bool hidden = base + " --hidden" == exec;
+  return {hidden || base == exec, hidden};
+}
+// The Exec a registration writes. Without a "hidden" argument, as from elarni-cli, the current
+// choice of the hidden start stays.
+std::string registered_exec(const std::string& binary, FlValue* hidden) {
+  return login_exec(binary, hidden ? fl_value_get_bool(hidden) : login_entry().hidden);
+}
 FlValue* system_info() {
   auto* value = fl_value_new_map();
   struct utsname name{};
@@ -170,74 +218,83 @@ FlValue* system_info() {
   fl_value_set_string_take(value, "processorCount", fl_value_new_int(sysconf(_SC_NPROCESSORS_CONF)));
   fl_value_set_string_take(value, "activeProcessorCount", fl_value_new_int(sysconf(_SC_NPROCESSORS_ONLN)));
   fl_value_set_string_take(value, "physicalMemoryBytes", fl_value_new_int(static_cast<int64_t>(info.totalram) * info.mem_unit));
-  g_autoptr(GKeyFile) entry = g_key_file_new();
-  bool enabled = g_key_file_load_from_file(entry, config_path("autostart/com.elarni.Elarni.desktop").c_str(), G_KEY_FILE_NONE, nullptr)
-      && !g_key_file_get_boolean(entry, "Desktop Entry", "Hidden", nullptr);
-  // As on Windows, an entry for a moved or replaced copy does not start this one.
-  g_autofree char* exec = enabled ? g_key_file_get_string(entry, "Desktop Entry", "Exec", nullptr) : nullptr;
-  enabled = exec && desktop_exec(launcher()) == exec;
-  fl_value_set_string_take(value, "launchAtLoginStatus", fl_value_new_string(enabled ? "enabled" : "notRegistered"));
+  const LoginEntry login = login_entry();
+  fl_value_set_string_take(value, "launchAtLoginStatus", fl_value_new_string(login.enabled ? "enabled" : "notRegistered"));
+  fl_value_set_string_take(value, "launchHidden", fl_value_new_bool(login.hidden));
   return value;
 }
+// The entry points of the camera module (elarni_camera.h).
+struct CameraModule {
+  decltype(&elarni_camera_open) open = nullptr;
+  decltype(&elarni_camera_frame) frame = nullptr;
+  decltype(&elarni_camera_close) close = nullptr;
+};
+// Whether the camera module at path loads and comes from this runner's build. It does not where
+// GStreamer, or a symbol of it the module uses, is missing, nor after an upgrade replaced it under
+// this runner.
+bool load_camera_module(const char* path, CameraModule& module, const char* build = ELARNI_BUILD) {
+  // Eager binding: a GStreamer that lacks a symbol fails here, not at the first frame.
+  GModule* library = g_module_open(path, G_MODULE_BIND_LOCAL);
+  if (!library) { g_debug("No camera: %s", g_module_error()); return false; }
+  CameraModule found;
+  decltype(&elarni_camera_build) module_build = nullptr;
+  if (!g_module_symbol(library, "elarni_camera_build", reinterpret_cast<gpointer*>(&module_build)) ||
+      !g_module_symbol(library, "elarni_camera_open", reinterpret_cast<gpointer*>(&found.open)) ||
+      !g_module_symbol(library, "elarni_camera_frame", reinterpret_cast<gpointer*>(&found.frame)) ||
+      !g_module_symbol(library, "elarni_camera_close", reinterpret_cast<gpointer*>(&found.close))) {
+    g_debug("No camera: %s", g_module_error());
+    g_module_close(library);
+    return false;
+  }
+  if (strcmp(module_build(), build) != 0) {
+    g_debug("No camera: %s is from build %s, this runner from %s", path, module_build(), build);
+    g_module_close(library);
+    return false;
+  }
+  g_module_make_resident(library);
+  g_debug("Camera module loaded from %s", path);
+  module = found;
+  return true;
+}
+// The camera module beside the runner at program; empty when that path is unknown or relative,
+// as a module found from the working directory could be anyone's.
+std::string camera_module_path(const std::string& program) {
+  if (!g_path_is_absolute(program.c_str())) return "";
+  g_autofree char* directory = g_path_get_dirname(program.c_str());
+  g_autofree char* path = g_build_filename(directory, "lib", "libelarni_camera.so", nullptr);
+  return path;
+}
+// The camera module beside the runner's libraries, opened at the first camera call and kept.
+const CameraModule* camera_module() {
+  static CameraModule module;
+  static const bool loaded = [] {
+    const std::string path = camera_module_path(executable());
+    if (path.empty()) { g_debug("No camera: the runner's own path is unknown"); return false; }
+    return load_camera_module(path.c_str(), module);
+  }();
+  return loaded ? &module : nullptr;
+}
 void stop_camera(DesktopHost* host) {
-  if (host->camera) gst_element_set_state(host->camera, GST_STATE_NULL);
-  if (host->frames) gst_object_unref(host->frames);
-  if (host->camera) gst_object_unref(host->camera);
-  host->frames = nullptr;
+  if (host->camera) camera_module()->close(host->camera);
   host->camera = nullptr;
 }
 void camera_frame(DesktopHost* host, FlMethodCall* call) {
+  // Without the module, as without GStreamer, the answer is the one for a system without a camera.
+  const CameraModule* camera = camera_module();
+  if (!camera) { fail(call, "camera_unavailable"); return; }
   if (!host->camera) {
-    g_autoptr(GError) error = nullptr;
-    host->camera = gst_parse_launch(
-        "decodebin name=decode ! videoconvert ! videoscale ! video/x-raw,width=640,height=480 "
-        "! jpegenc ! appsink name=frames max-buffers=1 drop=true sync=false", &error);
-    if (error || !host->camera) { stop_camera(host); fail(call, "camera_unavailable"); return; }
-    // autovideosrc falls back to synthetic color bars when no camera opens.
-    // Select an actual device, including cameras whose path is not /dev/video0.
-    g_autoptr(GstDeviceMonitor) monitor = gst_device_monitor_new();
-    g_autoptr(GstCaps) caps = gst_caps_from_string("video/x-raw;image/jpeg");
-    gst_device_monitor_add_filter(monitor, "Video/Source", caps);
-    GList* devices = gst_device_monitor_get_devices(monitor);
-    GstElement* source = nullptr;
-    for (GList* item = devices; item && !source; item = item->next) {
-      auto* candidate = gst_device_create_element(GST_DEVICE(item->data), "camera");
-      if (!candidate) continue;
-      if (gst_element_set_state(candidate, GST_STATE_READY) != GST_STATE_CHANGE_FAILURE) source = candidate;
-      else { gst_element_set_state(candidate, GST_STATE_NULL); gst_object_unref(candidate); }
-    }
-    g_list_free_full(devices, gst_object_unref);
-    if (!source) { stop_camera(host); fail(call, "camera_unavailable"); return; }
-    if (!gst_bin_add(GST_BIN(host->camera), source)) {
-      gst_element_set_state(source, GST_STATE_NULL); gst_object_unref(source);
-      stop_camera(host); fail(call, "camera_unavailable"); return;
-    }
-    g_autoptr(GstElement) decoder = gst_bin_get_by_name(GST_BIN(host->camera), "decode");
-    if (!decoder || !gst_element_link(source, decoder)) { stop_camera(host); fail(call, "camera_unavailable"); return; }
-    host->frames = gst_bin_get_by_name(GST_BIN(host->camera), "frames");
-    if (!host->frames || gst_element_set_state(host->camera, GST_STATE_PLAYING) == GST_STATE_CHANGE_FAILURE) {
-      stop_camera(host); fail(call, "camera_unavailable"); return;
-    }
+    host->camera = camera->open();
+    if (!host->camera) { fail(call, "camera_unavailable"); return; }
   }
-  GstBus* bus = gst_element_get_bus(host->camera);
-  GstMessage* error = gst_bus_pop_filtered(bus, static_cast<GstMessageType>(GST_MESSAGE_ERROR | GST_MESSAGE_EOS));
-  gst_object_unref(bus);
-  if (error) { gst_message_unref(error); stop_camera(host); fail(call, "camera_unavailable"); return; }
-  GstSample* sample = gst_app_sink_try_pull_sample(GST_APP_SINK(host->frames), 0);
-  if (!sample) { success(call); return; }
-  GstBuffer* buffer = gst_sample_get_buffer(sample);
-  GstMapInfo map{};
-  if (!buffer || !gst_buffer_map(buffer, &map, GST_MAP_READ)) {
-    gst_sample_unref(sample); stop_camera(host); fail(call, "camera_unavailable"); return;
-  }
-  if (map.size == 0 || map.size > 8 * 1024 * 1024) {
-    fail(call, "camera_unavailable");
-  } else {
-    g_autoptr(FlValue) value = fl_value_new_uint8_list(map.data, map.size);
-    success(call, value);
-  }
-  gst_buffer_unmap(buffer, &map);
-  gst_sample_unref(sample);
+  gboolean failed = FALSE;
+  g_autoptr(GBytes) frame = camera->frame(host->camera, &failed);
+  if (failed) { stop_camera(host); fail(call, "camera_unavailable"); return; }
+  if (!frame) { success(call); return; }
+  gsize size = 0;
+  const auto* data = static_cast<const uint8_t*>(g_bytes_get_data(frame, &size));
+  if (size == 0 || size > 8 * 1024 * 1024) { fail(call, "camera_unavailable"); return; }
+  g_autoptr(FlValue) value = fl_value_new_uint8_list(data, size);
+  success(call, value);
 }
 bool version_name(const std::string& name) {
   return !name.empty() && name.find_first_not_of("0123456789.") == std::string::npos && name.find('.') != std::string::npos &&
@@ -740,6 +797,7 @@ void platform_call(FlMethodChannel*, FlMethodCall* call, gpointer data) {
   else if (method == "setLaunchAtLogin") {
     auto* enabled = field(args, "enabled", FL_VALUE_TYPE_BOOL);
     if (!enabled) { fail(call, "invalid_settings"); return; }
+    auto* hidden = field(args, "hidden", FL_VALUE_TYPE_BOOL);
     std::string path = config_path("autostart/com.elarni.Elarni.desktop");
     if (fl_value_get_bool(enabled)) {
       std::string binary = launcher();
@@ -747,7 +805,7 @@ void platform_call(FlMethodChannel*, FlMethodCall* call, gpointer data) {
       g_autoptr(GKeyFile) entry = g_key_file_new();
       g_key_file_set_string(entry, "Desktop Entry", "Type", "Application");
       g_key_file_set_string(entry, "Desktop Entry", "Name", "Elarni");
-      g_key_file_set_string(entry, "Desktop Entry", "Exec", desktop_exec(binary).c_str());
+      g_key_file_set_string(entry, "Desktop Entry", "Exec", registered_exec(binary, hidden).c_str());
       g_key_file_set_string(entry, "Desktop Entry", "Icon", APPLICATION_ID);
       g_autofree char* contents = g_key_file_to_data(entry, nullptr, nullptr);
       if (!write_private(path, contents, strlen(contents))) { fail(call, "login_registration_failed"); return; }
@@ -799,16 +857,67 @@ void settings_action(GSimpleAction*, GVariant*, gpointer data) {
   g_autoptr(FlValue) action = fl_value_new_string("settings");
   notify(host->desktop, "action", action);
 }
+// Sends Dart a window state, as the engine does when GTK changes the window's.
+void send_lifecycle(FlBinaryMessenger* messenger, const char* state) {
+  g_autoptr(FlValue) value = fl_value_new_string(state);
+  g_autoptr(FlStringCodec) codec = fl_string_codec_new();
+  g_autoptr(GError) error = nullptr;
+  g_autoptr(GBytes) message = fl_message_codec_encode_message(FL_MESSAGE_CODEC(codec), value, &error);
+  if (!message) { g_warning("Lifecycle state not sent: %s", error->message); return; }
+  fl_binary_messenger_send_on_channel(messenger, "flutter/lifecycle", message, nullptr, nullptr, nullptr);
+}
+void tray_wait_stop(TrayWait& wait) {
+  if (wait.timer) g_source_remove(wait.timer);
+  if (wait.handler) g_signal_handler_disconnect(wait.indicator, wait.handler);
+  wait.timer = 0;
+  wait.handler = 0;
+}
+void tray_connection_changed(gpointer, gboolean connected, gpointer data) {
+  if (connected) tray_wait_stop(*static_cast<TrayWait*>(data));
+}
+gboolean tray_wait_over(gpointer data) {
+  auto& wait = *static_cast<TrayWait*>(data);
+  // The source ends as this returns.
+  wait.timer = 0;
+  tray_wait_stop(wait);
+  gboolean connected = FALSE;
+  if (wait.indicator) g_object_get(wait.indicator, "connected", &connected, nullptr);
+  if (!connected) wait.show(wait.data);
+  return G_SOURCE_REMOVE;
+}
+// Calls show(data) once after wait_ms unless a status-notifier host takes the indicator's icon
+// first; nothing when one already has. A host that comes up later at login ends the wait as it
+// connects.
+void tray_wait_start(TrayWait& wait, gpointer indicator, guint wait_ms, void (*show)(gpointer), gpointer data) {
+  if (wait.timer) return;
+  gboolean connected = FALSE;
+  if (indicator) g_object_get(indicator, "connected", &connected, nullptr);
+  if (connected) return;
+  wait.indicator = indicator;
+  wait.show = show;
+  wait.data = data;
+  if (indicator)
+    wait.handler = g_signal_connect(indicator, APP_INDICATOR_SIGNAL_CONNECTION_CHANGED, G_CALLBACK(tray_connection_changed), &wait);
+  wait.timer = g_timeout_add(wait_ms, tray_wait_over, &wait);
+}
+// Without a tray host nothing else could show a window started hidden: it comes up minimized. One
+// already shown is left as it is.
+void show_minimized(gpointer data) {
+  auto* host = static_cast<DesktopHost*>(data);
+  if (gtk_widget_get_visible(GTK_WIDGET(host->window))) return;
+  gtk_window_iconify(host->window);
+  gtk_window_present(host->window);
+}
 }  // namespace
 
 DesktopHost* desktop_host_new(GtkApplication* app, GtkWindow* window, FlView* view) {
   auto* host = new DesktopHost{};
   host->app = app;
   host->window = window;
-  gst_init(nullptr, nullptr);
   g_autoptr(FlStandardMethodCodec) codec = fl_standard_method_codec_new();
   auto* messenger = fl_engine_get_binary_messenger(fl_view_get_engine(view));
-  host->desktop = fl_method_channel_new(messenger, "com.elarni/desktop", FL_METHOD_CODEC(codec));
+  host->messenger = FL_BINARY_MESSENGER(g_object_ref(messenger));
+  host->desktop =fl_method_channel_new(messenger, "com.elarni/desktop", FL_METHOD_CODEC(codec));
   host->platform = fl_method_channel_new(messenger, "com.elarni/linux", FL_METHOD_CODEC(codec));
   fl_method_channel_set_method_call_handler(host->desktop, desktop_call, host, nullptr);
   fl_method_channel_set_method_call_handler(host->platform, platform_call, host, nullptr);
@@ -873,8 +982,19 @@ void desktop_host_closed_to_tray(DesktopHost* host) {
   g_autoptr(FlValue) action = fl_value_new_string("closedToTray");
   notify(host->desktop, "action", action);
 }
+bool desktop_host_hidden_start(const char* const* arguments) {
+  return arguments && arguments[0] && strcmp(arguments[0], "--hidden") == 0 && !arguments[1];
+}
+void desktop_host_start_hidden(DesktopHost* host) {
+  if (!host) return;
+  // GTK sends no state for a window it never maps, and Dart would take the app as shown: it would
+  // poll traffic rates for nobody. Showing the window later sends its state.
+  send_lifecycle(host->messenger, "AppLifecycleState.hidden");
+  tray_wait_start(host->tray_wait, host->indicator, kTrayHostWaitMs, show_minimized, host);
+}
 void desktop_host_free(DesktopHost* host) {
   if (!host) return;
+  tray_wait_stop(host->tray_wait);
   stop_camera(host);
   g_action_map_remove_action(G_ACTION_MAP(host->app), "quit");
   g_action_map_remove_action(G_ACTION_MAP(host->app), "preferences");
@@ -888,5 +1008,6 @@ void desktop_host_free(DesktopHost* host) {
   fl_method_channel_set_method_call_handler(host->platform, nullptr, nullptr, nullptr);
   g_clear_object(&host->desktop);
   g_clear_object(&host->platform);
+  g_clear_object(&host->messenger);
   delete host;
 }

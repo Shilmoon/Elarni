@@ -83,11 +83,12 @@ jobs:
             clang++ -std=c++14 -Wall -Werror -Ilinux/flutter/ephemeral \
               -DAPPLICATION_ID="\"com.elarni.Elarni\"" test/linux_desktop_host_test.cc \
               -Llinux/flutter/ephemeral -lflutter_linux_gtk \
-              $(pkg-config --cflags --libs gtk+-3.0 ayatana-appindicator3-0.1 gstreamer-app-1.0) \
+              $(pkg-config --cflags --libs gtk+-3.0 ayatana-appindicator3-0.1 gmodule-no-export-2.0) \
               -o .build/linux-desktop-host-test
             LD_LIBRARY_PATH=linux/flutter/ephemeral python scripts/check_report.py -- .build/linux-desktop-host-test
             python scripts/check-server-cores
             rm -rf .build/release-candidate .build/release-source .build/release-dependencies
+            # The image keeps the source packages of the tray libraries the AppImage carries: no package archive needed.
             python scripts/check_report.py -- python scripts/package-linux --output .build/release-candidate
             python scripts/check_report.py -- python scripts/package-source --output .build/release-source
             python scripts/check_report.py -- python scripts/package-dependencies --output .build/release-dependencies
@@ -324,9 +325,11 @@ jobs:
         run: python scripts/check_report.py -- xcodebuild -quiet -workspace macos/Runner.xcworkspace -scheme Runner -configuration Debug -derivedDataPath .build/diagnostics-macos CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO ARCHS=arm64 ONLY_ACTIVE_ARCH=YES ELARNI_DIAGNOSTICS_SUFFIX=-diagnostics 'SWIFT_ACTIVE_COMPILATION_CONDITIONS=$(inherited) DEBUG ELARNI_DIAGNOSTICS' build
       - name: iOS unsigned device build
         if: matrix.ios
+        # The Rust libraries use the release profile a phone's Release build links, so a
+        # release-only Rust or link failure fails here; the app itself compiles as Debug.
         run: |
           rustup target add aarch64-apple-ios
-          sh scripts/build-ios-native iphoneos
+          CONFIGURATION=Release sh scripts/build-ios-native iphoneos
           python scripts/check_report.py -- xcodebuild -quiet -project ios/Elarni/Elarni.xcodeproj -scheme Elarni -configuration Debug -destination 'generic/platform=iOS' -derivedDataPath .build/ios/Device CODE_SIGNING_ALLOWED=NO build
       - name: Retain candidates (not production releases)
         if: matrix.release && github.event_name != 'pull_request'

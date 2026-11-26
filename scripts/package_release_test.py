@@ -1,6 +1,8 @@
 """Process-level checks of candidate packaging and public source selection."""
 import ctypes
 import hashlib
+import importlib.machinery
+import importlib.util
 import json
 from pathlib import Path
 import shutil
@@ -9,7 +11,9 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+from types import SimpleNamespace
 import unittest
+import unittest.mock
 import zipfile
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -17,6 +21,34 @@ sys.path.insert(0, str(ROOT / 'scripts'))
 from release_support import version  # noqa: E402
 # elarni.exe imports all three and elarni_domain.dll imports vcruntime140.dll; a clean Windows has none.
 VC_RUNTIME = ('msvcp140.dll', 'vcruntime140.dll', 'vcruntime140_1.dll')
+
+
+def package_linux():
+    """scripts/package-linux as a module, to run one of its steps."""
+    loader = importlib.machinery.SourceFileLoader('package_linux', str(ROOT / 'scripts/package-linux'))
+    module = importlib.util.module_from_spec(importlib.util.spec_from_loader(loader.name, loader))
+    loader.exec_module(module)
+    return module
+
+
+def tray_library(soname, package, version, source, source_version, root):
+    """A carried library as package-linux's bundled_libraries describes it, with fixture files under root."""
+    return {'soname': soname, 'path': root / soname, 'package': package, 'version': version, 'source': source,
+            'source_version': source_version, 'copyright': root / package / 'copyright'}
+
+
+def source_package(cache, source, version, files):
+    """A source package as apt-get source leaves it in cache: the .dsc and the files it lists with their SHA-256."""
+    lines = []
+    for name, content in files.items():
+        (cache / name).write_bytes(content)
+        lines.append(f' {hashlib.sha256(content).hexdigest()} {len(content)} {name}')
+    dsc = cache / f"{source}_{version.split(':', 1)[-1]}.dsc"
+    dsc.write_text(f'Format: 3.0 (quilt)\nSource: {source}\nVersion: {version}\nChecksums-Sha1:\n'
+                   + ''.join(f' 0000 {len(content)} {name}\n' for name, content in files.items())
+                   + 'Checksums-Sha256:\n' + '\n'.join(lines) + '\nFiles:\n'
+                   + ''.join(f' 0000 {len(content)} {name}\n' for name, content in files.items()))
+    return dsc
 
 
 def product_version(value):
@@ -218,6 +250,135 @@ class PackageReleaseChecks(unittest.TestCase):
                                      '--output', str(Path(temporary) / 'output')], capture_output=True, text=True)
             self.assertNotEqual(result.returncode, 0)
             self.assertIn('Bundle version differs from pubspec.yaml', result.stderr)
+
+    def tray_libraries(self, packager):
+        """The libraries the AppImage carries, as package-linux finds them; skips off the Ubuntu build container."""
+        try:
+            return packager.bundled_libraries()
+        except SystemExit as missing:
+            self.skipTest(f'the AppImage takes its tray libraries from the Ubuntu build container: {missing}')
+
+    def test_appimage_libraries_come_with_their_packages_licence_files(self):
+        packager = package_linux()
+        libraries = self.tray_libraries(packager)
+        self.assertEqual([library['soname'] for library in libraries], list(packager.BUNDLED_LIBRARIES))
+        for library in libraries:
+            self.assertTrue(library['path'].is_file() and not library['path'].is_symlink(), library)
+            self.assertTrue(library['copyright'].is_file(), library)
+            self.assertTrue(all(library[key] for key in ('package', 'version', 'source', 'source_version')), library)
+        # The shipped notices name exactly these packages.
+        packager.check_notices(libraries, ROOT / 'THIRD_PARTY_NOTICES')
+        # A build system whose packages carry no licence file (as images that drop /usr/share/doc) is refused.
+        with tempfile.TemporaryDirectory() as documentation:
+            with self.assertRaises(SystemExit) as refused:
+                packager.bundled_libraries(Path(documentation))
+            self.assertIn('Missing licence file of bundled libayatana-appindicator3.so.1', str(refused.exception))
+
+    def test_tray_library_package_is_read_for_the_architecture_that_installed_it(self):
+        packager = package_linux()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            known, calls = [], []
+            for soname in packager.BUNDLED_LIBRARIES:
+                (root / soname).write_bytes(b'fixture')
+                known.append(f'\t{soname} (libc6,x86-64) => {root / soname}')
+                package = soname.split('.so', 1)[0] + '-1'
+                (root / 'doc' / package).mkdir(parents=True)
+                (root / 'doc' / package / 'copyright').write_text('fixture licence')
+
+            def run(command, **_):
+                calls.append(command)
+                if command[1:] == ['-p']:
+                    return SimpleNamespace(stdout='\n'.join(known) + '\n')
+                if command[1] == '-S':
+                    soname = Path(command[2]).name
+                    return SimpleNamespace(stdout=f"{soname.split('.so', 1)[0]}-1:amd64: {command[2]}\n")
+                # With i386 copies installed too (Steam, Wine), the bare package name prints both records.
+                record = '1.0-1\tfixture-source\t1:1.0-1'
+                return SimpleNamespace(stdout=record if command[-1].endswith(':amd64') else record + record)
+
+            system = SimpleNamespace(run=run)
+            with unittest.mock.patch.object(packager, 'subprocess', system), \
+                    unittest.mock.patch.object(packager, 'sys', SimpleNamespace(platform='linux')), \
+                    unittest.mock.patch.object(packager, 'shutil', SimpleNamespace(which=lambda name: '/usr/bin/' + name)):
+                libraries = packager.bundled_libraries(root / 'doc')
+        self.assertEqual([library['package'] for library in libraries],
+                         [soname.split('.so', 1)[0] + '-1' for soname in packager.BUNDLED_LIBRARIES])
+        self.assertEqual({(library['version'], library['source'], library['source_version']) for library in libraries},
+                         {('1.0-1', 'fixture-source', '1:1.0-1')})
+        self.assertTrue(all(command[-1].endswith(':amd64') for command in calls if command[1] == '-W'), calls)
+
+    def test_notices_must_name_the_versions_the_appimage_carries(self):
+        packager = package_linux()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            libraries = [tray_library('libfixture.so.1', 'libfixture1', '1.0-1ubuntu2', 'fixture', '1.0-1ubuntu2', root),
+                         tray_library('libother.so.4', 'libother4', '2:4.1-3', 'other', '2:4.1-3', root)]
+            notices = root / 'THIRD_PARTY_NOTICES'
+            section = ('## Linux AppImage only: tray libraries\n\nThe AppImage carries:\n\n'
+                       '- `libfixture.so.1`: package `libfixture1` 1.0-1ubuntu2, from\n'
+                       '  source package `fixture` 1.0-1ubuntu2. LGPL-2.1.\n'
+                       '- `libother.so.4`: package `libother4` 2:4.1-3, from source package\n'
+                       '  `other` 2:4.1-3. GPL-3.\n')
+            notices.write_text('# Notices\n\n' + section + '\n## Next component\n\nMIT\n')
+            packager.check_notices(libraries, notices)
+            # A newer build system's package, or a notice in another section, is refused.
+            entries = section.split('The AppImage carries:\n\n', 1)[1]
+            for text in (section.replace('2:4.1-3. GPL', '2:4.1-4. GPL'),
+                         '## Linux AppImage only: tray libraries\n\nNone.\n\n## Other libraries\n\n' + entries):
+                with self.subTest(text=text):
+                    notices.write_text('# Notices\n\n' + text + '\n## Last component\n\nMIT\n')
+                    with self.assertRaises(SystemExit) as refused:
+                        packager.check_notices(libraries, notices)
+                    self.assertIn('`libother.so.4`: package `libother4` 2:4.1-3, from source package `other` 2:4.1-3.',
+                                  str(refused.exception))
+
+    def test_appimage_sources_come_from_the_build_image_without_a_package_archive(self):
+        packager = package_linux()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            cache = root / 'cache'
+            cache.mkdir()
+            libraries = [tray_library('libfixture.so.1', 'libfixture1', '1.0-1', 'fixture', '1:1.0-1', root),
+                         tray_library('libfixture-gtk.so.1', 'libfixture-gtk1', '1.0-1', 'fixture', '1:1.0-1', root)]
+            source_package(cache, 'fixture', '1:1.0-1', {'fixture_1.0.orig.tar.gz': b'original',
+                                                         'fixture_1.0-1.debian.tar.xz': b'packaging'})
+            fetched = []
+
+            def offline(command, **_):
+                fetched.append(command)
+                return SimpleNamespace(returncode=100, stderr='E: no package archive')
+
+            archive = root / 'elarni-0.0.1-1-linux-bundled-sources.tar'
+            with unittest.mock.patch.object(packager, 'subprocess', SimpleNamespace(run=offline)):
+                packager.bundled_sources(libraries, archive, '0.0.1-1', cache=cache)
+                self.assertEqual(fetched, [])
+                with tarfile.open(archive) as written:
+                    self.assertEqual(sorted(Path(name).name for name in written.getnames()),
+                                     ['README', 'elarni-0.0.1-1-linux-bundled-sources', 'fixture_1.0-1.debian.tar.xz',
+                                      'fixture_1.0-1.dsc', 'fixture_1.0.orig.tar.gz'])
+                # A cached file that differs from its .dsc, or no cache, leaves it to apt-get source.
+                for damaged in ('fixture_1.0.orig.tar.gz', 'fixture_1.0-1.dsc'):
+                    with self.subTest(damaged=damaged):
+                        if damaged.endswith('.dsc'):
+                            (cache / damaged).unlink()
+                        else:
+                            (cache / damaged).write_bytes(b'changed')
+                        with self.assertRaises(SystemExit) as refused:
+                            packager.bundled_sources(libraries, root / 'refused.tar', '0.0.1-1', cache=cache)
+                        self.assertIn('Cannot fetch source package fixture 1:1.0-1', str(refused.exception))
+                        self.assertEqual(fetched[-1], ['apt-get', 'source', '--download-only', '-qq', 'fixture=1:1.0-1'])
+            self.assertFalse((root / 'refused.tar').exists())
+
+    @unittest.skipUnless(package_linux().BUNDLED_SOURCES_CACHE.is_dir(), 'the build image keeps the tray sources')
+    def test_build_image_keeps_the_source_packages_of_the_tray_libraries(self):
+        packager = package_linux()
+        libraries = self.tray_libraries(packager)
+        with tempfile.TemporaryDirectory() as temporary:
+            folder = Path(temporary)
+            for source, source_version in {(library['source'], library['source_version']) for library in libraries}:
+                dsc = packager.BUNDLED_SOURCES_CACHE / f"{source}_{source_version.split(':', 1)[-1]}.dsc"
+                self.assertTrue(packager.cached_source(dsc, folder), dsc)
 
     def test_bundle_without_the_vc_runtime_is_rejected(self):
         for name in VC_RUNTIME:

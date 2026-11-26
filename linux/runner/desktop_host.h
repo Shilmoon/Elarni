@@ -12,4 +12,11 @@ void desktop_host_links(DesktopHost* host, char** arguments);
 bool desktop_host_hides_on_close(DesktopHost* host);
 // Tells Dart that a close hid the window to the tray.
 void desktop_host_closed_to_tray(DesktopHost* host);
+// Whether the arguments, without the program name, are exactly the autostart entry's start
+// hidden in the tray.
+bool desktop_host_hidden_start(const char* const* arguments);
+// The window stays hidden at start, and Dart learns it is hidden. When no status-notifier host
+// has taken the tray icon within 20 seconds, the window is shown minimized instead, so the app
+// stays reachable; a host that comes up within that time ends the wait.
+void desktop_host_start_hidden(DesktopHost* host);
 void desktop_host_free(DesktopHost* host);

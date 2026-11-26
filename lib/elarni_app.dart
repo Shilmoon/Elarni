@@ -401,7 +401,8 @@ class _ElarniHomeState extends State<ElarniHome> {
   String _health = 'unknown';
   String? _healthNodeId;
   DateTime? _healthAt;
-  // Whether the connected server passes traffic: ok, noTraffic or null.
+  // Whether the connected server passes traffic: ok, noTraffic, stalled (small
+  // probes pass, longer transfers are cut off) or null.
   String? _liveness;
   DateTime? _noTrafficAt;
   // The saved local proxy login, shown in Settings on request.
@@ -564,11 +565,30 @@ class _ElarniHomeState extends State<ElarniHome> {
   void _set(VoidCallback update) {
     setState(update);
     _troubleshootRefresh?.call(() {});
+    _sendTrayStatus();
+  }
+
+  // The tray's label and its Connect and Disconnect items follow each change,
+  // not only a drawn frame: a window started hidden in the tray draws none.
+  // The desktop sends a status only when it differs from the last one.
+  void _sendTrayStatus() {
+    if (!mounted) return;
+    widget.desktop.status(
+      _noTraffic
+          ? 'connected, no traffic'
+          : _stalled
+          ? 'connected, transfers cut off'
+          : _state.name,
+      canConnect: _canConnect,
+      canDisconnect: _canDisconnect,
+    );
   }
 
   // An instance method, so removeListener finds the listener addListener got.
   void _restorePingSettings() {
     if (mounted && _adoptPingSettings()) setState(() {});
+    // The desktop drops a status sent before its preferences loaded.
+    _sendTrayStatus();
   }
 
   /// Takes the stored test settings once the desktop preferences load; a
@@ -638,11 +658,7 @@ class _ElarniHomeState extends State<ElarniHome> {
     linuxStorageText = widget.linux;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      widget.desktop.status(
-        _noTraffic ? 'connected, no traffic' : _state.name,
-        canConnect: _canConnect,
-        canDisconnect: _canDisconnect,
-      );
+      _sendTrayStatus();
       // Every change of the connection state rebuilds; the counter reads follow it.
       _followMonitoring();
     });
@@ -816,6 +832,11 @@ class _ElarniHomeState extends State<ElarniHome> {
         ],
       ),
     );
+    // "Launch app at login" shows it on, and "Start hidden in the tray" can change, alike.
+    final loginOn = const [
+      'enabled',
+      'requiresApproval',
+    ].contains(_systemInfo['launchAtLoginStatus']);
     // Built for the open category only: together they are most of this page.
     final settingsSections = <SettingsCategory, List<Widget> Function()>{
       SettingsCategory.general: () => [
@@ -897,14 +918,24 @@ class _ElarniHomeState extends State<ElarniHome> {
             'notFound' => l10n.loginServiceNotFound,
             _ => l10n.loginStateUnavailable,
           }),
-          value: const [
-            'enabled',
-            'requiresApproval',
-          ].contains(_systemInfo['launchAtLoginStatus']),
+          value: loginOn,
           onChanged: _systemBusy
               ? null
               : (value) => _refreshSystemInfo(launchAtLogin: value),
         ),
+        // The login entry carries the choice on Windows and Linux; a macOS login
+        // item cannot, so macOS starts with its window.
+        if (widget.desktopCore)
+          ElarniCheckboxTile(
+            title: Text(l10n.startHiddenInTray),
+            value: _systemInfo['launchHidden'] == true,
+            onChanged: _systemBusy || !loginOn
+                ? null
+                : (value) => _refreshSystemInfo(
+                    launchAtLogin: true,
+                    launchHidden: value,
+                  ),
+          ),
         if (_systemError != null) ListTile(subtitle: Text(_systemError!)),
         toggle(
           l10n.disconnectOnSleep,

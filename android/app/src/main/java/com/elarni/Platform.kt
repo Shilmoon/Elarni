@@ -220,7 +220,8 @@ class ElarniVpnService : VpnService() {
         try { foreground(vpn && !taken && prepare(this) == null) }
         catch (_: Exception) { app.repository.report(AppFailure("foreground_start_denied")); stopSelf(); return START_NOT_STICKY }
         val generation = intent?.takeIf { it.hasExtra(GENERATION) }?.getLongExtra(GENERATION, -1)
-        app.repository.scope.launch { app.repository.serviceStart(this@ElarniVpnService, intent?.action != CONNECT, generation, startId, taken, alwaysOn) }
+        val untilOnline = waitsForNetwork(intent?.action, restarted = intent == null, boot = intent?.getBooleanExtra(BOOT, false) == true, isAlwaysOn = isAlwaysOn)
+        app.repository.scope.launch { app.repository.serviceStart(this@ElarniVpnService, intent?.action != CONNECT, generation, startId, taken, alwaysOn, untilOnline) }
         if (monitor == null) monitor = app.repository.scope.launch {
             var ticks = 0
             while (isActive) {
@@ -305,7 +306,8 @@ class ElarniVpnService : VpnService() {
     private fun notification(state: String): Notification {
         val disconnect = PendingIntent.getService(this, 1, Intent(this, ElarniVpnService::class.java).setAction(DISCONNECT), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         val vpn = app.repository.state.value.catalog.mapObject("settings").optBoolean("xrayTunEnabled", true)
-        val passes = if (app.repository.state.value.liveness == "noTraffic") tr(R.string.server_passes_no_traffic) else ""
+        val passes = when (app.repository.state.value.trafficState) {
+            "noTraffic" -> tr(R.string.server_passes_no_traffic); "stalled" -> tr(R.string.server_cuts_transfers_off); else -> "" }
         val text = when (state) { "connected" -> (if (vpn) tr(R.string.vpn_connected) else tr(R.string.local_proxy_running)) + passes; "paused" -> tr(R.string.paused_while_screen_is_off); "failed" -> tr(R.string.connection_failed_open_to_review); "disconnecting" -> tr(R.string.disconnecting_2); "disconnected" -> tr(R.string.disconnected); else -> tr(R.string.connecting_2) }
         return Notification.Builder(this, ElarniApplication.CONNECTION_CHANNEL).setSmallIcon(R.drawable.ic_elarni).setContentTitle("Elarni").setContentText(text)
             .setOngoing(true).setOnlyAlertOnce(true).setCategory(Notification.CATEGORY_SERVICE).setContentIntent(app.openApp())
@@ -328,7 +330,13 @@ class ElarniVpnService : VpnService() {
         super.onDestroy()
     }
     companion object {
-        const val CONNECT = "com.elarni.CONNECT"; const val DISCONNECT = "com.elarni.DISCONNECT"; const val GENERATION = "generation"
+        const val CONNECT = "com.elarni.CONNECT"; const val DISCONNECT = "com.elarni.DISCONNECT"; const val GENERATION = "generation"; const val BOOT = "boot"
+        /** Whether a start waits for the network when its server cannot be looked up yet: boot and Always-on start as the
+         *  device starts, perhaps before its network can. That is a start at [boot], or one Android makes for Always-on VPN:
+         *  with its own [action], or as the restart of a sticky service, which comes without an intent ([restarted]), while
+         *  this app [isAlwaysOn]. A Connect from the app, its tile or a widget shows its failure at once, Always-on or not. */
+        fun waitsForNetwork(action: String?, restarted: Boolean, boot: Boolean, isAlwaysOn: Boolean) =
+            boot || action == VpnService.SERVICE_INTERFACE || restarted && isAlwaysOn
         // Each TUN packet costs the userspace stack one syscall; 9000 moves bulk TCP in about 6x fewer.
         const val MTU = 9000
         const val PACKAGES_SETTLE_MS = 2000L
@@ -345,7 +353,7 @@ class ElarniTileService : TileService() {
         watch?.cancel()
         watch = app.repository.scope.launch {
             app.repository.awaitReady()
-            app.repository.state.map { Triple(it.connection, it.liveness, Catalog(it.catalog).selectedName) }.distinctUntilChanged().collect { (connection, liveness, server) ->
+            app.repository.state.map { Triple(it.connection, it.trafficState, Catalog(it.catalog).selectedName) }.distinctUntilChanged().collect { (connection, liveness, server) ->
                 qsTile?.let {
                     val running = connection in active
                     it.state = if (running) Tile.STATE_ACTIVE else Tile.STATE_INACTIVE
