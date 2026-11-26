@@ -109,6 +109,7 @@ func (c *WireGuardConfig) Build() (proto.Message, error) {
 		if err := validateAmneziaSettings(c.Amnezia); err != nil {
 			return nil, err
 		}
+		fillAmneziaJmax(c.Amnezia)
 		config.Amnezia, config.AmneziaSettings = true, c.Amnezia
 	}
 

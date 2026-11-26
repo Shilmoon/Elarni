@@ -2,6 +2,7 @@ package wireguard
 
 import (
 	"context"
+	"encoding/hex"
 	"fmt"
 	awg "github.com/amnezia-vpn/amneziawg-go/v3/device"
 	gonet "net"
@@ -48,8 +49,9 @@ type Handler struct {
 	tun          tun.Device
 	tnet         *Net
 	dev          tunnelDevice
-	configured   bool   // dev accepted the config; until then each dial retries IpcSet
-	stopWatchers func() // ends the rebind and sleep watchers of dev
+	configured   bool        // dev accepted the config; until then each dial retries IpcSet
+	sleep        *sleepWatch // expires dev's keys after a sleep (sleep.go)
+	stopWatchers func()      // ends the rebind and sleep watchers of dev
 	mu           sync.Mutex
 	diagnosticID uint64
 }
@@ -367,40 +369,37 @@ func (h *Handler) newDevice(ctx context.Context) tunnelDevice {
 			})
 		},
 	}
-	peers := make([]string, len(h.conf.Peers))
-	for i, peer := range h.conf.Peers {
-		peers[i] = peer.PublicKey
-	}
 	var dev tunnelDevice
 	if h.conf.Amnezia {
-		dev = amneziaDevice{Device: awg.NewDevice(adaptAmneziaTUN(h.tun), &amneziaBind{bind}, &awg.Logger{Verbosef: logger.Verbosef, Errorf: logger.Errorf}), peers: peers}
+		dev = amneziaDevice{awg.NewDevice(adaptAmneziaTUN(h.tun), &amneziaBind{bind}, &awg.Logger{Verbosef: logger.Verbosef, Errorf: logger.Errorf})}
 	} else {
-		dev = wireguardDevice{Device: device.NewDevice(h.tun, bind, logger), peers: peers}
+		dev = wireguardDevice{device.NewDevice(h.tun, bind, logger)}
 	}
 	bind.downFunc = dev.Down
+	// Elarni: after a sleep the server may have dropped the keys the engine still thinks fresh.
+	var peers [][32]byte
+	for _, peer := range h.conf.Peers {
+		var key [32]byte
+		if n, err := hex.Decode(key[:], []byte(peer.PublicKey)); err == nil && n == len(key) {
+			peers = append(peers, key)
+		}
+	}
+	watch := newSleepWatch(readClocks, dev.IpcGet, dev.ExpireKeys, peers)
+	bind.sleep, h.sleep = watch, watch
 	// The socket keeps the interface it was bound to; reopen it on the new one.
-	moves, done, watched := make(chan struct{}, 1), make(chan struct{}), make(chan struct{})
+	moves, done := make(chan struct{}, 1), make(chan struct{})
 	remove := internet.OnSocketPathChange(func() {
 		select {
 		case moves <- struct{}{}:
 		default:
 		}
 	})
-	h.stopWatchers = func() { remove(); close(done); <-watched }
+	h.stopWatchers = func() { remove(); close(done); watch.stop() }
 	go coalesce(moves, done, rebindGap, func() {
 		if dev.BindUpdate() != nil {
 			dev.Down() // the next dial retries Up, as after a failed start
 		}
 	})
-	// Elarni: after a sleep the server may have dropped the keys the engine still thinks fresh.
-	go func() {
-		defer close(watched)
-		watchSleep(done, sleepTick, readClocks, func() {
-			if err := dev.Rehandshake(); err != nil {
-				errors.LogDebugInner(context.Background(), err, "WireGuard handshake after sleep")
-			}
-		})
-	}()
 	return dev
 }
 
@@ -431,7 +430,13 @@ func (h *Handler) init(ctx context.Context) error {
 		return errors.New("closed")
 	}
 	if h.configured {
-		return h.dev.Up()
+		if err := h.dev.Up(); err != nil {
+			return err
+		}
+		// Elarni: a dial after a long sleep waits for a new handshake instead of sending with keys
+		// the server may have dropped.
+		h.sleep.dialing()
+		return nil
 	}
 	if h.dev == nil {
 		h.dev = h.newDevice(context.WithoutCancel(ctx)) // the device outlives the dial that starts it
@@ -445,13 +450,6 @@ func (h *Handler) init(ctx context.Context) error {
 	sort.Strings(keys)
 	for _, key := range keys {
 		cfg.WriteString(key + "=" + h.conf.AmneziaSettings[key] + "\n")
-	}
-	// Elarni: the engine refuses Jmin above Jmax and counts a missing Jmax as 0, which stored profiles
-	// naming only Jmin (import accepts it without junk packets) hit. Junk sizes stay on this side.
-	if jmin, ok := h.conf.AmneziaSettings["jmin"]; ok {
-		if _, ok := h.conf.AmneziaSettings["jmax"]; !ok {
-			cfg.WriteString("jmax=" + jmin + "\n")
-		}
 	}
 	for _, peer := range h.conf.Peers {
 		cfg.WriteString("public_key=" + peer.PublicKey + "\n")

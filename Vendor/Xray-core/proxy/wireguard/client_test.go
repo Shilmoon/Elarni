@@ -361,43 +361,9 @@ func TestWireGuardRebindsWhenTheSocketPathChanges(t *testing.T) {
 // engine update with -bench=WireGuardBulkTransfer -benchtime=1x, one process per run.
 func BenchmarkWireGuardBulkTransfer(b *testing.B) {
 	const size = 64 << 20
-	clientKey, err := ecdh.X25519().GenerateKey(rand.Reader)
-	if err != nil {
-		b.Fatal(err)
-	}
-	serverKey, err := ecdh.X25519().GenerateKey(rand.Reader)
-	if err != nil {
-		b.Fatal(err)
-	}
-	clientTun, clientNet, _, err := CreateNetTUN([]netip.Addr{netip.MustParseAddr("10.29.0.2")}, nil, tunnelMTU(1420, false), true)
-	if err != nil {
-		b.Fatal(err)
-	}
-	serverTun, _, serverStack, err := CreateNetTUN([]netip.Addr{netip.MustParseAddr("10.29.0.1")}, nil, tunnelMTU(1420, false), false)
-	if err != nil {
-		clientTun.Close()
-		b.Fatal(err)
-	}
-	serverSocket, err := net.ListenPacket("udp4", "127.0.0.1:0")
-	if err != nil {
-		clientTun.Close()
-		serverTun.Close()
-		b.Fatal(err)
-	}
-	server := device.NewDevice(serverTun, &bind{listenFunc: func() (net.PacketConn, error) { return serverSocket, nil }}, &device.Logger{Verbosef: func(string, ...any) {}, Errorf: b.Logf})
-	defer serverSocket.Close()
-	defer server.Close()
-	if err := server.IpcSet("private_key=" + hex.EncodeToString(serverKey.Bytes()) + "\npublic_key=" + hex.EncodeToString(clientKey.PublicKey().Bytes()) + "\nallowed_ip=10.29.0.2/32\n"); err != nil {
-		b.Fatal(err)
-	}
-	if err := server.Up(); err != nil {
-		b.Fatal(err)
-	}
-	handler := &Handler{conf: &DeviceConfig{SecretKey: hex.EncodeToString(clientKey.Bytes()),
-		Peers: []*PeerConfig{{PublicKey: hex.EncodeToString(serverKey.PublicKey().Bytes()), Endpoint: serverSocket.LocalAddr().String(), AllowedIps: []string{"0.0.0.0/0"}}}},
-		dns: offlineDNS{&atomic.Bool{}}, tun: clientTun, tnet: clientNet, streamSettings: &internet.MemoryStreamConfig{}}
-	defer handler.Close()
-	if err := handler.init(context.Background()); err != nil {
+	f := newTunnelFixture(b, fixtureOptions{mtu: tunnelMTU(1420, false), dns: offlineDNS{&atomic.Bool{}}})
+	clientNet, serverStack := f.clientNet, f.serverStack
+	if err := f.handler.init(context.Background()); err != nil {
 		b.Fatal(err)
 	}
 	// The sink answers one byte once the upload ends; the source sends size bytes and closes.

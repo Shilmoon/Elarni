@@ -16,9 +16,11 @@ type tunnelDevice interface {
 	Down() error
 	BindUpdate() error
 	IpcSet(string) error
+	IpcGet() (string, error)
 	Close()
-	// Rehandshake renews the keys of every configured peer (sleep.go).
-	Rehandshake() error
+	// ExpireKeys expires the send keys of these peers, so the next packet to each starts a
+	// handshake (sleep.go).
+	ExpireKeys(peers [][32]byte)
 }
 
 type amneziaTUN struct {
