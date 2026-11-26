@@ -2,8 +2,10 @@
 # Start the CI Windows VM on this Linux host (dockur/windows over KVM): Windows Server 2022 like the
 # old windows-2022 hosted runner, 8 cores, 8 GB that ballooning hands back under host memory pressure
 # (so no start-time RAM check, which would shrink the VM while CI's emulators run).
-# Rerun after `docker rm -f elarni-windows` to apply changes; the installed disk stays.
-# Its CPU weight is a quarter of the default, so the Linux CI container's timing tests keep their CPU when both run.
+# Rerun after `docker stop elarni-windows && docker rm elarni-windows` to apply changes; the installed disk stays.
+# A larger DISK_SIZE grows the disk without data loss; extend C: inside Windows afterwards (README).
+# It has the default CPU weight, like the Linux CI container: at a quarter of it (until 2026-11-26) a 1 ms sleep in the VM
+# took 4.5-7 ms while the Linux job loaded the host, and the Windows timing tests failed.
 # Ports listen on 127.0.0.1 only: reach them through an SSH tunnel to this host.
 # Usage: sh start [authorized_keys]   (first run: the key provision.ps1 logs in with)
 set -eu
@@ -15,9 +17,8 @@ cp "$(dirname "$0")"/oem/* "$dir/oem/"
 docker=docker; docker info > /dev/null 2>&1 || docker='sudo -n docker'
 $docker run -d --name elarni-windows --restart unless-stopped \
   --device /dev/kvm --device /dev/net/tun --cap-add NET_ADMIN --stop-timeout 120 --memory 9g \
-  --cpu-shares 256 \
   -p 127.0.0.1:8006:8006 -p 127.0.0.1:3389:3389 -p 127.0.0.1:2222:22 \
-  -e VERSION=2022 -e CPU_CORES=8 -e RAM_SIZE=8G -e DISK_SIZE=64G -e BALLOONING=Y -e BALLOONING_MIN_MEM=2G \
+  -e VERSION=2022 -e CPU_CORES=8 -e RAM_SIZE=8G -e DISK_SIZE=96G -e BALLOONING=Y -e BALLOONING_MIN_MEM=2G \
   -e RAM_CHECK=N \
   -e USERNAME=elarni -e PASSWORD="$(cat "$dir/password")" \
   -v "$dir/storage:/storage" -v "$dir/oem:/oem" \

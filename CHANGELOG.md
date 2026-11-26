@@ -33,6 +33,9 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
   (`scripts/free-runner-disk`). With less than 8 GB free it removes old temporary files, Go
   build cache entries unused for 2 days and the Rust incremental caches, and only then the Rust
   build outputs. The VM's disk had filled up and failed the job.
+- For contributors: the Windows CI VM gets a 96 GB disk instead of 64 GB and the same CPU weight as
+  the Linux CI container instead of a quarter of it. While the Linux job loaded the server, a 1 ms
+  sleep in the VM took 4.5-7 ms, and that is when the Windows timing tests failed.
 
 ### Fixed
 
