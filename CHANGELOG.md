@@ -19,6 +19,9 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
 - For contributors: `main` does not repeat the Android emulator acceptance (about 20 minutes on
   the one Linux runner) for files that already passed it in a manually started run of the
   branch. The runner keeps a record per tree.
+- For contributors: the Swift checks run in the macOS 26 job beside the iPhone build instead of
+  in the macOS 15 checks job, which took 18 minutes and ended every pull request's run last. Each
+  macOS job now takes about 12 minutes, and no check was dropped.
 
 ## 0.6.5 - 2026-11-26
 
