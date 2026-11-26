@@ -410,15 +410,24 @@ class AndroidE2E {
                 ui.activity.startForegroundService(Intent(ui.activity, ElarniVpnService::class.java).setAction(ElarniVpnService.CONNECT))
                 ui.activity.startService(Intent(ui.activity, ElarniVpnService::class.java).setAction(ElarniVpnService.DISCONNECT))
             }
+            // The system shows the service's notification on its own thread, for a millisecond or so (0.2 to 11 ms in 40
+            // runs) and in one run of five only after the refresh has ended. Waiting while it shows and then reading it
+            // again saw it missing and then shown, with no service left: the failures in CI. So the end is one
+            // condition: the service has gone and no notification is shown.
+            val services = ui.activity.getSystemService(android.app.ActivityManager::class.java)
+            @Suppress("DEPRECATION") fun running() = services.getRunningServices(Int.MAX_VALUE).any { it.service.className == ElarniVpnService::class.java.name }
             refresh.get(15, java.util.concurrent.TimeUnit.SECONDS)
             val deadline = System.currentTimeMillis() + 10_000
-            while (manager.activeNotifications.any { it.id == 1 } && System.currentTimeMillis() < deadline) Thread.sleep(100)
-            // Seen twice in CI and not explained by the start and stop paths: name the service's state when it fails again.
-            if (manager.activeNotifications.any { it.id == 1 }) {
-                val services = shell("dumpsys activity services ${ui.activity.packageName}")
-                fail("Disconnect left the VPN service in the foreground: connection=${repo.state.value.connection} " +
-                    "error=${repo.state.value.error} refresh=${refresh.get()}\n$services")
+            var ended = false
+            while (!ended && System.currentTimeMillis() < deadline) {
+                ended = !running() && manager.activeNotifications.none { it.id == 1 }
+                if (!ended) Thread.sleep(50)
             }
+            if (!ended) fail("Disconnect left the VPN service or its notification: connection=${repo.state.value.connection} error=${repo.state.value.error} " +
+                "refresh=${refresh.get()} notification=${manager.activeNotifications.any { it.id == 1 }}\n" + shell("dumpsys activity services ${ui.activity.packageName}"))
+            // The service's start may end the service, and with it the notification, before Stop has published its last state.
+            val settled = System.currentTimeMillis() + 10_000
+            while (repo.state.value.connection != "disconnected" && System.currentTimeMillis() < settled) Thread.sleep(50)
             assertEquals("disconnected", repo.state.value.connection)
         }
     }

@@ -144,5 +144,53 @@ class CheckChangedSelection(unittest.TestCase):
         self.assertIn('FLAKY splithttp', result.stdout)
 
 
+class CIJobSelection(unittest.TestCase):
+    """--ci-jobs: the jobs of the checks workflow that a pull request's changed paths need."""
+    ALL = 'linux windows macos macos-release apple'
+
+    def jobs(self, *paths, everything=False):
+        result = subprocess.run([sys.executable, str(SCRIPT), '--ci-jobs', *(['--all'] if everything else [])],
+                                input=''.join(path + '\n' for path in paths), capture_output=True, text=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        return result.stdout.strip()
+
+    def test_code_shared_by_the_platforms_runs_every_job(self):
+        for path in ('lib/app.dart', 'test/app_test.dart', 'Vendor/Xray-core/proxy/tuic/client.go', 'native/elarni-domain/src/lib.rs',
+                     'scripts/check-tests', '.github/workflows/checks.yml', 'pubspec.lock', 'include/elarni_ffi.h', 'mise.toml'):
+            self.assertEqual(self.jobs(path), self.ALL, path)
+
+    def test_an_android_change_runs_only_the_linux_job_which_builds_android_and_reads_its_translations(self):
+        self.assertEqual(self.jobs('android/app/src/main/java/com/elarni/Platform.kt', 'android/app/src/main/res/values-ru/strings.xml'), 'linux')
+
+    def test_an_iphone_change_runs_the_iphone_build_and_the_mac_checks_that_read_its_translations(self):
+        self.assertEqual(self.jobs('ios/Elarni/Elarni/Localizable.xcstrings'), 'macos apple')
+
+    def test_a_mac_change_runs_the_three_mac_jobs(self):
+        self.assertEqual(self.jobs('macos/Runner/AppDelegate.swift'), 'macos macos-release apple')
+
+    def test_a_windows_runner_change_runs_windows_and_the_linux_build_that_installs_its_license_files(self):
+        self.assertEqual(self.jobs('windows/runner/main.cpp'), 'linux windows')
+        self.assertEqual(self.jobs('windows/GOZXING_LICENSE.txt'), 'linux windows')
+
+    def test_a_linux_runner_change_runs_only_linux(self):
+        self.assertEqual(self.jobs('linux/runner/my_application.cc'), 'linux')
+
+    def test_platform_changes_add_up_and_one_shared_file_runs_every_job(self):
+        self.assertEqual(self.jobs('android/app/build.gradle.kts', 'ios/Elarni/Elarni/Info.plist'), 'linux macos apple')
+        self.assertEqual(self.jobs('android/app/build.gradle.kts', 'lib/app.dart'), self.ALL)
+
+    def test_documentation_runs_no_job_and_does_not_widen_a_platform_change(self):
+        self.assertEqual(self.jobs('README.md', 'docs/TESTING.md', 'docs/images/main.png', 'LICENSE'), '')
+        self.assertEqual(self.jobs('CHANGELOG.md', 'android/README.md', 'android/app/build.gradle.kts'), 'linux')
+
+    def test_a_file_list_that_was_cut_short_runs_every_job(self):
+        # The workflow passes "many" when GitHub lists more files than it returns.
+        self.assertEqual(self.jobs('many'), self.ALL)
+
+    def test_all_runs_every_job_for_any_code_and_none_for_documentation(self):
+        self.assertEqual(self.jobs('android/app/build.gradle.kts', everything=True), self.ALL)
+        self.assertEqual(self.jobs('README.md', everything=True), '')
+
+
 if __name__ == '__main__':
     unittest.main()

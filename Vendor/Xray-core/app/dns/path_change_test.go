@@ -258,9 +258,6 @@ func queryAWith(ctx context.Context, s Server, domain string, timeout time.Durat
 // Elarni: a UDP query was sent once, so a lost datagram cost the whole query timeout, and the app's
 // own retry joined the same lookup instead of sending another.
 func TestUDPQueriesAreResentOnce(t *testing.T) {
-	previous := udpResendAfter
-	udpResendAfter = 50 * time.Millisecond
-	t.Cleanup(func() { udpResendAfter = previous })
 	var sent atomic.Int32
 	flows := &udpFlows{ended: make(chan int, 8), answer: func(_ int, query []byte) []byte {
 		if sent.Add(1) == 1 {
@@ -269,6 +266,7 @@ func TestUDPQueriesAreResentOnce(t *testing.T) {
 		return answerA(query)
 	}}
 	s := NewClassicNameServer(net.UDPDestination(net.ParseAddress("192.0.2.53"), 53), flows, true, false, 0, nil)
+	s.resendAfter = 50 * time.Millisecond
 	defer s.Close()
 	if err := queryAWith(udpTestContext(t), s, "lossy.test", 2*time.Second); err != nil {
 		t.Fatal(err)
@@ -282,9 +280,6 @@ func TestUDPQueriesAreResentOnce(t *testing.T) {
 // to a query it carries, then closes.
 func TestUDPPathChangeMovesNewQueriesAndKeepsInFlightAnswers(t *testing.T) {
 	shortPathChangeTimers(t, 50*time.Millisecond, time.Second)
-	previous := udpResendAfter
-	udpResendAfter = time.Hour
-	t.Cleanup(func() { udpResendAfter = previous })
 	received, release := make(chan struct{}), make(chan struct{})
 	flows := &udpFlows{ended: make(chan int, 8), answer: func(flow int, query []byte) []byte {
 		if flow == 0 {
@@ -294,6 +289,7 @@ func TestUDPPathChangeMovesNewQueriesAndKeepsInFlightAnswers(t *testing.T) {
 		return answerA(query)
 	}}
 	s := NewClassicNameServer(net.UDPDestination(net.ParseAddress("192.0.2.53"), 53), flows, true, false, 0, nil)
+	s.resendAfter = time.Hour
 	startedDNS(t, s)
 	ctx := udpTestContext(t)
 	inFlight := make(chan error, 1)

@@ -1,13 +1,25 @@
 name: Supply chain
 
 # Known vulnerabilities in the Go core and Rust crates, and a tampered Gradle wrapper. GitHub-hosted runners,
-# a few minutes; the weekly run catches advisories published after the last change.
+# a few minutes; the daily run on main catches advisories published after the last change.
 on:
   push:
     branches: [main]
   pull_request:
+    # A new advisory fails the audit of every commit, whatever a pull request changes: in November 2026 three of
+    # them turned 81 pull request runs red. A pull request is audited when it changes what the audits read (the
+    # locked dependencies, the Go version, the Gradle wrapper, this file); the daily run reports the rest.
+    paths:
+      - Cargo.lock
+      - '**/go.mod'
+      - '**/go.sum'
+      - go.work
+      - go.work.sum
+      - mise.toml
+      - android/gradle/wrapper/**
+      - .github/workflows/supply-chain.yml
   schedule:
-    - cron: '23 5 * * 1'
+    - cron: '23 5 * * *'
   workflow_dispatch:
 
 permissions:

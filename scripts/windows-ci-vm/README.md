@@ -3,7 +3,7 @@
 CI's Windows jobs run on a self-hosted runner (`elarni-windows`) in a Windows Server 2022
 evaluation VM on the Linux server, through [dockur/windows](https://github.com/dockur/windows) over KVM.
 The VM gets 8 cores and 8 GB, which ballooning returns under host memory pressure; its disk
-(64 GB, sparse) and the server-side state live in `~/elarni-windows`.
+(96 GB, sparse) and the server-side state live in `~/elarni-windows`.
 
 1. Copy this directory to the server and start the VM with the public key that may log in:
    `sh start ~/key.pub`. The first start downloads Windows from Microsoft and installs it unattended
@@ -15,5 +15,10 @@ The VM gets 8 cores and 8 GB, which ballooning returns under host memory pressur
    `ssh -p 2222 elarni@127.0.0.1 powershell -ExecutionPolicy Bypass -File provision.ps1 -Token TOKEN -Password PASSWORD`.
    It installs Git, Python, Visual Studio Build Tools (C++), the .NET SDK, rustup and the runner service;
    the workflow adds mise's tools and WiX.
+
+To change the VM's settings, edit `start`, copy it to the server and run
+`docker stop elarni-windows && docker rm elarni-windows && sh start` (the stop lets Windows shut down; the disk stays).
+After a larger `DISK_SIZE` the added space is unallocated: extend C: from the server with
+`ssh -p 2222 elarni@127.0.0.1 'Resize-Partition -DriveLetter C -Size (Get-PartitionSupportedSize -DriveLetter C).SizeMax'`.
 
 The evaluation runs 180 days; `slmgr /rearm` extends it, or replace it with a licensed install.

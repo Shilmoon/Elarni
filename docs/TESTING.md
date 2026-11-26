@@ -7,10 +7,16 @@ run writes `.build/check-results/<UTC time>-<id>/summary.json` and `output.log`.
 analyze check.
 
 `python scripts/ci-wait [run-id]` waits for a CI run (the newest one on the current branch
-without an ID) and prints each job's result and the end of every failed job's log.
+without an ID) and prints each job's result and the end of every failed job's log. It stops
+with exit code 3 when a job stays queued for a self-hosted runner that is offline (it looks
+every 5 minutes; listing runners needs admin rights on the repository).
 `python scripts/flaky-report --ci 40` ranks the tests that failed and then passed, from
 the local check results and those of the last 40 CI runs; a failure on a revision whose
 check never passed is listed apart.
+
+A pull request that changes only one platform's own folder (`android/`, `ios/`, `macos/`,
+`windows/`, `linux/`) runs only the CI jobs it can affect; the list is `PLATFORM_JOBS` in
+`scripts/check-changed`. Any other code runs every job, and so does every commit on `main`.
 
 ## Host checks
 

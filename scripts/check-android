@@ -168,7 +168,9 @@ if len(args.serial) > 1:
             if name in EXPECTED and count != EXPECTED[name] and len(groups[avd]) > 1:
                 failed += 1
                 summary.append(f'{avd}: INCOMPLETE {name} ran {count} of {EXPECTED[name]} tests across its shards')
-    print('Summary: ' + ('every suite passed' if not failed else f'{failed} run(s) failed'), flush=True)
+    flaky = sum(' FLAKY ' in line for line in summary)
+    print('Summary: ' + ('every suite passed' if not failed else f'{failed} run(s) failed') +
+          (f'; {flaky} test(s) failed and then passed when rerun alone' if flaky else ''), flush=True)
     for line in summary:
         print('  ' + line, flush=True)
     raise SystemExit(1 if failed else 0)
@@ -269,8 +271,9 @@ def instrumentation(class_name, expected=None, options=(), timeout=600, sharded=
     if passed and not failed and (shard or ran == expected) and not re.search(r'FAILURES!!!|INSTRUMENTATION_FAILED|INSTRUMENTATION_STATUS_CODE: -[1234]', output):
         counts.append((class_name, ran))
         return
-    if not failed or re.search(r'INSTRUMENTATION_FAILED|Process crashed', output):
-        # A crash or a count mismatch names no single test to rerun.
+    if not failed or (not shard and ran != expected) or re.search(r'INSTRUMENTATION_FAILED|Process crashed', output):
+        # A crash or a count mismatch names no single test to rerun; a suite that ran too few tests stays incomplete
+        # whatever its failed tests do alone.
         failures.append(f'INCOMPLETE {class_name}: ran {ran} of {"its shard" if shard else expected} tests' +
                         (' (the instrumentation crashed)' if re.search(r'INSTRUMENTATION_FAILED|Process crashed', output) else ''))
         print(failures[-1], flush=True)
@@ -375,8 +378,11 @@ if args.case != 'native':
                             if attempt(f'com.elarni.AndroidProcessDeathE2E#{killed}', kill):
                                 instrumentation(f'com.elarni.AndroidProcessDeathE2E#{restarted}', 1, peers)
                 if len(failures) > failed_before:
-                    # A TUIC request came back empty in CI four times and the peer's log was gone with its directory.
-                    print('TUIC peer log, last 60 lines:\n' + '\n'.join(tuic_log.read_text(errors='replace').splitlines()[-60:]), flush=True)
+                    # A TUIC request came back empty in CI six times, with no cause found. The failed test's message says
+                    # when its request began; only the whole log covers that moment: later tests write its last lines.
+                    lines = tuic_log.read_text(errors='replace').splitlines()
+                    whole = any('tuic' in failure for failure in failures[failed_before:])
+                    print(f"TUIC peer log, {'all' if whole else 'last 60 of'} {len(lines)} lines:\n" + '\n'.join(lines if whole else lines[-60:]), flush=True)
             finally:
                 # An interrupted test must not leave a synthetic VPN active in the emulator.
                 shell('am', 'force-stop', 'com.elarni.debug')
@@ -384,9 +390,15 @@ if args.case != 'native':
 for measurement in measurements:
     print('Measured: ' + measurement, flush=True)
 shard_note = f' (shard {shard_index + 1} of {shard_count})' if shard_count > 1 else ''
-if failures:
+# A test that failed in its suite and passed alone is reported, and scripts/flaky-report ranks it, but it does not fail
+# the run: 25 of the 41 failed CI runs of November 2026 held nothing else, and each was repeated whole (20 minutes).
+flaky = [failure for failure in failures if failure.startswith('FLAKY ')]
+if len(flaky) < len(failures):
     print(f'Android acceptance failed on {name}{shard_note}:', flush=True)
     for failure in failures:
         print('  ' + failure, flush=True)
     raise SystemExit(1)
-print(f'Android acceptance passed on {name}{shard_note}: ' + ', '.join(f'{name}={count}' for name, count in counts) + '; no test skips.', flush=True)
+print(f'Android acceptance passed on {name}{shard_note}: ' + ', '.join(f'{name}={count}' for name, count in counts) + '; no test skips' +
+      ('; failed, then passed when rerun alone:' if flaky else '.'), flush=True)
+for failure in flaky:
+    print('  ' + failure, flush=True)

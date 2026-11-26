@@ -4,6 +4,68 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
 
 ## Unreleased
 
+### Changed
+
+- For contributors: the Supply chain checks run on a pull request only when it changes the locked
+  dependencies, the Go version or the Gradle wrapper, and daily on `main` instead of weekly. A
+  newly published advisory used to fail every open pull request, whatever it changed.
+- For contributors: a CI job that finds the Linux container in use by a manual
+  `scripts/check-linux-container` run waits for it to end, up to 45 minutes, instead of failing
+  within seconds. Such a failed job could only be rerun together with its whole workflow run.
+- For contributors: an Android acceptance run (`scripts/check-android`) no longer fails for a
+  test that failed in its suite and passed when rerun alone. The test is still reported as
+  `FLAKY`, the CI run's summary names it, and `scripts/flaky-report` ranks it. A test that fails
+  again, a crash or a suite that ran too few tests fails the run as before.
+- For contributors: `main` does not repeat the Android emulator acceptance (about 20 minutes on
+  the one Linux runner) for files that already passed it in a manually started run of the
+  branch. The runner keeps a record per tree.
+- For contributors: the Swift checks run in the macOS 26 job beside the iPhone build instead of
+  in the macOS 15 checks job, which took 18 minutes and ended every pull request's run last. Each
+  macOS job now takes about 12 minutes, and no check was dropped.
+- For contributors: a pull request that changes only one platform's own folder (`android/`,
+  `ios/`, `macos/`, `windows/`, `linux/`) runs only the CI jobs it can affect, so an Android or
+  iPhone change no longer waits for the Windows VM. `main` still runs every job.
+- For contributors: `python scripts/ci-wait` no longer waits for days on a run whose runner is
+  down. When a job stays queued for a self-hosted runner that is offline, it names the job and
+  the runner and stops with exit code 3. It also no longer reports a run as not finished when
+  GitHub fails to answer one request: it goes on waiting.
+- For contributors: the Windows CI job frees disk space on its VM before it builds
+  (`scripts/free-runner-disk`). With less than 8 GB free it removes old temporary files, Go
+  build cache entries unused for 2 days and the Rust incremental caches, and only then the Rust
+  build outputs. The VM's disk had filled up and failed the job.
+- For contributors: the Windows CI VM gets a 96 GB disk instead of 64 GB and the same CPU weight as
+  the Linux CI container instead of a quarter of it. While the Linux job loaded the server, a 1 ms
+  sleep in the VM took 4.5-7 ms, and that is when the Windows timing tests failed.
+
+### Fixed
+
+- For contributors: the path-change burst tests of Hysteria, gRPC and TUIC
+  (`TestBurstOfPathChangesRetiresOnceMore`) no longer fail on a runner whose timers run late.
+  They sent ten signals over 90% of one check whatever the time taken, and a signal sent after
+  the check rightly started a third pass; the burst now ends by the clock, as WireGuard's does.
+- For contributors: the required "checks passed" check no longer passes when GitHub cancelled a
+  job it found no runner for. It now reads each job's own result, because GitHub reports such a
+  job matrix as passed.
+- For contributors: two Android emulator tests no longer fail by timing. "Disconnect before the
+  service starts" waited for the VPN notification to go and then read it again, while Android
+  shows that notification for about a millisecond at a moment of its own; it now waits for one
+  state, the service gone and no notification. The Wi-Fi tests join the emulator's network by
+  name after airplane mode instead of waiting for Android to do it (Android 11 held back for
+  minutes).
+- For contributors: a TUIC emulator test that fails now says when its request began and how far
+  it got, and `check-android` prints the TUIC peer's whole log, with times. The reply that came
+  back empty six times in CI is not explained yet.
+- For contributors: the DNS test "an empty AAAA answer ends a parallel lookup" no longer fails
+  the race check (it did in two of nine Linux runs on 2026-11-26). The delay before a UDP query
+  is sent again was a package variable that tests changed and restored while a query of the
+  finished lookup was still being sent; it now belongs to each name server.
+- For contributors: the TUIC test "stalled downloads leave the connection usable" no longer fails on a
+  slow runner (four Windows runs from 2026-11-18 to 11-26, each with "a fresh download got 348920
+  bytes"). It waited one second for twelve stalled downloads to fill and then gave a fresh one five
+  seconds for a megabyte; when the link was slow, the twelve were still filling and took most of it.
+  The test now waits until the server has sent all the stalled downloads may hold, and stops when
+  the server sends nothing for ten seconds.
+
 ## 0.6.5 - 2026-11-26
 
 ### Added

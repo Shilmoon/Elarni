@@ -43,13 +43,18 @@ python3 scripts/check-android --avd Elarni_API_36_16K --avd Elarni_API_30
 - `--serial <id>` uses an emulator that is already running.
 - Naming an AVD twice boots two instances that split its suites.
 - `--case native|catalog|ui|vpn` and `--test-method <name>` narrow the run.
-- A failed test is rerun once alone and reported as `FLAKY` or `FAILED`.
+- A failed test is rerun once alone and reported as `FLAKY` or `FAILED`. A `FLAKY` test does
+  not fail the run; `scripts/flaky-report` ranks them.
 
 The VPN suite needs the TUIC test server described in
 [docs/TESTING.md](../docs/TESTING.md). On x86_64 Linux with KVM,
 `python scripts/prepare-android-linux --emulators` creates x86_64 AVDs with the
 same names. `scripts/check-android-release --serial <id> --apk <signed apk>` checks
 a release build signed with a development key.
+
+CI runs the acceptance on `main` and on a manually started "Development checks" run, not on a
+pull request. Start a run on a branch that holds `main`'s tip before merging it: `main` then
+does not repeat the acceptance for the same files.
 
 Emulators don't cover the camera, OEM battery management, long Doze periods,
 Wi-Fi/cellular handoff or always-on VPN after reboot; check those on a device.
