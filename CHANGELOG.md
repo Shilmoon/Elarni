@@ -22,6 +22,9 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
 - For contributors: the Swift checks run in the macOS 26 job beside the iPhone build instead of
   in the macOS 15 checks job, which took 18 minutes and ended every pull request's run last. Each
   macOS job now takes about 12 minutes, and no check was dropped.
+- For contributors: a pull request that changes only one platform's own folder (`android/`,
+  `ios/`, `macos/`, `windows/`, `linux/`) runs only the CI jobs it can affect, so an Android or
+  iPhone change no longer waits for the Windows VM. `main` still runs every job.
 
 ## 0.6.5 - 2026-11-26
 

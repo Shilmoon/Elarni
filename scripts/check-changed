@@ -82,6 +82,26 @@ def select(paths):
     return sorted(selected), unmapped
 
 
+# The jobs of .github/workflows/checks.yml, and the ones a change inside a platform's own folder needs. Its own build
+# is not all: the Flutter suite reads the Android, iPhone and macOS translations (test/l10n_test.dart), the script
+# tests name files of each folder in the source package, the iPhone app links macOS sources, and the Linux build
+# installs two license files from windows/. Any other code runs every job.
+CI_JOBS = ('linux', 'windows', 'macos', 'macos-release', 'apple')
+PLATFORM_JOBS = {'android/': {'linux'}, 'ios/': {'macos', 'apple'}, 'macos/': {'macos', 'macos-release', 'apple'},
+                 'windows/': {'linux', 'windows'}, 'linux/': {'linux'}}
+
+
+def ci_jobs(paths, every):
+    jobs = set()
+    for path in paths:
+        # Documentation, as the workflow has always told it from code.
+        if path.endswith('.md') or path.startswith('docs/') or path == 'LICENSE':
+            continue
+        own = next((needed for folder, needed in PLATFORM_JOBS.items() if path.startswith(folder)), None)
+        jobs |= set(CI_JOBS) if every or own is None else own
+    return [job for job in CI_JOBS if job in jobs]
+
+
 def everything():
     # Every check CI runs on this OS; the static and race checks run only on Linux.
     names = set(COMMANDS) - ({'windows'} if sys.platform == 'darwin' else {'swift', 'ios'})
@@ -101,7 +121,13 @@ def main():
     parser.add_argument('--base', default='HEAD', help='compare against this commit (default: HEAD)')
     parser.add_argument('--all', action='store_true', help='run every check CI runs on this OS, changed or not')
     parser.add_argument('--dry-run', action='store_true', help='print the selected checks without running them')
+    parser.add_argument('--ci-jobs', action='store_true',
+                        help='print the jobs of the checks workflow that the changed paths on standard input need; '
+                             'with --all, every job unless the paths are documentation')
     arguments = parser.parse_args()
+    if arguments.ci_jobs:
+        print(*ci_jobs(sys.stdin.read().splitlines(), arguments.all))
+        return 0
     selected, unmapped = (everything(), []) if arguments.all else select(changed(arguments.base))
     if unmapped:
         print('No local check covers: ' + ', '.join(unmapped), file=sys.stderr)
