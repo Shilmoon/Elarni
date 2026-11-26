@@ -543,9 +543,9 @@ func (network linuxNetwork) firewallPresent() bool {
 
 // restoredFirewall is the firewall that install put in, as one transaction that replaces
 // whatever is left of the table, so a table that was there after all is not doubled.
-func (network linuxNetwork) restoredFirewall(protected []netip.Prefix) string {
+func (network linuxNetwork) restoredFirewall(protected []netip.Prefix, answerInbound bool) string {
 	name := network.Name
-	return "add table inet " + name + "\ndelete table inet " + name + "\nadd table inet " + name + "\n" + network.firewall(protected)
+	return "add table inet " + name + "\ndelete table inet " + name + "\nadd table inet " + name + "\n" + network.firewall(protected, answerInbound)
 }
 
 func (network linuxNetwork) restoreFirewall(policy *share.WindowsRoutePolicy) error {
@@ -553,7 +553,7 @@ func (network linuxNetwork) restoreFirewall(policy *share.WindowsRoutePolicy) er
 	if err != nil {
 		return err
 	}
-	detail, err := nftWithOutput(network.restoredFirewall(protected))
+	detail, err := nftWithOutput(network.restoredFirewall(protected, policy != nil && policy.AnswerInbound))
 	if err != nil && detail != "" {
 		// nft repeats the rule it rejected, which can hold every guarded route.
 		if len(detail) > 512 {

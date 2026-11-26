@@ -127,7 +127,7 @@ func TestLinuxGuardCoversForwardedTraffic(t *testing.T) {
 // lookups upstream are exempt from the redirect and would leave outside the tunnel.
 func TestLinuxLoopbackResolversAreNotRedirected(t *testing.T) {
 	network := linuxNetwork{Name: "rv0123456789ab", Mark: 0x52562ee1, DNSPort: 35123}
-	script := network.firewall(nil)
+	script := network.firewall(nil, false)
 	redirect := strings.Index(script, "add rule inet rv0123456789ab dns meta l4proto { tcp, udp } th dport 53 redirect to :35123\n")
 	for _, want := range []string{
 		"add rule inet rv0123456789ab dns ip daddr 127.0.0.0/8 ip daddr != { 127.0.0.53, 127.0.0.54 } return\n",
@@ -155,7 +155,7 @@ func TestLinuxLoopbackResolverAnswersItselfInANamespace(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer network.cleanup()
-	if err := nft(network.firewall(nil)); err != nil {
+	if err := nft(network.firewall(nil, false)); err != nil {
 		t.Fatal(err)
 	}
 	listen := func(port int) *net.UDPConn {
@@ -213,7 +213,7 @@ func TestLinuxFirewallIsPutBackAfterAFlush(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := nft(network.firewall(protected)); err != nil {
+	if err := nft(network.firewall(protected, false)); err != nil {
 		t.Fatal(err)
 	}
 	listing := func() string {
