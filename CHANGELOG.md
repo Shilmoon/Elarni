@@ -4,6 +4,13 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
 
 ## Unreleased
 
+### Changed
+
+- For contributors: an Android acceptance run (`scripts/check-android`) no longer fails for a
+  test that failed in its suite and passed when rerun alone. The test is still reported as
+  `FLAKY`, the CI run's summary names it, and `scripts/flaky-report` ranks it. A test that fails
+  again, a crash or a suite that ran too few tests fails the run as before.
+
 ## 0.6.5 - 2026-11-26
 
 ### Added
