@@ -72,22 +72,30 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
 - **REALITY with a randomized fingerprint could not connect on about half of the app starts.**
   The randomized hello carried the post-quantum key share that REALITY servers since Xray 26.9.8
   require only half the time; it now takes the hello that "random" picks, which always has it.
+  With `randomizednoalpn` that hello carries no ALPN, and the log names the hello once.
 - **The "Firefox" fingerprint failed with "invalid server key share" against servers that pick
-  the P-256 key exchange**; uTLS now keeps a key for each share the hello offers. AmneziaWG
-  moves to amneziawg-go v3.1.20261116, which no longer loses a handshake retry or keepalive timer
-  change, and a profile that names Jmin without Jmax still connects. WireGuard and AmneziaWG take
-  gVisor's fix for TCP connections that retried a busy connection without yielding the processor.
+  the P-256 key exchange**; uTLS now keeps a key for each share the hello offers.
+- **AmneziaWG no longer loses a handshake retry or a keepalive timer change.** It moves to
+  amneziawg-go v3.1.20261116, and a profile that names Jmin without Jmax still connects.
+  WireGuard and AmneziaWG take gVisor's fix for TCP connections that retried a busy connection
+  without yielding the processor.
 - **The tunnel could stop carrying traffic after one read error of its network adapter**, while
   the app still showed it connected. Elarni reads on after such an error and stops reading only
-  when the tunnel stops.
+  when the tunnel stops or its adapter is gone. An error that repeats is logged once a minute,
+  with how many times it came.
 - **WireGuard could keep a CPU core busy while its socket kept failing.** It now waits longer
   after each error, up to a second, instead of retrying at once.
 - **Hysteria2 uses the upload speed you set, as the official client does.** Brutal congestion
   control starts whenever the up speed is set, capped by the server's limit if it has one; it
   needed a server limit too. "100 mbps" now means 100,000,000 bits per second, not 104,857,600.
-- **A Hysteria2, MASQUE, XDRIVE or HTTP/3 XHTTP server chained through another one could freeze
-  when a connection closed.** The socket under it is closed first now, so the close no longer
-  waits for the outer connection to end.
+  For server operators: a Hysteria2 inbound of this core without `brutalUp` now sends to each
+  client with Brutal at the download speed that client asks for, with no limit, as official
+  Hysteria does without `ignoreClientBandwidth`; set `brutalUp` to cap it, or
+  `"congestion": "bbr"` to keep BBR.
+- **A Hysteria2, MASQUE, XDRIVE or HTTP/3 XHTTP server, or an XDNS resolver over DNS over
+  HTTP/3, chained through another one could freeze when a connection closed.** The socket under
+  it is closed first now, so the close no longer waits for the outer connection to end. A failed
+  XDNS connection over HTTP/3 no longer leaves its socket open.
 - **An XHTTP `scMaxEachPostBytes` of 0 or less, such as `"0-1000000"`, crashed the core** at
   the first connection. The profile is refused with an error that names the setting.
 - **Mux uses its configured concurrency again (8 by default).** Every outbound had been raised
@@ -95,7 +103,8 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
 - **Server tests left a connection open for every server that accepted but stalled in TLS.**
   The test's own timeout now ends the TLS handshake and the wait for an answer too.
 - **XDNS with a TCP resolver did not work**: its queries went out without the length that DNS
-  over TCP needs. The resolver now sends and answers them on a pool of connections.
+  over TCP needs. The resolver now sends and answers them on a pool of connections; a query left
+  without an answer gives its connection up after 5 s.
 - **DNS answers over TCP could arrive broken when several were sent at once**, and an answer read
   while the DNS cache was cleaned could lose its addresses.
 - **Connections of a stopped tunnel no longer run on in the background**: stopping the tunnel

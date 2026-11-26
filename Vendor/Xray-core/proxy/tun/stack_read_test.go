@@ -3,11 +3,12 @@ package tun
 import (
 	"errors"
 	"net/netip"
-	"sync/atomic"
+	"os"
 	"testing"
 	"time"
 
 	"github.com/xtls/xray-core/common/buf"
+	"github.com/xtls/xray-core/common/retry"
 )
 
 var errTunHiccup = errors.New("no buffer space available")
@@ -68,41 +69,34 @@ func TestStackReadsOnAfterAnErrorOfTheTun(t *testing.T) {
 	}
 }
 
-// A tun that keeps failing is read at longer and longer intervals instead of on a whole core, and Close of the
-// stack ends the wait for the next read; so does an error that comes after Close.
+// A tun that keeps failing is read again only after a wait instead of at once, on a whole core, and Close of
+// the stack ends the wait for the next read; so does an error that comes after Close.
 func TestStackBacksOffATunThatKeepsFailingUntilClose(t *testing.T) {
 	for name, segments := range map[string]bool{"packets": false, "segments": true} {
 		t.Run(name, func(t *testing.T) {
 			l := newLink()
 			l.segments, l.errs = segments, make(chan error)
 			s := newUnstartedStack(t, l, nil)
+			// a wait that no test outlasts: only Close ends it
+			s.readRetry = retry.Backoff{Min: time.Hour, Max: time.Hour}
 			defer l.Close()
 			ended := reading(s)
-			var taken atomic.Int32
-			stop := make(chan struct{})
-			defer close(stop)
-			go func() {
-				for {
-					select {
-					case l.errs <- errTunHiccup:
-						taken.Add(1)
-					case <-stop:
-						return
-					}
-				}
-			}()
 
-			time.Sleep(400 * time.Millisecond)
-			// 2 reads at once, then one after each wait of 5, 10, 20, 40, 80 and 160 ms; a loop that spins makes millions
-			if n := taken.Load(); n < 2 || n > 20 {
-				t.Fatalf("%d reads of a failing tun in 400 ms", n)
+			// the first error is read again at once, as a one-off error is; the second one waits
+			for range 2 {
+				select {
+				case l.errs <- errTunHiccup:
+				case <-time.After(5 * time.Second):
+					t.Fatal("the stack did not read again after one error")
+				}
 			}
-			closed := time.Now()
+			select {
+			case l.errs <- errTunHiccup:
+				t.Fatal("the stack read a tun that keeps failing again at once")
+			case <-time.After(50 * time.Millisecond):
+			}
 			s.Close()
 			ends(t, ended, 5*time.Second, "after the stack was closed")
-			if waited := time.Since(closed); waited > 100*time.Millisecond {
-				t.Fatalf("the reading ended %v after Close, not when it was closed", waited)
-			}
 		})
 	}
 
@@ -114,4 +108,53 @@ func TestStackBacksOffATunThatKeepsFailingUntilClose(t *testing.T) {
 	s.Close()
 	l.errs <- errTunHiccup
 	ends(t, reading(s), 5*time.Second, "after an error that came when the stack was closed")
+}
+
+// A tun whose device is gone answers every read with the same error: ENXIO or EBADF for a destroyed utun or
+// tun, EBADF for an fd that Android's VpnService revoked. Reading it again went on for ever at the longest wait,
+// with a warning each time; such an error ends the reading as a closed tun does.
+func TestStackStopsReadingATunWhoseDeviceIsGone(t *testing.T) {
+	if len(tunGoneErrors) == 0 {
+		t.Skip("no error of this system's tun says that its device is gone")
+	}
+	for _, gone := range tunGoneErrors {
+		for name, segments := range map[string]bool{"packets": false, "segments": true} {
+			t.Run(gone.Error()+"/"+name, func(t *testing.T) {
+				l := newLink()
+				l.segments, l.errs = segments, make(chan error, 1)
+				s := newUnstartedStack(t, l, nil)
+				defer s.Close()
+				defer l.Close()
+				// as os.File gives it
+				l.errs <- &os.PathError{Op: "read", Path: "/dev/tun", Err: gone}
+				ends(t, reading(s), 5*time.Second, "after its device was gone")
+			})
+		}
+	}
+}
+
+// An error that repeats is warned of the first time, then once a minute at most with how many times it came
+// in between, instead of once a second for as long as it lasts.
+func TestReadWarningsArePacedAndCounted(t *testing.T) {
+	var w warnings
+	start := time.Unix(1_000_000, 0)
+	for _, step := range []struct {
+		after time.Duration
+		log   bool
+		held  int
+	}{
+		{0, true, 0},
+		{time.Second, false, 0},
+		{30 * time.Second, false, 0},
+		{59 * time.Second, false, 0},
+		{time.Minute, true, 3},
+		{time.Minute + time.Second, false, 0},
+		{10 * time.Minute, true, 1},
+		{11 * time.Minute, true, 0},
+	} {
+		log, held := w.pass(start.Add(step.after), time.Minute)
+		if log != step.log || held != step.held {
+			t.Fatalf("after %v: logged %v with %d held back, want %v with %d", step.after, log, held, step.log, step.held)
+		}
+	}
 }

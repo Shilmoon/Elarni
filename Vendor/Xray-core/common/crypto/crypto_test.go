@@ -29,8 +29,9 @@ func TestRandBetweenIncludesBothEnds(t *testing.T) {
 	if v := crypto.RandBetween(4, 4); v != 4 {
 		t.Errorf("RandBetween(4, 4) = %d", v)
 	}
-	// the widest ranges do not overflow
-	for _, r := range [][2]int64{{0, math.MaxInt64}, {math.MinInt64, math.MaxInt64}, {math.MinInt64, 0}} {
+	// the widest ranges do not overflow, nor do the widest that the path without big.Int takes
+	for _, r := range [][2]int64{{0, math.MaxInt64}, {math.MinInt64, math.MaxInt64}, {math.MinInt64, 0},
+		{1, math.MaxInt64}, {math.MinInt64, -1}} {
 		if v := crypto.RandBetween(r[0], r[1]); v < r[0] || v > r[1] {
 			t.Errorf("RandBetween(%d, %d) = %d", r[0], r[1], v)
 		}

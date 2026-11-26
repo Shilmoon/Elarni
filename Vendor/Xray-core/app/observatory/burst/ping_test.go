@@ -2,8 +2,8 @@ package burst
 
 import (
 	"context"
+	"io"
 	gonet "net"
-	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -16,6 +16,7 @@ import (
 // A probe to a server that takes the connection and never answers its TLS hello ends within the probe
 // timeout, and so does the dial behind it: net/http keeps a dial going after the request gives up,
 // and without a handshake timeout that one waited for the server, holding its socket and goroutines.
+// The server sees the probe's connection closed.
 func TestProbeToAStalledTLSServerLeavesNothingBehind(t *testing.T) {
 	ln, err := gonet.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -24,6 +25,8 @@ func TestProbeToAStalledTLSServerLeavesNothingBehind(t *testing.T) {
 	var mu sync.Mutex
 	var held []gonet.Conn
 	accepted := make(chan struct{}, 1)
+	// ended tells when the probe's side closed a connection: the server reads it to its end, and answers nothing
+	ended := make(chan struct{}, 1)
 	go func() {
 		for {
 			conn, err := ln.Accept()
@@ -37,6 +40,13 @@ func TestProbeToAStalledTLSServerLeavesNothingBehind(t *testing.T) {
 			case accepted <- struct{}{}:
 			default:
 			}
+			go func() {
+				_, _ = io.Copy(io.Discard, conn)
+				select {
+				case ended <- struct{}{}:
+				default:
+				}
+			}()
 		}
 	}()
 	defer func() {
@@ -61,10 +71,6 @@ func TestProbeToAStalledTLSServerLeavesNothingBehind(t *testing.T) {
 	}
 	defer func() { tagged.Dialer = saved }()
 
-	// let the accept loop settle before counting
-	time.Sleep(10 * time.Millisecond)
-	baseline := runtime.NumGoroutine()
-
 	const timeout = 200 * time.Millisecond
 	client := newPingClient(context.Background(), nil, "https://"+ln.Addr().String()+"/", timeout, "proxy")
 	start := time.Now()
@@ -81,14 +87,9 @@ func TestProbeToAStalledTLSServerLeavesNothingBehind(t *testing.T) {
 			t.Fatal("the probe never reached the server")
 		}
 	}
-
-	deadline := time.Now().Add(10 * timeout)
-	for runtime.NumGoroutine() > baseline {
-		if time.Now().After(deadline) {
-			buf := make([]byte, 1<<16)
-			t.Fatalf("%d goroutines %v after the probe, %d before it:\n%s",
-				runtime.NumGoroutine(), 10*timeout, baseline, buf[:runtime.Stack(buf, true)])
-		}
-		time.Sleep(10 * time.Millisecond)
+	select {
+	case <-ended:
+	case <-time.After(10 * timeout):
+		t.Fatalf("the probe's connection is still open %v after the probe", 10*timeout)
 	}
 }

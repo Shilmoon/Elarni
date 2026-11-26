@@ -18,6 +18,7 @@ import (
 	"net/http"
 	"reflect"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -179,6 +180,78 @@ func realityFingerprint(name string) *utls.ClientHelloID {
 	return &utls.HelloChrome_Auto
 }
 
+// randomizedFingerprint tells whether the fingerprint name is a randomized one, which realityFingerprint
+// swaps, and whether that one sends no ALPN (Elarni)
+func randomizedFingerprint(name string) (randomized, noALPN bool) {
+	fingerprint := tls.GetFingerprint(name)
+	if fingerprint == nil {
+		return false, false
+	}
+	switch fingerprint.Client {
+	case utls.HelloRandomized.Client, utls.HelloRandomizedALPN.Client:
+		return true, false
+	case utls.HelloRandomizedNoALPN.Client:
+		return true, true
+	}
+	return false, false
+}
+
+// loggedSwaps are the randomized fingerprint names whose swap UClient has logged: once for each (Elarni)
+var loggedSwaps sync.Map
+
+// realityUConn is the uTLS client of UClient over c for the fingerprint name, with its hello built: the hello
+// of realityFingerprint, which for a randomized fingerprint that sends no ALPN sends none either (Elarni)
+func realityUConn(c net.Conn, config *utls.Config, name string) (*utls.UConn, error) {
+	fingerprint := realityFingerprint(name)
+	if fingerprint == nil {
+		return nil, errors.New("REALITY: failed to get fingerprint")
+	}
+	var uConn *utls.UConn
+	if _, noALPN := randomizedFingerprint(name); noALPN {
+		spec, err := utls.UTLSIdToSpec(*fingerprint)
+		if err != nil {
+			return nil, errors.New("REALITY: failed to get fingerprint").Base(err)
+		}
+		// ALPS carries settings for the protocol that ALPN agreed on, so it goes too
+		spec.Extensions = slices.DeleteFunc(spec.Extensions, func(extension utls.TLSExtension) bool {
+			switch extension.(type) {
+			case *utls.ALPNExtension, *utls.ApplicationSettingsExtension, *utls.ApplicationSettingsExtensionNew:
+				return true
+			}
+			return false
+		})
+		uConn = utls.UClient(c, config, utls.HelloCustom)
+		if err := uConn.ApplyPreset(&spec); err != nil {
+			return nil, errors.New("REALITY: failed to apply fingerprint").Base(err)
+		}
+	} else {
+		uConn = utls.UClient(c, config, *fingerprint)
+	}
+	if err := uConn.BuildHandshakeState(); err != nil {
+		return nil, errors.New("REALITY: failed to build the hello").Base(err)
+	}
+	return uConn, nil
+}
+
+// realityKey is the private key of the X25519 share that a REALITY server reads the hello's auth key from:
+// the X25519 share of its own, else the X25519 half of X25519MLKEM768. Elarni: uTLS keeps the key of the
+// first classical share in Ecdhe and the others in AdditionalEcdhe, so Ecdhe is P-256 for a hello whose
+// first classical share is P-256
+func realityKey(keys *utls.KeySharePrivateKeys) *ecdh.PrivateKey {
+	if keys == nil {
+		return nil
+	}
+	for _, key := range append([]*ecdh.PrivateKey{keys.Ecdhe}, keys.AdditionalEcdhe...) {
+		if key != nil && key.Curve() == ecdh.X25519() {
+			return key
+		}
+	}
+	if keys.MlkemEcdhe != nil && keys.MlkemEcdhe.Curve() == ecdh.X25519() {
+		return keys.MlkemEcdhe
+	}
+	return nil
+}
+
 func UClient(c net.Conn, config *Config, ctx context.Context, dest net.Destination) (_ net.Conn, err error) {
 	// Elarni: callers drop c when this fails, so release it here unless a crawl keeps it.
 	keep := false
@@ -202,13 +275,20 @@ func UClient(c net.Conn, config *Config, ctx context.Context, dest net.Destinati
 		utlsConfig.ServerName = dest.Address.String()
 	}
 	uConn.ServerName = utlsConfig.ServerName
-	fingerprint := realityFingerprint(config.Fingerprint)
-	if fingerprint == nil {
-		return nil, errors.New("REALITY: failed to get fingerprint")
+	if uConn.UConn, err = realityUConn(c, utlsConfig, config.Fingerprint); err != nil {
+		return nil, err
 	}
-	uConn.UConn = utls.UClient(c, utlsConfig, *fingerprint)
+	if randomized, noALPN := randomizedFingerprint(config.Fingerprint); randomized {
+		if _, logged := loggedSwaps.LoadOrStore(config.Fingerprint, true); !logged {
+			without := ""
+			if noALPN {
+				without = " without ALPN"
+			}
+			errors.LogWarning(ctx, "REALITY: the randomized fingerprint ", config.Fingerprint, " sends the hello of \"random\", ",
+				realityFingerprint(config.Fingerprint).Str(), without, ": a randomized hello lacks the X25519MLKEM768 key share that REALITY servers need half of the time")
+		}
+	}
 	{
-		uConn.BuildHandshakeState()
 		hello := uConn.HandshakeState.Hello
 		hello.SessionId = make([]byte, 32)
 		copy(hello.Raw[39:], hello.SessionId) // the fixed location of `Session ID`
@@ -225,12 +305,9 @@ func UClient(c net.Conn, config *Config, ctx context.Context, dest net.Destinati
 		if err != nil {
 			return nil, errors.New("REALITY: nil publicKey").Base(err)
 		}
-		ecdhe := uConn.HandshakeState.State13.KeyShareKeys.Ecdhe
+		ecdhe := realityKey(uConn.HandshakeState.State13.KeyShareKeys)
 		if ecdhe == nil {
-			ecdhe = uConn.HandshakeState.State13.KeyShareKeys.MlkemEcdhe
-		}
-		if ecdhe == nil {
-			return nil, errors.New("Current fingerprint ", uConn.ClientHelloID.Client, uConn.ClientHelloID.Version, " does not support TLS 1.3, REALITY handshake cannot establish.")
+			return nil, errors.New("Current fingerprint ", uConn.ClientHelloID.Client, uConn.ClientHelloID.Version, " does not support TLS 1.3 with an X25519 key share, REALITY handshake cannot establish.")
 		}
 		if uConn.AuthKey, err = ecdhe.ECDH(publicKey); err != nil {
 			return nil, errors.New("REALITY: nil sharedKey").Base(err)
