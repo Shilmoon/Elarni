@@ -193,6 +193,11 @@ func guardMarker() string {
 	return filepath.Join(root, ".dns-guard")
 }
 
+// currentGuardMarker is the marker with the fallback routes it names.
+func currentGuardMarker() guardMarkerFile {
+	return guardMarkerFile{path: guardMarker()}
+}
+
 // A static session: its objects outlive this process until they are deleted,
 // BFE stops or Windows restarts.
 func openWFP() (uintptr, error) {
@@ -242,8 +247,8 @@ func releaseGuard() error {
 	if code, _, _ := wfpCommit.Call(engine); code != 0 {
 		return syscall.Errno(code)
 	}
-	_ = os.Remove(guardMarker())
-	return nil
+	// The fallback routes of Block traffic without VPN go with it, then the marker that names them.
+	return clearFallbackRoutes(&loopbackRoutes{}, currentGuardMarker())
 }
 
 // Only an elevated helper can give the event this owner; any user may wait on
@@ -339,8 +344,9 @@ func clearVPNGuard() (any, error) {
 
 // The guard outlives a crashed helper, so a crash blocks DNS instead of leaking
 // it until a helper removes it or Windows restarts. Physical DNS settings stay intact.
-// The caller holds claimGuard's owner handle for as long as the guard may exist.
-func protectDNS(luid uint64, protected []netip.Prefix) error {
+// The caller holds claimGuard's owner handle for as long as the guard may exist, and has put
+// fallback, the fallback routes of Block traffic without VPN (none without it), in place.
+func protectDNS(luid uint64, protected, fallback []netip.Prefix) error {
 	failed := errors.New("dns_guard_failed")
 	if unsafe.Sizeof(wfpFilter{}) != 200 || unsafe.Sizeof(wfpSession{}) != 72 || unsafe.Sizeof(wfpCondition{}) != 40 {
 		return failed
@@ -462,12 +468,9 @@ func protectDNS(luid uint64, protected []netip.Prefix) error {
 		}
 	}
 	runtime.KeepAlive(outside)
-	// Written first, so a crash right after the commit still leaves it for Repair.
-	// Rewriting an empty marker left by an earlier boot may keep its old time.
-	if marker := guardMarker(); os.WriteFile(marker, nil, 0o644) == nil {
-		now := time.Now()
-		_ = os.Chtimes(marker, now, now)
-	}
+	// Written first, so a crash right after the commit still leaves it for Repair. It keeps
+	// naming the fallback routes; without them it is empty, as before them.
+	_ = currentGuardMarker().write(fallback)
 	code, _, _ = wfpCommit.Call(engine)
 	if code != 0 {
 		return syscall.Errno(code)

@@ -923,6 +923,26 @@ func runVPNTunnel(pipe io.Writer, parent windows.Handle, request vpnCommand, com
 		writeFrame(pipe, map[string]any{"ready": false, "error": "invalid_vpn_config"})
 		return 1, false, false
 	}
+	// With Block traffic without VPN every prefix the tunnel takes also leads into the loopback
+	// interface, before the core adds the tunnel's own routes (see fallbackRoutes). They stay as
+	// long as the guard, which releaseGuard ends; another tunnel's that this one has not go here.
+	tunnelRoutes, err := share.WindowsRoutes(request.RoutePolicy)
+	if err != nil {
+		return fail("routes", err)
+	}
+	fallback := fallbackRoutes(tunnelRoutes, request.RoutePolicy != nil && request.RoutePolicy.BlockWithoutVPN)
+	if len(fallback) > 0 && !guard.installed {
+		// Until protectDNS puts the guard in place, a start that fails leaves nothing, as a failed
+		// guard does. Deferred before the core's stop, so it runs after the tunnel's routes are gone.
+		defer func() {
+			if !guard.installed && releaseGuard() != nil {
+				guard.installed, guard.failed = true, true // The marker stays, for Repair.
+			}
+		}()
+	}
+	if err := placeFallbackRoutes(&loopbackRoutes{}, currentGuardMarker(), fallback); err != nil {
+		return fail("block_routes", err)
+	}
 	logCursor := xray.LastLogSeq()
 	started := make(chan error, 1)
 	tun.SetSessionLimits(request.TCPMaxConnections, request.UDPMaxConnections)
@@ -972,7 +992,7 @@ func runVPNTunnel(pipe io.Writer, parent windows.Handle, request vpnCommand, com
 	if err != nil {
 		return fail("routes", err)
 	}
-	if err := protectDNS(uint64(iface.InterfaceLUID), protected); err != nil {
+	if err := protectDNS(uint64(iface.InterfaceLUID), protected, fallback); err != nil {
 		return fail("dns", err)
 	}
 	// It also replaced any guard a lost tunnel kept.

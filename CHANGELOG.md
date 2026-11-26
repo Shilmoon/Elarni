@@ -6,6 +6,9 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
 
 ### Fixed
 
+- **Windows: "Block traffic without VPN" now also holds WSL2, Hyper-V and Mobile Hotspot traffic.**
+  What this PC passed on for them left outside the VPN for a few seconds while Elarni switched
+  servers or after the tunnel was lost; it is now dropped until the tunnel is back.
 - **Android: "Connect after device restart" waits for the network.** A server given by name
   was looked up once as the phone started, often before Wi-Fi or mobile data worked; the
   start failed and, with "Reconnect automatically" off, the phone stayed without VPN. A start
