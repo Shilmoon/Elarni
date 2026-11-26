@@ -9,6 +9,11 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
 - **Windows: "Block traffic without VPN" now also holds WSL2, Hyper-V and Mobile Hotspot traffic.**
   What this PC passed on for them left outside the VPN for a few seconds while Elarni switched
   servers or after the tunnel was lost; it is now dropped until the tunnel is back.
+- **Hysteria2, TUIC and XHTTP over HTTP/3 servers given by name try the name's other
+  addresses.** When the first address did not answer, for example an IPv6 address on a network
+  without IPv6, the connection waited for it until the time ran out. Up to four addresses now
+  share that time, and the one that answered is tried first next time, until the network
+  changes.
 - **Android: "Connect after device restart" waits for the network.** A server given by name
   was looked up once as the phone started, often before Wi-Fi or mobile data worked; the
   start failed and, with "Reconnect automatically" off, the phone stayed without VPN. A start

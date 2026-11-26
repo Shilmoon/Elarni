@@ -420,77 +420,89 @@ func createHTTPClient(releaseCtx context.Context, dest net.Destination, streamSe
 			quicConfig.MaxIncomingStreams = -1
 		}
 
+		// dialAddress opens the QUIC connection to one address of the server.
+		dialAddress := func(ctx context.Context, dest net.Destination, tlsCfg *gotls.Config, cfg *quic.Config) (*quic.Conn, error) {
+			var pktConn net.PacketConn
+			var udpAddr net.Addr
+			if streamSettings.FinalMask != nil {
+				conn, err := streamSettings.FinalMask.DialUDP(ctx, dest)
+				if err != nil {
+					return nil, errors.New("failed to dial to dest").Base(err)
+				}
+				pktConn = conn.(*net.PacketConnWrapper).PacketConn
+				udpAddr = conn.RemoteAddr()
+			} else {
+				conn, err := internet.DialSystem(ctx, dest, streamSettings.SocketSettings)
+				if err != nil {
+					return nil, errors.New("failed to dial to dest").Base(err)
+				}
+				switch c := conn.(type) {
+				case *net.PacketConnWrapper:
+					pktConn = c.PacketConn
+					udpAddr = c.RemoteAddr()
+				case *cnc.Connection:
+					pktConn = &internet.FakePacketConn{Conn: c}
+					udpAddr = &net.UDPAddr{IP: []byte{0, 0, 0, 0}}
+				default:
+					panic(reflect.TypeOf(c))
+				}
+			}
+
+			tr := &quic.Transport{Conn: pktConn, DisableGSO: quicParams.DisableGSO}
+
+			if !quicParams.DisableChromeParrot {
+				tr.ConnectionIDGenerator = quic.ZeroLengthConnectionIDGenerator{}
+				tlsCfg.GetCertificate = nil
+			}
+
+			conn, err := tr.DialEarly(ctx, udpAddr, tlsCfg, cfg)
+			if err != nil {
+				// the packet conn first: the transport waits for its read loop, which a dialerProxy's
+				// packet conn ends only by closing
+				pktConn.Close()
+				tr.Close()
+				return nil, err
+			}
+			open.Add(1)
+			livePaths.add(conn, func(bound time.Duration) {
+				received := conn.ConnectionStats().PacketsReceived
+				conn.Ping()
+				time.AfterFunc(bound, func() {
+					if conn.ConnectionStats().PacketsReceived == received {
+						conn.CloseWithError(0, "")
+					}
+				})
+			})
+			context.AfterFunc(conn.Context(), func() { open.Add(-1); livePaths.remove(conn); pktConn.Close(); tr.Close() })
+
+			switch quicParams.Congestion {
+			case "reno":
+			case "", "bbr":
+				congestion.UseBBR(conn, bbr.Profile(quicParams.BbrProfile))
+			case "force-brutal":
+				congestion.UseBrutal(conn, quicParams.BrutalUp, quicParams.BrutalDisableLossCompensation)
+			default:
+				panic(quicParams.Congestion)
+			}
+
+			return conn, nil
+		}
+
 		transport = &http3.Transport{
 			QUICConfig:      quicConfig,
 			TLSClientConfig: gotlsConfig,
 			Dial: func(ctx context.Context, addr string, tlsCfg *gotls.Config, cfg *quic.Config) (*quic.Conn, error) {
 				// Other requests wait on this dial, so it outlives the request that started it, within the setup bound.
-				ctx, cancel := context.WithTimeout(ctx, setupTimeout)
+				budget := setupTimeout
+				ctx, cancel := context.WithTimeout(ctx, budget)
 				defer cancel()
-				var pktConn net.PacketConn
-				var udpAddr net.Addr
-				if streamSettings.FinalMask != nil {
-					conn, err := streamSettings.FinalMask.DialUDP(ctx, dest)
-					if err != nil {
-						return nil, errors.New("failed to dial to dest").Base(err)
-					}
-					pktConn = conn.(*net.PacketConnWrapper).PacketConn
-					udpAddr = conn.RemoteAddr()
-				} else {
-					conn, err := internet.DialSystem(ctx, dest, streamSettings.SocketSettings)
-					if err != nil {
-						return nil, errors.New("failed to dial to dest").Base(err)
-					}
-					switch c := conn.(type) {
-					case *net.PacketConnWrapper:
-						pktConn = c.PacketConn
-						udpAddr = c.RemoteAddr()
-					case *cnc.Connection:
-						pktConn = &internet.FakePacketConn{Conn: c}
-						udpAddr = &net.UDPAddr{IP: []byte{0, 0, 0, 0}}
-					default:
-						panic(reflect.TypeOf(c))
-					}
-				}
-
-				tr := &quic.Transport{Conn: pktConn, DisableGSO: quicParams.DisableGSO}
-
-				if !quicParams.DisableChromeParrot {
-					tr.ConnectionIDGenerator = quic.ZeroLengthConnectionIDGenerator{}
-					tlsCfg.GetCertificate = nil
-				}
-
-				conn, err := tr.DialEarly(ctx, udpAddr, tlsCfg, cfg)
+				candidates, err := internet.UDPCandidates(ctx, dest, streamSettings.SocketSettings, streamSettings.FinalMask)
 				if err != nil {
-					// the packet conn first: the transport waits for its read loop, which a dialerProxy's
-					// packet conn ends only by closing
-					pktConn.Close()
-					tr.Close()
-					return nil, err
+					return nil, errors.New("failed to dial to dest").Base(err)
 				}
-				open.Add(1)
-				livePaths.add(conn, func(bound time.Duration) {
-					received := conn.ConnectionStats().PacketsReceived
-					conn.Ping()
-					time.AfterFunc(bound, func() {
-						if conn.ConnectionStats().PacketsReceived == received {
-							conn.CloseWithError(0, "")
-						}
-					})
+				return internet.DialUDPCandidates(ctx, dest, candidates, budget, func(ctx context.Context, dest net.Destination) (*quic.Conn, error) {
+					return dialAddress(ctx, dest, tlsCfg, cfg)
 				})
-				context.AfterFunc(conn.Context(), func() { open.Add(-1); livePaths.remove(conn); pktConn.Close(); tr.Close() })
-
-				switch quicParams.Congestion {
-				case "reno":
-				case "", "bbr":
-					congestion.UseBBR(conn, bbr.Profile(quicParams.BbrProfile))
-				case "force-brutal":
-					congestion.UseBrutal(conn, quicParams.BrutalUp, quicParams.BrutalDisableLossCompensation)
-				default:
-					panic(quicParams.Congestion)
-				}
-
-				return conn, nil
 			},
 		}
 	} else if httpVersion == "2" {

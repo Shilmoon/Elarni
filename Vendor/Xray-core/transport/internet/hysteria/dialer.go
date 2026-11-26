@@ -149,8 +149,19 @@ func newQuicConfig(quicParams *internet.QuicParams) *quic.Config {
 	return quicConfig
 }
 
-// dial opens a QUIC connection and authenticates on it.
-func (c *client) dial(ctx context.Context) (*connection, error) {
+// dial opens a QUIC connection and authenticates on it, trying the addresses of a server name
+// in turn within budget.
+func (c *client) dial(ctx context.Context, budget time.Duration) (*connection, error) {
+	candidates, err := internet.UDPCandidates(ctx, c.dest, c.socketConfig, c.finalMask)
+	if err != nil {
+		return nil, errors.New("failed to dial to dest").Base(err)
+	}
+	return internet.DialUDPCandidates(ctx, c.dest, candidates, budget, c.dialAddress)
+}
+
+// dialAddress opens a QUIC connection to dest and authenticates on it. A refused password
+// ends the dial: the server answered.
+func (c *client) dialAddress(ctx context.Context, dest net.Destination) (*connection, error) {
 	quicParams := c.quicParams
 	if quicParams == nil {
 		quicParams = &internet.QuicParams{
@@ -162,14 +173,14 @@ func (c *client) dial(ctx context.Context) (*connection, error) {
 	var pktConn net.PacketConn
 	var udpAddr net.Addr
 	if c.finalMask != nil {
-		conn, err := c.finalMask.DialUDP(ctx, c.dest)
+		conn, err := c.finalMask.DialUDP(ctx, dest)
 		if err != nil {
 			return nil, errors.New("failed to dial to dest").Base(err)
 		}
 		pktConn = conn.(*net.PacketConnWrapper).PacketConn
 		udpAddr = conn.RemoteAddr()
 	} else {
-		conn, err := internet.DialSystem(ctx, c.dest, c.socketConfig)
+		conn, err := internet.DialSystem(ctx, dest, c.socketConfig)
 		if err != nil {
 			return nil, errors.New("failed to dial to dest").Base(err)
 		}
@@ -237,7 +248,7 @@ func (c *client) dial(ctx context.Context) (*connection, error) {
 		_ = conn.CloseWithError(closeErrCodeProtocolError, "")
 		_ = pktConn.Close()
 		_ = tr.Close()
-		return nil, errors.New("auth failed code ", resp.StatusCode)
+		return nil, internet.UDPServerAnswered(errors.New("auth failed code ", resp.StatusCode))
 	}
 
 	// udp, _ := strconv.ParseBool(resp.Header.Get(ResponseHeaderUDPEnabled))
@@ -301,10 +312,11 @@ func (c *client) connection(ctx context.Context) (*connection, error) {
 	}
 	d := c.dialing
 	if d == nil || d.moves != c.moves { // one from before a path change keeps only its callers
-		dialCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), dialTimeout)
+		budget := dialTimeout
+		dialCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), budget)
 		d = &dialing{done: make(chan struct{}), cancel: cancel, moves: c.moves}
 		c.dialing = d
-		go c.complete(dialCtx, d)
+		go c.complete(dialCtx, d, budget)
 	}
 	c.unlock()
 	select {
@@ -315,8 +327,8 @@ func (c *client) connection(ctx context.Context) (*connection, error) {
 	}
 }
 
-func (c *client) complete(ctx context.Context, d *dialing) {
-	conn, err := c.dial(ctx)
+func (c *client) complete(ctx context.Context, d *dialing, budget time.Duration) {
+	conn, err := c.dial(ctx, budget)
 	d.cancel()
 	c.lock <- struct{}{}
 	switch {
