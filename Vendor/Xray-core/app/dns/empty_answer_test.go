@@ -49,6 +49,7 @@ func udpResolver(timeout time.Duration, answer func(query []byte) []byte) (*Clie
 	}}
 	both := dns.IPOption{IPv4Enable: true, IPv6Enable: true}
 	server := NewClassicNameServer(net.UDPDestination(net.ParseAddress("192.0.2.53"), 53), flows, true, false, 0, nil)
+	server.resendAfter = time.Hour // these tests count the queries a lookup sends
 	return &Client{server: server, ipOption: &both, timeoutMs: timeout}, asked
 }
 
@@ -97,9 +98,6 @@ func askedTypes(asked chan dnsmessage.Type) []dnsmessage.Type {
 // lookup went on to the next resolver and, when that one did not answer (it often has no IPv6 route
 // either), waited out its timeout before the app got the empty answer it already had (N2-47).
 func TestAnEmptyAAAAAnswerEndsTheLookup(t *testing.T) {
-	previous := udpResendAfter
-	udpResendAfter = time.Hour
-	t.Cleanup(func() { udpResendAfter = previous })
 	ipv6Only := dns.IPOption{IPv6Enable: true, FakeEnable: true}
 	ipv4Only := dns.IPOption{IPv4Enable: true, FakeEnable: true}
 	both := dns.IPOption{IPv4Enable: true, IPv6Enable: true, FakeEnable: true}
@@ -199,9 +197,6 @@ func TestAnEmptyAAAAAnswerEndsTheLookup(t *testing.T) {
 // for the next group, often without an IPv6 route, until its timeout although the first group had
 // answered an AAAA query cleanly without records. The same answer ends it there too.
 func TestAnEmptyAAAAAnswerEndsAParallelLookup(t *testing.T) {
-	previous := udpResendAfter
-	udpResendAfter = time.Hour
-	t.Cleanup(func() { udpResendAfter = previous })
 	ipv6Only := dns.IPOption{IPv6Enable: true, FakeEnable: true}
 	ipv4Only := dns.IPOption{IPv4Enable: true, FakeEnable: true}
 	empty := func(query []byte) []byte { return reply(query, dnsmessage.RCodeSuccess) }
