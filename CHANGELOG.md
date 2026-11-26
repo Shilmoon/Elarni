@@ -27,9 +27,9 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
   servers or after the tunnel was lost; it is now dropped until the tunnel is back.
 - **Hysteria2, TUIC and XHTTP over HTTP/3 servers given by name try the name's other
   addresses.** When the first address did not answer, for example an IPv6 address on a network
-  without IPv6, the connection waited for it until the time ran out. Up to four addresses now
-  share that time, and the one that answered is tried first next time, until the network
-  changes.
+  without IPv6, the connection waited for it until the time ran out. Now the next of up to four
+  addresses starts when one fails or after 2 seconds, while the earlier ones keep waiting, and
+  the first that answers is used and tried first next time, until the network changes.
 - **Linux: the AppImage starts on Debian 13, Fedora, Arch and openSUSE.** It stopped at once
   on systems without the ayatana tray libraries or GStreamer. The AppImage now carries the
   tray libraries (their source code is a

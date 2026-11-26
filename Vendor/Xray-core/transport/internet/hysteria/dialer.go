@@ -149,14 +149,15 @@ func newQuicConfig(quicParams *internet.QuicParams) *quic.Config {
 	return quicConfig
 }
 
-// dial opens a QUIC connection and authenticates on it, trying the addresses of a server name
-// in turn within budget.
+// dial opens a QUIC connection and authenticates on it, racing the addresses of a server name
+// within budget. A connection authenticated, so its server answered: its address is remembered
+// at once.
 func (c *client) dial(ctx context.Context, budget time.Duration) (*connection, error) {
 	candidates, err := internet.UDPCandidates(ctx, c.dest, c.socketConfig, c.finalMask)
 	if err != nil {
 		return nil, errors.New("failed to dial to dest").Base(err)
 	}
-	return internet.DialUDPCandidates(ctx, c.dest, candidates, budget, c.dialAddress)
+	return internet.DialUDPCandidates(ctx, c.dest, candidates, budget, c.dialAddress, (*connection).close, nil)
 }
 
 // dialAddress opens a QUIC connection to dest and authenticates on it. A refused password
