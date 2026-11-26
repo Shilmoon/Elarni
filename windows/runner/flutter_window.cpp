@@ -99,6 +99,18 @@ void RegisterProfileLinks() {
   }
 }
 
+// Whether the Run value starts this copy, and in *hidden whether hidden in the tray: the value is
+// the only store of that choice.
+bool LaunchesAtLogin(bool* hidden) {
+  wchar_t login[32768]{};
+  DWORD bytes = sizeof(login);
+  const auto status = RegGetValueW(HKEY_CURRENT_USER,
+      L"Software\\Microsoft\\Windows\\CurrentVersion\\Run", L"Elarni",
+      RRF_RT_REG_SZ, nullptr, login, &bytes);
+  *hidden = false;
+  return status == ERROR_SUCCESS && IsLaunchCommand(login, AppPath(), hidden);
+}
+
 flutter::EncodableMap SystemInfo() {
   using flutter::EncodableValue;
   SYSTEM_INFO info{};
@@ -106,14 +118,8 @@ flutter::EncodableMap SystemInfo() {
   MEMORYSTATUSEX memory{};
   memory.dwLength = sizeof(memory);
   GlobalMemoryStatusEx(&memory);
-  wchar_t login[32768]{};
-  DWORD bytes = sizeof(login);
-  const auto status = RegGetValueW(HKEY_CURRENT_USER,
-      L"Software\\Microsoft\\Windows\\CurrentVersion\\Run", L"Elarni",
-      RRF_RT_REG_SZ, nullptr, login, &bytes);
-  // The Run value is the only store of the hidden start too.
   bool hidden = false;
-  const bool enabled = status == ERROR_SUCCESS && IsLaunchCommand(login, AppPath(), &hidden);
+  const bool enabled = LaunchesAtLogin(&hidden);
   return {{EncodableValue("os"), EncodableValue("Windows")},
       {EncodableValue("architecture"), EncodableValue("x86_64")},
       {EncodableValue("processorCount"), EncodableValue(static_cast<int32_t>(info.dwNumberOfProcessors))},
@@ -367,12 +373,15 @@ bool FlutterWindow::OnCreate() {
         if (!enabled || AppPath().empty()) { result->Error("invalid_settings", "Invalid login setting."); return; }
         const auto hidden_entry = args->find(EncodableValue("hidden"));
         const auto* hidden = hidden_entry == args->end() ? nullptr : std::get_if<bool>(&hidden_entry->second);
+        // Without "hidden", as from elarni-cli, the current choice of the hidden start stays.
+        bool current = false;
+        const bool start_hidden = hidden ? *hidden : (LaunchesAtLogin(&current) && current);
         HKEY key = nullptr;
         auto status = RegCreateKeyExW(HKEY_CURRENT_USER,
             L"Software\\Microsoft\\Windows\\CurrentVersion\\Run", 0, nullptr, 0,
             KEY_SET_VALUE, nullptr, &key, nullptr);
         if (status == ERROR_SUCCESS) {
-          const std::wstring command = LaunchCommand(AppPath(), hidden && *hidden);
+          const std::wstring command = LaunchCommand(AppPath(), start_hidden);
           status = *enabled ? RegSetValueExW(key, L"Elarni", 0, REG_SZ,
               reinterpret_cast<const BYTE*>(command.c_str()), static_cast<DWORD>((command.size() + 1) * sizeof(wchar_t)))
               : RegDeleteValueW(key, L"Elarni");
@@ -454,8 +463,13 @@ bool FlutterWindow::OnCreate() {
   });
 
   flutter_controller_->engine()->SetNextFrameCallback([&]() {
+    if (headless_) return;
     // A start hidden in the tray shows the window only when no tray icon could bring it up.
-    if (!headless_ && (!start_hidden_ || !tray_added_)) this->Show();
+    if (!start_hidden_ || !tray_added_) { this->Show(); return; }
+    // The engine sends no state for a window Windows never showed, and Dart would take the app as
+    // shown: it would poll traffic rates for nobody.
+    SendLifecycle("AppLifecycleState.hidden");
+    lifecycle_hidden_ = true;
   });
 
   // Flutter can complete the first frame before the "show window" callback is
@@ -478,6 +492,12 @@ void FlutterWindow::OnDestroy() {
   }
 
   Win32Window::OnDestroy();
+}
+
+void FlutterWindow::SendLifecycle(const std::string& state) {
+  if (!flutter_controller_ || !flutter_controller_->engine()) return;
+  flutter_controller_->engine()->messenger()->Send("flutter/lifecycle",
+      reinterpret_cast<const uint8_t*>(state.data()), state.size());
 }
 
 void ShowAppWindow(HWND window) {
@@ -505,6 +525,12 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
     ShowWindow(hwnd, SW_HIDE);
     if (desktop_channel_) desktop_channel_->InvokeMethod("action", std::make_unique<flutter::EncodableValue>("closedToTray"));
     return 0;
+  }
+  // The first show after a start hidden in the tray. The engine counts its own view as shown but
+  // unfocused from the start, so it sends nothing for this show until focus comes.
+  if (message == WM_SHOWWINDOW && wparam && lifecycle_hidden_) {
+    lifecycle_hidden_ = false;
+    SendLifecycle("AppLifecycleState.inactive");
   }
   // Give Flutter, including plugins, an opportunity to handle window messages.
   if (flutter_controller_) {

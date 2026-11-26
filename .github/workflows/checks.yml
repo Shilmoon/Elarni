@@ -88,8 +88,7 @@ jobs:
             LD_LIBRARY_PATH=linux/flutter/ephemeral python scripts/check_report.py -- .build/linux-desktop-host-test
             python scripts/check-server-cores
             rm -rf .build/release-candidate .build/release-source .build/release-dependencies
-            # The AppImage carries the tray libraries, whose source packages it fetches; the image keeps no package lists.
-            apt-get update -qq
+            # The image keeps the source packages of the tray libraries the AppImage carries: no package archive needed.
             python scripts/check_report.py -- python scripts/package-linux --output .build/release-candidate
             python scripts/check_report.py -- python scripts/package-source --output .build/release-source
             python scripts/check_report.py -- python scripts/package-dependencies --output .build/release-dependencies

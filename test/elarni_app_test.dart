@@ -2464,6 +2464,52 @@ void main() {
     expect(row.onChanged, isNotNull);
   });
 
+  // A window started hidden in the tray draws no frames; the tray's label and
+  // its Connect and Disconnect items still follow the connection.
+  testWidgets('the tray follows a tray Connect while the window is hidden', (
+    tester,
+  ) async {
+    final statuses = <Map<Object?, Object?>>[];
+    final messenger = tester.binding.defaultBinaryMessenger;
+    messenger.setMockMethodCallHandler(DesktopIntegration.channel, (
+      call,
+    ) async {
+      if (call.method == 'getPreferences') return '{}';
+      if (call.method == 'setStatus') {
+        statuses.add(call.arguments as Map<Object?, Object?>);
+      }
+      return null;
+    });
+    addTearDown(
+      () => messenger.setMockMethodCallHandler(DesktopIntegration.channel, null),
+    );
+    final control = FakeTunnelControl();
+    await pumpApp(tester, control, windows: true);
+    expect(statuses.last, containsPair('canConnect', true));
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
+    await tester.pump();
+    const channel = DesktopIntegration.channel;
+    await messenger.handlePlatformMessage(
+      channel.name,
+      channel.codec.encodeMethodCall(const MethodCall('action', 'connect')),
+      null,
+    );
+    await tester.pump();
+    await tester.pump(const Duration(seconds: 1));
+    expect(control.connectCalls, 1);
+    expect(
+      statuses.last,
+      allOf(
+        containsPair('state', 'connected'),
+        containsPair('canConnect', false),
+        containsPair('canDisconnect', true),
+      ),
+    );
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    await tester.pumpWidget(const SizedBox());
+  });
+
   // A login item cannot tell the app how it was started on macOS.
   testWidgets('macOS has no start hidden in the tray', (tester) async {
     final control = FakeTunnelControl()

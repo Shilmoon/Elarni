@@ -22,14 +22,20 @@ import tarfile
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / 'scripts'))
 from snapshot import git, snapshot
-# deb-src and patchelf: scripts/package-linux fetches the source packages of the tray libraries the AppImage
-# carries, and points their copies at one another; run apt-get update before it, as the image keeps no lists.
+# The AppImage carries the tray libraries (scripts/package-linux: BUNDLED_LIBRARIES, from these five packages), whose
+# copies patchelf points at one another. Their exact source packages, which a release publishes beside it, are fetched
+# here with the libraries and kept in /usr/src/elarni-bundled-sources (BUNDLED_SOURCES_CACHE): the image keeps no
+# package lists, and a later update of the archive no longer offers the installed versions.
 DOCKERFILE = r"""FROM ubuntu:22.04
 ENV DEBIAN_FRONTEND=noninteractive
 RUN sed -i 's/^# deb-src /deb-src /' /etc/apt/sources.list && apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates curl git xz-utils unzip zip jq python3 file dpkg-dev build-essential iputils-ping \
     libunwind-dev clang cmake ninja-build pkg-config libgtk-3-dev libstdc++-12-dev libayatana-appindicator3-dev \
     libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev desktop-file-utils openjdk-17-jdk-headless patchelf \
+ && mkdir /usr/src/elarni-bundled-sources && cd /usr/src/elarni-bundled-sources \
+ && dpkg-query -W -f='${source:Package}=${source:Version}\n' libayatana-appindicator3-1 libayatana-indicator3-7 \
+    libayatana-ido3-0.4-0 libdbusmenu-glib4 libdbusmenu-gtk3-4 > /tmp/bundled-sources \
+ && sort -u /tmp/bundled-sources | xargs apt-get source --download-only -qq && rm /tmp/bundled-sources && cd / \
  && rm -rf /var/lib/apt/lists/* && ln -s /usr/bin/python3 /usr/local/bin/python \
  && git config --system --add safe.directory '*'
 RUN curl -fsSL https://mise.run | MISE_VERSION=v2026.9.8 MISE_INSTALL_PATH=/usr/local/bin/mise sh

@@ -13,5 +13,8 @@ ElarniCamera* elarni_camera_open(void);
 // with an error or at the end of its stream; the caller then closes it.
 GBytes* elarni_camera_frame(ElarniCamera* camera, gboolean* failed);
 void elarni_camera_close(ElarniCamera* camera);
+// The app build this module comes from (ELARNI_BUILD): the runner opens only its own build's module, as an in-place
+// upgrade replaces it under a runner that is still running.
+const char* elarni_camera_build(void);
 
 G_END_DECLS
