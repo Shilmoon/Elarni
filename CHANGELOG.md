@@ -4,6 +4,8 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
 
 ## Unreleased
 
+## 0.6.5 - 2026-11-26
+
 ### Added
 
 - **Windows and Linux: start at login hidden in the tray.** Under "Launch app at login", "Start
@@ -35,13 +37,6 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
   tray libraries (their source code is a
   separate download of each release), and without GStreamer only scanning QR codes with a
   camera is unavailable. The AppImage and the portable archive need glibc 2.34 or newer.
-- **Two dependencies with published security advisories are updated**: the packet parser of
-  the tunnel stack (etherparse 0.20.4, RUSTSEC-2026-0596) and the WebSocket library
-  (gorilla/websocket, GO-2026-6278: the mask key now comes from the system's random source).
-  No release of the WebSocket library has the fix yet, so Elarni uses the upstream commit that
-  has it, with the library's other changes since v1.5.3; among them, a WebSocket inbound
-  answers a request that is not a WebSocket upgrade with "426 Upgrade Required" instead of
-  "400 Bad Request". All platforms.
 - **A server whose network cuts transfers off no longer looks healthy.** Some hosting networks
   stop each connection after its first 16 KB or so: the quick server checks passed while pages
   never loaded. Elarni now also downloads about 100 KB through the connected server after
@@ -215,16 +210,12 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
   them. In the iPhone simulator, AES-128-GCM went from 146 to 9,115 MB/s and SHA-256 from 458
   to 3,247 MB/s; the phone itself was not measured. A Release build also compiles its packet
   path and ShadowQUIC client with full optimization.
-### Fixed
-
 - **Windows: Docker in WSL can create networks while Elarni is connected.** With WSL in mirrored
   networking mode, `docker network create` and `docker compose up` failed with "all predefined
   address pools have been fully subnetted". The tunnel's routes had no next hop, WSL showed them
   to Linux as directly connected networks, and Docker gives no network a subnet inside one. The
   routes now go through an address of the tunnel adapter's own subnet, which routes the same
   traffic and leaves Docker's address pools free.
-### Fixed
-
 - **Windows: ShadowQUIC did not connect on a network adapter with IPv6 switched off.** With
   "Internet Protocol Version 6 (TCP/IPv6)" unticked in the adapter's properties, every
   connection through a ShadowQUIC server failed at once, and the log repeated "bind socket to
@@ -233,8 +224,6 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
   server address was IPv4. When the adapter refuses that socket, the client now opens one for
   the server's address family alone. The log still shows the refused IPv6 binding, followed by
   a line saying that the client uses a socket for IPv4 only. Since 0.6.2.
-### Fixed
-
 - **A server without IPv6 no longer gets apps' IPv6 traffic through DNS answers.** With the IP
   type "Automatic" (the default for subscription profiles) Elarni's DNS handed apps IPv6
   addresses whatever the server could reach. A server without IPv6 resets such TCP connections
@@ -248,6 +237,16 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
   set in hosts, and the IP types "IPv4" and "IPv6" are not affected. This also applies on
   Windows and Linux in TUN mode. Apps that resolve names themselves (DNS over HTTPS in a
   browser) or dial IPv6 addresses directly still reach the server with IPv6.
+
+### Security
+
+- **Two dependencies with published security advisories are updated**: the packet parser of
+  the tunnel stack (etherparse 0.20.4, RUSTSEC-2026-0596) and the WebSocket library
+  (gorilla/websocket, GO-2026-6278: the mask key now comes from the system's random source).
+  No release of the WebSocket library has the fix yet, so Elarni uses the upstream commit that
+  has it, with the library's other changes since v1.5.3; among them, a WebSocket inbound
+  answers a request that is not a WebSocket upgrade with "426 Upgrade Required" instead of
+  "400 Bad Request". All platforms.
 
 ## 0.6.4 - 2026-11-23
 
