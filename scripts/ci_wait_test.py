@@ -25,19 +25,56 @@ class CiWait(unittest.TestCase):
         self.conclusion = 'success'
         self.runs = [{'databaseId': 77, 'event': 'pull_request', 'status': 'in_progress', 'headSha': 'a' * 40}]
         self.log = ''
+        # What the repository's API answers: its self-hosted runners, and the run's jobs with their runs-on labels.
+        self.runners = [{'name': 'linux-server', 'status': 'online', 'labels': [{'name': 'self-hosted'}, {'name': 'elarni-linux'}]},
+                        {'name': 'windows-vm', 'status': 'online', 'labels': [{'name': 'self-hosted'}, {'name': 'elarni-windows'}]}]
+        self.queued = []
+        self.runners_refused = False
+        # One entry per "gh run watch" that ends by its time limit, the run still going; called before the next one.
+        self.watch_timeouts = []
+        # One entry per "gh run watch" after those: an error it gives up with while the run goes on, a function for one
+        # that ends by its time limit, None for one that sees the run end.
+        self.watch_errors = []
+        self.view_refused = 0
+        self.status = 'completed'
+        self.pauses = []
         self.module.gh = self.gh
+        self.module.time.sleep = self.pauses.append
+        self.addCleanup(setattr, self.module.time, 'sleep', __import__('time').sleep)
 
-    def gh(self, *args, check=True):
+    def gh(self, *args, check=True, timeout=None):
         self.calls.append(args)
+        if args[:2] == ('run', 'watch') and self.watch_errors and not self.watch_timeouts:
+            step = self.watch_errors.pop(0)
+            self.status = 'completed' if step is None else 'in_progress'
+            if callable(step):
+                step()
+                return None, '', ''
+            if step is not None:
+                return 1, '', step
+        if args[:2] == ('run', 'view') and '--log-failed' not in args and self.view_refused:
+            self.view_refused -= 1
+            return 1, '', 'HTTP 502: Bad Gateway'
+        return (*self.answer(*args, timeout=timeout), '')
+
+    def answer(self, *args, timeout=None):
         if args[:2] == ('run', 'list'):
             return 0, json.dumps(self.runs)
         if args[:2] == ('run', 'watch'):
+            if self.watch_timeouts:
+                self.assertIsNotNone(timeout)
+                self.watch_timeouts.pop(0)()
+                return None, ''
             return (0 if self.conclusion == 'success' else 1), ''
+        if args[0] == 'api' and args[1].endswith('/actions/runners'):
+            return (1, '') if self.runners_refused else (0, json.dumps({'runners': self.runners}))
+        if args[0] == 'api' and '/actions/runs/77/jobs' in args[1]:
+            return 0, json.dumps({'jobs': self.queued})
         if args[:2] == ('run', 'view') and '--log-failed' in args:
             return 0, self.log
         if args[:2] == ('run', 'view'):
-            return 0, json.dumps({'conclusion': self.conclusion, 'attempt': 1, 'url': 'https://example.invalid/run/77',
-                                  'jobs': self.jobs})
+            return 0, json.dumps({'status': self.status, 'conclusion': self.conclusion if self.status == 'completed' else '',
+                                  'attempt': 1, 'url': 'https://example.invalid/run/77', 'jobs': self.jobs})
         raise AssertionError(f'unexpected gh call: {args}')
 
     def run_main(self, *argv):
@@ -128,6 +165,115 @@ class CiWait(unittest.TestCase):
         code, output = self.run_main('77')
         self.assertEqual(code, 1)
         self.assertIn('cancelled', output)
+
+    def queue(self, name, *labels):
+        self.queued.append({'name': name, 'status': 'queued', 'labels': list(labels)})
+
+    def offline(self, name, offline=True):
+        next(runner for runner in self.runners if runner['name'] == name)['status'] = 'offline' if offline else 'online'
+
+    def test_a_job_queued_for_an_offline_runner_ends_the_wait_with_exit_three(self):
+        self.queue('linux checks and release', 'self-hosted', 'elarni-linux')
+        self.offline('linux-server')
+        self.watch_timeouts = [lambda: None]
+        code, output = self.run_main('77')
+        self.assertEqual(code, 3)
+        self.assertIn('linux-server', output)
+        self.assertIn('linux checks and release', output)
+        self.assertIn('offline', output)
+        self.assertEqual(sum(call[:2] == ('run', 'watch') for call in self.calls), 1)
+
+    def test_a_runner_that_comes_back_before_the_next_look_does_not_end_the_wait(self):
+        self.queue('linux checks and release', 'self-hosted', 'elarni-linux')
+        self.offline('linux-server')
+        self.watch_timeouts = [lambda: self.offline('linux-server', False)]
+        code, output = self.run_main('77')
+        self.assertEqual(code, 0)
+        self.assertIn('linux-server', output)
+        self.assertIn('success  linux checks and release', output)
+
+    def test_a_runner_that_goes_offline_during_the_wait_is_seen_at_a_later_look(self):
+        self.queue('windows-2022 checks and release', 'self-hosted', 'elarni-windows')
+        self.watch_timeouts = [lambda: self.offline('windows-vm'), lambda: None]
+        code, output = self.run_main('77')
+        self.assertEqual(code, 3)
+        self.assertIn('windows-vm', output)
+
+    def test_a_job_queued_for_a_busy_or_hosted_runner_is_waited_for(self):
+        self.queue('linux checks and release', 'self-hosted', 'elarni-linux')
+        self.queue('macos-15 checks', 'macos-15')
+        self.offline('windows-vm')
+        self.watch_timeouts = [lambda: None, lambda: None]
+        code, output = self.run_main('77')
+        self.assertEqual(code, 0)
+        self.assertNotIn('offline', output)
+
+    def test_a_job_that_another_online_runner_can_take_is_waited_for(self):
+        self.runners.append({'name': 'linux-second', 'status': 'online', 'labels': [{'name': 'self-hosted'}, {'name': 'elarni-linux'}]})
+        self.queue('linux checks and release', 'self-hosted', 'elarni-linux')
+        self.offline('linux-server')
+        self.watch_timeouts = [lambda: None, lambda: None]
+        code, output = self.run_main('77')
+        self.assertEqual(code, 0)
+        self.assertNotIn('offline', output)
+
+    def test_a_job_that_is_running_on_a_runner_gone_offline_is_left_to_github(self):
+        self.queued.append({'name': 'linux checks and release', 'status': 'in_progress', 'labels': ['self-hosted', 'elarni-linux']})
+        self.offline('linux-server')
+        self.watch_timeouts = [lambda: None, lambda: None]
+        code, output = self.run_main('77')
+        self.assertEqual(code, 0)
+        self.assertNotIn('offline', output)
+
+    def test_an_account_that_may_not_list_runners_waits_as_before(self):
+        self.queue('linux checks and release', 'self-hosted', 'elarni-linux')
+        self.offline('linux-server')
+        self.runners_refused = True
+        self.watch_timeouts = [lambda: None, lambda: None]
+        code, output = self.run_main('77')
+        self.assertEqual(code, 0)
+        self.assertNotIn('offline', output)
+
+    def watches(self):
+        return sum(call[:2] == ('run', 'watch') for call in self.calls)
+
+    def test_a_watch_that_gives_up_while_the_run_goes_on_is_started_again(self):
+        self.watch_errors = ['failed to get run: HTTP 502: Bad Gateway', 'Post "https://api.github.com/graphql": EOF', None]
+        code, output = self.run_main('77')
+        self.assertEqual(code, 0)
+        self.assertEqual(self.watches(), 3)
+        self.assertIn('HTTP 502', output)
+        self.assertIn('success  linux checks and release', output)
+        self.assertEqual(len(self.pauses), 2, 'the next watch must not start at once: the failure may last')
+
+    def test_a_watch_that_keeps_giving_up_ends_the_wait_as_not_finished(self):
+        self.watch_errors = ['HTTP 401: Bad credentials'] * 50
+        code, output = self.run_main('77')
+        self.assertEqual(code, 1)
+        self.assertEqual(self.watches(), self.module.WATCH_TRIES)
+        self.assertIn('Bad credentials', output)
+        self.assertIn('not finished', output)
+
+    def test_gives_up_only_after_failures_in_a_row(self):
+        failures = ['HTTP 502'] * (self.module.WATCH_TRIES - 1)
+        self.watch_errors = [*failures, lambda: None, *failures, None]
+        code, _ = self.run_main('77')
+        self.assertEqual(code, 0)
+
+    def test_a_failed_run_whose_watch_exits_non_zero_is_not_watched_again(self):
+        self.conclusion = 'failure'
+        self.jobs = [{'databaseId': 1, 'name': 'linux checks and release', 'conclusion': 'failure'}]
+        code, _ = self.run_main('77')
+        self.assertEqual(code, 1)
+        self.assertEqual(self.watches(), 1)
+        self.assertEqual(self.pauses, [])
+
+    def test_a_run_whose_state_cannot_be_read_after_the_watch_is_watched_again(self):
+        self.watch_errors = ['HTTP 502: Bad Gateway', None]
+        self.view_refused = 1
+        code, _ = self.run_main('77')
+        self.assertEqual(code, 0)
+        self.assertEqual(self.watches(), 2)
 
 
 if __name__ == '__main__':

@@ -245,6 +245,10 @@ jobs:
           cache: ${{ runner.environment == 'github-hosted' }}
       - name: Install the Rust toolchain selected by the repository
         run: rustup show
+      - name: Free disk space on the Windows VM
+        if: runner.environment == 'self-hosted' && runner.os == 'Windows'
+        # Nothing else trims the caches the VM keeps between jobs; its 64 GB disk filled up on 2026-11-26.
+        run: python scripts/free-runner-disk --below 8
       - name: Locate Go and pub caches
         if: runner.environment == 'github-hosted'
         id: caches

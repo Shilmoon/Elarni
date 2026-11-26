@@ -1,0 +1,96 @@
+#!/usr/bin/env python3
+"""Free disk space on a self-hosted runner that keeps its caches, when the disk is nearly full.
+
+A hosted runner starts empty; a self-hosted one keeps the Go build cache, the Rust target folders and what
+tests left in the temporary folder, and nothing else trims them. With less than --below GB free this removes,
+in this order and only until enough is free: temporary files older than 6 hours, Go build cache entries unused
+for 2 days, the Rust incremental caches, and last the Rust build outputs (the next build is then a full one).
+It never fails the job: a disk that stays full is reported as a warning.
+"""
+import argparse
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+
+HOUR = 3600
+
+
+def free_gb(path):
+    return shutil.disk_usage(path).free / 1024 ** 3
+
+
+def remove_older(folder, age, keep=()):
+    """Remove the files under folder not changed for age seconds, then the folders as old that emptied."""
+    limit = time.time() - age
+    # Read before anything is removed: removing an entry makes its folder look new.
+    old = {parent for parent, _, _ in os.walk(folder) if os.lstat(parent).st_mtime < limit}
+    for parent, _, files in os.walk(folder, topdown=False):
+        for name in files:
+            path = os.path.join(parent, name)
+            try:
+                if name not in keep and os.lstat(path).st_mtime < limit:
+                    os.unlink(path)
+            except OSError:
+                pass  # in use, or gone meanwhile
+        if parent != str(folder) and parent in old:
+            try:
+                os.rmdir(parent)
+            except OSError:
+                pass  # not empty
+
+
+def rust_targets(root):
+    """Cargo's target folders in the checkout: cargo marks each with .rustc_info.json."""
+    marked = [root / 'target/.rustc_info.json', *(root / '.build').glob('**/.rustc_info.json')]
+    return [marker.parent for marker in marked if marker.is_file()]
+
+
+def go_cache():
+    try:
+        return subprocess.run(['go', 'env', 'GOCACHE'], capture_output=True, text=True, timeout=60).stdout.strip() or None
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument('--below', type=float, required=True, help='free space in GB under which caches are trimmed')
+    parser.add_argument('--root', type=Path, default=Path.cwd(), help='the checkout (default: the current folder)')
+    parser.add_argument('--temp', type=Path, default=Path(tempfile.gettempdir()), help='temporary folder (default: the system one)')
+    parser.add_argument('--go-cache', type=Path, help="Go build cache (default: go env GOCACHE)")
+    arguments = parser.parse_args(argv)
+    root = arguments.root.resolve()
+    free = free_gb(root)
+    print(f'{free:.1f} GB free on the disk of {root}', flush=True)
+    if free >= arguments.below:
+        return 0
+    cache = arguments.go_cache or go_cache()
+
+    def rust(pattern):
+        for target in rust_targets(root):
+            for path in [target] if pattern is None else target.glob(pattern):
+                shutil.rmtree(path, ignore_errors=True)
+
+    stages = [('temporary files older than 6 hours', lambda: remove_older(arguments.temp, 6 * HOUR)),
+              # Go writes trim.txt when it trims the cache itself (entries unused for 5 days, once a day).
+              ('Go build cache entries unused for 2 days', lambda: cache and remove_older(cache, 48 * HOUR, keep=('trim.txt', 'README'))),
+              ('Rust incremental caches', lambda: rust('*/incremental')),
+              ('Rust build outputs: the next build is a full one', lambda: rust(None))]
+    for name, remove in stages:
+        remove()
+        before, free = free, free_gb(root)
+        print(f'Removed {name}: {free:.1f} GB free (+{max(free - before, 0):.1f})', flush=True)
+        if free >= arguments.below:
+            return 0
+    print(f'::warning title=Runner disk::{free:.1f} GB free after trimming every cache, under the {arguments.below:g} GB this job wants')
+    return 0
+
+
+if __name__ == '__main__':
+    for stream in (sys.stdout, sys.stderr):
+        stream.reconfigure(errors='replace')
+    raise SystemExit(main())
