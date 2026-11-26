@@ -756,6 +756,7 @@
   "unsupportedTest": "Проверка не поддерживается",
   "testServerLatency": "Проверить задержку сервера",
   "serverCount": "{count, plural, one{{count} сервер} few{{count} сервера} many{{count} серверов} other{{count} сервера}}",
+  "providerMessageLine": "Провайдер: {message}",
   "runtime": "Среда выполнения",
   "failureFetch": "Ошибка загрузки",
   "failureFetchText": "Загрузка не удалась. Проверьте сеть этого устройства и повторите.",

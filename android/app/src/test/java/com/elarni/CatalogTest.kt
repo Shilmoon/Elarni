@@ -93,6 +93,51 @@ class CatalogTest {
         assertFalse("Nothing was selected before", catalog("b", "b").replacedSelection(""))
     }
 
+    // A refresh's servers still unmatched after the exact identity pair with the stored ones by the
+    // identity without the REALITY values 3x-ui rotates, when it occurs as often on both sides.
+    @Test fun stableIdentityPairsOnlyEqualCountsInFeedOrder() {
+        assertEquals("A unique identity on both sides", mapOf(0 to "a", 2 to "c"),
+            Catalog.pairByStableIdentity(listOf(0 to "A", 2 to "C"), listOf("a" to "A", "c" to "C")))
+        assertEquals("One host listed three times pairs in order", mapOf(1 to "x1", 3 to "x2", 4 to "x3"),
+            Catalog.pairByStableIdentity(listOf(1 to "X", 3 to "X", 4 to "X"), listOf("x1" to "X", "x2" to "X", "x3" to "X")))
+        assertEquals("Fewer in the refresh is left to the name stages", emptyMap<Int, String>(),
+            Catalog.pairByStableIdentity(listOf(0 to "X"), listOf("x1" to "X", "x2" to "X")))
+        assertEquals("More in the refresh too; other identities still pair", mapOf(3 to "b"),
+            Catalog.pairByStableIdentity(listOf(0 to "X", 1 to "X", 2 to "X", 3 to "B"), listOf("x1" to "X", "x2" to "X", "b" to "B")))
+        assertEquals("A key on one side only", emptyMap<Int, String>(),
+            Catalog.pairByStableIdentity(listOf(0 to "xrayProfile\nX"), listOf("t" to "telegram\nX")))
+        assertEquals(emptyMap<Int, String>(), Catalog.pairByStableIdentity(emptyList(), listOf("a" to "A")))
+    }
+
+    // The importer marks a line whose server no provider runs ("📊 10GB left", "Device limit reached"); it is a
+    // message only in a feed whose own host is public: a feed from this device or a lab lists real servers there.
+    @Test fun providerMessageLinesCountOnlyInAPublicFeed() {
+        listOf("https://sub.example/feed", "https://SUB.example:8443/feed?token=1", "http://192.0.3.1/feed", "http://10.0.0.1:2096/feed",
+            "https://[2001:db9::1]/feed", "https://127.0.0.1.example/feed", "https://localhost.example/feed",
+        ).forEach { assertTrue(it, Catalog.noticesApply(it)) }
+        listOf("http://127.0.0.1:8080/feed", "http://127.1.2.3/feed", "http://[::1]:8080/feed", "http://localhost/feed", "http://LocalHost:8080/feed",
+            "http://0.0.0.0/feed", "http://[::]/feed", "http://192.0.2.1/feed", "http://198.51.100.7/feed", "http://203.0.113.255/feed",
+            "http://[2001:db8::1]/feed", "http://[2001:DB8:ffff::1]/feed", "http://[::ffff:127.0.0.1]/feed", "http://[::ffff:192.0.2.1]/feed",
+            "not a link", "",
+        ).forEach { assertFalse(it, Catalog.noticesApply(it)) }
+    }
+
+    @Test fun providerMessageLinesOfAPublicFeedAreNoticesInOrderEachOnceAndFiveAtMost() {
+        fun line(name: String, notice: Boolean = false) = obj("format" to "xrayProfile", "name" to name,
+            "config" to obj("outbounds" to JSONArray(listOf(obj("protocol" to "socks"))))).apply { if (notice) put("notice", true) }
+        val feed = listOf(line("DE-1"), line("📊 10GB left", true), line("Device limit reached", true), line("NL-1"), line("📊 10GB left", true),
+            line("✖ Package Ended", true), line(" Renew at panel.example ", true), line("Sixth", true), line("Seventh", true))
+        val (servers, notices) = Catalog.providerNotices(feed, "https://sub.example/feed")
+        assertEquals(listOf("DE-1", "NL-1"), servers.map { it.string("name") })
+        assertEquals(listOf("📊 10GB left", "Device limit reached", "✖ Package Ended", "Renew at panel.example", "Sixth"), notices)
+        val (local, none) = Catalog.providerNotices(feed, "http://127.0.0.1:2096/feed")
+        assertEquals("A feed from this device lists servers", feed.map { it.string("name") }, local.map { it.string("name") })
+        assertEquals(emptyList<String>(), none)
+        val (alone, ended) = Catalog.providerNotices(listOf(line("✖ Package Ended", true)), "https://sub.example/feed")
+        assertEquals(emptyList<JSONObject>(), alone)
+        assertEquals(listOf("✖ Package Ended"), ended)
+    }
+
     @Test fun probeKeyNamesTheHandshakeSNI() {
         fun node(security: String, serverName: String? = null, address: String = "1.2.3.4") = obj("config" to obj("outbounds" to JSONArray(listOf(obj(
             "protocol" to "vless", "settings" to obj("vnext" to JSONArray(listOf(obj("address" to address, "port" to 443)))),

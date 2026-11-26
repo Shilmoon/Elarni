@@ -222,6 +222,10 @@ fn execute(request: &[u8]) -> (ElarniStatus, Value) {
             ELARNI_STATUS_OK,
             json!({"identity": crate::catalog::node_identity(envelope.payload).to_string()}),
         ),
+        "catalogStableIdentity" => (
+            ELARNI_STATUS_OK,
+            json!({"identity": crate::catalog::stable_node_identity(envelope.payload).to_string()}),
+        ),
         "keepShortIds" => {
             #[derive(Deserialize)]
             #[serde(deny_unknown_fields)]

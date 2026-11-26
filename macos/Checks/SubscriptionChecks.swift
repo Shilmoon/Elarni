@@ -534,6 +534,18 @@ struct SubscriptionChecks {
       try expect(uniqueNodeIDs([(key, "a"), (key, "b")]).isEmpty, "ambiguous node identity")
       try expect(uniqueNodeIDs([(key, "a")])[key] == "a", "unique node identity")
     }
+    try check("the stable identity pairs only counts equal on both sides, in feed order") {
+      try expect(pairedByStableIdentity(fresh: [(0, "A"), (2, "C")], stale: [("a", "A"), ("c", "C")]) == [0: "a", 2: "c"],
+        "a unique identity on both sides did not pair")
+      try expect(pairedByStableIdentity(fresh: [(1, "X"), (3, "X"), (4, "X")], stale: [("x1", "X"), ("x2", "X"), ("x3", "X")]) ==
+        [1: "x1", 3: "x2", 4: "x3"], "one host listed three times did not pair in feed order")
+      try expect(pairedByStableIdentity(fresh: [(0, "X")], stale: [("x1", "X"), ("x2", "X")]).isEmpty,
+        "fewer servers in the refresh were paired")
+      try expect(pairedByStableIdentity(fresh: [(0, "X"), (1, "X"), (2, "X"), (3, "B")], stale: [("x1", "X"), ("x2", "X"), ("b", "B")]) ==
+        [3: "b"], "more servers in the refresh were paired, or stopped the other identities")
+      try expect(pairedByStableIdentity(fresh: [(0, "xrayProfile\nX")], stale: [("t", "telegram\nX")]).isEmpty,
+        "different keys paired")
+    }
 
     try check("metadata handles byte counters Unix expiry and malformed fields") {
       let response = HTTPURLResponse(url: URL(string: "https://provider.example/feed")!, statusCode: 200,
@@ -817,6 +829,8 @@ struct SubscriptionChecks {
     passed += try await selectionPublicationChecks()
     passed += try await nodeEditChecks()
     passed += try await hiddenServerChecks(fixture: url)
+    passed += try await panelRefreshChecks(fixture: url)
+    passed += try await providerMessageChecks(fixture: url)
     passed += try await refreshConcurrencyChecks(fixture: url)
     passed += try await scheduledRetryChecks(fixture: url)
     passed += try await backupChecks(vless: vless, telegram: telegram, clash: clash, fixture: url)
@@ -2023,6 +2037,152 @@ struct SubscriptionChecks {
     try await mode("baseline")
     print("PASS servers hidden together stay hidden, and a selection with the selected server hides none")
     return 2
+  }
+
+  /// A 3x-ui panel picks each REALITY server's sid and sni per fetch and writes the traffic left into the remark.
+  static func panelRefreshChecks(fixture: URL) async throws -> Int {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent("elarni-panel-\(UUID())")
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let secrets = MemorySecrets()
+    let store = try SubscriptionStore(directory: directory,
+      routing: RoutingStore(directory: directory.appendingPathComponent("routing")), secretAccess: secrets.access())
+    store.publishRefresh = { [weak store] candidate in
+      guard let store else { throw SubscriptionError.invalidState }
+      _ = try store.beginPublication(candidate)
+      try store.finishPublication(candidate)
+    }
+    func mode(_ value: String) async throws {
+      _ = try await URLSession.shared.data(from: fixture.appendingPathComponent("mode")
+        .appending(queryItems: [URLQueryItem(name: "value", value: value)]))
+    }
+    func group() -> [String: Any] { (store.snapshot()["subscriptions"] as! [[String: Any]])[0] }
+    func nodes() -> [[String: Any]] { group()["nodes"] as! [[String: Any]] }
+    func hidden() -> [String] { (group()["hiddenNodes"] as! [[String: Any]]).map { $0["id"] as! String } }
+    try await mode("panel_first")
+    let id = try store.register(urlText: fixture.appendingPathComponent("feed").absoluteString)
+    var operation = try await store.refresh(id: id)
+    for _ in 0..<8 {
+      guard let challenge = operation.warning?.challenge else { break }
+      operation = try await store.refresh(id: id, challenge: challenge)
+    }
+    try expect(operation.warning == nil && nodes().map { $0["name"] as! String } == ["DE-1 9.52GB", "DE-1 9.52GB", "NL-1 9.52GB"],
+      "the panel feed did not import")
+    let ids = nodes().map { $0["id"] as! String }
+    try store.commitSelection(nodeID: ids[2])
+    _ = try store.setFavorite(nodeID: ids[0], favorite: true)
+    _ = try store.renameNode(id: ids[0], name: "My Frankfurt")
+    _ = try store.deleteNode(id: ids[1])
+    // DE-1 is listed twice, so only the stable identity, which pairs them in feed order, keeps its IDs.
+    for (value, left) in [("panel_sid", "9.47GB"), ("panel_sni", "9.41GB"), ("panel_all", "9.30GB")] {
+      try await mode(value)
+      _ = try await store.refresh(id: id)
+      try expect(nodes().map { $0["id"] as! String } == [ids[0], ids[2]] && hidden() == [ids[1]],
+        "\(value): a refresh that changed the remark with REALITY values gave servers new IDs or showed a hidden one")
+      try expect(nodes()[0]["favorite"] as? Bool == true && nodes()[0]["name"] as? String == "My Frankfurt" &&
+        nodes()[1]["name"] as? String == "NL-1 \(left)" && store.selectedNodeID() == ids[2],
+        "\(value): the favorite, the user's name, the provider's new remark or the selection was lost")
+    }
+    print("PASS a refresh that changed the remark with the REALITY sid, sni or both keeps servers, favorites, names, hidden ones and the selection")
+    // DE-1 listed once instead of twice is left to the name stages, which find no server with its new remark.
+    try await mode("panel_fewer")
+    _ = try await store.refresh(id: id)
+    let fewer = nodes().map { $0["id"] as! String }
+    try expect(fewer.count == 2 && !ids.contains(fewer[0]) && fewer[1] == ids[2] && store.selectedNodeID() == ids[2],
+      "unequal counts were paired by the stable identity, or the unique server lost its ID")
+    try await mode("baseline")
+    print("PASS unequal counts of one stable identity are left to the name stages")
+    return 2
+  }
+
+  // Providers write a message into the remark of a line no server answers (N10-07): a feed with a public host
+  // gets them as the subscription's notices, a feed served from this machine or a lab range as servers.
+  static func providerMessageChecks(fixture: URL) async throws -> Int {
+    for url in ["https://sub.example/feed", "https://SUB.example:8443/feed?token=1", "http://192.0.3.1/feed",
+                "http://10.0.0.1:2096/feed", "https://[2001:db9::1]/feed", "http://127.0.0.1.example/feed",
+                "http://localhost.example/feed"] {
+      try expect(noticesApply(feedURL: url), "\(url) does not count as a public feed")
+    }
+    for url in ["http://127.0.0.1:8080/feed", "http://127.1.2.3/feed", "http://[::1]/feed", "http://localhost/feed",
+                "http://LocalHost:2096/feed", "http://0.0.0.0/feed", "http://[::]/feed", "http://192.0.2.1/feed",
+                "http://198.51.100.7/feed", "http://203.0.113.255/feed", "http://[2001:db8::1]/feed",
+                "http://[2001:DB8:ffff::1]/feed", "http://[::ffff:127.0.0.1]/feed", "http://[::ffff:192.0.2.1]/feed",
+                "not a link", ""] {
+      try expect(!noticesApply(feedURL: url), "\(url) counts as a public feed")
+    }
+    print("PASS provider message lines count only in a feed whose own host is public")
+
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent("elarni-provider-messages-\(UUID())")
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let secrets = MemorySecrets()
+    func opened() throws -> SubscriptionStore {
+      let store = try SubscriptionStore(directory: directory,
+        routing: RoutingStore(directory: directory.appendingPathComponent("routing")), secretAccess: secrets.access())
+      store.publishRefresh = { [weak store] candidate in
+        guard let store else { throw SubscriptionError.invalidState }
+        _ = try store.beginPublication(candidate)
+        try store.finishPublication(candidate)
+      }
+      return store
+    }
+    var store = try opened()
+    let messages = ["socks://127.0.0.1:1080#📊 10GB left", "socks://192.0.2.1:1#Device limit reached", "trojan://1@1.1.1.1#✖ Package Ended"]
+    let servers = ["vless://00000000-0000-4000-8000-000000000001@de.example:443?encryption=none&security=reality&type=tcp&fp=chrome"
+      + "&pbk=FCNsCTRerqst97Y-_Pc32LnnBu0g_hw-LhJYlaeiEVs&sni=www.example.com&sid=0a1b#DE-1",
+      "trojan://fixture@nl.example:443?security=tls&sni=nl.example#NL-1"]
+    let mixed = Data([messages[0], servers[0], messages[1], servers[1], messages[2]].joined(separator: "\n").utf8)
+    let fromPublic = try store.parseImport(mixed, sourceURL: "https://sub.example/feed")
+    try expect(fromPublic.nodes.map(\.name) == ["DE-1", "NL-1"] &&
+      fromPublic.notices == ["📊 10GB left", "Device limit reached", "✖ Package Ended"],
+      "a public feed's message lines became servers, or its servers were lost")
+    let fromHere = try store.parseImport(mixed, sourceURL: "http://127.0.0.1:2096/feed")
+    try expect(fromHere.nodes.map(\.name) == ["📊 10GB left", "DE-1", "Device limit reached", "NL-1", "✖ Package Ended"] &&
+      fromHere.notices.isEmpty, "a feed served from this machine lost servers to notices")
+    let byHand = try store.parseImport(mixed)
+    try expect(byHand.nodes.count == 5 && byHand.notices.isEmpty, "links pasted by hand became notices")
+    let alone = try store.parseImport(Data(messages.joined(separator: "\n").utf8), sourceURL: "https://sub.example/feed")
+    try expect(alone.nodes.isEmpty && alone.notices.count == 3, "a public feed of messages alone failed or made servers")
+    let repeated = ["One", "Two", "One", "Three", "Four", "Five", "Six"].enumerated()
+      .map { "socks://127.0.0.1:\(1080 + $0.offset)#\($0.element)" }.joined(separator: "\n")
+    try expect(try store.parseImport(Data(repeated.utf8), sourceURL: "https://sub.example/feed").notices == ["One", "Two", "Three", "Four", "Five"],
+      "notices are not the first five in feed order, each once")
+    print("PASS a public feed's message lines are notices, never servers; elsewhere they stay servers")
+
+    // The same lines from the fixture, which this machine serves: five servers and no notices.
+    func mode(_ value: String) async throws {
+      _ = try await URLSession.shared.data(from: fixture.appendingPathComponent("mode")
+        .appending(queryItems: [URLQueryItem(name: "value", value: value)]))
+    }
+    func refreshed(_ id: String) async throws -> SubscriptionOperationResult {
+      var operation = try await store.refresh(id: id)
+      for _ in 0..<8 {
+        guard let challenge = operation.warning?.challenge else { break }
+        operation = try await store.refresh(id: id, challenge: challenge)
+      }
+      return operation
+    }
+    try await mode("provider_messages")
+    let id = try store.register(urlText: fixture.appendingPathComponent("feed").absoluteString)
+    let operation = try await refreshed(id)
+    func group() -> [String: Any] { (store.snapshot()["subscriptions"] as! [[String: Any]])[0] }
+    func names() -> [String] { (group()["nodes"] as! [[String: Any]]).map { $0["name"] as! String } }
+    try expect(operation.warning == nil && names() == ["📊 10GB left", "DE-1", "Device limit reached", "NL-1", "✖ Package Ended"] &&
+      group()["notices"] as? [String] == [], "a feed served here did not keep all five lines as servers")
+    // Saved notices load with the subscription, an older catalog without them loads too, and a refresh replaces them.
+    let catalogURL = directory.appendingPathComponent("subscriptions-v1.json")
+    var saved = try JSONSerialization.jsonObject(with: Data(contentsOf: catalogURL)) as! [String: Any]
+    var records = saved["subscriptions"] as! [[String: Any]]
+    try expect(records[0]["notices"] == nil, "a subscription without notices saved the field")
+    records[0]["notices"] = ["📊 10GB left"]
+    saved["subscriptions"] = records
+    try JSONSerialization.data(withJSONObject: saved).write(to: catalogURL, options: [.atomic])
+    store = try opened()
+    try expect(group()["notices"] as? [String] == ["📊 10GB left"] && names().count == 5, "saved notices did not load")
+    let again = try await refreshed(id)
+    try expect(again.warning == nil && group()["notices"] as? [String] == [] && names().count == 5,
+      "a refresh kept the notices of the last one")
+    try await mode("baseline")
+    print("PASS notices are saved with the subscription and replaced by each refresh")
+    return 3
   }
 
   static func selectionPublicationChecks() async throws -> Int {

@@ -1722,6 +1722,27 @@ extension _HomePages on _ElarniHomeState {
   Widget _serverSubscriptionHeader(
     SubscriptionGroup group, {
     required bool open,
+  }) => Column(
+    crossAxisAlignment: CrossAxisAlignment.stretch,
+    children: [
+      _serverSubscriptionTile(group, open: open),
+      // The provider's message lines, such as the traffic left: text only.
+      for (final notice in group.notices)
+        Padding(
+          padding: const EdgeInsets.fromLTRB(20, 0, 20, 4),
+          child: Text(
+            l10n.providerMessageLine(notice),
+            style: TextStyle(
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
+            ),
+          ),
+        ),
+    ],
+  );
+
+  Widget _serverSubscriptionTile(
+    SubscriptionGroup group, {
+    required bool open,
   }) => Semantics(
     expanded: open,
     child: ListTile(

@@ -80,25 +80,9 @@ func buildOutbound(outbound *conf.OutboundDetourConfig) (err error) {
 // Xray builds a client whose server has port 0 or a host name with a space, slash or
 // colon; no share link can name it and the profile compiler refuses it.
 func invalidServer(outbound *conf.OutboundDetourConfig) bool {
-	switch outbound.Protocol {
-	case "vless", "vmess", "trojan", "shadowsocks", "socks", "http", "hysteria", "tuic", "shadowquic":
-	default:
+	servers, ok := outboundServers(outbound)
+	if !ok {
 		return false
-	}
-	type server struct {
-		Address *conf.Address
-		Port    uint16
-	}
-	var settings struct {
-		server
-		Vnext, Servers []*server
-	}
-	if outbound.Settings == nil || json.Unmarshal(*outbound.Settings, &settings) != nil {
-		return false
-	}
-	servers := append(settings.Vnext, settings.Servers...)
-	if settings.Address != nil { // the flat form replaces the server list
-		servers = []*server{&settings.server}
 	}
 	for _, server := range servers {
 		if server == nil || server.Port == 0 || server.Address == nil {
@@ -117,6 +101,33 @@ func invalidServer(outbound *conf.OutboundDetourConfig) bool {
 		}
 	}
 	return false
+}
+
+type outboundServer struct {
+	Address *conf.Address
+	Port    uint16
+}
+
+// outboundServers lists the servers a proxy outbound names; ok is false for other protocols and
+// for settings that do not read. An entry may be nil.
+func outboundServers(outbound *conf.OutboundDetourConfig) (servers []*outboundServer, ok bool) {
+	switch outbound.Protocol {
+	case "vless", "vmess", "trojan", "shadowsocks", "socks", "http", "hysteria", "tuic", "shadowquic":
+	default:
+		return nil, false
+	}
+	var settings struct {
+		outboundServer
+		Vnext, Servers []*outboundServer
+	}
+	if outbound.Settings == nil || json.Unmarshal(*outbound.Settings, &settings) != nil {
+		return nil, false
+	}
+	servers = append(settings.Vnext, settings.Servers...)
+	if settings.Address != nil { // the flat form replaces the server list
+		servers = []*outboundServer{&settings.outboundServer}
+	}
+	return servers, true
 }
 
 var rawMessageType = reflect.TypeOf(json.RawMessage{})

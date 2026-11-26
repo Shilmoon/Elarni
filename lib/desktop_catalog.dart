@@ -596,6 +596,7 @@ final class DesktopCatalog {
             'format',
             'fallbackHosts',
             'fetchOptions',
+            'notices',
           ])
             key: source[key],
           'isLocal': source['url'] == null,
@@ -803,6 +804,36 @@ final class DesktopCatalog {
       );
       if (index >= 0) matches[i] = available.removeAt(index);
     }
+    // 3x-ui picks a REALITY server's shortId and serverName per fetch and
+    // writes the traffic left into the remark, which defeats the stages before
+    // and after this one. Without those values a still unmatched identity that
+    // occurs as often on both sides pairs in feed order; other counts are left
+    // to the name stages.
+    final unmatched = [
+      for (var i = 0; i < parsed.length; i++)
+        if (!matches.containsKey(i)) i,
+    ];
+    if (unmatched.isNotEmpty && available.isNotEmpty) {
+      String stableKey(CatalogMap node) =>
+          '${node['format']}\n${domain('catalogStableIdentity', catalogMap(node['config']))['identity']}';
+      final left = Set<CatalogMap>.identity()..addAll(available);
+      final fresh = <String, List<int>>{};
+      final stale = <String, List<CatalogMap>>{};
+      for (final i in unmatched) {
+        (fresh[stableKey(parsed[i])] ??= []).add(i);
+      }
+      for (final old in previous) {
+        if (left.contains(old)) (stale[stableKey(old)] ??= []).add(old);
+      }
+      for (final MapEntry(:key, value: positions) in fresh.entries) {
+        final olds = stale[key];
+        if (olds == null || olds.length != positions.length) continue;
+        for (var k = 0; k < positions.length; k++) {
+          matches[positions[k]] = olds[k];
+          available.remove(olds[k]);
+        }
+      }
+    }
     final parsedKeys = counts(parsed.map(logicalKey)),
         parsedNames = counts(parsed.map((item) => item['name'])),
         previousNames = counts(previous.map((item) => item['name']));
@@ -867,7 +898,9 @@ final class DesktopCatalog {
         unchanged = oldIdentity == identity(config);
       }
       result.add({
-        ...item,
+        // The importer's mark of a provider's message line is not stored.
+        for (final MapEntry(:key, :value) in item.entries)
+          if (key != 'notice') key: value,
         'id': old?['id'] ?? desktopID(),
         'config': config,
         'favorite': old?['favorite'] == true,
@@ -1093,6 +1126,44 @@ final class DesktopCatalog {
         : null;
   }
 
+  /// Whether the lines the importer marks as a provider's messages are
+  /// messages in a feed fetched from [feedURL]. A feed served from this device
+  /// or a documentation address (a test or lab feed) lists real servers
+  /// there; a host name counts as public and is not resolved.
+  static bool noticesApply(String feedURL) {
+    final host = Uri.tryParse(feedURL)?.host.toLowerCase() ?? '';
+    if (host.isEmpty || host == 'localhost') return false;
+    List<int> bytes;
+    try {
+      bytes = host.contains(':')
+          ? Uri.parseIPv6Address(host)
+          : Uri.parseIPv4Address(host);
+    } on FormatException {
+      return true;
+    }
+    if (bytes.length == 16 &&
+        bytes.take(10).every((byte) => byte == 0) &&
+        bytes[10] == 0xff &&
+        bytes[11] == 0xff)
+      bytes = bytes.sublist(12);
+    if (bytes.every((byte) => byte == 0)) return false;
+    if (bytes.length == 4) {
+      final network = bytes[0] << 16 | bytes[1] << 8 | bytes[2];
+      // 127/8, 192.0.2/24, 198.51.100/24 and 203.0.113/24.
+      return bytes[0] != 127 &&
+          !const {0xc00002, 0xc63364, 0xcb0071}.contains(network);
+    }
+    final loopback =
+        bytes.take(15).every((byte) => byte == 0) && bytes[15] == 1;
+    // 2001:db8::/32.
+    final documentation =
+        bytes[0] == 0x20 &&
+        bytes[1] == 0x01 &&
+        bytes[2] == 0x0d &&
+        bytes[3] == 0xb8;
+    return !loopback && !documentation;
+  }
+
   static bool isRoutingLink(String value) => [
     'happ://routing/',
     'incy://routing/',
@@ -1215,14 +1286,33 @@ final class DesktopCatalog {
       },
     });
     final migratedURL = imported['newSourceURL'] as String?;
+    // A line the importer marks carries a provider's message ("📊 10GB left",
+    // "Device limit reached"), not a server: the subscription shows the first
+    // five, each once.
+    var profiles = catalogList(imported['profiles']);
+    final notices = <String>[];
+    if (noticesApply(url)) {
+      for (final profile in profiles.where((item) => item['notice'] == true)) {
+        final text = (profile['name'] as String? ?? '').trim();
+        if (text.isNotEmpty && notices.length < 5 && !notices.contains(text))
+          notices.add(text);
+      }
+      profiles = [
+        for (final profile in profiles)
+          if (profile['notice'] != true) profile,
+      ];
+    }
     // Hidden servers match like the rest, and stay hidden while the provider lists them.
     final hidden = {
       for (final node in catalogList(current['hiddenNodes'] ?? [])) node['id'],
     };
-    final merged = parseNodes(imported, [
-      ...catalogList(current['nodes']),
-      ...catalogList(current['hiddenNodes'] ?? []),
-    ]);
+    // A feed of messages alone leaves the subscription without servers.
+    final merged = profiles.isEmpty && notices.isNotEmpty
+        ? <CatalogMap>[]
+        : parseNodes({...imported, 'profiles': profiles}, [
+            ...catalogList(current['nodes']),
+            ...catalogList(current['hiddenNodes'] ?? []),
+          ]);
     final nodes = [
       for (final node in merged)
         if (!hidden.contains(node['id'])) node,
@@ -1346,7 +1436,10 @@ final class DesktopCatalog {
         current['providerName'] ??
         Uri.parse(feed['url']! as String).host;
     putSource({
-      ...current,
+      // Each refresh replaces the messages; a feed without any leaves none.
+      for (final MapEntry(:key, :value) in current.entries)
+        if (key != 'notices') key: value,
+      if (notices.isNotEmpty) 'notices': notices,
       if (migratedURL != null) ...{
         'url': migratedURL,
         'shareLink': migratedURL,

@@ -80,6 +80,27 @@ class Handler(BaseHTTPRequestHandler):
                                 "reality_fp": ("e4f5", "example.org", "firefox")}.get(version, (version[len("reality_"):], "example.com", "chrome"))
                 body = ("vless://00000000-0000-4000-8000-000000000001@192.0.2.1:443?encryption=none&security=reality"
                         f"&type=tcp&fp={fp}&pbk=FCNsCTRerqst97Y-_Pc32LnnBu0g_hw-LhJYlaeiEVs&sni={sni}&sid={sid}#Test\n").encode()
+            elif version.startswith("panel_"):
+                # A 3x-ui panel picks the REALITY sid and sni per fetch and writes the traffic left into the remark.
+                # DE-1 is one host listed twice; panel_fewer lists it once.
+                sid, sni, left = {"panel_first": ("a1b2", "www.example.com", "9.52GB"),
+                                  "panel_sid": ("e5f6", "www.example.com", "9.47GB"),
+                                  "panel_sni": ("e5f6", "cdn.example.org", "9.41GB"),
+                                  "panel_all": ("0c1d", "www.example.net", "9.30GB"),
+                                  "panel_fewer": ("7a8b", "www.example.com", "9.20GB")}[version]
+                servers = [("DE-1", 11), ("DE-1", 11), ("NL-1", 12)][1 if version == "panel_fewer" else 0:]
+                body = "".join(f"vless://00000000-0000-4000-8000-0000000000{host}@192.0.2.{host}:443?encryption=none"
+                               "&security=reality&type=tcp&fp=chrome&pbk=FCNsCTRerqst97Y-_Pc32LnnBu0g_hw-LhJYlaeiEVs"
+                               f"&sni={sni}&sid={sid}0{i}#{name}%20{left}\n" for i, (name, host) in enumerate(servers)).encode()
+            elif version == "provider_messages":
+                # Three lines that carry a provider's messages around two servers. This feed is served from
+                # this machine, so all five stay servers.
+                body = ("socks://127.0.0.1:1080#📊 10GB left\n"
+                        "vless://00000000-0000-4000-8000-000000000001@de.example:443?encryption=none&security=reality"
+                        "&type=tcp&fp=chrome&pbk=FCNsCTRerqst97Y-_Pc32LnnBu0g_hw-LhJYlaeiEVs&sni=www.example.com&sid=0a1b#DE-1\n"
+                        "socks://192.0.2.1:1#Device limit reached\n"
+                        "trojan://fixture@nl.example:443?security=tls&sni=nl.example#NL-1\n"
+                        "trojan://1@1.1.1.1#✖ Package Ended\n").encode()
             elif version in ("full_profile", "system_dns"):
                 body = json.dumps({"remarks": "Test", **({"dns": {"servers": ["localhost"]}} if version == "system_dns" else {}), "outbounds": [{
                     "tag": "proxy", "protocol": "vless",

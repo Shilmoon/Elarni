@@ -885,6 +885,97 @@ func TestSkippedTextLinesAreNotNamedAsSchemes(t *testing.T) {
 	}
 }
 
+// Providers write a message into the remark of a line whose server cannot be theirs: a loopback,
+// unspecified, documentation or well-known resolver address, or port 0 or 1. Such a profile is
+// marked, so a subscription can show it as a notice instead of a server.
+func TestProviderMessageLinesAreMarkedAsNotices(t *testing.T) {
+	const id = "00000000-0000-4000-8000-000000000001"
+	notice := func(text string) bool {
+		t.Helper()
+		result, err := ImportClientProfiles(text)
+		if err != nil || len(result.Profiles) != 1 {
+			t.Fatalf("%s: %+v, %v", text, result, err)
+		}
+		encoded, err := json.Marshal(result.Profiles[0])
+		if err != nil {
+			t.Fatal(err)
+		}
+		if marked := strings.Contains(string(encoded), `"notice":true`); marked != result.Profiles[0].Notice {
+			t.Errorf("%s: encoded as %s", text, encoded)
+		}
+		if !result.Profiles[0].Notice && strings.Contains(string(encoded), `"notice"`) {
+			t.Errorf("%s: an unmarked profile carries the field: %s", text, encoded)
+		}
+		return result.Profiles[0].Notice
+	}
+	// A Trojan server at 1.1.1.1 with TLS that names no serverName, and the given transport.
+	cdn := func(stream string) string {
+		return `{"outbounds":[{"protocol":"trojan","settings":{"servers":[{"address":"1.1.1.1","port":443,"password":"pw"}]},` +
+			`"streamSettings":{"security":"tls",` + stream + `}}]}`
+	}
+	for _, line := range []string{
+		// The three lines of the report.
+		"socks://127.0.0.1:1080#📊 10GB left",
+		"socks://192.0.2.1:1#Device limit reached",
+		"trojan://1@1.1.1.1#✖ Package Ended",
+		"vless://" + id + "@0.0.0.0:443?encryption=none&security=tls&sni=a.example#Expires 2026-12-01",
+		"vless://" + id + "@[::1]:443?encryption=none&security=none#Renew",
+		"vless://" + id + "@[2001:db8::7]:443?encryption=none&security=tls&sni=a.example#Renew",
+		"vless://" + id + "@198.51.100.9:443?encryption=none&security=tls&sni=a.example#Renew",
+		"vless://" + id + "@203.0.113.9:443?encryption=none&security=tls&sni=a.example#Renew",
+		"trojan://pw@server.example:1?security=tls&sni=a.example#Renew",
+		// A resolver address that names no host, or only itself.
+		"socks://8.8.8.8:1080#Notice",
+		"trojan://pw@1.0.0.1:443?security=tls#Renew",
+		"trojan://pw@8.8.4.4:443?security=tls&sni=8.8.4.4#Renew",
+		"vless://" + id + "@1.1.1.1:443?encryption=none&security=tls&type=ws#Renew",
+		`{"outbounds":[{"protocol":"socks","settings":{"servers":[{"address":"::ffff:127.0.0.1","port":1080}]}}]}`,
+		// localhost is loopback in any case.
+		"socks://localhost:1080#📊 10GB left",
+		"socks://LocalHost:1080#📊 10GB left",
+	} {
+		if !notice(line) {
+			t.Errorf("%s: not marked", line)
+		}
+	}
+	for _, line := range []string{
+		"vless://" + id + "@server.example:443?encryption=none&security=reality&type=tcp&fp=chrome" +
+			"&pbk=FCNsCTRerqst97Y-_Pc32LnnBu0g_hw-LhJYlaeiEVs&sni=www.example.com&sid=0a1b#DE-1 9.52GB",
+		"vless://" + id + "@10.0.0.1:443?encryption=none&security=none#Lan",
+		"trojan://pw@1.1.1.2:443?security=tls&sni=a.example#Near a resolver",
+		"vless://" + id + "@192.0.3.1:443?encryption=none&security=tls&sni=a.example#Past the range",
+		"socks://127.0.0.1.example:1080#A name",
+		"socks://localhost.example:1080#A name",
+		// 1.1.1.1 and 1.0.0.1 are also Cloudflare's edge: a server behind it names its own host.
+		"trojan://pw@1.0.0.1:443?security=tls&sni=a.example#Renew",
+		"trojan://pw@8.8.8.8:443?security=tls&sni=a.example#Renew",
+		"trojan://pw@8.8.4.4:443?security=tls&sni=a.example#Renew",
+		"vless://" + id + "@1.1.1.1:443?encryption=none&security=tls&type=ws&host=cdn.example&sni=cdn.example#CDN",
+		"vless://" + id + "@1.1.1.1:443?encryption=none&security=tls&type=ws&host=cdn.example#CDN",
+		"vless://" + id + "@1.1.1.1:443?encryption=none&security=reality&type=tcp&fp=chrome" +
+			"&pbk=FCNsCTRerqst97Y-_Pc32LnnBu0g_hw-LhJYlaeiEVs&sni=cdn.example&sid=0a1b#CDN",
+		// The host header alone, without TLS.
+		`{"outbounds":[{"protocol":"vmess","settings":{"vnext":[{"address":"1.1.1.1","port":80,"users":[{"id":"` + id + `"}]}]},` +
+			`"streamSettings":{"network":"ws","wsSettings":{"host":"cdn.example"}}}]}`,
+		cdn(`"network":"ws","wsSettings":{"headers":{"Host":"cdn.example"}}`),
+		cdn(`"network":"httpupgrade","httpupgradeSettings":{"host":"cdn.example"}`),
+		cdn(`"network":"xhttp","xhttpSettings":{"host":"cdn.example"}`),
+		cdn(`"network":"splithttp","splithttpSettings":{"host":"cdn.example"}`),
+		cdn(`"network":"grpc","grpcSettings":{"authority":"cdn.example","serviceName":"s"}`),
+		cdn(`"network":"tcp","tcpSettings":{"header":{"type":"http","request":{"headers":{"Host":["cdn.example"]}}}}`),
+		cdn(`"network":"raw","rawSettings":{"header":{"type":"http","request":{"headers":{"host":"cdn.example"}}}}`),
+		// One real server among them makes the profile a server.
+		`{"outbounds":[{"protocol":"socks","settings":{"servers":[{"address":"127.0.0.1","port":1080}]}},` +
+			`{"protocol":"socks","settings":{"servers":[{"address":"server.example","port":1080}]}}]}`,
+		// No server at all is no notice either.
+		`{"outbounds":[{"protocol":"freedom"}]}`,
+	} {
+		if notice(line) {
+			t.Errorf("%s: marked as a notice", line)
+		}
+	}
+}
+
 // AmneziaVPN fills the DNS placeholders from its own settings (1.1.1.1 and 1.0.0.1 by default)
 // when a key names no usable dns1 or dns2 (NativeServerConfig::getDnsPair).
 func TestAmneziaVPNKeyWithoutDNSUsesAmneziaDefaults(t *testing.T) {
