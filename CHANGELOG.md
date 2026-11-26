@@ -4,6 +4,15 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
 
 ## Unreleased
 
+### Fixed
+
+- For contributors: the TUIC test "stalled downloads leave the connection usable" no longer fails on a
+  slow runner (four Windows runs from 2026-11-18 to 11-26, each with "a fresh download got 348920
+  bytes"). It waited one second for twelve stalled downloads to fill and then gave a fresh one five
+  seconds for a megabyte; when the link was slow, the twelve were still filling and took most of it.
+  The test now waits until the server has sent all the stalled downloads may hold, and stops when
+  the server sends nothing for ten seconds.
+
 ## 0.6.5 - 2026-11-26
 
 ### Added
