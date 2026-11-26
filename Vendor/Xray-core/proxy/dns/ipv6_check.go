@@ -73,6 +73,9 @@ type ipv6Check struct {
 	ctx     context.Context
 	cancel  context.CancelFunc
 	unwatch func()
+	// probes counts the dials of answers that are still running: it returns at the first answer,
+	// so the others end on their own
+	probes sync.WaitGroup
 
 	mu sync.Mutex
 	// by inbound tag: routing rules tell inbounds apart
@@ -290,7 +293,11 @@ func (c *ipv6Check) answers(tag string, dests []net.Destination) bool {
 	defer cancel()
 	results := make(chan bool, len(dests))
 	for _, dest := range dests {
-		go func() { results <- c.answered(ctx, tag, dest) }()
+		c.probes.Add(1)
+		go func() {
+			defer c.probes.Done()
+			results <- c.answered(ctx, tag, dest)
+		}()
 	}
 	for range dests {
 		if <-results {

@@ -119,6 +119,7 @@ func settled(t *testing.T, c *ipv6Check, tag string) ipv6State {
 		if r != nil && !r.running && !r.checked.IsZero() {
 			state := r.state
 			c.mu.Unlock()
+			c.probes.Wait() // the dials it did not wait for are counted too
 			return state
 		}
 		c.mu.Unlock()
@@ -170,9 +171,12 @@ func TestIPv6CheckTellsAServerWithoutIPv6FromEveryOtherFailure(t *testing.T) {
 		}, ipv6Alive, 2},
 	} {
 		route := &fakeRoute{meets: c.meets}
-		if got := testIPv6Check(t, route).check("apps"); got != c.want {
+		check := testIPv6Check(t, route)
+		if got := check.check("apps"); got != c.want {
 			t.Errorf("%s: IPv6 is %v, want %v", c.name, got, c.want)
 		}
+		// check returns at the first address that answers; the other dial may start after that
+		check.probes.Wait()
 		if dials := route.dialed(testV4a) + route.dialed(testV4b); dials != c.v4Dials {
 			t.Errorf("%s: the IPv4 addresses were dialed %d times, want %d", c.name, dials, c.v4Dials)
 		}
