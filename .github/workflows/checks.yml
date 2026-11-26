@@ -97,11 +97,20 @@ jobs:
         # Android builds the Go core, the Rust domain and its own sources; other changes cannot break it.
         # Branches skip it when none of those changed since main; main and manual runs always build.
         # The emulator acceptance (about 20 minutes) runs only on main and manual runs: dispatch the workflow to try a branch.
+        # A branch that holds main's tip is merged as the tree its dispatched run tested, so main does not repeat the
+        # acceptance for a tree that already passed it on this runner (a file per tree, written below).
         id: android
         run: |
           main=false
           if [ "$GITHUB_REF" = refs/heads/main ] || [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then main=true; fi
-          echo emulators=$main >> "$GITHUB_OUTPUT"
+          emulators=$main
+          passed="${XDG_CACHE_HOME:-$HOME/.cache}/elarni-ci/emulators-passed/$(git rev-parse 'HEAD^{tree}')"
+          echo "passed=$passed" >> "$GITHUB_OUTPUT"
+          if [ "$GITHUB_EVENT_NAME" = push ] && [ -e "$passed" ]; then
+            echo "::notice::The emulator acceptance already passed on this tree ($(cat "$passed")); not repeated"
+            emulators=false
+          fi
+          echo emulators=$emulators >> "$GITHUB_OUTPUT"
           if [ $main = true ] ||
              git diff --name-only "$(git merge-base origin/main HEAD)" HEAD | grep -E \
                '^(android/|Vendor/|native/|include/|go\.work|Cargo\.|rust-toolchain\.toml|\.github/workflows/|scripts/(check-android|build-android-native|prepare-android-linux|tuic_fixture\.py|shadowquic_fixture\.py|check-linux-container|check_report\.py)$)' > /dev/null
@@ -129,6 +138,15 @@ jobs:
             set -e
             python scripts/prepare-android-linux --emulators
             python scripts/check-android --avd Elarni_API_36_16K --avd Elarni_API_30 --avd Elarni_API_30'
+      - name: Remember that this tree passed the emulators
+        if: steps.android.outputs.emulators == 'true' && runner.environment == 'self-hosted'
+        env:
+          PASSED: ${{ steps.android.outputs.passed }}
+        run: |
+          mkdir -p "$(dirname "$PASSED")"
+          echo "run $GITHUB_RUN_ID of $GITHUB_SHA" > "$PASSED"
+          # A merge follows its dispatched run within days.
+          find "$(dirname "$PASSED")" -type f -mtime +30 -delete
       # Release builds come from release.yml on GitHub-hosted runners; these candidates are for testing main.
       - name: Retain candidates (not production releases)
         if: github.event_name != 'pull_request'

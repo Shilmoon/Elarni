@@ -16,6 +16,9 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
   test that failed in its suite and passed when rerun alone. The test is still reported as
   `FLAKY`, the CI run's summary names it, and `scripts/flaky-report` ranks it. A test that fails
   again, a crash or a suite that ran too few tests fails the run as before.
+- For contributors: `main` does not repeat the Android emulator acceptance (about 20 minutes on
+  the one Linux runner) for files that already passed it in a manually started run of the
+  branch. The runner keeps a record per tree.
 
 ## 0.6.5 - 2026-11-26
 
