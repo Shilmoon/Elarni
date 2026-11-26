@@ -93,7 +93,8 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
 - **The "Firefox" fingerprint failed with "invalid server key share" against servers that pick
   the P-256 key exchange**; uTLS now keeps a key for each share the hello offers.
 - **AmneziaWG no longer loses a handshake retry or a keepalive timer change.** It moves to
-  amneziawg-go v3.1.20261116, and a profile that names Jmin without Jmax still connects.
+  amneziawg-go v3.1.20261116, and a profile that names Jmin without Jmax still connects: it now
+  imports, also with junk packets (Jc above 0), and is stored with Jmax equal to Jmin.
   WireGuard and AmneziaWG take gVisor's fix for TCP connections that retried a busy connection
   without yielding the processor.
 - **The tunnel could stop carrying traffic after one read error of its network adapter**, while
@@ -101,7 +102,8 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
   when the tunnel stops or its adapter is gone. An error that repeats is logged once a minute,
   with how many times it came.
 - **WireGuard could keep a CPU core busy while its socket kept failing.** It now waits longer
-  after each error, up to a second, instead of retrying at once.
+  after each error, up to a second, instead of retrying at once. An error that only reports a
+  packet the server did not take, as while it is briefly down, does not delay its next answer.
 - **Hysteria2 uses the upload speed you set, as the official client does.** Brutal congestion
   control starts whenever the up speed is set, capped by the server's limit if it has one; it
   needed a server limit too. "100 mbps" now means 100,000,000 bits per second, not 104,857,600.
@@ -203,7 +205,8 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
   `Encrypt-Tag` header and `?key=` in its link) failed as an invalid or unsupported feed; the
   message now says it is encrypted for another app and to ask the provider for another link.
 - **WireGuard and AmneziaWG carry traffic again right after the device wakes**, instead of
-  after about 15 s: a sleep of a minute or more renews the keys the server may have dropped.
+  after about 15 s: after a sleep of a minute or more since the last key exchange, the next
+  packet starts a new one. A tunnel that sends nothing does nothing on waking.
   Names with many addresses resolve again in apps that take small DNS answers or ask over TCP,
   a name without an IPv6 address no longer waits for the next DNS server, and on the Mac and
   iPhone a probe to the tunnel's own addresses ends at once instead of hanging until its timeout.

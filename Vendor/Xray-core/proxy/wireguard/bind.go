@@ -71,12 +71,29 @@ const (
 	receiveRetryMax = time.Second
 )
 
+// perPacketError reports whether a read error answers one datagram sent before, as the error of an
+// ICMP port unreachable does, instead of the socket failing: the next read may well return the
+// peer's reply, so it comes at once (Elarni).
+func perPacketError(err error) bool {
+	for _, e := range perPacketErrors {
+		if goerrors.Is(err, e) {
+			return true
+		}
+	}
+	return false
+}
+
 type bind struct {
 	resolveFunc    func(host string) (net.IP, error)
 	listenFunc     func() (net.PacketConn, error)
 	downFunc       func() error
 	reserved       []byte
 	preserveHeader bool
+	// receiveRetry bounds the waits between reads of a socket that keeps failing, receiveRetryMin
+	// and receiveRetryMax when unset; tests set others.
+	receiveRetry retry.Backoff
+	// sleep, set before the device starts, checks for sleep as a client's bind sends (sleep.go).
+	sleep *sleepWatch
 
 	net.PacketConn
 	batch   *ipv4.PacketConn
@@ -110,11 +127,15 @@ func (b *bind) Open(port uint16) (fns []conn.ReceiveFunc, actualPort uint16, err
 
 	// One goroutine calls each receive function, and the peer's address rarely changes.
 	var last *conn.StdNetEndpoint
+	retryBounds := b.receiveRetry
+	if retryBounds.Min == 0 && retryBounds.Max == 0 {
+		retryBounds = retry.Backoff{Min: receiveRetryMin, Max: receiveRetryMax}
+	}
 	return []conn.ReceiveFunc{
 		func(bufs [][]byte, sizes []int, eps []conn.Endpoint) (n int, err error) {
 			// Elarni: a socket error that repeats at once (a dead interface, a mask that keeps
 			// failing) spun this loop on a whole core and wrote a log line per turn.
-			backoff := retry.Backoff{Min: receiveRetryMin, Max: receiveRetryMax}
+			backoff := retryBounds
 			for {
 				var addr net.Addr
 				n = 1
@@ -142,6 +163,9 @@ func (b *bind) Open(port uint16) (fns []conn.ReceiveFunc, actualPort uint16, err
 						return 0, net.ErrClosed
 					}
 					errors.LogErrorInner(context.Background(), err, "bind recv err")
+					if perPacketError(err) {
+						continue
+					}
 					if !backoff.Wait(ch) {
 						return 0, net.ErrClosed
 					}
@@ -192,6 +216,9 @@ func (b *bind) Send(bufs [][]byte, ep conn.Endpoint) (err error) {
 
 	if c == nil {
 		return syscall.EAFNOSUPPORT
+	}
+	if b.sleep != nil {
+		b.sleep.sending()
 	}
 
 	addr := net.UDPAddrFromAddrPort(ep.(*conn.StdNetEndpoint).AddrPort)

@@ -3,8 +3,6 @@ package wireguard
 import (
 	"bytes"
 	"context"
-	"crypto/ecdh"
-	"crypto/rand"
 	"encoding/hex"
 	"fmt"
 	"io"
@@ -15,75 +13,31 @@ import (
 	"testing"
 	"time"
 
-	awg "github.com/amnezia-vpn/amneziawg-go/v3/device"
 	"github.com/miekg/dns"
-	"github.com/xtls/xray-core/transport/internet"
-	"golang.zx2c4.com/wireguard/device"
 	"gvisor.dev/gvisor/pkg/tcpip/adapters/gonet"
 )
 
-// Uses fresh keys, loopback wire sockets and isolated gVisor stacks. No OS VPN,
-// production peer, persistent identity or root privileges are involved.
+// Both engines carry TCP, UDP and tunnel DNS over IPv4 and IPv6 between loopback peers, again after
+// the device went down, and not after the handler closed.
 func TestWireGuardEnginesCarryTCPAndUDP(t *testing.T) {
 	for _, amnezia := range []bool{false, true} {
 		t.Run(fmt.Sprintf("amnezia=%t", amnezia), func(t *testing.T) {
-			clientKey, err := ecdh.X25519().GenerateKey(rand.Reader)
-			if err != nil {
-				t.Fatal(err)
-			}
-			serverKey, err := ecdh.X25519().GenerateKey(rand.Reader)
-			if err != nil {
-				t.Fatal(err)
-			}
-			clientTun, clientNet, _, err := CreateNetTUN([]netip.Addr{netip.MustParseAddr("10.29.0.2"), netip.MustParseAddr("fd29::2")}, []netip.Addr{netip.MustParseAddr("10.29.0.1")}, 1280, true)
-			if err != nil {
-				t.Fatal(err)
-			}
-			serverTun, _, serverStack, err := CreateNetTUN([]netip.Addr{netip.MustParseAddr("10.29.0.1"), netip.MustParseAddr("fd29::1")}, nil, 1280, true)
-			if err != nil {
-				clientTun.Close()
-				t.Fatal(err)
-			}
-			serverSocket, err := net.ListenPacket("udp4", "127.0.0.1:0")
-			if err != nil {
-				clientTun.Close()
-				serverTun.Close()
-				t.Fatal(err)
-			}
-			serverBind := &bind{preserveHeader: amnezia, listenFunc: func() (net.PacketConn, error) { return serverSocket, nil }}
-			var client, server tunnelDevice
-			obf := ""
-			if amnezia {
-				logger := &awg.Logger{Verbosef: func(string, ...any) {}, Errorf: t.Logf}
-				server = amneziaDevice{Device: awg.NewDevice(adaptAmneziaTUN(serverTun), &amneziaBind{serverBind}, logger)}
-				// Full-width headers catch the reserved-byte corruption regression.
-				obf = "jc=4\njmin=40\njmax=80\ns1=16\ns2=17\ns3=18\ns4=19\nh1=100000-100100\nh2=200000-200100\nh3=300000-300100\nh4=400000-400100\nheader_protection_key=" + hex.EncodeToString(bytes.Repeat([]byte{0x5a}, 32)) + "\ncontent_padding_addition=4-8\nrandom_trailers=true\ndisable_cookies=true\n"
-			} else {
-				logger := &device.Logger{Verbosef: func(string, ...any) {}, Errorf: t.Logf}
-				server = wireguardDevice{Device: device.NewDevice(serverTun, serverBind, logger)}
-			}
-			defer serverSocket.Close()
-			defer server.Close()
-			if err := server.IpcSet("private_key=" + hex.EncodeToString(serverKey.Bytes()) + "\n" + obf + "public_key=" + hex.EncodeToString(clientKey.PublicKey().Bytes()) + "\nallowed_ip=10.29.0.2/32\nallowed_ip=fd29::2/128\n"); err != nil {
-				t.Fatal(err)
-			}
 			settings := map[string]string{}
-			for _, line := range strings.Split(obf, "\n") {
-				if key, value, ok := strings.Cut(line, "="); ok {
-					settings[key] = value
+			if amnezia {
+				// Full-width headers catch the reserved-byte corruption regression.
+				obf := "jc=4\njmin=40\njmax=80\ns1=16\ns2=17\ns3=18\ns4=19\nh1=100000-100100\nh2=200000-200100\nh3=300000-300100\nh4=400000-400100\nheader_protection_key=" + hex.EncodeToString(bytes.Repeat([]byte{0x5a}, 32)) + "\ncontent_padding_addition=4-8\nrandom_trailers=true\ndisable_cookies=true\n"
+				for _, line := range strings.Split(obf, "\n") {
+					if key, value, ok := strings.Cut(line, "="); ok {
+						settings[key] = value
+					}
 				}
 			}
-			handler := &Handler{conf: &DeviceConfig{SecretKey: hex.EncodeToString(clientKey.Bytes()), Amnezia: amnezia, AmneziaSettings: settings,
-				Peers: []*PeerConfig{{PublicKey: hex.EncodeToString(serverKey.PublicKey().Bytes()), Endpoint: serverSocket.LocalAddr().String(), AllowedIps: []string{"0.0.0.0/0", "::/0"}}}},
-				tun: clientTun, tnet: clientNet, streamSettings: &internet.MemoryStreamConfig{}}
-			defer handler.Close()
+			f := newTunnelFixture(t, fixtureOptions{amnezia: amnezia, settings: settings})
+			handler, clientNet, serverStack := f.handler, f.clientNet, f.serverStack
 			if err := handler.init(context.Background()); err != nil {
 				t.Fatal(err)
 			}
-			client = handler.dev
-			if err := server.Up(); err != nil {
-				t.Fatal(err)
-			}
+			client := handler.dev
 			if err := client.Up(); err != nil {
 				t.Fatal(err)
 			}
@@ -188,99 +142,6 @@ func TestWireGuardEnginesCarryTCPAndUDP(t *testing.T) {
 			if err := handler.init(context.Background()); err == nil {
 				t.Fatal("closed WireGuard handler restarted")
 			}
-		})
-	}
-}
-
-// Regression: amneziawg-go v3.1.20261116 refuses Jmin above Jmax and counts a missing Jmax as 0,
-// so a stored profile that names only Jmin (no junk packets, as import accepts) failed to connect.
-func TestAmneziaJminWithoutJmaxStartsTheDevice(t *testing.T) {
-	for _, test := range []struct {
-		settings map[string]string
-		jmax     string
-	}{
-		{map[string]string{"jmin": "40"}, "40"},
-		{map[string]string{"jmin": "40", "jc": "0"}, "40"},
-		{map[string]string{"jc": "2", "jmin": "10", "jmax": "20"}, "20"}, // a named Jmax is kept
-	} {
-		t.Run(fmt.Sprint(test.settings), func(t *testing.T) {
-			clientKey, err := ecdh.X25519().GenerateKey(rand.Reader)
-			if err != nil {
-				t.Fatal(err)
-			}
-			serverKey, err := ecdh.X25519().GenerateKey(rand.Reader)
-			if err != nil {
-				t.Fatal(err)
-			}
-			clientTun, clientNet, _, err := CreateNetTUN([]netip.Addr{netip.MustParseAddr("10.29.0.2")}, nil, 1280, true)
-			if err != nil {
-				t.Fatal(err)
-			}
-			serverTun, _, serverStack, err := CreateNetTUN([]netip.Addr{netip.MustParseAddr("10.29.0.1")}, nil, 1280, true)
-			if err != nil {
-				clientTun.Close()
-				t.Fatal(err)
-			}
-			serverSocket, err := net.ListenPacket("udp4", "127.0.0.1:0")
-			if err != nil {
-				clientTun.Close()
-				serverTun.Close()
-				t.Fatal(err)
-			}
-			// Junk sizes are the sender's own: a peer without them still talks to this client.
-			serverBind := &bind{preserveHeader: true, listenFunc: func() (net.PacketConn, error) { return serverSocket, nil }}
-			server := awg.NewDevice(adaptAmneziaTUN(serverTun), &amneziaBind{serverBind}, &awg.Logger{Verbosef: func(string, ...any) {}, Errorf: t.Logf})
-			defer serverSocket.Close()
-			defer server.Close()
-			if err := server.IpcSet("private_key=" + hex.EncodeToString(serverKey.Bytes()) + "\npublic_key=" + hex.EncodeToString(clientKey.PublicKey().Bytes()) + "\nallowed_ip=10.29.0.2/32\n"); err != nil {
-				t.Fatal(err)
-			}
-			if err := server.Up(); err != nil {
-				t.Fatal(err)
-			}
-			handler := &Handler{conf: &DeviceConfig{SecretKey: hex.EncodeToString(clientKey.Bytes()), Amnezia: true, AmneziaSettings: test.settings,
-				Peers: []*PeerConfig{{PublicKey: hex.EncodeToString(serverKey.PublicKey().Bytes()), Endpoint: serverSocket.LocalAddr().String(), AllowedIps: []string{"0.0.0.0/0"}}}},
-				tun: clientTun, tnet: clientNet, streamSettings: &internet.MemoryStreamConfig{}}
-			defer handler.Close()
-			if err := handler.init(context.Background()); err != nil {
-				t.Fatalf("the AmneziaWG device refused the profile: %v", err)
-			}
-			state, err := handler.dev.(amneziaDevice).IpcGet()
-			if err != nil {
-				t.Fatal(err)
-			}
-			var junk []string
-			for _, line := range strings.Split(state, "\n") {
-				if strings.HasPrefix(line, "j") {
-					junk = append(junk, line)
-				}
-			}
-			if !slices.Contains(junk, "jmax="+test.jmax) {
-				t.Fatalf("device runs with junk settings %v, want jmax=%s", junk, test.jmax)
-			}
-			remote := netip.MustParseAddrPort("10.29.0.1:18184")
-			full, family := convertToFullAddr(remote)
-			listener, err := gonet.ListenTCP(serverStack, full, family)
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer listener.Close()
-			go func() {
-				conn, err := listener.Accept()
-				if err != nil {
-					return
-				}
-				defer conn.Close()
-				conn.SetDeadline(time.Now().Add(10 * time.Second))
-				io.Copy(conn, conn)
-			}()
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			connection, err := clientNet.DialContextTCPAddrPort(ctx, remote)
-			cancel()
-			if err != nil {
-				t.Fatal(err)
-			}
-			checkEcho(t, connection)
 		})
 	}
 }
