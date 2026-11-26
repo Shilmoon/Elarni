@@ -79,7 +79,7 @@ func (c *noiseConn) buildSegment(seg *Segment) []byte {
 		common.Must2(rand.Read(b))
 		return b
 	default:
-		size := crypto.RandBetween(seg.MinSize, seg.MaxSize+1)
+		size := crypto.RandBetween(seg.MinSize, seg.MaxSize)
 		if size <= 0 {
 			return nil
 		}

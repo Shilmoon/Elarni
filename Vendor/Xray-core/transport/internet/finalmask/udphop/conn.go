@@ -107,14 +107,14 @@ func (c *udpHopConn) closed() bool {
 }
 
 func (c *udpHopConn) run() {
-	ticker := time.NewTicker(time.Second * time.Duration(crypto.RandBetween(c.intervalMin, c.intervalMax+1)))
+	ticker := time.NewTicker(time.Second * time.Duration(crypto.RandBetween(c.intervalMin, c.intervalMax)))
 	defer ticker.Stop()
 	for {
 		select {
 		case <-c.closeCh:
 			return
 		case <-ticker.C:
-			ticker.Reset(time.Second * time.Duration(crypto.RandBetween(c.intervalMin, c.intervalMax+1)))
+			ticker.Reset(time.Second * time.Duration(crypto.RandBetween(c.intervalMin, c.intervalMax)))
 			c.hop()
 		}
 	}

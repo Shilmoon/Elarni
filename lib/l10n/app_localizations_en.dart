@@ -172,6 +172,14 @@ class AppLocalizationsEn extends AppLocalizations {
   String get issueVpnFirewallUnavailable => 'The VPN firewall tool is missing.';
 
   @override
+  String get issueWintunFailedRemedy =>
+      'Antivirus software or a device installation policy can cause this. Reinstall Elarni, or use System proxy mode.';
+
+  @override
+  String get issueWintunFailed =>
+      'The Windows network driver (Wintun) could not be loaded, or its network adapter could not be created.';
+
+  @override
   String get issueDisconnectUnconfirmedRemedy =>
       'Refresh status before reconnecting, or use Repair VPN setup.';
 
@@ -2720,6 +2728,14 @@ class AppLocalizationsEn extends AppLocalizations {
   @override
   String failureLinkRemovedText(String provider) {
     return '$provider removed or changed this link. Ask the provider for a new one.';
+  }
+
+  @override
+  String get failureEncrypted => 'Encrypted for another app';
+
+  @override
+  String failureEncryptedText(String provider) {
+    return '$provider encrypted this subscription for another app, such as Happ, and Elarni cannot read it. Ask the provider for a link without encryption.';
   }
 
   @override

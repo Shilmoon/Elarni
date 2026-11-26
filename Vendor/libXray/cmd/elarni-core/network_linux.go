@@ -225,18 +225,30 @@ func linuxTunnelConfig(raw []byte, network linuxNetwork, policy *share.WindowsRo
 var errLinuxFirewallUnavailable = errors.New("vpn_firewall_unavailable")
 
 func nft(script string) error {
+	_, err := nftWithOutput(script)
+	return err
+}
+
+// nftWithOutput is nft that also returns, on one line, what nft printed about a script it
+// did not apply.
+func nftWithOutput(script string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	command := exec.CommandContext(ctx, linuxTool("nft"), "-f", "-")
 	command.Stdin = strings.NewReader(script)
+	var stderr bytes.Buffer
+	command.Stderr = &stderr
 	if err := command.Run(); err != nil {
 		var exit *exec.ExitError
 		if !errors.As(err, &exit) && ctx.Err() == nil {
-			return errLinuxFirewallUnavailable // nftables is not installed
+			return "", errLinuxFirewallUnavailable // nftables is not installed
 		}
-		return errors.New("vpn_firewall_failed")
+		if ctx.Err() != nil {
+			return "nft did not finish in 5 seconds", errors.New("vpn_firewall_failed")
+		}
+		return strings.Join(strings.Fields(stderr.String()), " "), errors.New("vpn_firewall_failed")
 	}
-	return nil
+	return "", nil
 }
 
 // The supervisor reserves an empty private firewall table before starting a
@@ -461,6 +473,11 @@ func (network linuxNetwork) firewall(protected []netip.Prefix) string {
 			fmt.Fprintf(&script, "add rule inet %s dns meta skuid %d return\n", name, uid)
 		}
 	}
+	// A resolver the user runs on loopback (dnsmasq, dnscrypt-proxy, unbound) answers itself;
+	// its own plain lookups upstream are not exempt, so the rule below takes them. Lookups to
+	// the systemd-resolved stub stay redirected: its upstream lookups are exempt above.
+	fmt.Fprintf(&script, "add rule inet %s dns ip daddr 127.0.0.0/8 ip daddr != { 127.0.0.53, 127.0.0.54 } return\n", name)
+	fmt.Fprintf(&script, "add rule inet %s dns ip6 daddr ::1 return\n", name)
 	fmt.Fprintf(&script, "add rule inet %s dns meta l4proto { tcp, udp } th dport 53 redirect to :%d\n", name, network.DNSPort)
 	if len(protected) != 0 {
 		fmt.Fprintf(&script, "add chain inet %s guard { type filter hook output priority 0; policy accept; }\n", name)
@@ -497,6 +514,39 @@ func (network linuxNetwork) firewall(protected []netip.Prefix) string {
 		}
 	}
 	return script.String()
+}
+
+// firewallPresent says whether this network's table is still there. A listing that did not
+// run or timed out tells nothing, and counts as present.
+func (network linuxNetwork) firewallPresent() bool {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	err := exec.CommandContext(ctx, linuxTool("nft"), "list", "table", "inet", network.Name).Run()
+	var exit *exec.ExitError
+	return err == nil || !errors.As(err, &exit) || ctx.Err() != nil
+}
+
+// restoredFirewall is the firewall that install put in, as one transaction that replaces
+// whatever is left of the table, so a table that was there after all is not doubled.
+func (network linuxNetwork) restoredFirewall(protected []netip.Prefix) string {
+	name := network.Name
+	return "add table inet " + name + "\ndelete table inet " + name + "\nadd table inet " + name + "\n" + network.firewall(protected)
+}
+
+func (network linuxNetwork) restoreFirewall(policy *share.WindowsRoutePolicy) error {
+	protected, err := linuxGuardedRoutes(network, policy)
+	if err != nil {
+		return err
+	}
+	detail, err := nftWithOutput(network.restoredFirewall(protected))
+	if err != nil && detail != "" {
+		// nft repeats the rule it rejected, which can hold every guarded route.
+		if len(detail) > 512 {
+			detail = detail[:512] + "..."
+		}
+		return fmt.Errorf("%w: %s", err, detail)
+	}
+	return err
 }
 
 func (network linuxNetwork) cleanup() error {

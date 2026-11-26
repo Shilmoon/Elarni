@@ -159,7 +159,7 @@ enum SubscriptionFeedFetcher {
       case "invalid_feed", "input_too_large": throw SubscriptionError.invalidFeed
       case "fetch_cancelled": throw CancellationError()
       case let code? where ["dns_failed", "provider_unreachable", "provider_error", "rate_limited",
-                            "subscription_denied", "subscription_unavailable"].contains(code):
+                            "subscription_denied", "subscription_unavailable", "encrypted_feed"].contains(code):
         throw SubscriptionError.fetchClass(code)
       default: throw SubscriptionError.fetchFailed
       }

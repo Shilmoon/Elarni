@@ -658,7 +658,9 @@ extension _ProxyCommands on DesktopProxy {
             candidate.importRouting(content);
           } else if (parsed != null &&
               parsed.path.isNotEmpty &&
-              parsed.path != '/' &&
+              // A root URL is an HTTP proxy unless it named itself, as a
+              // panel's https://host/#Name; the core moved the name to input.
+              (parsed.path != '/' || input['name'] != null) &&
               !({'t.me', 'telegram.me'}.contains(parsed.host) &&
                   parsed.path == '/proxy')) {
             await refresh(addSource({...input, 'text': url!}));

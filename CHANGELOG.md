@@ -4,6 +4,111 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
 
 ## Unreleased
 
+### Fixed
+
+- **Android: "Connect after device restart" waits for the network.** A server given by name
+  was looked up once as the phone started, often before Wi-Fi or mobile data worked; the
+  start failed and, with "Reconnect automatically" off, the phone stayed without VPN. A start
+  at boot or by Always-on VPN that fails because the name has no answer or no network is up
+  now tries again after 2, 4, 8 and 16 s, then every 30 s and at once when a network comes,
+  for 2 minutes. Other failures, such as a refused setting, still end the start at once.
+- **Android: per-app routing on Xiaomi (HyperOS, MIUI) and Honor phones.** Their systems show
+  an app no other installed apps until their own permission allows it, so the list said "No
+  other installed apps." Elarni now declares that permission, so its app settings can allow
+  it. While it is denied, the empty list says so with a button to those settings, and the list
+  is read again on return.
+- **Android: no crash where Android has no file picker or settings screen.** Opening or saving
+  a file on a device without a document picker (some TV boxes), and opening Android's VPN,
+  location or app settings, the share sheet or the VPN permission dialog where the system has
+  none, closed the app. Elarni now says that the device has no app or screen for it.
+- **Android: a Keystore that fails for a moment no longer offers to reset Elarni.** Any
+  failure to decrypt the saved data read as damaged data, and the offered reset deletes the
+  subscriptions. Only a file that does not match its key, or a key Android removed, offers the
+  reset now; a failing Keystore keeps the data and offers **Retry**, which opens it again.
+- **REALITY with a randomized fingerprint could not connect on about half of the app starts.**
+  The randomized hello carried the post-quantum key share that REALITY servers since Xray 26.9.8
+  require only half the time; it now takes the hello that "random" picks, which always has it.
+- **The tunnel could stop carrying traffic after one read error of its network adapter**, while
+  the app still showed it connected. Elarni reads on after such an error and stops reading only
+  when the tunnel stops.
+- **WireGuard could keep a CPU core busy while its socket kept failing.** It now waits longer
+  after each error, up to a second, instead of retrying at once.
+- **Hysteria2 uses the upload speed you set, as the official client does.** Brutal congestion
+  control starts whenever the up speed is set, capped by the server's limit if it has one; it
+  needed a server limit too. "100 mbps" now means 100,000,000 bits per second, not 104,857,600.
+- **A Hysteria2, MASQUE, XDRIVE or HTTP/3 XHTTP server chained through another one could freeze
+  when a connection closed.** The socket under it is closed first now, so the close no longer
+  waits for the outer connection to end.
+- **An XHTTP `scMaxEachPostBytes` of 0 or less, such as `"0-1000000"`, crashed the core** at
+  the first connection. The profile is refused with an error that names the setting.
+- **Mux uses its configured concurrency again (8 by default).** Every outbound had been raised
+  to 128 connections per mux; only XDRIVE, which needs it, still is.
+- **Server tests left a connection open for every server that accepted but stalled in TLS.**
+  The test's own timeout now ends the TLS handshake and the wait for an answer too.
+- **XDNS with a TCP resolver did not work**: its queries went out without the length that DNS
+  over TCP needs. The resolver now sends and answers them on a pool of connections.
+- **DNS answers over TCP could arrive broken when several were sent at once**, and an answer read
+  while the DNS cache was cleaned could lose its addresses.
+- **Connections of a stopped tunnel no longer run on in the background**: stopping the tunnel
+  cancels the connections it handed to the core.
+- **Ranges in profiles now include their upper end.** Fragment, noise, padding and XHTTP size
+  ranges never took their largest value, so "1-2" was always 1.
+- **A Hysteria2, TUIC or XHTTP/3 connection no longer closes over one packet it could not send.**
+  A full send buffer, frequent on Mac and iPhone, closed a Hysteria2 or XHTTP/3 connection, and a
+  moment without a network, route or local address while the device moved between Wi-Fi and
+  mobile data closed those and TUIC connections, so every app on them reconnected. Such a packet
+  is now resent like a lost one; a connection whose network does not come back still ends at the
+  idle timeout, and a connection attempt to a server the device has no route to (an IPv6 address
+  without IPv6) still fails at once. All platforms.
+- **A long-lived Hysteria2, TUIC or XHTTP/3 connection no longer runs out of streams.** A stream
+  that either side stopped while an app was still sending on it never gave its slot back, so
+  after many such streams (a video or download closed mid-transfer) the connection refused new
+  ones with "too many open streams". All platforms.
+- **Servers with a long certificate chain or a post-quantum key exchange connect over
+  Hysteria2, TUIC and XHTTP/3.** A server's first handshake reply larger than 16 KiB failed the
+  connection with CRYPTO_BUFFER_EXCEEDED. All platforms.
+- **A UDP packet over Hysteria2 or TUIC is no longer delivered twice on a path that reorders
+  packets.** After more than 64 gaps in what had arrived, a late copy of an old packet was taken
+  as new. All platforms.
+- **A DNS resolver running on the computer works in VPN mode.** On Windows the DNS guard blocked
+  every lookup to port 53 that did not go through the tunnel, including lookups to 127.0.0.1
+  and ::1, so apps that used a local resolver (dnscrypt-proxy, Acrylic, AdGuard Home) got no
+  answers. On Linux such lookups went to Elarni's DNS instead of the resolver. Lookups to
+  loopback now reach the resolver. Its own plain lookups to its upstream servers still go
+  through the tunnel (Linux) or are blocked (Windows), as are lookups to the router or another
+  resolver on the local network. On Linux, systemd-resolved (127.0.0.53, 127.0.0.54) is still
+  answered by Elarni, because its own lookups would leave outside the tunnel.
+- **Linux: the VPN puts its firewall rules back when another program removes them.** A program
+  that ran `nft flush ruleset` removed Elarni's DNS redirect and kill switch rules, so DNS
+  lookups went around the tunnel until the next Connect. Elarni checks once a second, puts the
+  rules back and logs it. If it cannot put them back, it logs why and the VPN disconnects.
+- **Windows: a Wintun failure says what went wrong.** When the Windows network driver (Wintun)
+  could not be loaded, Elarni showed a generic connection failure. The message now names the
+  driver, says that antivirus software or a device installation policy can cause this, and
+  suggests reinstalling Elarni or using System proxy mode. The diagnostics export keeps the
+  Windows error code.
+- **Not now on an update keeps that version from installing by itself.** With automatic updates
+  on, a release you put off with **Not now** was still downloaded and installed at the next
+  check or start. Now it waits until you press **Update**. A newer release is offered and
+  downloaded as usual.
+- **More panel and app links import.** Hysteria2 links with `obfs=salamander` next to a
+  FinalMask (`fm`) that says the same, `mports` port hopping and an old `fm` with
+  `quicParams.udpHop`; Hysteria2 Gecko without packet sizes (Hysteria's 512 and 1200);
+  Shadowsocks with `plugin=obfs-local;obfs=http` (simple-obfs HTTP mode); WireGuard links with
+  a `/` before the query, `privatekey`, a UDP `fm` and `ifp=0`; WireGuard configurations with
+  an IPv6 `Endpoint` written without brackets; TUIC links with `congestion_control=BBR`,
+  `reduce_rtt` or `fp`; versioned fingerprints such as `fp=chrome_120` (the browser's preset);
+  mKCP `mtu` and `tti`; VMess QR JSON with `"tls":"reality"`. What still cannot work says why:
+  simple-obfs TLS mode, WireGuard noise packets (`ifp`), TUIC `disable_sni=1`, VMess REALITY
+  without a public key.
+- **Server names no longer end in `?serverDescription=…`.** 3x-ui appends a server's
+  description to its name this way for Happ; Elarni leaves it out.
+- **A subscription at a panel's root named in its link, `https://host/#Name`, is added under
+  that name** on every platform, instead of failing or importing as an HTTP proxy.
+- **A subscription encrypted for Happ says so.** A feed that only Happ can decrypt (an
+  `Encrypt-Tag` header and `?key=` in its link) failed as an invalid or unsupported feed; the
+  message now says it is encrypted for another app and to ask the provider for another link.
+
 ## 0.6.4 - 2026-11-23
 
 ### Added

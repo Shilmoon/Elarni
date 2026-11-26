@@ -493,8 +493,11 @@ final class DesktopIntegration extends ChangeNotifier {
     updateChecked = (at: at, read: read);
     availableUpdate = found;
     _updateAssets = assets;
-    // A failed install holds back its own version, not a newer one.
-    if (updateStage == UpdateStage.failed &&
+    // A failed install holds back its own version, not a newer one; so does
+    // Not now on a downloaded one, whose hidden notice would hide the newer.
+    if ((updateStage == UpdateStage.failed ||
+            updateStage == UpdateStage.ready &&
+                updateVersion == dismissedUpdate) &&
         found != null &&
         found.version != updateVersion) {
       updateStage = UpdateStage.none;
@@ -530,7 +533,11 @@ final class DesktopIntegration extends ChangeNotifier {
       updateVersion = ready as String;
     }
     notifyListeners();
-    if (updateStage != UpdateStage.ready || !autoUpdate) return;
+    // Not now holds the version back from installing by itself.
+    if (updateStage != UpdateStage.ready ||
+        !autoUpdate ||
+        updateVersion == dismissedUpdate)
+      return;
     if (support.kind == 'msi' &&
         support.silent &&
         updateAttempted != updateVersion) {
@@ -546,12 +553,14 @@ final class DesktopIntegration extends ChangeNotifier {
       await _install(reconnect: false, user: false);
   }
 
-  // Starts the automatic download when everything allows it.
+  // Starts the automatic download when everything allows it. A version put
+  // off with Not now is not fetched: its notice, and so its Update, is hidden.
   void _startDownload() {
     final found = availableUpdate;
     if (_closed ||
         found == null ||
         !autoUpdate ||
+        found.version == dismissedUpdate ||
         updateStage != UpdateStage.none ||
         _downloadingUpdate ||
         (_downloadRetry?.isAfter(DateTime.now()) ?? false) ||
@@ -621,7 +630,11 @@ final class DesktopIntegration extends ChangeNotifier {
     if (updateStage == UpdateStage.none &&
         (found == null || !updateInstallable || !await _download(found)))
       return;
-    if (_closed || updateStage != UpdateStage.ready) return;
+    // Not now during the download keeps the release from installing by itself.
+    if (_closed ||
+        updateStage != UpdateStage.ready ||
+        !user && updateVersion == dismissedUpdate)
+      return;
     updateStage = UpdateStage.installing;
     notifyListeners();
     if (reconnect) await _store(reconnectAfterUpdate: true);

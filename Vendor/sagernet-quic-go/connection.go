@@ -193,6 +193,9 @@ type Conn struct {
 	droppedInitialKeys bool
 	handshakeComplete  bool
 	handshakeConfirmed bool
+	// Elarni: the send queue's goroutine reads it to tell a dial that cannot reach the
+	// server from a connection that loses its network for a moment.
+	handshakeCompleteForSend atomic.Bool
 
 	receivedRetry       bool
 	versionNegotiated   bool
@@ -528,7 +531,7 @@ func (c *Conn) preSetup() {
 	c.largestRcvdAppData = protocol.InvalidPacketNumber
 	c.initialStream = newInitialCryptoStream(c.perspective == protocol.PerspectiveClient, c.config.ChromeParrot)
 	c.handshakeStream = newCryptoStream()
-	c.sendQueue = newSendQueue(c.conn)
+	c.sendQueue = newSendQueue(c.conn, &c.handshakeCompleteForSend)
 	c.retransmissionQueue = newRetransmissionQueue()
 	c.frameParser = *wire.NewFrameParser(
 		c.config.EnableDatagrams,
@@ -946,7 +949,7 @@ func (c *Conn) switchToNewPath(tr *Transport, now monotime.Time) {
 	c.mtuDiscoverer.Reset(now, initialPacketSize, maxPacketSize)
 	c.conn = newSendConn(tr.conn, c.conn.RemoteAddr(), packetInfo{}, utils.DefaultLogger) // TODO: find a better way
 	c.sendQueue.Close()
-	c.sendQueue = newSendQueue(c.conn)
+	c.sendQueue = newSendQueue(c.conn, &c.handshakeCompleteForSend)
 	go func() {
 		if err := c.sendQueue.Run(); err != nil {
 			c.destroyImpl(err)
@@ -956,6 +959,7 @@ func (c *Conn) switchToNewPath(tr *Transport, now monotime.Time) {
 
 func (c *Conn) handleHandshakeComplete(now monotime.Time) error {
 	defer close(c.handshakeCompleteChan)
+	c.handshakeCompleteForSend.Store(true)
 	// Once the handshake completes, we have derived 1-RTT keys.
 	// There's no point in queueing undecryptable packets for later decryption anymore.
 	c.undecryptablePackets = nil

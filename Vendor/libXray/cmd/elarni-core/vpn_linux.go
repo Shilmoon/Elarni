@@ -987,6 +987,9 @@ func linuxWorker(ctx context.Context, input io.Reader, output io.Writer) (code i
 	defer ticker.Stop()
 	var gate metricsGate
 	var connections connectionsCursor
+	// A reload keeps the route policy (sameSession), so the firewall it put back is the same.
+	firewall := firewallKeeper{present: network.firewallPresent,
+		restore: func() error { return network.restoreFirewall(command.Request.RoutePolicy) }}
 	for {
 		select {
 		case <-ctx.Done():
@@ -1010,6 +1013,14 @@ func linuxWorker(ctx context.Context, input io.Reader, output io.Writer) (code i
 			}
 		case now := <-ticker.C:
 			if !xray.GetXrayState() {
+				return 1
+			}
+			// A firewall that cannot be put back ends the tunnel, as a core that stopped does;
+			// the line that says why goes out first.
+			if firewall.keep(now) != nil {
+				if logs := xray.ReadLogs(logCursor).Entries; len(logs) > 0 {
+					_ = linuxWriteFrame(output, linuxReply{Logs: logs})
+				}
 				return 1
 			}
 			if sleep.resumed() {

@@ -172,6 +172,14 @@ class AppLocalizationsRu extends AppLocalizations {
       'Нет инструмента межсетевого экрана для VPN.';
 
   @override
+  String get issueWintunFailedRemedy =>
+      'Причиной может быть антивирус или политика установки устройств. Переустановите Elarni или используйте режим системного прокси.';
+
+  @override
+  String get issueWintunFailed =>
+      'Не удалось загрузить сетевой драйвер Windows (Wintun) или создать его сетевой адаптер.';
+
+  @override
   String get issueDisconnectUnconfirmedRemedy =>
       'Обновите состояние перед повторным подключением или используйте «Исправить настройку VPN».';
 
@@ -2758,6 +2766,14 @@ class AppLocalizationsRu extends AppLocalizations {
   @override
   String failureLinkRemovedText(String provider) {
     return 'Провайдер «$provider» удалил или изменил эту ссылку. Попросите у провайдера новую.';
+  }
+
+  @override
+  String get failureEncrypted => 'Зашифровано для другого приложения';
+
+  @override
+  String failureEncryptedText(String provider) {
+    return 'Провайдер «$provider» зашифровал эту подписку для другого приложения, например Happ, и Elarni не может её прочитать. Попросите у провайдера ссылку без шифрования.';
   }
 
   @override

@@ -322,8 +322,11 @@ private val LocalReselect = compositionLocalOf { 0 }
                 if (source == null) {
                     // Only a reset gets past a saved catalog that cannot be read, damaged or with its key gone; unavailable storage can come back by itself.
                     val unreadable = error in Repository.unreadable && activity.repository.catalogUnreadable
-                    val reset = tr(R.string.reset_elarni).takeIf { unreadable }
-                    if (snackbar.showSnackbar(errorMessage(error, unreadable), reset, withDismissAction = true) == SnackbarResult.ActionPerformed) confirmReset()
+                    val retry = !unreadable && error == "storage_unavailable" && activity.repository.catalogUnavailable
+                    val action = if (unreadable) tr(R.string.reset_elarni) else if (retry) tr(R.string.retry) else null
+                    if (snackbar.showSnackbar(errorMessage(error, unreadable), action, withDismissAction = true) == SnackbarResult.ActionPerformed) {
+                        if (unreadable) confirmReset() else activity.repository.scope.launch { activity.repository.retryOpen() }
+                    }
                 } else {
                     val support = source.mapObject("links").string("support").takeIf { error in providerFaults && it.isNotEmpty() }
                     val result = snackbar.showSnackbar(tr(R.string.the_last_working_servers_were_kept, refreshFailure(error, source.string("name"))), support?.let { tr(R.string.contact_provider) }, withDismissAction = true)
@@ -1423,6 +1426,9 @@ fun pingScope(result: JSONObject) = when (result.string("protocol")) { "tcp" -> 
                 val unreadable = state.error in Repository.unreadable && activity.repository.catalogUnreadable
                 state.error?.let { SettingsTile(errorMessage(it, unreadable), titleColor = MaterialTheme.colorScheme.error) }
                 if (unreadable) SettingsTile(tr(R.string.reset_elarni), enabled = !state.busy, titleColor = MaterialTheme.colorScheme.error, onClick = reset)
+                // Storage that was unavailable may open now; a reset would delete what it holds.
+                else if (state.error == "storage_unavailable" && activity.repository.catalogUnavailable)
+                    SettingsTile(tr(R.string.retry), enabled = !state.busy) { activity.repository.scope.launch { activity.repository.retryOpen() } }
             }
             SettingsGroup {
                 SettingsTile(tr(R.string.retry_selected_server), enabled = !state.busy) { activity.connect() }
@@ -1532,10 +1538,11 @@ private fun refreshLabel(code: String) = when (code) {
     "rate_limited" -> tr(R.string.rate_limited)
     "subscription_denied" -> tr(R.string.access_refused)
     "subscription_unavailable" -> tr(R.string.link_removed)
+    "encrypted_feed" -> tr(R.string.encrypted_for_another_app)
     else -> tr(R.string.last_update_failed)
 }
 /** Failures only the provider can fix, which offer its support link. */
-private val providerFaults = setOf("provider_unreachable", "provider_error", "subscription_denied", "subscription_unavailable", "hwid_required", "hwid_limit")
+private val providerFaults = setOf("provider_unreachable", "provider_error", "subscription_denied", "subscription_unavailable", "encrypted_feed", "hwid_required", "hwid_limit")
 /** A failed download in words that name the provider, so its outages are not reported as app bugs. */
 private fun refreshFailure(code: String, provider: String) = when (code) {
     "hwid_required", "hwid_limit" -> tr(R.string.named_provider_device_limit, provider)
@@ -1544,6 +1551,7 @@ private fun refreshFailure(code: String, provider: String) = when (code) {
     "rate_limited" -> tr(R.string.named_provider_rate_limited, provider)
     "subscription_denied" -> tr(R.string.named_provider_denied, provider)
     "subscription_unavailable" -> tr(R.string.named_provider_link_removed, provider)
+    "encrypted_feed" -> tr(R.string.named_provider_encrypted_feed, provider)
     "sharing_disabled" -> tr(R.string.named_provider_sharing_disabled, provider)
     else -> errorMessage(code)
 }
@@ -1584,6 +1592,8 @@ fun errorMessage(code: String, unreadable: Boolean = false): String = when (code
     "invalid_qr_image" -> tr(R.string.no_readable_qr_code_was_found)
     "camera_unavailable" -> tr(R.string.no_camera_app_is_available_import)
     "file_unavailable" -> tr(R.string.the_file_could_not_be_read)
+    "picker_unavailable" -> tr(R.string.no_app_on_this_device_can_open)
+    "system_screen_unavailable" -> tr(R.string.android_on_this_device_cannot_open)
     "recording_empty" -> tr(R.string.nothing_is_recorded_yet_turn_on)
     "recording_failed" -> tr(R.string.the_recording_could_not_be_updated)
     "export_expired" -> tr(R.string.android_restarted_the_app_during_export)
@@ -1599,6 +1609,7 @@ fun errorMessage(code: String, unreadable: Boolean = false): String = when (code
     "rate_limited" -> tr(R.string.the_provider_is_limiting_requests_elarni)
     "subscription_denied" -> tr(R.string.the_provider_refused_the_request_the)
     "subscription_unavailable" -> tr(R.string.the_provider_removed_or_changed_this)
+    "encrypted_feed" -> tr(R.string.the_provider_encrypted_this_subscription_for)
     "not_connected" -> tr(R.string.connect_to_this_server_before_testing)
     "assets_unavailable", "invalid_assets", "invalid_geodata" -> tr(R.string.routing_data_is_missing_or_invalid)
     // RoutingAssets appends the missing codes to this code.

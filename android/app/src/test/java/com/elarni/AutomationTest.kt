@@ -158,6 +158,65 @@ class AutomationTest {
         assertTrue("One stop an hour always restarts", quiet.allow(3600.0) && quiet.allow(7200.0) && quiet.allow(10800.0))
     }
 
+    @Test fun aStartAtBootTriesAgainAfterGrowingDelaysForTwoMinutes() {
+        val retry = StartRetry()
+        assertNull(retry.retryAt)
+        val tries = mutableListOf<Double>()
+        var time = 0.0
+        while (retry.failed(time)) { tries.add(retry.retryAt!!); time = retry.retryAt!! }
+        assertEquals("2, 4, 8, 16, then 30 s; the last try may come at the end of the window", listOf(2.0, 6.0, 14.0, 30.0, 60.0, 90.0, 120.0), tries)
+        assertNull("Given up", retry.retryAt)
+        assertFalse(retry.due(1000.0))
+        // A failure that took its lookup's 5 s counts from when it ended, and the window from the first failure.
+        val slow = StartRetry()
+        assertTrue(slow.failed(5.0)); assertEquals(7.0, slow.retryAt!!, 0.0)
+        assertTrue(slow.failed(12.0)); assertEquals(16.0, slow.retryAt!!, 0.0)
+        assertFalse(slow.due(15.9)); assertTrue(slow.due(16.0)); assertTrue(slow.due(17.0))
+    }
+
+    @Test fun aNetworkThatComesBringsTheWaitingTryForwardWithinTheWindow() {
+        val retry = StartRetry()
+        retry.networkAvailable(1.0)
+        assertNull("Nothing waits, so nothing is due", retry.retryAt)
+        retry.failed(0.0); retry.failed(2.0)
+        assertEquals(6.0, retry.retryAt!!, 0.0)
+        retry.networkAvailable(3.0)
+        assertTrue(retry.due(3.0))
+        retry.networkAvailable(5.0)
+        assertEquals("Never later than it was", 3.0, retry.retryAt!!, 0.0)
+        // A network that keeps coming and going cannot stretch the attempts past the window.
+        var time = 3.0
+        while (retry.failed(time)) { retry.networkAvailable(time + 0.5); time = retry.retryAt!! }
+        assertTrue("Last try at $time", time <= StartRetry.WINDOW)
+        // A later start counts its own window.
+        assertTrue(retry.failed(500.0))
+        assertEquals(502.0, retry.retryAt!!, 0.0)
+        retry.reset()
+        assertNull(retry.retryAt)
+        assertTrue(retry.failed(600.0)); assertEquals("A reset starts the delays over", 602.0, retry.retryAt!!, 0.0)
+    }
+
+    @Test fun onlyAStartTheNetworkCouldFixWaits() {
+        val unanswered = AppFailure("connection_failed", java.net.UnknownHostException("server.example"))
+        assertTrue("The server's name had no answer", StartRetry.retryable(unanswered, offline = false))
+        assertTrue("A download's lookup failed", StartRetry.retryable(AppFailure("dns_failed"), offline = false))
+        assertTrue("A network change cancelled a download", StartRetry.retryable(AppFailure("fetch_cancelled"), offline = false))
+        assertFalse("Online, a refused start is the server's", StartRetry.retryable(AppFailure("connection_failed"), offline = false))
+        assertFalse(StartRetry.retryable(AppFailure("fetch_failed"), offline = false))
+        assertTrue("Without a network, the start could not get anywhere", StartRetry.retryable(AppFailure("connection_failed"), offline = true))
+        assertTrue(StartRetry.retryable(AppFailure("fetch_failed"), offline = true))
+        for (code in listOf("invalid_settings", "per_app_none_installed", "vpn_consent_required", "no_selection", "storage_unavailable", "vpn_network_unavailable", "unsupported_profile"))
+            assertFalse("$code fails the same way again", StartRetry.retryable(AppFailure(code), offline = true))
+        assertFalse(StartRetry.retryable(IllegalStateException("unexpected"), offline = true))
+    }
+
+    @Test fun aServerNameWithoutAnAnswerIsALookupFailure() {
+        assertTrue("No answer in 5 s", Engine.lookupFailed(java.util.concurrent.TimeoutException()))
+        assertTrue("No answer at all", Engine.lookupFailed(java.util.concurrent.ExecutionException(java.net.UnknownHostException("server.example"))))
+        assertFalse(Engine.lookupFailed(java.util.concurrent.ExecutionException(SecurityException("no INTERNET"))))
+        assertFalse("A blocked host mapping", Engine.lookupFailed(AppFailure("connection_failed")))
+    }
+
     @Test fun aServerThatPassedTrafficRestartsItsCoreAfterTwoFailedChecksInARow() {
         val server = "a:1"
         fun checks(vararg results: Boolean) = DeadCore().let { core -> results.map { core.checked(server, it) } }

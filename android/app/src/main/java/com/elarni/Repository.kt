@@ -101,21 +101,7 @@ class Repository(private val app: ElarniApplication) {
         scope.launch {
             var refresh = false
             mutex.withLock {
-                try {
-                    store.load()?.let { saved ->
-                        if (saved.optInt("journalVersion") != 1) throw AppFailure("storage_corrupt")
-                        // Recovery publishes only the last committed configuration, never an interrupted candidate.
-                        catalog = Catalog(saved.getJSONObject("committed"))
-                        // Before validation, which derives the DNS flag from the mode and so hides the old pair.
-                        val dnsMigrated = catalog.migrateDNS()
-                        catalog.validate()
-                        // A catalog that allowed external control before keys existed gets one, which Settings shows.
-                        if (dnsMigrated or catalog.migrateSessionLimits() or catalog.ensureControlKey() or saved.has("pending")) persist(catalog)
-                    }
-                    automation = Automation(catalog.data.mapObject("automationEpisode"))
-                    automation.intent = catalog.data.optBoolean("connectionIntent")
-                    retireAssets()
-                } catch (error: Exception) { loadFailed = true; storageFailure = code(error); mutable.update { it.copy(error = storageFailure, event = it.event + 1) } }
+                open()
                 try {
                     publish(loading = false)
                     // Android restarts a killed sticky service as a background start and stops it again, so the
@@ -128,6 +114,45 @@ class Repository(private val app: ElarniApplication) {
             // Outside the lock: a refresh job this start serves is waiting for it.
             app.scheduleRefresh(refresh)
         }
+    }
+    /** Opens the saved catalog, under the lock. A failure leaves the placeholder in memory and says why. */
+    private fun open() {
+        try {
+            store.load()?.let { saved ->
+                if (saved.optInt("journalVersion") != 1) throw AppFailure("storage_corrupt")
+                // Recovery publishes only the last committed configuration, never an interrupted candidate.
+                catalog = Catalog(saved.getJSONObject("committed"))
+                // Before validation, which derives the DNS flag from the mode and so hides the old pair.
+                val dnsMigrated = catalog.migrateDNS()
+                catalog.validate()
+                // A catalog that allowed external control before keys existed gets one, which Settings shows.
+                if (dnsMigrated or catalog.migrateSessionLimits() or catalog.ensureControlKey() or saved.has("pending")) persist(catalog)
+            }
+            automation = Automation(catalog.data.mapObject("automationEpisode"))
+            automation.intent = catalog.data.optBoolean("connectionIntent")
+            retireAssets()
+        } catch (error: Exception) { loadFailed = true; storageFailure = code(error); mutable.update { it.copy(error = storageFailure, event = it.event + 1) } }
+    }
+    /** The saved catalog failed to open only because storage was unavailable, which can pass: [retryOpen] tries again. */
+    val catalogUnavailable get() = loadFailed && storageFailure == "storage_unavailable"
+    /** The Retry of a saved catalog that storage could not open: a Keystore that failed for a moment opens it now. */
+    suspend fun retryOpen() {
+        ready.await()
+        var refresh = false
+        mutex.withLock {
+            if (!catalogUnavailable) return
+            val failure = storageFailure
+            // The placeholder is gone once the saved catalog opens; a migration it needs saves again.
+            loadFailed = false; storageFailure = null; catalog = Catalog.empty()
+            open()
+            if (loadFailed) return
+            // Publishing copies the catalog only when the edits counter moved.
+            edits++
+            mutable.update { it.copy(error = it.error.takeUnless { error -> error == failure }) }
+            publish()
+            refresh = backgroundWork()
+        }
+        app.scheduleRefresh(refresh)
     }
     private fun endedWhileConnected(): Boolean {
         // Without its service the VPN was already down: a failed Connect, a reboot or an earlier start that stayed down.
@@ -260,7 +285,8 @@ class Repository(private val app: ElarniApplication) {
             }
         }
     }
-    suspend fun requestConnect(manual: Boolean = true, generation: Long = beginConnectionRequest()) = withContext(Dispatchers.IO) {
+    /** [boot]: the start after the device started, which may come before its network can look the server up. */
+    suspend fun requestConnect(manual: Boolean = true, generation: Long = beginConnectionRequest(), boot: Boolean = false) = withContext(Dispatchers.IO) {
         ready.await(); mutex.withLock {
             check(generation)
             storageFailure?.let { throw AppFailure(it) }
@@ -272,11 +298,13 @@ class Repository(private val app: ElarniApplication) {
             catalog.data.put("connectionIntent", true).put("automationEpisode", automation.episode())
             // An approval built before Connect would undo it. Connect works without the save, as Stop does.
             runCatching { persist(catalog) }.onFailure { if (it is Exception) report(it) }; revision++; state("connecting")
-            try { app.startForegroundService(Intent(app, ElarniVpnService::class.java).setAction(ElarniVpnService.CONNECT).putExtra(ElarniVpnService.GENERATION, generation)) }
+            try { app.startForegroundService(Intent(app, ElarniVpnService::class.java).setAction(ElarniVpnService.CONNECT).putExtra(ElarniVpnService.GENERATION, generation)
+                .apply { if (boot) putExtra(ElarniVpnService.BOOT, true) }) }
             catch (_: Exception) { state("failed"); throw AppFailure("foreground_start_denied") }
         }
     }
-    suspend fun serviceStart(owner: ElarniVpnService, restart: Boolean, requestedGeneration: Long?, startId: Int, taken: Boolean, alwaysOn: Boolean) {
+    /** [untilOnline]: a start by boot or always-on, which waits for the network when its server cannot be looked up yet. */
+    suspend fun serviceStart(owner: ElarniVpnService, restart: Boolean, requestedGeneration: Long?, startId: Int, taken: Boolean, alwaysOn: Boolean, untilOnline: Boolean = false) {
         ready.await(); mutex.withLock {
             // Enabling always-on is a newer system request than an earlier in-app Stop or revoke.
             if (requestedGeneration == null && alwaysOn) stopRequested.set(false)
@@ -301,21 +329,52 @@ class Repository(private val app: ElarniApplication) {
                 if (restart && catalog.settings.optBoolean("disconnectOnSleep") && !app.getSystemService(android.os.PowerManager::class.java).isInteractive) {
                     automation.sleeping = true; state("paused"); return
                 }
+                // This start replaces one that waited for the network.
+                waiting = null; startRetry.reset()
                 start(catalog, generation, requireListedApp = true)
-                catalog.node(catalog.selected).put("lastSuccessAt", now()).put("lastSuccessRevision", catalog.node(catalog.selected).string("configurationRevision"))
-                // Start wrote intent, assets and the success time; an approval built before them would undo them.
-                // A save that fails must not undo a start that worked.
-                automation.healthy(Automation.clock()); runCatching { persist(catalog) }.onFailure { if (it is Exception) report(it) }; revision++; state("connected")
-            } catch (error: Exception) {
-                runCatching { engine.stop(releaseTunnel = !wantsRecovery()) }
-                if (generation == epoch.get()) {
-                    state("failed")
-                    if (error is ResourceReview) challengeResource(error, "prepareConnection", JSONObject())
-                    else { report(error); automation.schedule(Automation.clock()) }
-                }
-                else state("disconnected")
-                if (generation == epoch.get() && !wantsRecovery()) owner.finish(startId)
-            }
+                started()
+            } catch (error: Exception) { startFailed(owner, error, generation, startId, untilOnline) }
+        }
+    }
+    /** The selected server's start worked. */
+    private fun started() {
+        catalog.node(catalog.selected).put("lastSuccessAt", now()).put("lastSuccessRevision", catalog.node(catalog.selected).string("configurationRevision"))
+        // Start wrote intent, assets and the success time; an approval built before them would undo them.
+        // A save that fails must not undo a start that worked.
+        automation.healthy(Automation.clock()); runCatching { persist(catalog) }.onFailure { if (it is Exception) report(it) }; revision++; state("connected")
+    }
+    /** A start by boot or always-on that waits for the network, in [owner]'s service, which stays in the foreground meanwhile.
+     *  Stop finishes that service and a newer Connect starts in it; a Cancel elsewhere, such as an update's, leaves it waiting. */
+    private class WaitingStart(val owner: ElarniVpnService, val startId: Int)
+    private var waiting: WaitingStart? = null
+    private val startRetry = StartRetry()
+    /** The start [startId] of [owner]'s service failed with [error]. Without recovery the service ends, unless [untilOnline]
+     *  and the network could not look the server up yet: boot and always-on start as the device starts, often before
+     *  Wi-Fi or mobile data works, and nothing else would try again. */
+    private fun startFailed(owner: ElarniVpnService, error: Exception, generation: Long, startId: Int, untilOnline: Boolean) {
+        runCatching { engine.stop(releaseTunnel = !wantsRecovery()) }
+        if (generation != epoch.get()) { waiting = null; startRetry.reset(); state("disconnected"); return }
+        if (untilOnline && !wantsRecovery() && StartRetry.retryable(error, offline = engine.physical() == null) && startRetry.failed(Automation.clock())) {
+            waiting = WaitingStart(owner, startId); state("connecting"); return
+        }
+        waiting = null; startRetry.reset()
+        state("failed")
+        if (error is ResourceReview) challengeResource(error, "prepareConnection", JSONObject())
+        else { report(error); automation.schedule(Automation.clock()) }
+        if (!wantsRecovery()) owner.finish(startId)
+    }
+    /** The next try of a start that waits for the network, from the 2 s tick, as request [generation]. */
+    private fun retryStart(pending: WaitingStart, generation: Long) {
+        // Paused for sleep meanwhile, as a process the system killed then: the screen turning on starts it.
+        if (automation.sleeping) { waiting = null; startRetry.reset(); state("paused"); return }
+        try {
+            start(catalog, generation, requireListedApp = true)
+            waiting = null; startRetry.reset()
+            started()
+        } catch (error: Exception) {
+            // A Cancel elsewhere interrupted this try, which comes again at the next tick; Stop ends the wait instead.
+            if (generation != epoch.get() && !stopRequested.get()) { runCatching { engine.stop() }; return }
+            startFailed(pending.owner, error, generation, pending.startId, untilOnline = true)
         }
     }
     suspend fun serviceGone(owner: ElarniVpnService, revoked: Boolean) {
@@ -324,7 +383,7 @@ class Repository(private val app: ElarniApplication) {
             if (engine.service !== owner) { owner.closeTunnel(); return }
             runCatching { engine.stop() }
             if (BuildConfig.ELARNI_RECORDING) runCatching { engine.record(false) }
-            engine.detach(owner)
+            engine.detach(owner); waiting = null; startRetry.reset()
             if (revoked) {
                 automation.stop(); catalog.data.put("connectionIntent", false)
                 runCatching { persist(catalog) }; revision++; report(AppFailure("vpn_revoked"))
@@ -779,6 +838,8 @@ class Repository(private val app: ElarniApplication) {
             val signature = "${physical?.networkHandle ?: 0}:" + networks.map { it.networkHandle }.sorted().joinToString(",")
             val available = networks.isNotEmpty()
             automation.path(signature, available, Automation.clock())
+            // A start waiting for the network tries now rather than after its delay.
+            if (waiting != null && available) startRetry.networkAvailable(Automation.clock())
             // The VPN's underlying network is the default one, which Android tracks itself: the core binds no socket.
             // New sockets follow the default network, and the default-network callback tells the core's pooled ones
             // to move. A restart resets every tunneled connection, so only a network that is gone takes one. The new
@@ -826,7 +887,7 @@ class Repository(private val app: ElarniApplication) {
     suspend fun boot() {
         ready.await()
         if (catalog.settings.optBoolean("launchAtBoot") && catalog.selected.isNotEmpty()) {
-            try { requestConnect(false) } catch (error: Exception) { report(error) }
+            try { requestConnect(false, boot = true) } catch (error: Exception) { report(error) }
         }
     }
     suspend fun tick() {
@@ -835,6 +896,11 @@ class Repository(private val app: ElarniApplication) {
             // An approval gates only applying its candidate; recovery keeps running on the applied catalog.
             if (storageFailure != null || stopRequested.get()) return
             val time = Automation.clock(); val generation = epoch.get()
+            // A start that waits for the network tries again when it is due. Recovery, once turned on, retries instead.
+            waiting?.let { pending ->
+                if (engine.running || engine.service !== pending.owner || wantsRecovery()) { waiting = null; startRetry.reset() }
+                else if (startRetry.due(time)) retryStart(pending, generation)
+            }
             val config = catalog.data.optJSONObject("automation") ?: Automation.defaults()
             var probed = false
             if (engine.running) {

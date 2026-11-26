@@ -32,7 +32,8 @@ internal fun java.io.InputStream.readBounded(limit: Int): ByteArray {
     return output.toByteArray()
 }
 
-class AppFailure(val code: String) : Exception(code)
+/** [cause] says more than [code] for the app itself, such as a server name without an answer; the UI shows only [code]. */
+class AppFailure(val code: String, cause: Throwable? = null) : Exception(code, cause)
 
 object NativeBindings {
     init { System.loadLibrary("elarni_jni") }
@@ -64,7 +65,7 @@ object Native {
     // A download failure keeps its class, so the app can say whose fault it is.
     private val passedThrough = setOf("hwid_required", "hwid_limit", "invalid_target", "fetch_cancelled", "invalid_backup", "invalid_backup_password", "probe_cancelled", "probe_busy",
         "fetch_failed", "dns_failed", "provider_unreachable", "provider_error", "rate_limited", "subscription_denied", "subscription_unavailable", "recording_empty",
-        "input_too_large", "unencrypted_server")
+        "input_too_large", "unencrypted_server", "encrypted_feed")
 
     fun call(method: String, payload: JSONObject = JSONObject()): JSONObject {
         val raw = LibXray.invoke(obj("apiVersion" to 1, "method" to method, "payload" to payload).toString())

@@ -6185,15 +6185,20 @@ if tunnel: note('closed')
 
   test('a failed refresh says whose fault it is', () async {
     var status = 200;
+    var encrypted = false;
     final feed = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
     feed.listen((request) async {
       request.response.statusCode = status;
+      if (encrypted)
+        request.response.headers.set('encrypt-tag', 'YWJjZGVmZ2hpamtsbW5vcA==');
       if (status == 200) request.response.write(profile);
       await request.response.close();
     });
     try {
+      // Happ decrypts a feed whose URL names a key only when the reply has an
+      // Encrypt-Tag header; without one the feed is read as it is.
       final added = await backend.control.importClientProfiles(
-        content: 'http://127.0.0.1:${feed.port}/synthetic-token',
+        content: 'http://127.0.0.1:${feed.port}/synthetic-token?key=key02',
       );
       final id = added.snapshot.subscriptions.singleWhere((s) => !s.isLocal).id;
       await backend.control.refreshSubscription(
@@ -6221,6 +6226,20 @@ if tunnel: note('closed')
           reason: 'HTTP $code',
         );
       }
+      status = 200;
+      encrypted = true;
+      await expectLater(
+        backend.control.refreshSubscription(id),
+        throwsA(
+          isA<PlatformException>()
+              .having((e) => e.code, 'code', 'encrypted_feed')
+              .having(
+                (e) => e.message,
+                'message',
+                desktopError('encrypted_feed').message,
+              ),
+        ),
+      );
       // Nothing listens on the feed's port any more.
       await feed.close(force: true);
       await expectLater(
@@ -6236,6 +6255,18 @@ if tunnel: note('closed')
     } finally {
       await feed.close(force: true);
     }
+  });
+
+  // A panel's root named in its fragment is a subscription under that name
+  // (probe N10-09); an HTTP proxy link names no path.
+  test('a root URL named in its fragment imports as a subscription', () async {
+    final added = await backend.control.importClientProfiles(
+      content: 'http://127.0.0.1:9/#Root%20feed',
+    );
+    final group = added.snapshot.subscriptions.single;
+    expect([group.isLocal, group.name], [false, 'Root feed']);
+    // The loopback address waits for approval before anything is contacted.
+    expect(added.warning, isNotNull);
   });
 
   // The provider's Profile-Update-Interval is each subscription's default; the

@@ -53,3 +53,23 @@ func TestRealityFingerprintsSendMLKEMKeyShare(t *testing.T) {
 		t.Error("an unknown fingerprint name must stay unknown")
 	}
 }
+
+// A randomized hello has the X25519MLKEM768 share with probability one half, and its seed lasts the
+// process: half the starts of the app could not reach a REALITY server. REALITY takes the hello that
+// "random" chose instead, which always has it.
+func TestRealityRandomizedFingerprintsSendMLKEMKeyShare(t *testing.T) {
+	random := realityFingerprint("random")
+	for _, name := range []string{"randomized", "randomizednoalpn", "hellorandomized", "hellorandomizedalpn", "hellorandomizednoalpn"} {
+		id := realityFingerprint(name)
+		if id == nil {
+			t.Errorf("%q: no fingerprint", name)
+			continue
+		}
+		if id != random {
+			t.Errorf("%q -> %s, want the hello of \"random\", %s", name, id.Str(), random.Str())
+		}
+		if !sendsMLKEMKeyShare(t, id) {
+			t.Errorf("%q -> %s sends no X25519MLKEM768 key share", name, id.Str())
+		}
+	}
+}

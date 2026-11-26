@@ -172,18 +172,24 @@ def dns_server(server):
         server.sendto(response, peer)
 
 
-def dns_probe(allowed):
+def dns_answers(address):
     labels = b''.join(bytes([len(label)]) + label.encode('ascii') for label in fixture_name.split('.')) + b'\0'
     packet = struct.pack('!HHHHHH', 4321, 0x0100, 1, 0, 0, 0) + labels + struct.pack('!HH', 1, 1)
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as client:
         client.settimeout(1)
         try:
-            client.sendto(packet, ('127.0.0.1', 53))
+            client.sendto(packet, (address, 53))
             reply, _ = client.recvfrom(65536)
-            received = reply[:2] == packet[:2]
+            return reply[:2] == packet[:2]
         except OSError:
-            received = False
-    assert received == allowed, 'DNS guard or cleanup did not match the required state'
+            return False
+
+
+def dns_probe(allowed):
+    # The guard blocks a resolver outside the tunnel, here on this PC's physical address; a
+    # resolver on loopback, such as dnscrypt-proxy, answers in every state.
+    assert dns_answers(physical_address) == allowed, 'DNS guard or cleanup did not match the required state'
+    assert dns_answers('127.0.0.1'), 'The DNS guard blocked a resolver on loopback'
 
 
 def wait_clean(adapter, dns=True):
@@ -253,9 +259,6 @@ dns = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 dns.bind(('127.0.0.1', 0))
 dns_port = dns.getsockname()[1]
 threading.Thread(target=dns_server, args=(dns,), daemon=True).start()
-guard_probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-guard_probe.bind(('127.0.0.1', 53))
-threading.Thread(target=dns_server, args=(guard_probe,), daemon=True).start()
 upstream_port, socks_port = free_port(), free_port()
 # The ShadowQUIC peer's requests leave through the upstream core, whose rules lead to the fixtures.
 upstream_socks = [{'listen': '127.0.0.1', 'port': free_port(), 'protocol': 'socks', 'settings': {'udp': True}}] if arguments.protocol == 'shadowquic' else []
@@ -264,6 +267,11 @@ with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as route_probe:
     route_probe.connect(('192.0.2.1', 9))
     physical_address = route_probe.getsockname()[0]
 assert not ipaddress.ip_address(physical_address).is_loopback
+guard_probe, loopback_probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM), socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+guard_probe.bind((physical_address, 53))
+loopback_probe.bind(('127.0.0.1', 53))
+for probe in (guard_probe, loopback_probe):
+    threading.Thread(target=dns_server, args=(probe,), daemon=True).start()
 physical_index = int(powershell("Get-NetIPAddress -AddressFamily IPv4 -IPAddress '" + physical_address + "' | Select-Object -First 1 -ExpandProperty InterfaceIndex"))
 def physical_connection():
     client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -641,5 +649,6 @@ finally:
         wait_clean(adapter)
     dns.close()
     guard_probe.close()
+    loopback_probe.close()
     http_server.shutdown()
     http_server.server_close()

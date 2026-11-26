@@ -763,6 +763,9 @@ func fetchResourceAttempt(ctx context.Context, request SubscriptionFetchRequest,
 				return nil, errors.New("hwid_required")
 			}
 		}
+		if destination == "" && !binaryBody && happEncrypted(response.Header, request.URL, u) {
+			return nil, errors.New("encrypted_feed")
+		}
 		if !binaryBody && !utf8.Valid(body) {
 			return nil, errors.New("invalid_feed")
 		}
@@ -792,6 +795,19 @@ func fetchResourceAttempt(ctx context.Context, request SubscriptionFetchRequest,
 		return result, nil
 	}
 	return nil, errors.New("fetch_failed")
+}
+
+// happEncrypted reports a feed that Happ decrypts: an Encrypt-Tag header and a key parameter in
+// the subscription URL, which names one of Happ's own AES keys (Happ's "Subscription Content
+// Encryption"). Elarni cannot read such a feed, so it says so rather than calling it invalid.
+func happEncrypted(header http.Header, subscription string, final *url.URL) bool {
+	if strings.TrimSpace(header.Get("Encrypt-Tag")) == "" {
+		return false
+	}
+	if u, err := url.Parse(subscription); err == nil && u.Query().Get("key") != "" {
+		return true
+	}
+	return final.Query().Get("key") != ""
 }
 
 var errSaveFailed = errors.New("assets_unavailable")

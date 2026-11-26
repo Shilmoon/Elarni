@@ -424,6 +424,7 @@ final class IOSAppModel {
       case "rate_limited": String(localized: "\(name) is limiting requests. Elarni retries later; wait before refreshing again.")
       case "subscription_denied": String(localized: "\(name) refused the request. The subscription may have expired, run out of traffic or reached its device limit. Contact the provider.")
       case "subscription_unavailable": String(localized: "\(name) removed or changed this link. Ask the provider for a new one.")
+      case "encrypted_feed": String(localized: "\(name) encrypted this subscription for another app, such as Happ, and Elarni cannot read it. Ask the provider for a link without encryption.")
       default: describe(error)
       }
       throw IOSAppError.refreshFailed(text + String(localized: " The last working servers were kept."))
@@ -1524,6 +1525,7 @@ final class IOSAppModel {
       case .fetchClass("rate_limited"): return String(localized: "The provider is limiting requests. Elarni retries later; wait before refreshing again.")
       case .fetchClass("subscription_denied"): return String(localized: "The provider refused the request. The subscription may have expired, run out of traffic or reached its device limit. Contact the provider.")
       case .fetchClass("subscription_unavailable"): return String(localized: "The provider removed or changed this link. Ask the provider for a new one.")
+      case .fetchClass("encrypted_feed"): return String(localized: "The provider encrypted this subscription for another app, such as Happ, and Elarni cannot read it. Ask the provider for a link without encryption.")
       case .fetchClass: return String(localized: "The subscription could not be downloaded. Check the provider address and try again.")
       default: return String(localized: "The catalog changed or could not be read. Refresh the screen and retry.")
       }

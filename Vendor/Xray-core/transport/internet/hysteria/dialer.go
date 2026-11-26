@@ -76,10 +76,13 @@ func (c *connection) idle() bool {
 	return c.streams.Load() == 0 && (c.udpSM == nil || c.udpSM.sessions() == 0)
 }
 
+// close closes the packet conn before the transport: a transport stops its read loop through a read
+// deadline and waits for it, and the packet conn of a dialerProxy ignores deadlines, so closing the
+// transport first would wait, with the client lock held, until the tunnel under it ended on its own.
 func (c *connection) close() {
 	c.CloseWithError(closeErrCodeOK, "")
-	c.tr.Close()
 	c.pktConn.Close()
+	c.tr.Close()
 }
 
 // answers reports whether the server acknowledges probes within bound. A reset unidirectional
@@ -223,8 +226,8 @@ func (c *client) dial(ctx context.Context) (*connection, error) {
 		if conn != nil {
 			_ = conn.CloseWithError(closeErrCodeProtocolError, "")
 		}
-		_ = tr.Close()
 		_ = pktConn.Close()
+		_ = tr.Close()
 		return nil, err
 	}
 	_ = resp.Body.Close()
@@ -232,13 +235,14 @@ func (c *client) dial(ctx context.Context) (*connection, error) {
 	if resp.StatusCode != StatusAuthOK {
 		_ = rt.Close()
 		_ = conn.CloseWithError(closeErrCodeProtocolError, "")
-		_ = tr.Close()
 		_ = pktConn.Close()
+		_ = tr.Close()
 		return nil, errors.New("auth failed code ", resp.StatusCode)
 	}
 
 	// udp, _ := strconv.ParseBool(resp.Header.Get(ResponseHeaderUDPEnabled))
-	down, _ := strconv.ParseUint(resp.Header.Get(CommonHeaderCCRX), 10, 64)
+	remoteRx, _ := strconv.ParseUint(resp.Header.Get(CommonHeaderCCRX), 10, 64)
+	tx := quicParams.BrutalUp
 	errors.LogDebug(context.Background(), "ECHAccepted ", conn.ConnectionState().TLS.ECHAccepted)
 
 	switch quicParams.Congestion {
@@ -246,10 +250,14 @@ func (c *client) dial(ctx context.Context) (*connection, error) {
 	case "bbr":
 		congestion.UseBBR(conn, bbr.Profile(quicParams.BbrProfile))
 	case "", "brutal":
-		if quicParams.BrutalUp == 0 || down == 0 {
+		// as official Hysteria: the client's up rate turns Brutal on, the server's rx only caps it
+		if tx == 0 {
 			congestion.UseBBR(conn, bbr.Profile(quicParams.BbrProfile))
 		} else {
-			congestion.UseBrutal(conn, min(quicParams.BrutalUp, down), quicParams.BrutalDisableLossCompensation)
+			if remoteRx > 0 {
+				tx = min(tx, remoteRx)
+			}
+			congestion.UseBrutal(conn, tx, quicParams.BrutalDisableLossCompensation)
 		}
 	case "force-brutal":
 		congestion.UseBrutal(conn, quicParams.BrutalUp, quicParams.BrutalDisableLossCompensation)

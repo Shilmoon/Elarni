@@ -347,6 +347,12 @@ func (c *SplitHTTPConfig) Build() (proto.Message, error) {
 		return nil, errors.New("xPaddingBytes cannot be disabled")
 	}
 
+	// Elarni: the upload of packet-up splits into posts of this size; a size of 0 or less stopped the
+	// process at its first dial. 0 alone is unset and takes the default.
+	if r := c.ScMaxEachPostBytes; r != (Int32Range{}) && (r.From <= 0 || r.To < r.From) {
+		return nil, errors.New(`"scMaxEachPostBytes" must be a positive size or range of sizes, not `, r.From, "-", r.To)
+	}
+
 	if c.XPaddingKey == "" {
 		c.XPaddingKey = "x_padding"
 	}
@@ -697,12 +703,13 @@ func (c *HttpUpgradeConfig) Build() (proto.Message, error) {
 	return config, nil
 }
 
+// decimal, as official Hysteria reads rates: 100 mbps is 100,000,000 bits per second
 const (
 	Byte     = 1
-	Kilobyte = 1024 * Byte
-	Megabyte = 1024 * Kilobyte
-	Gigabyte = 1024 * Megabyte
-	Terabyte = 1024 * Gigabyte
+	Kilobyte = 1000 * Byte
+	Megabyte = 1000 * Kilobyte
+	Gigabyte = 1000 * Megabyte
+	Terabyte = 1000 * Gigabyte
 )
 
 type Bandwidth string

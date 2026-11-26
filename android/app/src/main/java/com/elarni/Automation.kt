@@ -163,6 +163,43 @@ class CrashRestarts {
     }
 }
 
+/** A start by boot or always-on that failed because the network could not look its server up yet: both come as the device
+ *  starts, often before Wi-Fi or mobile data works, and with recovery off nothing else tries again. The next try comes
+ *  2, 4, 8 and 16 s after a failure and then every 30 s, at once when a network comes, until 2 minutes after the first
+ *  failure. Times are [Automation.clock] seconds. */
+class StartRetry {
+    private var since: Double? = null
+    private var attempts = 0
+    /** When the next try is due, or null while none waits. */
+    var retryAt: Double? = null
+        private set
+    /** Counts a start that failed at [time]; true when another try waits, due at [retryAt]. */
+    fun failed(time: Double): Boolean {
+        val first = since ?: time.also { since = it }
+        val next = time + delays[minOf(attempts, delays.lastIndex)]
+        if (next > first + WINDOW) { reset(); return false }
+        attempts++; retryAt = next
+        return true
+    }
+    fun due(time: Double) = retryAt.let { it != null && time >= it }
+    /** A network came: the waiting try runs now, within the same 2 minutes. */
+    fun networkAvailable(time: Double) { retryAt = retryAt?.let { minOf(it, time) } }
+    fun reset() { since = null; attempts = 0; retryAt = null }
+    companion object {
+        const val WINDOW = 120.0
+        private val delays = listOf(2.0, 4.0, 8.0, 16.0, 30.0)
+        /** Without a network, a download for the start or the core's own start fails as well. */
+        private val offlineFailures = setOf("connection_failed", "fetch_failed")
+        /** Whether a start that failed with [error] may work once the network is up: the server's name had no answer
+         *  (Engine marks it), a download's lookup failed or a network change cancelled it, or no network is there at all
+         *  ([offline]). A refused setting, a missing VPN consent or a damaged catalog fails the same way again. */
+        fun retryable(error: Exception, offline: Boolean): Boolean {
+            val code = (error as? AppFailure)?.code ?: return false
+            return error.cause is java.net.UnknownHostException || code == "dns_failed" || code == "fetch_cancelled" || offline && code in offlineFailures
+        }
+    }
+}
+
 /** As on desktop, a server that passed a liveness check since its core started and then failed two in a row gets a new
  *  core. One that never passed (its exit may refuse the check targets) is only reported, so it cannot restart forever;
  *  the restart [reset]s the pass, so only a new one allows the next. */

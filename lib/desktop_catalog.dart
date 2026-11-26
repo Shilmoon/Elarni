@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:math';
 
+import 'connection_diagnostics.dart' show wintunFailure;
 import 'platform_services.dart';
 
 import 'tunnel_channel.dart';
@@ -67,6 +68,9 @@ PlatformException desktopError(
       'Another Elarni VPN is connected on this computer, by another user or the system service. Disconnect it, then retry.',
     'vpn_guard_stale' =>
       'DNS is blocked by a crashed tunnel. Use Repair VPN setup to remove the block.',
+    _ when wintunFailure(code) =>
+      'The Windows network driver (Wintun) could not be loaded, or its network adapter could not be created. '
+          'Antivirus software or a device installation policy can cause this. Reinstall Elarni, or use System proxy mode.',
     'invalid_backup_password' => 'Backup passwords need 12 to 1024 characters.',
     'invalid_backup' =>
       'The backup could not be opened. Check the password and the file.',

@@ -16,6 +16,7 @@ import (
 	"reflect"
 	"runtime"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -115,6 +116,128 @@ func TestLinuxGuardCoversForwardedTraffic(t *testing.T) {
 	}
 	if unguarded := network.firewall(nil); bytes.Contains([]byte(unguarded), []byte("forward_guard")) {
 		t.Fatal("forward guard installed without enforced routes")
+	}
+}
+
+// N6-15: a resolver the user runs on loopback answers itself. systemd-resolved does not: its own
+// lookups upstream are exempt from the redirect and would leave outside the tunnel.
+func TestLinuxLoopbackResolversAreNotRedirected(t *testing.T) {
+	network := linuxNetwork{Name: "rv0123456789ab", Mark: 0x52562ee1, DNSPort: 35123}
+	script := network.firewall(nil)
+	redirect := strings.Index(script, "add rule inet rv0123456789ab dns meta l4proto { tcp, udp } th dport 53 redirect to :35123\n")
+	for _, want := range []string{
+		"add rule inet rv0123456789ab dns ip daddr 127.0.0.0/8 ip daddr != { 127.0.0.53, 127.0.0.54 } return\n",
+		"add rule inet rv0123456789ab dns ip6 daddr ::1 return\n",
+	} {
+		if at := strings.Index(script, want); at < 0 || redirect < 0 || at > redirect {
+			t.Fatalf("%q is not before the DNS redirect in:\n%s", want, script)
+		}
+	}
+}
+
+func TestLinuxLoopbackResolverAnswersItselfInANamespace(t *testing.T) {
+	runtime.LockOSThread()
+	if err := unix.Unshare(unix.CLONE_NEWNET); err != nil {
+		t.Skip("a private network namespace needs root:", err)
+	}
+	// A new namespace's loopback is down and has no address until it is up.
+	if lo, err := netlink.LinkByName("lo"); err != nil || netlink.LinkSetUp(lo) != nil {
+		t.Fatal("loopback:", err)
+	}
+	network, err := reserveLinuxNetwork()
+	if errors.Is(err, errLinuxFirewallUnavailable) {
+		t.Skip("nftables is not installed")
+	} else if err != nil {
+		t.Fatal(err)
+	}
+	defer network.cleanup()
+	if err := nft(network.firewall(nil)); err != nil {
+		t.Fatal(err)
+	}
+	listen := func(port int) *net.UDPConn {
+		conn, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: port})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { conn.Close() })
+		return conn
+	}
+	resolver, elarni := listen(53), listen(network.DNSPort)
+	for _, query := range []struct {
+		to   string
+		want *net.UDPConn
+	}{
+		{"127.0.0.1:53", resolver},
+		{"127.0.0.53:53", elarni},
+		{"127.0.0.54:53", elarni},
+	} {
+		sender, err := net.Dial("udp4", query.to)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = sender.Write([]byte(query.to))
+		sender.Close()
+		if err != nil {
+			t.Fatal(query.to, err)
+		}
+		received := make([]byte, 64)
+		query.want.SetReadDeadline(time.Now().Add(2 * time.Second))
+		if n, _, err := query.want.ReadFromUDP(received); err != nil || string(received[:n]) != query.to {
+			t.Fatalf("a lookup to %s did not reach the expected listener: %v %q", query.to, err, received[:n])
+		}
+	}
+}
+
+// N6-16: a firewall service that reloads with nft flush ruleset removes the table while connected.
+func TestLinuxFirewallIsPutBackAfterAFlush(t *testing.T) {
+	runtime.LockOSThread()
+	if err := unix.Unshare(unix.CLONE_NEWNET); err != nil {
+		t.Skip("a private network namespace needs root:", err)
+	}
+	// The reservation binds a probe on 127.0.0.1, which a new namespace has once loopback is up.
+	if lo, err := netlink.LinkByName("lo"); err != nil || netlink.LinkSetUp(lo) != nil {
+		t.Fatal("loopback:", err)
+	}
+	network, err := reserveLinuxNetwork()
+	if errors.Is(err, errLinuxFirewallUnavailable) {
+		t.Skip("nftables is not installed")
+	} else if err != nil {
+		t.Fatal(err)
+	}
+	defer network.cleanup()
+	protected, err := linuxGuardedRoutes(network, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := nft(network.firewall(protected)); err != nil {
+		t.Fatal(err)
+	}
+	listing := func() string {
+		output, _ := exec.Command(linuxTool("nft"), "list", "table", "inet", network.Name).Output()
+		return string(output)
+	}
+	redirect := fmt.Sprintf("redirect to :%d", network.DNSPort)
+	// A restore over a table that is there replaces it instead of adding its rules twice.
+	if err := network.restoreFirewall(nil); err != nil || strings.Count(listing(), redirect) != 1 {
+		t.Fatalf("restore over a present table: %v\n%s", err, listing())
+	}
+	if !network.firewallPresent() {
+		t.Fatal("the installed table was reported missing")
+	}
+	if err := exec.Command(linuxTool("nft"), "flush", "ruleset").Run(); err != nil {
+		t.Fatal(err)
+	}
+	if network.firewallPresent() {
+		t.Fatal("the flushed table was reported present")
+	}
+	keeper := firewallKeeper{present: network.firewallPresent, restore: func() error { return network.restoreFirewall(nil) }}
+	if err := keeper.keep(time.Now()); err != nil || strings.Count(listing(), redirect) != 1 {
+		t.Fatalf("restore after the flush: %v\n%s", err, listing())
+	}
+	// A script nft rejects: the worker logs what nft said, on one line, before the tunnel ends.
+	detail, err := nftWithOutput("add rule inet " + network.Name + "x dns return\n")
+	if err == nil || err.Error() != "vpn_firewall_failed" || !strings.Contains(detail, "Error") || strings.Contains(detail, "\n") {
+		t.Fatalf("a rejected script: %v, %q", err, detail)
 	}
 }
 
