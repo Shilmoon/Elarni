@@ -423,6 +423,10 @@ final class DesktopIntegration extends ChangeNotifier {
       } else if (enabled) {
         _startDownload();
         unawaited(checkForUpdate());
+      } else if (dismissedUpdate != null) {
+        // Not now on a downloaded release the feed already has a newer one of.
+        _releaseHeldUpdate();
+        _startDownload();
       }
       error = null;
     } on Object {
@@ -493,18 +497,32 @@ final class DesktopIntegration extends ChangeNotifier {
     updateChecked = (at: at, read: read);
     availableUpdate = found;
     _updateAssets = assets;
-    // A failed install holds back its own version, not a newer one; so does
-    // Not now on a downloaded one, whose hidden notice would hide the newer.
-    if ((updateStage == UpdateStage.failed ||
-            updateStage == UpdateStage.ready &&
-                updateVersion == dismissedUpdate) &&
+    // A failed install holds back its own version, not another one.
+    if (updateStage == UpdateStage.failed &&
         found != null &&
         found.version != updateVersion) {
       updateStage = UpdateStage.none;
       updateVersion = null;
     }
+    _releaseHeldUpdate();
     notifyListeners();
     _startDownload();
+  }
+
+  // Not now on a downloaded release holds back that version, not a newer one
+  // the feed names, which then downloads in its place; an older one leaves it.
+  // Asked after each feed read, when a download ends and when Not now is
+  // pressed: the feed can name the newer one while the put-off one downloads.
+  void _releaseHeldUpdate() {
+    final found = availableUpdate, held = updateVersion;
+    if (updateStage == UpdateStage.ready &&
+        held != null &&
+        held == dismissedUpdate &&
+        found != null &&
+        (compareVersions(found.version, held) ?? 0) > 0) {
+      updateStage = UpdateStage.none;
+      updateVersion = null;
+    }
   }
 
   // Asked once per run: what this install is, and what an earlier run left.
@@ -592,7 +610,10 @@ final class DesktopIntegration extends ChangeNotifier {
       updateVersion = version is String && version.isNotEmpty
           ? version
           : found.version;
-      downloaded = true;
+      // Put off during the download, with a newer release seen meanwhile:
+      // that one downloads next (below).
+      _releaseHeldUpdate();
+      downloaded = updateStage == UpdateStage.ready;
     } on Object catch (error) {
       if (_closed) return false;
       final code = error is PlatformException ? error.code : '';

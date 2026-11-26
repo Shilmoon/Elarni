@@ -113,9 +113,15 @@ void main() {
   });
 
   // N3-58: antivirus removed the helper's wintun.dll and the app blamed the server.
+  // An adapter Wintun could not create (N6-03) sends the same code with its Windows
+  // error, a 32-bit number of up to 10 digits.
   test('a Wintun failure names the driver and keeps its Windows error', () {
     final generic = ConnectionIssue.forCode('connection_failed').description;
-    for (final code in ['vpn_wintun_failed_126', 'vpn_wintun_failed']) {
+    for (final code in [
+      'vpn_wintun_failed_126',
+      'vpn_wintun_failed',
+      'vpn_wintun_failed_4294967295',
+    ]) {
       for (final runtime in [true, false]) {
         expect(desktopFailureCode(code, runtime: runtime), code, reason: code);
       }

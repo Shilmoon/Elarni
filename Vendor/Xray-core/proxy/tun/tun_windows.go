@@ -66,6 +66,11 @@ type WindowsTun struct {
 // WindowsTun implements Tun
 var _ Tun = (*WindowsTun)(nil)
 
+// ErrAdapter wraps every NewTun failure: Wintun could not open or create the adapter (a device
+// installation policy or antivirus refusing it), or start its session. An embedder tells it from
+// the core's other start failures by it (Elarni).
+var ErrAdapter = go_errors.New("wintun adapter failed")
+
 // NewTun creates a Wintun interface with the given name. Should a Wintun
 // interface with the same name exist, it tried to be reused.
 func NewTun(options *Config) (Tun, error) {
@@ -76,7 +81,7 @@ func NewTun(options *Config) (Tun, error) {
 		adapter, session, err = startAdapter(options)
 	}
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %w", ErrAdapter, err)
 	}
 
 	tun := &WindowsTun{

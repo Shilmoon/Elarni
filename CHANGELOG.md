@@ -164,10 +164,11 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
   flushed table or a removed chain, puts the rules back and logs it. If it cannot put them back,
   it logs why and the VPN disconnects.
 - **Windows: a Wintun failure says what went wrong.** When the Windows network driver (Wintun)
-  could not be loaded, Elarni showed a generic connection failure. The message now names the
-  driver, says that antivirus software or a device installation policy can cause this, and
-  suggests reinstalling Elarni or using System proxy mode. The diagnostics export keeps the
-  Windows error code.
+  could not be loaded or could not create its network adapter, Elarni showed a generic
+  connection failure and switched to backup servers, which failed the same way. The message now
+  names the driver, says that antivirus software or a device installation policy can cause this,
+  and suggests reinstalling Elarni or using System proxy mode; no backup server is tried. The
+  diagnostics export keeps the Windows error code.
 - **Not now on an update keeps that version from installing by itself.** With automatic updates
   on, a release you put off with **Not now** was still downloaded and installed at the next
   check or start. Now it waits until you press **Update**. A newer release is offered and
