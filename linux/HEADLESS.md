@@ -25,17 +25,21 @@ first `connect` on a remote server, turn on the setting that answers them outsid
 the tunnel:
 
 ```sh
-echo '{"answerInbound":true}' > /tmp/inbound.json
-sudo elarni-cli settings /tmp/inbound.json
+echo '{"answerInbound":true}' | sudo elarni-cli settings -
 ```
 
 With it, a connection that reaches the server from outside (SSH, a web server, a
-published container port, a UDP service) is answered through the network it came
-from, and sessions that were open before the tunnel keep working. Under Block
-traffic without VPN the server's own services still answer, but ports forwarded
-to containers and virtual machines stay blocked, as all forwarded traffic outside
-the tunnel is. Everything the server opens itself still goes through
-the VPN. It is off by default: on a desktop it would let a program that accepts
+published container port) is answered through the network it came from, and
+sessions that were open before the tunnel keep working. A UDP service is answered
+outside only when it replies from the address the request reached: bound to that
+address, or choosing it per packet, as dnsmasq and unbound do with interface
+binding. One that listens on all addresses (`0.0.0.0`) and lets the kernel pick
+the source sends its answers into the tunnel, and the client does not get them.
+Under Block traffic without VPN the server's own services still answer, but ports
+forwarded to containers and virtual machines stay blocked, as all forwarded
+traffic outside the tunnel is. Everything the server opens itself still goes
+through the VPN, and so do its answers to what came in through the tunnel. It is
+off by default: on a desktop it would let a program that accepts
 connections, such as a torrent client, answer them outside the VPN. It needs the
 kernel's reverse-path filter in loose mode or off (`rp_filter` 2 or 0, the
 default on Debian, Ubuntu and Fedora).
