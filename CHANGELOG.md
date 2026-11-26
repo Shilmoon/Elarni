@@ -204,9 +204,9 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
   message now says it is encrypted for another app and to ask the provider for another link.
 - **WireGuard and AmneziaWG carry traffic again right after the device wakes**, instead of
   after about 15 s: a sleep of a minute or more renews the keys the server may have dropped.
-  Names with many addresses resolve again in apps that take small DNS answers, a name without
-  an IPv6 address no longer waits for the next DNS server, and on the Mac and iPhone a probe to
-  the tunnel's own addresses ends at once instead of hanging until its timeout.
+  Names with many addresses resolve again in apps that take small DNS answers or ask over TCP,
+  a name without an IPv6 address no longer waits for the next DNS server, and on the Mac and
+  iPhone a probe to the tunnel's own addresses ends at once instead of hanging until its timeout.
 - **iPhone: encryption uses the phone's AES and SHA instructions.** The iPhone core ran
   AES-GCM and SHA-256 without them, costing battery and heat on every connection that uses
   them. In the iPhone simulator, AES-128-GCM went from 146 to 9,115 MB/s and SHA-256 from 458
@@ -238,11 +238,13 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
   a round trip later and drops such UDP without a word, so an app with no IPv4 fallback waited
   out its own timeout, 5 s for QUIC. Elarni now finds out whether the server reaches public
   IPv6 (a TLS hello to Cloudflare's and Google's resolvers over IPv6, and over IPv4 to tell a
-  missing IPv6 from a tunnel that is down), on the first IPv6 answer and again when the result
-  is old. While the server has no IPv6, IPv6 answers hold no public address and apps use IPv4;
-  LAN addresses and the IP types "IPv4" and "IPv6" are not affected. Apps that resolve names
-  themselves (DNS over HTTPS in a browser) or dial IPv6 addresses directly still reach the
-  server with IPv6.
+  missing IPv6 from a tunnel that is down), on the first IPv6 answer, again when the result is
+  old, and on Android, the iPhone and the Mac after a change of network. While the server has no
+  IPv6, IPv6 answers for names that go through it hold no public address and apps use IPv4;
+  names that routing sends elsewhere (direct or to another server), LAN addresses, addresses
+  set in hosts, and the IP types "IPv4" and "IPv6" are not affected. This also applies on
+  Windows and Linux in TUN mode. Apps that resolve names themselves (DNS over HTTPS in a
+  browser) or dial IPv6 addresses directly still reach the server with IPv6.
 
 ## 0.6.4 - 2026-11-23
 

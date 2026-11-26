@@ -52,6 +52,35 @@ func udpResolver(timeout time.Duration, answer func(query []byte) []byte) (*Clie
 	return &Client{server: server, ipOption: &both, timeoutMs: timeout}, asked
 }
 
+// truncatedEmpty answers query without records and with the truncated bit set.
+func truncatedEmpty(query []byte) []byte {
+	var msg dnsmessage.Message
+	if msg.Unpack(query) != nil {
+		return nil
+	}
+	msg.Response, msg.Truncated = true, true
+	answer, err := msg.Pack()
+	common.Must(err)
+	return answer
+}
+
+// cutShort answers query with an AAAA record that lacks its last bytes.
+func cutShort(query []byte) []byte {
+	var msg dnsmessage.Message
+	if msg.Unpack(query) != nil || len(msg.Questions) != 1 {
+		return nil
+	}
+	q := msg.Questions[0]
+	msg.Response, msg.Additionals = true, nil
+	msg.Answers = []dnsmessage.Resource{{
+		Header: dnsmessage.ResourceHeader{Name: q.Name, Type: dnsmessage.TypeAAAA, Class: dnsmessage.ClassINET, TTL: 60},
+		Body:   &dnsmessage.AAAAResource{AAAA: [16]byte(net.ParseIP("2001:db8::1").To16())},
+	}}
+	answer, err := msg.Pack()
+	common.Must(err)
+	return answer[:len(answer)-4]
+}
+
 func askedTypes(asked chan dnsmessage.Type) []dnsmessage.Type {
 	var types []dnsmessage.Type
 	for {
@@ -120,6 +149,11 @@ func TestAnEmptyAAAAAnswerEndsTheLookup(t *testing.T) {
 			both := dns.IPOption{IPv4Enable: true, IPv6Enable: true}
 			return &Client{server: NewFakeDNSServer(engine), ipOption: &both, timeoutMs: time.Minute}
 		}, func(query []byte) []byte { return reply(query, dnsmessage.RCodeSuccess, "2001:db8::7") }, ipv6Only, []string{"2001:db8::7"}, []dnsmessage.Type{dnsmessage.TypeAAAA}},
+		// Not a clean answer: the records may be in the part that did not come.
+		{"AAAA answered empty but truncated", func() *Client { client, _ := udpResolver(time.Minute, truncatedEmpty); return client },
+			func(query []byte) []byte { return reply(query, dnsmessage.RCodeSuccess, "2001:db8::7") }, ipv6Only, []string{"2001:db8::7"}, []dnsmessage.Type{dnsmessage.TypeAAAA}},
+		{"AAAA answer whose record does not parse", func() *Client { client, _ := udpResolver(time.Minute, cutShort); return client },
+			func(query []byte) []byte { return reply(query, dnsmessage.RCodeSuccess, "2001:db8::7") }, ipv6Only, []string{"2001:db8::7"}, []dnsmessage.Type{dnsmessage.TypeAAAA}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			second, asked := udpResolver(time.Minute, func(query []byte) []byte {
@@ -156,6 +190,66 @@ func TestAnEmptyAAAAAnswerEndsTheLookup(t *testing.T) {
 			slices.Sort(types)
 			if !slices.Equal(types, c.asked) {
 				t.Fatalf("the next resolver was asked %v, want %v", types, c.asked)
+			}
+		})
+	}
+}
+
+// Elarni: with enableParallelQuery the resolvers of each policy group race, and a lookup waited
+// for the next group, often without an IPv6 route, until its timeout although the first group had
+// answered an AAAA query cleanly without records. The same answer ends it there too.
+func TestAnEmptyAAAAAnswerEndsAParallelLookup(t *testing.T) {
+	previous := udpResendAfter
+	udpResendAfter = time.Hour
+	t.Cleanup(func() { udpResendAfter = previous })
+	ipv6Only := dns.IPOption{IPv6Enable: true, FakeEnable: true}
+	ipv4Only := dns.IPOption{IPv4Enable: true, FakeEnable: true}
+	empty := func(query []byte) []byte { return reply(query, dnsmessage.RCodeSuccess) }
+	for _, c := range []struct {
+		name   string
+		first  func(query []byte) []byte
+		second func(query []byte) []byte // nil: never answers
+		option dns.IPOption
+		want   []string // nil: an empty answer
+	}{
+		{"AAAA answered empty", empty, nil, ipv6Only, nil},
+		{"AAAA answered empty but truncated", truncatedEmpty,
+			func(query []byte) []byte { return reply(query, dnsmessage.RCodeSuccess, "2001:db8::7") }, ipv6Only, []string{"2001:db8::7"}},
+		{"A answered empty", empty,
+			func(query []byte) []byte { return reply(query, dnsmessage.RCodeSuccess, "192.0.2.7") }, ipv4Only, []string{"192.0.2.7"}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			first, _ := udpResolver(time.Minute, c.first)
+			second, _ := udpResolver(time.Minute, func(query []byte) []byte {
+				if c.second == nil {
+					return nil
+				}
+				return c.second(query)
+			})
+			first.policyID, second.policyID = 1, 2 // two groups
+			allowed := dns.IPOption{IPv4Enable: true, IPv6Enable: true}
+			d := &DNS{ctx: udpTestContext(t), clients: []*Client{first, second}, ipOption: &allowed, hosts: &StaticHosts{}, enableParallelQuery: true}
+			type result struct {
+				ips []net.IP
+				err error
+			}
+			done := make(chan result, 1)
+			go func() {
+				ips, _, err := d.LookupIP("example.test", c.option)
+				done <- result{ips, err}
+			}()
+			var got result
+			select {
+			case got = <-done:
+			case <-time.After(5 * time.Second):
+				t.Fatal("no answer within 5 s: the lookup waited for the next group")
+			}
+			var addresses []string
+			for _, ip := range got.ips {
+				addresses = append(addresses, ip.String())
+			}
+			if c.want == nil && !go_errors.Is(got.err, dns.ErrEmptyResponse) || c.want != nil && got.err != nil || !slices.Equal(addresses, c.want) {
+				t.Fatalf("got %v, %v; want %v", addresses, got.err, c.want)
 			}
 		})
 	}

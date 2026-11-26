@@ -236,10 +236,10 @@ func (c *Client) queryIP(ctx context.Context, domain string, option dns.IPOption
 	cancel()
 
 	if err != nil {
-		// IPRecord.getIPs: the resolver answered, without error and without records.
+		// IPRecord.getIPs: the resolver answered cleanly, without error and without records.
 		_, asksAResolver := c.server.(CachedNameserver)
 		filtered := c.expectedIPs != nil || c.unexpectedIPs != nil
-		return nil, 0, asksAResolver && !filtered && go_errors.Is(err, dns.ErrEmptyResponse), err
+		return nil, 0, asksAResolver && !filtered && go_errors.Is(err, errAnsweredEmpty), err
 	}
 
 	if len(ips) == 0 {

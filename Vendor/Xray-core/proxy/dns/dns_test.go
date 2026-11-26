@@ -258,6 +258,51 @@ func TestUDPAnswersKeepTheAddressesThatFitWhatTheAskerTakes(t *testing.T) {
 	}
 }
 
+// Elarni: an answer larger than one 8 KiB buffer was dropped with a log line, so a TCP asker for a
+// name with about 290 or more addresses waited out its own timeout. Over TCP the whole answer goes
+// out, and only one larger than the 65535 bytes that TCP's length counts keeps the addresses that fit.
+func TestTCPAnswersLargerThanABufferAreSentWhole(t *testing.T) {
+	ips := make([]net.IP, 2400)
+	for i := range ips {
+		ips[i] = net.ParseIP(fmt.Sprintf("2001:db8::%x:%x", i/256, i%256))
+	}
+	for _, c := range []struct {
+		name  string
+		count int
+		whole bool
+	}{
+		{"400 AAAA records, about 11 KiB", 400, true},
+		{"2400 AAAA records, about 66 KiB", 2400, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			h := &Handler{client: staticClient{ips: ips[:c.count]}, timeout: time.Minute}
+			answer := answerFor(t, h, net.Network_TCP, queryFor(dnsmessage.TypeAAAA, 0))
+			var msg dnsmessage.Message
+			if err := msg.Unpack(answer); err != nil {
+				t.Fatalf("answer of %d bytes does not parse: %v", len(answer), err)
+			}
+			if msg.ID != 9 || msg.RCode != dnsmessage.RCodeSuccess || msg.Truncated {
+				t.Fatalf("id %d rcode %v truncated %t", msg.ID, msg.RCode, msg.Truncated)
+			}
+			for i, record := range msg.Answers {
+				if got := net.IP(record.Body.(*dnsmessage.AAAAResource).AAAA[:]); !got.Equal(ips[i]) {
+					t.Fatalf("answer %d is %v, want %v: the addresses in their order", i, got, ips[i])
+				}
+			}
+			n := len(msg.Answers)
+			if c.whole {
+				if n != c.count || len(answer) <= buf.Size {
+					t.Fatalf("%d of %d addresses in %d bytes, want all in more than %d", n, c.count, len(answer), buf.Size)
+				}
+				return
+			}
+			if n == 0 || n >= c.count || len(answer) > 65535 || len(answer)+28 <= 65535 {
+				t.Fatalf("%d of %d addresses in %d bytes, want as many as fit within 65535", n, c.count, len(answer))
+			}
+		})
+	}
+}
+
 // A short answer is the message the handler always sent: same header, question and records.
 func TestShortAnswersAreUnchanged(t *testing.T) {
 	ips := []net.IP{net.ParseIP("192.0.2.1"), net.ParseIP("192.0.2.2"), net.ParseIP("192.0.2.3")}

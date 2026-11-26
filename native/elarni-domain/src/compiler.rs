@@ -1079,7 +1079,7 @@ pub(crate) fn compile_owned_config(
     });
     close_with_app(&mut config);
     apply_per_app_routing(&mut config, runtime, "elarni-")?;
-    block_tun_own_subnets(&mut config, "elarni-block");
+    block_tun_own_subnets(&mut config, "elarni-block", packet_backend);
     serde_json::to_vec(&config).map_err(|_| CompileError::InvalidRoute)
 }
 
@@ -1092,28 +1092,46 @@ const TUN_OWN_SUBNETS: [&str; 5] = [
     "198.51.100.252/30",
     "fdfe:dcba:9876::/126",
     "fd76:6f75:7465::/126",
-    "192.0.2.0/30",
-    "2001:db8::/126",
+    APPLE_TUNNEL_SUBNETS[0],
+    APPLE_TUNNEL_SUBNETS[1],
 ];
 
-/// Ends TUN traffic to its own subnets, except DNS, ahead of every other rule, the
-/// per-app gate included.
-pub(crate) fn block_tun_own_subnets(config: &mut Value, block_tag: &str) {
-    let Some(tun_tag) = config["inbounds"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .find(|inbound| inbound["protocol"] == "tun")
-        .and_then(|inbound| inbound["tag"].as_str())
-        .map(str::to_owned)
-    else {
+/// The Mac and iPhone tunnel's own subnets. With the native backend (the iPhone always, the
+/// Mac by default) tun2proxy carries the tunnel's packets into the SOCKS inbound, so its
+/// probes and broadcasts arrive there and not at a TUN inbound.
+const APPLE_TUNNEL_SUBNETS: [&str; 2] = ["192.0.2.0/30", "2001:db8::/126"];
+
+/// Ends tunnel traffic to its own subnets, except DNS, ahead of every other rule, the
+/// per-app gate included: at the TUN inbound, or with the native backend at the SOCKS
+/// inbound that tun2proxy feeds.
+pub(crate) fn block_tun_own_subnets(
+    config: &mut Value,
+    block_tag: &str,
+    packet_backend: PacketBackend,
+) {
+    let inbound_tag = |protocol: &str| {
+        config["inbounds"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .find(|inbound| inbound["protocol"] == protocol)
+            .and_then(|inbound| inbound["tag"].as_str())
+            .map(str::to_owned)
+    };
+    let block = match packet_backend {
+        PacketBackend::XrayTun => inbound_tag("tun").map(|tag| (tag, TUN_OWN_SUBNETS.as_slice())),
+        PacketBackend::NativeTun2Proxy => {
+            inbound_tag("socks").map(|tag| (tag, APPLE_TUNNEL_SUBNETS.as_slice()))
+        }
+    };
+    let Some((inbound, subnets)) = block else {
         return;
     };
     if let Some(rules) = config["routing"]["rules"].as_array_mut() {
         rules.insert(
             0,
-            json!({"type": "field", "inboundTag": [tun_tag], "network": "tcp,udp",
-                "ip": TUN_OWN_SUBNETS, "port": "1-52,54-65535", "outboundTag": block_tag}),
+            json!({"type": "field", "inboundTag": [inbound], "network": "tcp,udp",
+                "ip": subnets, "port": "1-52,54-65535", "outboundTag": block_tag}),
         );
     }
 }

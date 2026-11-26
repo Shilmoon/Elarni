@@ -1240,7 +1240,7 @@ fn plain_udp_remote_resolver_reaches_its_server_through_the_proxy() {
     let mut request = compile_request();
     request.routes = routes.clone();
     let config = compiled(&request);
-    let rules = config["routing"]["rules"].as_array().unwrap();
+    let rules = crate::profile_tests::after_socks_own_subnet_block(&config);
     assert_eq!(rules[1], pin("1.1.1.1"), "{rules:?}");
     assert_eq!(rules.last().unwrap()["outboundTag"], "elarni-direct");
     assert!(!rules.contains(&pin("8.8.8.8")));

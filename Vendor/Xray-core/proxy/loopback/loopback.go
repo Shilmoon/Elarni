@@ -22,6 +22,10 @@ type Loopback struct {
 // CarriesLargePackets implements proxy.LargePacketCarrier.
 func (l *Loopback) CarriesLargePackets() {}
 
+// InboundTag is the inbound whose routing the traffic sent here takes next (Elarni: the DNS
+// outbound's IPv6 check follows a route through it to the outbound it ends at).
+func (l *Loopback) InboundTag() string { return l.inboundTag }
+
 func (l *Loopback) Process(ctx context.Context, link *transport.Link, _ internet.Dialer) error {
 	outbounds := session.OutboundsFromContext(ctx)
 	ob := outbounds[len(outbounds)-1]

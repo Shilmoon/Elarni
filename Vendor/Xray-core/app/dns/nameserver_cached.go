@@ -166,6 +166,10 @@ func merge(option dns.IPOption, rec4 *IPRecord, rec6 *IPRecord, errs ...error) (
 	if len(allIPs) > 0 {
 		return allIPs, rTTL, nil
 	}
+	// Elarni: one family answered cleanly and the other not; both are empty all the same.
+	if len(errs) == 2 && go_errors.Is(errs[0], dns.ErrEmptyResponse) && go_errors.Is(errs[1], dns.ErrEmptyResponse) {
+		return nil, rTTL, dns.ErrEmptyResponse
+	}
 	if len(errs) == 2 && go_errors.Is(errs[0], errs[1]) {
 		return nil, rTTL, errs[0]
 	}

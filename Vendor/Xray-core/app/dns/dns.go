@@ -534,6 +534,16 @@ func (s *DNS) parallelQuery(domain string, option dns.IPOption) ([]net.IP, uint3
 					return r.ips, r.ttl, nil
 				}
 			}
+			// Elarni: as in serial mode, a resolver of this group that answered an AAAA query
+			// cleanly without records said the name has no IPv6 address; the next groups are not
+			// waited for.
+			if option.IPv6Enable && !option.IPv4Enable {
+				for j := g.start; j <= g.end; j++ {
+					if r := results[j]; r != nil && r.answeredEmpty {
+						return nil, 0, dns.ErrEmptyResponse
+					}
+				}
+			}
 
 			// current group is incomplete and no one success -> continue pending
 			if pending[nextGroup] > 0 {
@@ -562,6 +572,8 @@ type queryResult struct {
 	ttl   uint32
 	err   error
 	index int
+	// Elarni: see Client.queryIP
+	answeredEmpty bool
 }
 
 func asyncQueryAll(domain string, option dns.IPOption, clients []*Client, ctx context.Context) chan queryResult {
@@ -586,8 +598,8 @@ func asyncQueryAll(domain string, option dns.IPOption, clients []*Client, ctx co
 				qctx = nctx
 				defer cancel()
 			}
-			ips, ttl, err := c.QueryIP(qctx, domain, option)
-			ch <- queryResult{ips: ips, ttl: ttl, err: err, index: i}
+			ips, ttl, answeredEmpty, err := c.queryIP(qctx, domain, option)
+			ch <- queryResult{ips: ips, ttl: ttl, err: err, index: i, answeredEmpty: answeredEmpty}
 		}(i, client)
 	}
 	return ch

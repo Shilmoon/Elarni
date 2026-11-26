@@ -168,6 +168,9 @@ func WindowsTunnelConfig(raw []byte, adapter string, policies ...*WindowsRoutePo
 	}
 	protocols := map[string]bool{"vless": true, "vmess": true, "shadowsocks": true, "trojan": true, "socks": true, "http": true,
 		"hysteria": true, "tuic": true, "shadowquic": true, "wireguard": true, "amneziawg": true, "freedom": true, "blackhole": true, "dns": true, "loopback": true}
+	// The compiler asks its DNS outbound to check IPv6 for the IP type Automatic. The TUN's DNS
+	// is answered by the outbound below instead, which asks the same.
+	checkIPv6 := false
 	for _, item := range outbounds {
 		outbound, ok := item.(map[string]any)
 		if !ok {
@@ -176,6 +179,9 @@ func WindowsTunnelConfig(raw []byte, adapter string, policies ...*WindowsRoutePo
 		protocol, _ := outbound["protocol"].(string)
 		if !protocols[protocol] || outbound["tag"] == "elarni-windows-dns" || outbound["tag"] == "elarni-windows-dns-forward" {
 			return nil, invalid
+		}
+		if settings, _ := outbound["settings"].(map[string]any); protocol == "dns" && settings["checkIPv6"] == true {
+			checkIPv6 = true
 		}
 		if protocol == "wireguard" || protocol == "amneziawg" {
 			settings, ok := outbound["settings"].(map[string]any)
@@ -278,15 +284,19 @@ func WindowsTunnelConfig(raw []byte, adapter string, policies ...*WindowsRoutePo
 	dns, _ := config["dns"].(map[string]any)
 	dnsTag, _ := dns["tag"].(string)
 	address, port, network := dnsForwardTarget(dns["servers"])
+	dnsSettings := map[string]any{"address": address, "port": port, "network": network, "rules": []any{
+		map[string]any{"action": "hijack", "qType": "1,28"},
+		map[string]any{"action": "return", "qType": "64,65"},
+		map[string]any{"action": "direct"}}}
+	if checkIPv6 {
+		dnsSettings["checkIPv6"] = true
+	}
 	config["outbounds"] = append(outbounds,
 		map[string]any{"tag": "elarni-windows-dns-forward", "protocol": "loopback", "settings": map[string]any{"inboundTag": dnsTag}},
 		// Linux renames the last outbound, so the DNS outbound stays last.
 		map[string]any{"tag": "elarni-windows-dns", "protocol": "dns",
 			"streamSettings": map[string]any{"sockopt": map[string]any{"dialerProxy": "elarni-windows-dns-forward"}},
-			"settings": map[string]any{"address": address, "port": port, "network": network, "rules": []any{
-				map[string]any{"action": "hijack", "qType": "1,28"},
-				map[string]any{"action": "return", "qType": "64,65"},
-				map[string]any{"action": "direct"}}}})
+			"settings":       dnsSettings})
 	routing, ok := config["routing"].(map[string]any)
 	if !ok {
 		routing = map[string]any{}

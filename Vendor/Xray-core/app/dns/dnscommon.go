@@ -40,6 +40,8 @@ type IPRecord struct {
 	Expire    time.Time
 	RCode     dnsmessage.RCode
 	RawHeader *dnsmessage.Header
+	// Elarni: the answer section was read to its end
+	complete bool
 }
 
 func (r *IPRecord) getIPs() ([]net.IP, int32, error) {
@@ -54,6 +56,9 @@ func (r *IPRecord) getIPs() ([]net.IP, int32, error) {
 		return nil, ttl, dns_feature.RCodeError(r.RCode)
 	}
 	if len(r.IP) == 0 {
+		if r.complete && r.RawHeader != nil && !r.RawHeader.Truncated {
+			return nil, ttl, errAnsweredEmpty
+		}
 		return nil, ttl, dns_feature.ErrEmptyResponse
 	}
 
@@ -61,6 +66,11 @@ func (r *IPRecord) getIPs() ([]net.IP, int32, error) {
 }
 
 var errRecordNotFound = errors.New("record not found")
+
+// errAnsweredEmpty is the empty response of a clean answer (Elarni): NOERROR, not truncated, and
+// read to the end of its answer section, so the resolver itself said the name has no records of
+// the type. An answer cut short, or one whose records did not parse, is only ErrEmptyResponse.
+var errAnsweredEmpty = errors.New("answered without records").Base(dns_feature.ErrEmptyResponse)
 
 type dnsRequest struct {
 	reqType dnsmessage.Type
@@ -214,6 +224,8 @@ L:
 		if err != nil {
 			if err != dnsmessage.ErrSectionDone {
 				errors.LogInfoInner(context.Background(), err, "failed to parse answer section for domain: ", ah.Name.String())
+			} else {
+				ipRecord.complete = true
 			}
 			break
 		}
