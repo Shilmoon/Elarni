@@ -28,7 +28,7 @@ require (
 	github.com/ghodss/yaml v1.0.1-0.20220118164431-d8423dcdf344 // indirect
 	github.com/gofrs/uuid/v5 v5.5.1 // indirect
 	github.com/google/btree v1.1.3 // indirect
-	github.com/gorilla/websocket v1.5.3 // indirect
+	github.com/gorilla/websocket v1.5.4-0.20240701034025-d67f41855da4 // indirect
 	github.com/juju/ratelimit v1.0.2 // indirect
 	github.com/klauspost/compress v1.20.2 // indirect
 	github.com/klauspost/cpuid/v2 v2.4.1 // indirect
