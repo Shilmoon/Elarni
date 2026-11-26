@@ -58,11 +58,12 @@ func listenLimited(t *testing.T, limit int) *msgSizeLimitedConn {
 }
 
 // dialLimited dials a loopback echo server whose socket refuses writes over serverLimit bytes,
-// from a socket that refuses writes over clientLimit bytes, and returns both ends.
+// from a socket that refuses writes over clientLimit bytes, and returns both ends. The server
+// takes DisablePathMTUDiscovery from conf.
 func dialLimited(t *testing.T, ctx context.Context, conf *Config, clientLimit, serverLimit int) (client, server *Conn, clientConn, serverConn *msgSizeLimitedConn, err error) {
 	t.Helper()
 	serverConn = listenLimited(t, serverLimit)
-	ln, err := Listen(serverConn, &tls.Config{Certificates: []tls.Certificate{selfSigned(t)}, NextProtos: []string{"t"}}, &Config{HandshakeIdleTimeout: time.Minute})
+	ln, err := Listen(serverConn, &tls.Config{Certificates: []tls.Certificate{selfSigned(t)}, NextProtos: []string{"t"}}, &Config{HandshakeIdleTimeout: time.Minute, DisablePathMTUDiscovery: conf.DisablePathMTUDiscovery})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -143,8 +144,14 @@ func TestHandshakeFallsBackToMinPacketSizeOnMsgSizeError(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
+			// Without path MTU discovery on either end: its first probe goes out five RTTs after the
+			// handshake is confirmed, sometimes while the echo below still runs, and is above the
+			// size in effect by design (1326 bytes here), so the socket refuses it. The check after
+			// the echo is for every other packet, still sized from the MTU discoverer.
+			conf := tc.conf.Clone()
+			conf.DisablePathMTUDiscovery = true
 			start := time.Now()
-			client, server, clientConn, serverConn, err := dialLimited(t, ctx, tc.conf, tc.clientLimit, tc.serverLimit)
+			client, server, clientConn, serverConn, err := dialLimited(t, ctx, conf, tc.clientLimit, tc.serverLimit)
 			if err != nil {
 				t.Fatalf("dial failed: %v", err)
 			}
