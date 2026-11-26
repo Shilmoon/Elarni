@@ -40,6 +40,9 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
   (`TestBurstOfPathChangesRetiresOnceMore`) no longer fail on a runner whose timers run late.
   They sent ten signals over 90% of one check whatever the time taken, and a signal sent after
   the check rightly started a third pass; the burst now ends by the clock, as WireGuard's does.
+- For contributors: the required "checks passed" check no longer passes when GitHub cancelled a
+  job it found no runner for. It now reads each job's own result, because GitHub reports such a
+  job matrix as passed.
 
 ## 0.6.5 - 2026-11-26
 
