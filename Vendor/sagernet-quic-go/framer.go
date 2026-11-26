@@ -33,6 +33,7 @@ type framer struct {
 	mutex sync.Mutex
 
 	activeStreams            map[protocol.StreamID]streamFrameGetter
+	blockedStreams           map[protocol.StreamID]struct{}
 	streamQueue              ringbuffer.RingBuffer[protocol.StreamID]
 	streamsWithControlFrames map[protocol.StreamID]streamControlFrameGetter
 
@@ -46,9 +47,16 @@ type framer struct {
 func newFramer(connFlowController *connectionFlowController) *framer {
 	return &framer{
 		activeStreams:            make(map[protocol.StreamID]streamFrameGetter),
+		blockedStreams:           make(map[protocol.StreamID]struct{}),
 		streamsWithControlFrames: make(map[protocol.StreamID]streamControlFrameGetter),
 		connFlowController:       connFlowController,
 	}
+}
+
+func (f *framer) HasUnblockedStreamData() bool {
+	f.mutex.Lock()
+	defer f.mutex.Unlock()
+	return len(f.activeStreams) > len(f.blockedStreams)
 }
 
 func (f *framer) HasData() bool {
@@ -85,19 +93,20 @@ func (f *framer) QueueControlFrame(frame wire.Frame) {
 	f.controlFrames = append(f.controlFrames, frame)
 }
 
-func (f *framer) Append(
+// AppendStreamFrames appends STREAM frames.
+// If a stream or the connection becomes blocked on flow control,
+// the respective STREAM_DATA_BLOCKED or DATA_BLOCKED frame is appended to frames.
+func (f *framer) AppendStreamFrames(
 	frames []ackhandler.Frame,
 	streamFrames []ackhandler.StreamFrame,
 	maxLen protocol.ByteCount,
-	now monotime.Time,
 	v protocol.Version,
 ) ([]ackhandler.Frame, []ackhandler.StreamFrame, protocol.ByteCount) {
+	// STREAM_DATA_BLOCKED and DATA_BLOCKED frames that don't fit are queued as control frames
 	f.controlFrameMutex.Lock()
-	frames, controlFrameLen := f.appendControlFrames(frames, maxLen, now, v)
-	maxLen -= controlFrameLen
 
 	var lastFrame ackhandler.StreamFrame
-	var streamFrameLen protocol.ByteCount
+	var controlFrameLen, streamFrameLen protocol.ByteCount
 	f.mutex.Lock()
 	// pop STREAM frames, until less than 128 bytes are left in the packet
 	numActiveStreams := f.streamQueue.Len()
@@ -153,12 +162,15 @@ func (f *framer) Append(
 	return frames, streamFrames, controlFrameLen + streamFrameLen
 }
 
-func (f *framer) appendControlFrames(
+func (f *framer) AppendControlFrames(
 	frames []ackhandler.Frame,
 	maxLen protocol.ByteCount,
 	now monotime.Time,
 	v protocol.Version,
 ) ([]ackhandler.Frame, protocol.ByteCount) {
+	f.controlFrameMutex.Lock()
+	defer f.controlFrameMutex.Unlock()
+
 	var length protocol.ByteCount
 	// add a PATH_RESPONSE first, but only pack a single PATH_RESPONSE per packet
 	if len(f.pathResponses) > 0 {
@@ -219,6 +231,7 @@ func (f *framer) QueuedTooManyControlFrames() bool {
 
 func (f *framer) AddActiveStream(id protocol.StreamID, str streamFrameGetter) {
 	f.mutex.Lock()
+	delete(f.blockedStreams, id)
 	if _, ok := f.activeStreams[id]; !ok {
 		f.streamQueue.PushBack(id)
 		f.activeStreams[id] = str
@@ -238,6 +251,7 @@ func (f *framer) AddStreamWithControlFrames(id protocol.StreamID, str streamCont
 func (f *framer) RemoveActiveStream(id protocol.StreamID) {
 	f.mutex.Lock()
 	delete(f.activeStreams, id)
+	delete(f.blockedStreams, id)
 	// We don't delete the stream from the streamQueue,
 	// since we'd have to iterate over the ringbuffer.
 	// Instead, we check if the stream is still in activeStreams when appending STREAM frames.
@@ -260,8 +274,14 @@ func (f *framer) getNextStreamFrame(maxLen protocol.ByteCount, v protocol.Versio
 	frame, blocked, hasMoreData := str.popStreamFrame(maxLen, v)
 	if hasMoreData { // put the stream back in the queue (at the end)
 		f.streamQueue.PushBack(id)
+		if frame.Frame == nil {
+			f.blockedStreams[id] = struct{}{}
+		} else {
+			delete(f.blockedStreams, id)
+		}
 	} else { // no more data to send. Stream is not active
 		delete(f.activeStreams, id)
+		delete(f.blockedStreams, id)
 	}
 	// Note that the frame.Frame can be nil:
 	// * if the stream was canceled after it said it had data
@@ -279,6 +299,7 @@ func (f *framer) Handle0RTTRejection() {
 	for id := range f.activeStreams {
 		delete(f.activeStreams, id)
 	}
+	clear(f.blockedStreams)
 	clear(f.streamsWithControlFrames)
 	var j int
 	for i, frame := range f.controlFrames {

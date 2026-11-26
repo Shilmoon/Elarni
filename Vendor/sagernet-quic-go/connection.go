@@ -167,6 +167,14 @@ type Conn struct {
 
 	maxPayloadSizeEstimate atomic.Uint32
 
+	// Elarni (quic-go/quic-go#5911): the Initial packet size in effect: the configured one, or 1200
+	// bytes once a write at the configured size failed with "message too long".
+	currentInitialPacketSize atomic.Uint32
+	// initialPacketSizeTried is set once a packet of the initial size was written, or refused.
+	// Until then, and until the handshake is confirmed, packets are written directly rather than
+	// through the send queue, which drops a "message too long" error.
+	initialPacketSizeTried bool
+
 	initialStream       *initialCryptoStream
 	handshakeStream     *cryptoStream
 	oneRTTStream        *cryptoStream // only set for the server
@@ -315,7 +323,7 @@ var newConnection = func(
 	s.rttStats.SetInitialRTT(rtt)
 	s.sentPacketHandler = ackhandler.NewSentPacketHandler(
 		0,
-		protocol.ByteCount(s.config.InitialPacketSize),
+		s.config.initialPacketSize(),
 		s.rttStats,
 		&s.connStats,
 		clientAddressValidated,
@@ -326,7 +334,8 @@ var newConnection = func(
 		s.qlogger,
 		s.logger,
 	)
-	s.maxPayloadSizeEstimate.Store(uint32(estimateMaxPayloadSize(protocol.ByteCount(s.config.InitialPacketSize))))
+	s.maxPayloadSizeEstimate.Store(uint32(estimateMaxPayloadSize(s.config.initialPacketSize())))
+	s.currentInitialPacketSize.Store(uint32(s.config.initialPacketSize()))
 	statelessResetToken := statelessResetter.GetStatelessResetToken(srcConnID)
 	params := &wire.TransportParameters{
 		InitialMaxStreamDataBidiLocal:   protocol.ByteCount(s.config.InitialStreamReceiveWindow),
@@ -448,7 +457,7 @@ var newClientConnection = func(
 	s.preSetup()
 	s.sentPacketHandler = ackhandler.NewSentPacketHandler(
 		initialPacketNumber,
-		protocol.ByteCount(s.config.InitialPacketSize),
+		s.config.initialPacketSize(),
 		s.rttStats,
 		&s.connStats,
 		false, // has no effect
@@ -459,7 +468,8 @@ var newClientConnection = func(
 		s.qlogger,
 		s.logger,
 	)
-	s.maxPayloadSizeEstimate.Store(uint32(estimateMaxPayloadSize(protocol.ByteCount(s.config.InitialPacketSize))))
+	s.maxPayloadSizeEstimate.Store(uint32(estimateMaxPayloadSize(s.config.initialPacketSize())))
+	s.currentInitialPacketSize.Store(uint32(s.config.initialPacketSize()))
 	oneRTTStream := newCryptoStream()
 	params := &wire.TransportParameters{
 		InitialMaxStreamDataBidiRemote: protocol.ByteCount(s.config.InitialStreamReceiveWindow),
@@ -748,6 +758,7 @@ runLoop:
 			c.setCloseError(&closeError{err: err})
 			break runLoop
 		}
+		c.sentPacketHandler.UpdateAppLimited(now, c.sendQueue.WouldBlock() || c.framer.HasUnblockedStreamData() || c.datagramQueue.Peek() != nil)
 		if c.sendQueue.WouldBlock() {
 			// The send queue is still busy sending out packets. Wait until there's space to enqueue new packets.
 			sendQueueAvailable = c.sendQueue.Available()
@@ -940,7 +951,7 @@ func (c *Conn) idleTimeoutStartTime() monotime.Time {
 }
 
 func (c *Conn) switchToNewPath(tr *Transport, now monotime.Time) {
-	initialPacketSize := protocol.ByteCount(c.config.InitialPacketSize)
+	initialPacketSize := c.initialPacketSize()
 	c.sentPacketHandler.MigratedPath(now, initialPacketSize)
 	maxPacketSize := protocol.ByteCount(protocol.MaxPacketBufferSize)
 	if c.peerParams.MaxUDPPayloadSize > 0 && c.peerParams.MaxUDPPayloadSize < maxPacketSize {
@@ -1327,14 +1338,14 @@ func (c *Conn) handleShortHeaderPacket(
 		return true, nil
 	}
 	c.pathManager.SwitchToPath(p.remoteAddr)
-	c.sentPacketHandler.MigratedPath(p.rcvTime, protocol.ByteCount(c.config.InitialPacketSize))
+	c.sentPacketHandler.MigratedPath(p.rcvTime, c.initialPacketSize())
 	maxPacketSize := protocol.ByteCount(protocol.MaxPacketBufferSize)
 	if c.peerParams.MaxUDPPayloadSize > 0 && c.peerParams.MaxUDPPayloadSize < maxPacketSize {
 		maxPacketSize = c.peerParams.MaxUDPPayloadSize
 	}
 	c.mtuDiscoverer.Reset(
 		p.rcvTime,
-		protocol.ByteCount(c.config.InitialPacketSize),
+		c.initialPacketSize(),
 		maxPacketSize,
 	)
 	c.conn.ChangeRemoteAddr(p.remoteAddr, p.info)
@@ -2474,16 +2485,23 @@ func (c *Conn) applyTransportParameters() {
 		// Retire the connection ID.
 		c.connIDManager.AddFromPreferredAddress(params.PreferredAddress.ConnectionID, params.PreferredAddress.StatelessResetToken)
 	}
-	maxPacketSize := protocol.ByteCount(protocol.MaxPacketBufferSize)
-	if params.MaxUDPPayloadSize > 0 && params.MaxUDPPayloadSize < maxPacketSize {
-		maxPacketSize = params.MaxUDPPayloadSize
-	}
 	c.mtuDiscoverer = newMTUDiscoverer(
 		c.rttStats,
-		protocol.ByteCount(c.config.InitialPacketSize),
-		maxPacketSize,
+		c.initialPacketSize(),
+		c.maxMTU(),
 		c.qlogger,
 	)
+}
+
+func (c *Conn) maxMTU() protocol.ByteCount {
+	if c.peerParams == nil || c.peerParams.MaxUDPPayloadSize <= 0 {
+		return protocol.MaxPacketBufferSize
+	}
+	return min(protocol.MaxPacketBufferSize, c.peerParams.MaxUDPPayloadSize)
+}
+
+func (c *Conn) initialPacketSize() protocol.ByteCount {
+	return protocol.ByteCount(c.currentInitialPacketSize.Load())
 }
 
 func (c *Conn) triggerSending(now monotime.Time) error {
@@ -2604,7 +2622,6 @@ func (c *Conn) sendPacketsWithoutGSO(now monotime.Time) error {
 		if _, err := c.appendOneShortHeaderPacket(buf, c.maxPacketSize(), ecn, now); err != nil {
 			if err == errNothingToPack {
 				buf.Release()
-				c.sentPacketHandler.MaybeNotifyAppLimited(now)
 				return nil
 			}
 			return err
@@ -2613,6 +2630,8 @@ func (c *Conn) sendPacketsWithoutGSO(now monotime.Time) error {
 		c.sendQueue.Send(buf, 0, ecn)
 
 		if c.sendQueue.WouldBlock() {
+			// keep sending if the send queue frees up before the run loop checks it
+			c.pacingDeadline = deadlineSendImmediately
 			return nil
 		}
 		sendMode := c.sentPacketHandler.SendMode(now)
@@ -2648,7 +2667,6 @@ func (c *Conn) sendPacketsWithGSO(now monotime.Time) error {
 			}
 			if buf.Len() == 0 {
 				buf.Release()
-				c.sentPacketHandler.MaybeNotifyAppLimited(now)
 				return nil
 			}
 			dontSendMore = true
@@ -2682,6 +2700,8 @@ func (c *Conn) sendPacketsWithGSO(now monotime.Time) error {
 			return nil
 		}
 		if c.sendQueue.WouldBlock() {
+			// keep sending if the send queue frees up before the run loop checks it
+			c.pacingDeadline = deadlineSendImmediately
 			return nil
 		}
 
@@ -2879,8 +2899,54 @@ func (c *Conn) sendPackedCoalescedPacket(packet *coalescedPacket, ecn protocol.E
 		)
 	}
 	c.connIDManager.SentPacket()
-	c.sendQueue.Send(packet.buffer, 0, ecn)
+	if c.initialPacketSizeTried || c.handshakeConfirmed {
+		c.sendQueue.Send(packet.buffer, 0, ecn)
+		return nil
+	}
+	c.writeUntilInitialPacketSizeTried(packet.buffer, ecn)
 	return nil
+}
+
+// writeUntilInitialPacketSizeTried writes a packet directly, so that the connection learns when
+// the interface refuses the initial packet size (quic-go/quic-go#5911, ported to v0.61): an MTU
+// below 1280 bytes, or below Chrome's 1250, as on some tunnels and mobile networks. Until the
+// configured size was tried, no packet went through the send queue, so the two never write at
+// the same time. Errors the send queue drops are dropped here too, and the others close the
+// connection with the raw error, as when the send queue stops on them.
+func (c *Conn) writeUntilInitialPacketSizeTried(buf *packetBuffer, ecn protocol.ECN) {
+	size := buf.Len()
+	err := c.conn.Write(buf.Data, 0, ecn)
+	buf.Release()
+	initialPacketSize := c.initialPacketSize()
+	var tooLarge *DatagramTooLargeError
+	switch {
+	case err == nil:
+		if size >= initialPacketSize {
+			c.initialPacketSizeTried = true
+		}
+	case isSendMsgSizeErr(err) || errors.As(err, &tooLarge):
+		if c.config.initialPacketSizeIsFloor() {
+			// The application accepts no smaller packets.
+			c.destroyImpl(err)
+			return
+		}
+		if size < initialPacketSize || initialPacketSize <= protocol.MinInitialPacketSize {
+			return // dropped, as the send queue drops it
+		}
+		// Loss recovery resends the refused packet at the smaller size.
+		c.logger.Debugf("Sending a %d-byte packet failed (%s), falling back to %d bytes", size, err, protocol.MinInitialPacketSize)
+		c.currentInitialPacketSize.Store(protocol.MinInitialPacketSize)
+		c.maxPayloadSizeEstimate.Store(uint32(estimateMaxPayloadSize(protocol.MinInitialPacketSize)))
+		c.sentPacketHandler.SetMaxDatagramSize(protocol.MinInitialPacketSize)
+		if c.mtuDiscoverer != nil {
+			c.mtuDiscoverer = newMTUDiscoverer(c.rttStats, protocol.MinInitialPacketSize, c.maxMTU(), c.qlogger)
+		}
+		c.initialPacketSizeTried = true
+	case isNoBufferSpaceErr(err), c.handshakeCompleteForSend.Load() && isNetworkChangeErr(err):
+		// dropped, as the send queue drops it
+	default:
+		c.destroyImpl(err)
+	}
 }
 
 func (c *Conn) sendConnectionClose(e error) ([]byte, error) {
@@ -2912,7 +2978,7 @@ func (c *Conn) maxPacketSize() protocol.ByteCount {
 		// If the server sends a max_udp_payload_size that's smaller than this size, we can ignore this:
 		// Apparently the server still processed the (fully padded) Initial packet anyway.
 		if c.perspective == protocol.PerspectiveClient {
-			return protocol.ByteCount(c.config.InitialPacketSize)
+			return c.initialPacketSize()
 		}
 		// On the server side, there's no downside to using 1200 bytes until we received the client's transport
 		// parameters:
@@ -3198,14 +3264,16 @@ func (c *Conn) SetCongestionControl(cc congestion.CongestionControl) {
 // InitialPacketSize returns the datagram size the connection starts out with,
 // before path MTU discovery raises it. This is the value the connection's own
 // congestion controller is seeded with, and it is not always the package
-// default: options that make the connection start smaller lower it too.
+// default: options that make the connection start smaller lower it too, and so
+// does a "message too long" error at that size during the handshake (the
+// connection then starts at 1200 bytes).
 //
 // A controller installed with SetCongestionControl must be seeded with this,
 // not with the package default. Seeding it high instead breaks as soon as path
 // MTU discovery reports a size between the two, which the connection sees as an
 // increase but the controller sees as a decrease.
 func (c *Conn) InitialPacketSize() congestion.ByteCount {
-	return congestion.ByteCount(c.config.InitialPacketSize)
+	return congestion.ByteCount(c.currentInitialPacketSize.Load())
 }
 
 // SetRemoteAddr Replace the current remote addr with a new one

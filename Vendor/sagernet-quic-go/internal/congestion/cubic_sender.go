@@ -1,8 +1,6 @@
 package congestion
 
 import (
-	"fmt"
-
 	"github.com/sagernet/quic-go/internal/monotime"
 	"github.com/sagernet/quic-go/internal/protocol"
 	"github.com/sagernet/quic-go/internal/utils"
@@ -147,10 +145,10 @@ func (c *cubicSender) OnPacketSent(
 	bytes protocol.ByteCount,
 	isRetransmittable bool,
 ) {
-	c.pacer.SentPacket(sentTime, bytes)
 	if !isRetransmittable {
 		return
 	}
+	c.pacer.SentPacket(sentTime, bytes)
 	c.largestSentPacketNumber = packetNumber
 	c.hybridSlowStart.OnPacketSent(packetNumber)
 }
@@ -318,9 +316,6 @@ func (c *cubicSender) maybeQlogStateChange(new qlog.CongestionState) {
 }
 
 func (c *cubicSender) SetMaxDatagramSize(s protocol.ByteCount) {
-	if s < c.maxDatagramSize {
-		panic(fmt.Sprintf("congestion BUG: decreased max datagram size from %d to %d", c.maxDatagramSize, s))
-	}
 	cwndIsMinCwnd := c.congestionWindow == c.minCongestionWindow()
 	c.maxDatagramSize = s
 	if cwndIsMinCwnd {

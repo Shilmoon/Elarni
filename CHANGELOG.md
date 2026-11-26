@@ -78,6 +78,12 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
 - **A UDP packet over Hysteria2 or TUIC is no longer delivered twice on a path that reorders
   packets.** After more than 64 gaps in what had arrived, a late copy of an old packet was taken
   as new. All platforms.
+- **Hysteria2, TUIC and XHTTP/3 connect on networks that do not take 1,280-byte packets**
+  (some tunnels and mobile networks): the connection attempt ran into its timeout and now falls
+  back to 1,200-byte packets. On any of these connections, game and call traffic no longer delays
+  flow-control updates and resent data, and sending no longer pauses when the send buffer frees
+  up at the wrong moment. TUIC with BBR takes SagerNet's changes to how periods with nothing to
+  send reach BBR. All platforms.
 - **A DNS resolver running on the computer works in VPN mode.** On Windows the DNS guard blocked
   every lookup to port 53 that did not go through the tunnel, including lookups to 127.0.0.1
   and ::1, so apps that used a local resolver (dnscrypt-proxy, Acrylic, AdGuard Home) got no
