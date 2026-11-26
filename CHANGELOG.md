@@ -155,6 +155,10 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
   Names with many addresses resolve again in apps that take small DNS answers, a name without
   an IPv6 address no longer waits for the next DNS server, and on the Mac and iPhone a probe to
   the tunnel's own addresses ends at once instead of hanging until its timeout.
+- **iPhone: encryption uses the phone's AES and SHA instructions.** The iPhone core encrypted
+  AES-GCM about 45 times slower than the phone's own crypto library, costing battery and heat
+  on every connection that uses it. Its packet path and ShadowQUIC client are now built with
+  full optimization too.
 
 ## 0.6.4 - 2026-11-23
 

@@ -1,0 +1,47 @@
+# Upstream Go commit 8058a577731129d56d03797451804a2c5f4745ca (golang/go, CL 816780, issue 80931):
+#   internal/cpu: enable ARM64 feature detection on ios
+# BSD-3-Clause, The Go Authors (the LICENSE file of the Go distribution).
+#
+# Without it GOOS=ios builds compile CPU feature detection out, so AES-GCM and SHA-256 run
+# without the CPU's AES and SHA instructions. scripts/build-ios-native applies this diff to
+# copies of the toolchain's files in .build/ios/go-overlay and passes them to `go build
+# -overlay`; the toolchain itself is never changed. Remove it once the pinned Go has the commit.
+diff --git a/src/internal/cpu/cpu_arm64_darwin.go b/src/internal/cpu/cpu_arm64_darwin.go
+index d32b459329321b..964854381b4232 100644
+--- a/src/internal/cpu/cpu_arm64_darwin.go
++++ b/src/internal/cpu/cpu_arm64_darwin.go
+@@ -2,7 +2,7 @@
+ // Use of this source code is governed by a BSD-style
+ // license that can be found in the LICENSE file.
+ 
+-//go:build arm64 && darwin && !ios
++//go:build arm64 && darwin
+ 
+ package cpu
+ 
+diff --git a/src/internal/cpu/cpu_arm64_other.go b/src/internal/cpu/cpu_arm64_other.go
+index 826f96177e8e79..59dcd1fefdc365 100644
+--- a/src/internal/cpu/cpu_arm64_other.go
++++ b/src/internal/cpu/cpu_arm64_other.go
+@@ -2,7 +2,7 @@
+ // Use of this source code is governed by a BSD-style
+ // license that can be found in the LICENSE file.
+ 
+-//go:build arm64 && !linux && !freebsd && !android && (!darwin || ios) && !openbsd && !windows
++//go:build arm64 && !linux && !freebsd && !android && !darwin && !openbsd && !windows
+ 
+ package cpu
+ 
+diff --git a/src/internal/cpu/cpu_darwin.go b/src/internal/cpu/cpu_darwin.go
+index 2d4ac54fc2f5c4..f9f39bd9f28d6d 100644
+--- a/src/internal/cpu/cpu_darwin.go
++++ b/src/internal/cpu/cpu_darwin.go
+@@ -2,7 +2,7 @@
+ // Use of this source code is governed by a BSD-style
+ // license that can be found in the LICENSE file.
+ 
+-//go:build darwin && !ios
++//go:build darwin
+ 
+ package cpu
+ 
