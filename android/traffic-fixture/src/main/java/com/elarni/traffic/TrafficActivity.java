@@ -50,7 +50,10 @@ public final class TrafficActivity extends Activity {
                     boolean direct = capabilities == null || !capabilities.hasTransport(android.net.NetworkCapabilities.TRANSPORT_VPN);
                     for (int attempt = 1; ; attempt++) {
                         try (Socket socket = new Socket()) {
+                            // For a reply that comes back short: when the request began, by the clock the peers' logs use, and how far it got.
+                            long began = android.os.SystemClock.elapsedRealtime(); result.put("at", java.time.Instant.now().toString());
                             socket.setSoTimeout(4000); socket.connect(new InetSocketAddress(proxy ? InetAddress.getByName(proxyAddress) : target, proxy ? proxyPort : port), 4000);
+                            result.put("connectMs", android.os.SystemClock.elapsedRealtime() - began);
                             if ("socksProxy".equals(mode)) {
                                 OutputStream output = socket.getOutputStream(); DataInputStream input = new DataInputStream(socket.getInputStream());
                                 output.write(new byte[]{5,1,2});
@@ -67,7 +70,11 @@ public final class TrafficActivity extends Activity {
                             String login = "httpProxy".equals(mode) ? "Proxy-Authorization: Basic "+android.util.Base64.encodeToString("fixture-user:fixture-password".getBytes(StandardCharsets.US_ASCII), android.util.Base64.NO_WRAP)+"\r\n" : "";
                             socket.getOutputStream().write(("GET "+requestTarget+" HTTP/1.1\r\nHost: fixture.elarni.test\r\n"+login+"Connection: close\r\n\r\n").getBytes(StandardCharsets.US_ASCII));
                             ByteArrayOutputStream bytes = new ByteArrayOutputStream(); byte[] buffer = new byte[1024];
-                            int count; while ((count = socket.getInputStream().read(buffer)) > 0) { bytes.write(buffer, 0, count); if (bytes.size() > 8192) throw new IOException("Response too large"); }
+                            int count; while ((count = socket.getInputStream().read(buffer)) > 0) {
+                                if (bytes.size() == 0) result.put("firstByteMs", android.os.SystemClock.elapsedRealtime() - began);
+                                bytes.write(buffer, 0, count); if (bytes.size() > 8192) throw new IOException("Response too large");
+                            }
+                            result.put("endMs", android.os.SystemClock.elapsedRealtime() - began); result.put("bytes", bytes.size());
                             result.put("body", bytes.toString("UTF-8"));
                             break;
                         } catch (SocketTimeoutException timeout) { if (!direct || attempt == 2) throw timeout; }

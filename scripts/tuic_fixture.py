@@ -34,7 +34,8 @@ def android_tuic_peer(root, tcp_port=None, udp_port=None, *, listen_host='127.0.
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as reservation:
             reservation.bind((listen_host, listen_port))
             port = reservation.getsockname()[1]
-        config = {'log': {'level': 'info'}, 'inbounds': [{
+        # Debug lines say how each flow ended, and the times place them beside a failed test's request.
+        config = {'log': {'level': 'debug', 'timestamp': True}, 'inbounds': [{
             'type': 'tuic', 'listen': listen_host, 'listen_port': port,
             'users': [{'uuid': '00000000-0000-4000-8000-000000000001', 'password': 'synthetic-tuic-only'}],
             'tls': {'enabled': True, 'alpn': ['h3'], 'certificate_path': str(cert), 'key_path': str(key)}}],

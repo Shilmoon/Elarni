@@ -43,6 +43,15 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
 - For contributors: the required "checks passed" check no longer passes when GitHub cancelled a
   job it found no runner for. It now reads each job's own result, because GitHub reports such a
   job matrix as passed.
+- For contributors: two Android emulator tests no longer fail by timing. "Disconnect before the
+  service starts" waited for the VPN notification to go and then read it again, while Android
+  shows that notification for about a millisecond at a moment of its own; it now waits for one
+  state, the service gone and no notification. The Wi-Fi tests join the emulator's network by
+  name after airplane mode instead of waiting for Android to do it (Android 11 held back for
+  minutes).
+- For contributors: a TUIC emulator test that fails now says when its request began and how far
+  it got, and `check-android` prints the TUIC peer's whole log, with times. The reply that came
+  back empty six times in CI is not explained yet.
 
 ## 0.6.5 - 2026-11-26
 

@@ -378,8 +378,11 @@ if args.case != 'native':
                             if attempt(f'com.elarni.AndroidProcessDeathE2E#{killed}', kill):
                                 instrumentation(f'com.elarni.AndroidProcessDeathE2E#{restarted}', 1, peers)
                 if len(failures) > failed_before:
-                    # A TUIC request came back empty in CI four times and the peer's log was gone with its directory.
-                    print('TUIC peer log, last 60 lines:\n' + '\n'.join(tuic_log.read_text(errors='replace').splitlines()[-60:]), flush=True)
+                    # A TUIC request came back empty in CI six times, with no cause found. The failed test's message says
+                    # when its request began; only the whole log covers that moment: later tests write its last lines.
+                    lines = tuic_log.read_text(errors='replace').splitlines()
+                    whole = any('tuic' in failure for failure in failures[failed_before:])
+                    print(f"TUIC peer log, {'all' if whole else 'last 60 of'} {len(lines)} lines:\n" + '\n'.join(lines if whole else lines[-60:]), flush=True)
             finally:
                 # An interrupted test must not leave a synthetic VPN active in the emulator.
                 shell('am', 'force-stop', 'com.elarni.debug')

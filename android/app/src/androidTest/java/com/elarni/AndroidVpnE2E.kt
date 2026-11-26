@@ -65,6 +65,7 @@ class AndroidVpnE2E {
     private fun shell(command: String) = ParcelFileDescriptor.AutoCloseInputStream(instrumentation.uiAutomation.executeShellCommand(command)).bufferedReader().use { it.readText() }
     /** Whether the fixture app's last request had the VPN as its network. */
     private var inTunnel = false
+    private var lastTraffic: JSONObject? = null
     private fun traffic(identity: String, mode: String, port: Int, address: String = "10.0.2.2", proxyAddress: String = "", proxyPort: Int = 0, expectReply: Boolean = true): String {
         val token = newId()
         val packageName = "com.elarni.traffic.$identity"
@@ -90,7 +91,20 @@ class AndroidVpnE2E {
             runCatching { ui.activityRule.scenario.state == Lifecycle.State.RESUMED }.getOrDefault(false)
         }
         inTunnel = result!!.optBoolean("vpn")
+        lastTraffic = result
         return result!!.optString("body")
+    }
+
+    /** The Wi-Fi network the emulator is on. When none is joined, perhaps after an earlier test's airplane mode or Wi-Fi
+     *  toggles, this turns Wi-Fi on and joins the saved network by name: Android may hold back its own join for
+     *  minutes (API 30 did, and every later Wi-Fi test of that run failed). */
+    private fun joinedWiFi(): String {
+        fun joined() = Regex("connected to \"(.+?)\"").find(shell("cmd wifi status"))?.groupValues?.get(1)
+        joined()?.let { return it }
+        ui.waitUntil(30_000) { shell("cmd wifi set-wifi-enabled enabled"); shell("cmd wifi status").contains("Wifi is enabled") }
+        Regex("^\\d+\\s+(\\S+)\\s+open\\s*$", RegexOption.MULTILINE).find(shell("cmd wifi list-networks"))?.let { shell("cmd wifi connect-network ${it.groupValues[1]} open") }
+        ui.waitUntil(30_000) { joined() != null }
+        return joined()!!
     }
 
     /** Waits until the VPN is connected over a Wi-Fi path that has held for 1.5 s. */
@@ -215,10 +229,11 @@ class AndroidVpnE2E {
                 connect()
                 // The physical TUIC endpoint is excluded; the controlled payload
                 // destinations are different IPs and must traverse VpnService.
-                // A TCP reply without the proxy's body came once in CI; name what came instead.
-                traffic("a", "tcp", httpPort, "198.18.0.81").let { assertTrue("TUIC $mode connection ${pass + 1} IPv4 TCP body: $it", it.contains("proxy:elarni-synthetic")) }
+                // A TCP reply without the proxy's body came six times in CI, with no cause found: the fixture's result
+                // says when the request began and how far it got, to read beside the peer's log that check-android prints.
+                traffic("a", "tcp", httpPort, "198.18.0.81").let { assertTrue("TUIC $mode connection ${pass + 1} IPv4 TCP body: $it; fixture $lastTraffic", it.contains("proxy:elarni-synthetic")) }
                 assertEquals("proxy:elarni-udp-fixture", traffic("b", "udp", udpPort, "198.18.0.81"))
-                traffic("b", "tcp", httpPort, "fdfe:dcba:9876::10").let { assertTrue("TUIC $mode IPv6 TCP body: $it", it.contains("proxy:elarni-synthetic")) }
+                traffic("b", "tcp", httpPort, "fdfe:dcba:9876::10").let { assertTrue("TUIC $mode IPv6 TCP body: $it; fixture $lastTraffic", it.contains("proxy:elarni-synthetic")) }
                 assertEquals("proxy:elarni-udp-fixture", traffic("a", "udp", udpPort, "fdfe:dcba:9876::10"))
                 assertEquals("198.18.0.81", traffic("a", "dns", udpPort, "198.18.0.81"))
                 assertTrue(traffic("b", "systemDns", udpPort).contains("198.18.0.81"))
@@ -803,14 +818,9 @@ class AndroidVpnE2E {
             listOf("ACCESS_FINE_LOCATION", "ACCESS_COARSE_LOCATION", "ACCESS_BACKGROUND_LOCATION").forEach { shell("pm grant ${context.packageName} android.permission.$it") }
             shell("cmd location set-location-enabled true")
             assertTrue(WiFiRule.namesAllowed(context))
-            // The emulator's Google app asks for mobile data of its own, at times for minutes after Wi-Fi changes; that
-            // keeps mobile data foreground, and the rule cannot ask to be told of leaving Wi-Fi until it is not.
-            val google = "com.google.android.googlequicksearchbox"
-            shell("pm disable-user --user 0 $google")
             // The emulator's access point; Wi-Fi coming back joins it again as a new network.
             fun network() = Regex("connected to \"(.+?)\"").find(shell("cmd wifi status"))?.groupValues?.get(1)
-            ui.waitUntil(30_000) { network() != null }
-            val ssid = network()!!
+            val ssid = joinedWiFi()
             val seen = context.getSharedPreferences("wifi-rule", android.content.Context.MODE_PRIVATE)
             seen.edit().clear().commit()
             fun join() = seen.getString("join", null)
@@ -833,9 +843,13 @@ class AndroidVpnE2E {
                 throw AssertionError("The leave watch was not set (watching=${WiFiRule.watching}); mobile data is asked for by:\n$asking", error)
             }
             fun rule(on: Boolean, trusted: List<String>) = call("settings", obj("settings" to obj("connectOnUntrustedWiFi" to on, "trustedWiFiNetworks" to JSONArray(trusted))))
+            // The emulator's Google app asks for mobile data of its own, at times for minutes after Wi-Fi changes; that
+            // keeps mobile data foreground, and the rule cannot ask to be told of leaving Wi-Fi until it is not.
+            val google = "com.google.android.googlequicksearchbox"
             // This test is about the reports that reach a killed process; a callback hears of every change before them.
             WiFiRule.reports = emptySet()
             try {
+                shell("pm disable-user --user 0 $google")
                 // Turning it on counts the network already joined; a trusted one stays as it is.
                 rule(true, listOf(ssid))
                 ui.waitUntil(15_000) { join() != null }
@@ -907,8 +921,7 @@ class AndroidVpnE2E {
             shell("cmd location set-location-enabled true")
             assertTrue(WiFiRule.namesAllowed(context))
             fun network() = Regex("connected to \"(.+?)\"").find(shell("cmd wifi status"))?.groupValues?.get(1)
-            ui.waitUntil(30_000) { network() != null }
-            val ssid = network()!!
+            val ssid = joinedWiFi()
             val seen = context.getSharedPreferences("wifi-rule", android.content.Context.MODE_PRIVATE)
             seen.edit().clear().commit()
             fun join() = seen.getString("join", null)
@@ -1078,6 +1091,7 @@ class AndroidVpnE2E {
                     shell("cmd connectivity airplane-mode disable")
                     shell("svc wifi enable")
                 }
+                joinedWiFi()
                 // Cellular can recover seconds before Wi-Fi associates, and the core then starts there. Require the
                 // default network on the Wi-Fi path we just restored, which the core's new sockets follow without
                 // a restart while cellular stays, then verify uninterrupted traffic.
@@ -1138,8 +1152,7 @@ class AndroidVpnE2E {
         fun on(network: android.net.Network?, transport: Int) = connectivity.getNetworkCapabilities(network)?.hasTransport(transport) == true
         val wifi = android.net.NetworkCapabilities.TRANSPORT_WIFI; val cellular = android.net.NetworkCapabilities.TRANSPORT_CELLULAR
         fun ssid() = Regex("connected to \"(.+?)\"").find(shell("cmd wifi status"))?.groupValues?.get(1)
-        ui.waitUntil(30_000) { ssid() != null }
-        val ssid = ssid()!!
+        val ssid = joinedWiFi()
         connect()
         recoveryMillis { on(repo.engine.physical(), wifi) }
         try {
