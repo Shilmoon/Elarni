@@ -40,9 +40,13 @@ class FlutterWindow : public Win32Window {
   bool tray_added_ = false, can_connect_ = false, can_disconnect_ = false;
   bool headless_ = false;
   bool start_hidden_ = false;
+  // Dart was told the window is hidden at a start hidden in the tray; showing it tells Dart again.
+  bool lifecycle_hidden_ = false;
   // Open file dialogs; Quit waits, or the nested loop destroys their owner.
   int modal_ = 0;
   void AddTray();
+  // Sends Dart a window state, as the engine does when the window's changes.
+  void SendLifecycle(const std::string& state);
   void TrayMenu();
   std::shared_ptr<CameraCapture> camera_;
   std::shared_ptr<RoutingApplicationLookup> routing_applications_;

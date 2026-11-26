@@ -3,6 +3,10 @@
 #include <gst/app/gstappsink.h>
 #include <gst/gst.h>
 
+#ifndef ELARNI_BUILD
+#error "ELARNI_BUILD names the app build (linux/runner/CMakeLists.txt)."
+#endif
+
 struct ElarniCamera {
   GstElement* pipeline = nullptr;
   GstElement* frames = nullptr;
@@ -23,6 +27,8 @@ void release_frame(gpointer data) {
 }  // namespace
 
 extern "C" {
+
+const char* elarni_camera_build(void) { return ELARNI_BUILD; }
 
 void elarni_camera_close(ElarniCamera* camera) {
   if (!camera) return;

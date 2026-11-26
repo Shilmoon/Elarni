@@ -5,11 +5,70 @@
 //   $(pkg-config --cflags --libs gtk+-3.0 ayatana-appindicator3-0.1 gmodule-no-export-2.0)
 //   -o .build/linux-desktop-host-test
 // env LD_LIBRARY_PATH=linux/flutter/ephemeral .build/linux-desktop-host-test
-// CI runs this after its Linux release build.
+// CI runs this after its Linux release build. ELARNI_CAMERA_MODULE names the camera module the
+// test opens, by default build/linux/x64/release/bundle/lib/libelarni_camera.so from the working
+// directory; after a debug build:
+// ELARNI_CAMERA_MODULE=build/linux/x64/debug/bundle/lib/libelarni_camera.so.
+// The runner's build, which no real module has: the test opens the bundle's module as another
+// build's, as an upgrade leaves it under a running runner.
+#define ELARNI_BUILD "host-test"
 #include "../linux/runner/desktop_host.cc"
 #include <sys/wait.h>
 #include <csignal>
 #include <cassert>
+
+// A stand-in for the AppIndicator: its "connected" property and "connection-changed" signal.
+struct FakeIndicator {
+  GObject parent_instance;
+  gboolean connected;
+};
+struct FakeIndicatorClass {
+  GObjectClass parent_class;
+};
+G_DEFINE_TYPE(FakeIndicator, fake_indicator, G_TYPE_OBJECT)
+static void fake_indicator_get_property(GObject* object, guint id, GValue* value, GParamSpec* spec) {
+  if (id == 1) g_value_set_boolean(value, reinterpret_cast<FakeIndicator*>(object)->connected);
+  else G_OBJECT_WARN_INVALID_PROPERTY_ID(object, id, spec);
+}
+static void fake_indicator_class_init(FakeIndicatorClass* klass) {
+  G_OBJECT_CLASS(klass)->get_property = fake_indicator_get_property;
+  g_object_class_install_property(G_OBJECT_CLASS(klass), 1,
+      g_param_spec_boolean("connected", nullptr, nullptr, FALSE, G_PARAM_READABLE));
+  g_signal_new(APP_INDICATOR_SIGNAL_CONNECTION_CHANGED, G_TYPE_FROM_CLASS(klass), G_SIGNAL_RUN_LAST, 0,
+      nullptr, nullptr, nullptr, G_TYPE_NONE, 1, G_TYPE_BOOLEAN);
+}
+static void fake_indicator_init(FakeIndicator*) {}
+
+// A messenger that keeps the last message sent on it.
+struct FakeMessenger {
+  GObject parent_instance;
+};
+struct FakeMessengerClass {
+  GObjectClass parent_class;
+};
+static std::string sent_channel, sent_message;
+static void fake_messenger_send(FlBinaryMessenger*, const gchar* channel, GBytes* message, GCancellable*,
+                                GAsyncReadyCallback, gpointer) {
+  sent_channel = channel;
+  gsize size = 0;
+  const auto* data = static_cast<const char*>(g_bytes_get_data(message, &size));
+  sent_message.assign(data, size);
+}
+static void fake_messenger_iface_init(FlBinaryMessengerInterface* iface) { iface->send_on_channel = fake_messenger_send; }
+G_DEFINE_TYPE_WITH_CODE(FakeMessenger, fake_messenger, G_TYPE_OBJECT,
+                        G_IMPLEMENT_INTERFACE(fl_binary_messenger_get_type(), fake_messenger_iface_init))
+static void fake_messenger_class_init(FakeMessengerClass*) {}
+static void fake_messenger_init(FakeMessenger*) {}
+
+// Runs the main loop for ms milliseconds.
+static void run_for(guint ms) {
+  g_autoptr(GMainLoop) loop = g_main_loop_new(nullptr, FALSE);
+  g_timeout_add(ms, [](gpointer data) -> gboolean {
+    g_main_loop_quit(static_cast<GMainLoop*>(data));
+    return G_SOURCE_REMOVE;
+  }, loop);
+  g_main_loop_run(loop);
+}
 
 // The list as the app receives it, made on the main thread as the host makes it.
 static FlValue* app_values(const AppList& apps) {
@@ -285,7 +344,19 @@ int main(int argc, char** argv) {
   assert(login_exec(executable(), false) == desktop_exec(executable()));
   assert(login_exec(executable(), true) == desktop_exec(executable()) + " --hidden");
   assert(login(login_exec(executable(), true)) == "enabled" && login_hidden);
+  // A registration without "hidden", as from elarni-cli, keeps the current choice.
+  {
+    g_autoptr(FlValue) shown = fl_value_new_bool(FALSE);
+    g_autoptr(FlValue) hide = fl_value_new_bool(TRUE);
+    assert(registered_exec(executable(), nullptr) == login_exec(executable(), true));
+    assert(registered_exec(executable(), shown) == login_exec(executable(), false));
+    assert(login(desktop_exec(executable())) == "enabled" && !login_hidden);
+    assert(registered_exec(executable(), nullptr) == login_exec(executable(), false));
+    assert(registered_exec(executable(), hide) == login_exec(executable(), true));
+  }
   assert(login(login_exec("/moved/elarni", true)) == "notRegistered" && !login_hidden);
+  // Another copy's hidden start is not this one's choice.
+  assert(registered_exec(executable(), nullptr) == login_exec(executable(), false));
   // An entry with any other argument is not this app's.
   for (const char* other : {" --minimized", " --hidden --minimized", " --hidden --hidden", "  --hidden", " --HIDDEN", "--hidden"})
     assert(login(desktop_exec(executable()) + other) == "notRegistered" && !login_hidden);
@@ -342,14 +413,73 @@ int main(int argc, char** argv) {
   assert(g_rmdir(upgrade) == 0);
   assert(WIFEXITED(status) && WEXITSTATUS(status) == 0);
 
+  // A start hidden in the tray shows the window, minimized, only when no tray host has taken the
+  // icon by the end of the wait; one that comes up later at login, within the wait, ends it.
+  {
+    int shown = 0;
+    void (*show)(gpointer) = [](gpointer data) { ++*static_cast<int*>(data); };
+    auto* indicator = static_cast<FakeIndicator*>(g_object_new(fake_indicator_get_type(), nullptr));
+    const guint changed = g_signal_lookup(APP_INDICATOR_SIGNAL_CONNECTION_CHANGED, fake_indicator_get_type());
+    TrayWait none;
+    tray_wait_start(none, indicator, 20, show, &shown);
+    assert(none.timer && none.handler && shown == 0);
+    tray_wait_start(none, indicator, 20, show, &shown);
+    // A host that drops the icon does not end the wait.
+    g_signal_emit_by_name(indicator, APP_INDICATOR_SIGNAL_CONNECTION_CHANGED, FALSE);
+    run_for(100);
+    assert(shown == 1 && !none.timer && !none.handler);
+    assert(!g_signal_has_handler_pending(indicator, changed, 0, FALSE));
+    TrayWait late;
+    tray_wait_start(late, indicator, 40, show, &shown);
+    indicator->connected = TRUE;
+    g_signal_emit_by_name(indicator, APP_INDICATOR_SIGNAL_CONNECTION_CHANGED, TRUE);
+    assert(!late.timer && !late.handler);
+    run_for(100);
+    assert(shown == 1);
+    TrayWait ready;
+    tray_wait_start(ready, indicator, 20, show, &shown);
+    assert(!ready.timer && !ready.handler);
+    // Quitting during the wait leaves nothing to run.
+    indicator->connected = FALSE;
+    TrayWait quit;
+    tray_wait_start(quit, indicator, 20, show, &shown);
+    tray_wait_stop(quit);
+    assert(!quit.timer && !quit.handler && !g_signal_has_handler_pending(indicator, changed, 0, FALSE));
+    run_for(60);
+    assert(shown == 1);
+    g_object_unref(indicator);
+  }
+  // Dart learns the window is hidden as the engine would tell it: a window GTK never maps sends
+  // no state of its own.
+  {
+    auto* messenger = FL_BINARY_MESSENGER(g_object_new(fake_messenger_get_type(), nullptr));
+    send_lifecycle(messenger, "AppLifecycleState.hidden");
+    assert(sent_channel == "flutter/lifecycle" && sent_message == "AppLifecycleState.hidden");
+    g_object_unref(messenger);
+  }
+
   // The camera is a module the runner opens at the first camera call. Where it does not load, as
   // without GStreamer, the camera answers as on a system without a camera: here no module lies
   // beside the test binary. The bundle's module loads where GStreamer is installed.
   assert(!camera_module());
+  // It is the one beside the runner; without the runner's own absolute path there is none, as one
+  // found from the working directory could be anyone's.
+  assert(camera_module_path("/opt/elarni/elarni") == "/opt/elarni/lib/libelarni_camera.so");
+  assert(camera_module_path("").empty() && camera_module_path("elarni").empty() && camera_module_path("./elarni").empty());
   CameraModule camera{};
   assert(!load_camera_module("/nonexistent-elarni/lib/libelarni_camera.so", camera));
-  g_autofree char* bundled_camera = g_canonicalize_filename("build/linux/x64/release/bundle/lib/libelarni_camera.so", nullptr);
-  assert(load_camera_module(bundled_camera, camera) && camera.open && camera.frame && camera.close);
+  const char* module = g_getenv("ELARNI_CAMERA_MODULE");
+  g_autofree char* bundled_camera =
+      g_canonicalize_filename(module ? module : "build/linux/x64/release/bundle/lib/libelarni_camera.so", nullptr);
+  GModule* library = g_module_open(bundled_camera, G_MODULE_BIND_LOCAL);
+  assert(library);
+  decltype(&elarni_camera_build) build = nullptr;
+  assert(g_module_symbol(library, "elarni_camera_build", reinterpret_cast<gpointer*>(&build)));
+  // The build names the app version; another build's module is refused.
+  assert(*build() && strcmp(build(), ELARNI_BUILD) != 0);
+  assert(!load_camera_module(bundled_camera, camera) && !camera.open);
+  assert(load_camera_module(bundled_camera, camera, build()) && camera.open && camera.frame && camera.close);
   // Whether a camera opens depends on the machine; neither answer may crash.
   if (ElarniCamera* opened = camera.open()) camera.close(opened);
+  g_module_close(library);
 }

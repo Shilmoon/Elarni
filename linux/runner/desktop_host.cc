@@ -21,9 +21,24 @@
 #include <string>
 #include <vector>
 
+#ifndef ELARNI_BUILD
+#error "ELARNI_BUILD names the app build (linux/runner/CMakeLists.txt)."
+#endif
+
+// A start hidden in the tray waits for a status-notifier host to take the indicator's icon
+// (tray_wait_start).
+struct TrayWait {
+  gpointer indicator = nullptr;
+  guint timer = 0;
+  gulong handler = 0;
+  void (*show)(gpointer) = nullptr;
+  gpointer data = nullptr;
+};
+
 struct DesktopHost {
   GtkApplication* app;
   GtkWindow* window;
+  FlBinaryMessenger* messenger = nullptr;
   FlMethodChannel* desktop;
   FlMethodChannel* platform;
   AppIndicator* indicator = nullptr;
@@ -38,8 +53,8 @@ struct DesktopHost {
   std::vector<std::string> links;
   // The tray's Quit or Ctrl+Q asked for the close: it quits even with a tray.
   bool quitting = false;
-  // A start hidden in the tray waits this source for a tray host to take the icon.
-  guint tray_wait = 0;
+  // A start hidden in the tray waits for a tray host to take the icon.
+  TrayWait tray_wait;
 };
 
 namespace {
@@ -165,8 +180,33 @@ std::string desktop_exec(const std::string& path) {
 std::string login_exec(const std::string& path, bool hidden) {
   return desktop_exec(path) + (hidden ? " --hidden" : "");
 }
-// How long a start hidden in the tray waits for a status-notifier host to take the icon.
-constexpr guint kTrayHostWaitMs = 3000;
+// How long a start hidden in the tray waits for a status-notifier host to take the icon. At login
+// the watcher (KDE, GNOME's AppIndicator extension, waybar) may come up after the autostart
+// entries, and its registration can take seconds on a loaded session.
+constexpr guint kTrayHostWaitMs = 20000;
+// Whether the autostart entry starts this copy, and whether hidden in the tray. As on Windows, an
+// entry for a moved or replaced copy, or with another argument, does not start this one. The entry
+// is the only store of the hidden start too.
+struct LoginEntry {
+  bool enabled = false;
+  bool hidden = false;
+};
+LoginEntry login_entry() {
+  g_autoptr(GKeyFile) entry = g_key_file_new();
+  if (!g_key_file_load_from_file(entry, config_path("autostart/com.elarni.Elarni.desktop").c_str(), G_KEY_FILE_NONE, nullptr) ||
+      g_key_file_get_boolean(entry, "Desktop Entry", "Hidden", nullptr))
+    return {};
+  g_autofree char* exec = g_key_file_get_string(entry, "Desktop Entry", "Exec", nullptr);
+  if (!exec) return {};
+  const std::string base = desktop_exec(launcher());
+  const bool hidden = base + " --hidden" == exec;
+  return {hidden || base == exec, hidden};
+}
+// The Exec a registration writes. Without a "hidden" argument, as from elarni-cli, the current
+// choice of the hidden start stays.
+std::string registered_exec(const std::string& binary, FlValue* hidden) {
+  return login_exec(binary, hidden ? fl_value_get_bool(hidden) : login_entry().hidden);
+}
 FlValue* system_info() {
   auto* value = fl_value_new_map();
   struct utsname name{};
@@ -178,16 +218,9 @@ FlValue* system_info() {
   fl_value_set_string_take(value, "processorCount", fl_value_new_int(sysconf(_SC_NPROCESSORS_CONF)));
   fl_value_set_string_take(value, "activeProcessorCount", fl_value_new_int(sysconf(_SC_NPROCESSORS_ONLN)));
   fl_value_set_string_take(value, "physicalMemoryBytes", fl_value_new_int(static_cast<int64_t>(info.totalram) * info.mem_unit));
-  g_autoptr(GKeyFile) entry = g_key_file_new();
-  bool enabled = g_key_file_load_from_file(entry, config_path("autostart/com.elarni.Elarni.desktop").c_str(), G_KEY_FILE_NONE, nullptr)
-      && !g_key_file_get_boolean(entry, "Desktop Entry", "Hidden", nullptr);
-  // As on Windows, an entry for a moved or replaced copy, or with another argument, does not
-  // start this one. The entry is the only store of the hidden start too.
-  g_autofree char* exec = enabled ? g_key_file_get_string(entry, "Desktop Entry", "Exec", nullptr) : nullptr;
-  const bool hidden = exec && login_exec(launcher(), true) == exec;
-  enabled = exec && (hidden || login_exec(launcher(), false) == exec);
-  fl_value_set_string_take(value, "launchAtLoginStatus", fl_value_new_string(enabled ? "enabled" : "notRegistered"));
-  fl_value_set_string_take(value, "launchHidden", fl_value_new_bool(hidden));
+  const LoginEntry login = login_entry();
+  fl_value_set_string_take(value, "launchAtLoginStatus", fl_value_new_string(login.enabled ? "enabled" : "notRegistered"));
+  fl_value_set_string_take(value, "launchHidden", fl_value_new_bool(login.hidden));
   return value;
 }
 // The entry points of the camera module (elarni_camera.h).
@@ -196,15 +229,25 @@ struct CameraModule {
   decltype(&elarni_camera_frame) frame = nullptr;
   decltype(&elarni_camera_close) close = nullptr;
 };
-// Whether the camera module at path loads; it does not where GStreamer is missing.
-bool load_camera_module(const char* path, CameraModule& module) {
-  GModule* library = g_module_open(path, static_cast<GModuleFlags>(G_MODULE_BIND_LAZY | G_MODULE_BIND_LOCAL));
+// Whether the camera module at path loads and comes from this runner's build. It does not where
+// GStreamer, or a symbol of it the module uses, is missing, nor after an upgrade replaced it under
+// this runner.
+bool load_camera_module(const char* path, CameraModule& module, const char* build = ELARNI_BUILD) {
+  // Eager binding: a GStreamer that lacks a symbol fails here, not at the first frame.
+  GModule* library = g_module_open(path, G_MODULE_BIND_LOCAL);
   if (!library) { g_debug("No camera: %s", g_module_error()); return false; }
   CameraModule found;
-  if (!g_module_symbol(library, "elarni_camera_open", reinterpret_cast<gpointer*>(&found.open)) ||
+  decltype(&elarni_camera_build) module_build = nullptr;
+  if (!g_module_symbol(library, "elarni_camera_build", reinterpret_cast<gpointer*>(&module_build)) ||
+      !g_module_symbol(library, "elarni_camera_open", reinterpret_cast<gpointer*>(&found.open)) ||
       !g_module_symbol(library, "elarni_camera_frame", reinterpret_cast<gpointer*>(&found.frame)) ||
       !g_module_symbol(library, "elarni_camera_close", reinterpret_cast<gpointer*>(&found.close))) {
     g_debug("No camera: %s", g_module_error());
+    g_module_close(library);
+    return false;
+  }
+  if (strcmp(module_build(), build) != 0) {
+    g_debug("No camera: %s is from build %s, this runner from %s", path, module_build(), build);
     g_module_close(library);
     return false;
   }
@@ -213,13 +256,21 @@ bool load_camera_module(const char* path, CameraModule& module) {
   module = found;
   return true;
 }
+// The camera module beside the runner at program; empty when that path is unknown or relative,
+// as a module found from the working directory could be anyone's.
+std::string camera_module_path(const std::string& program) {
+  if (!g_path_is_absolute(program.c_str())) return "";
+  g_autofree char* directory = g_path_get_dirname(program.c_str());
+  g_autofree char* path = g_build_filename(directory, "lib", "libelarni_camera.so", nullptr);
+  return path;
+}
 // The camera module beside the runner's libraries, opened at the first camera call and kept.
 const CameraModule* camera_module() {
   static CameraModule module;
   static const bool loaded = [] {
-    g_autofree char* directory = g_path_get_dirname(executable().c_str());
-    g_autofree char* path = g_build_filename(directory, "lib", "libelarni_camera.so", nullptr);
-    return load_camera_module(path, module);
+    const std::string path = camera_module_path(executable());
+    if (path.empty()) { g_debug("No camera: the runner's own path is unknown"); return false; }
+    return load_camera_module(path.c_str(), module);
   }();
   return loaded ? &module : nullptr;
 }
@@ -754,7 +805,7 @@ void platform_call(FlMethodChannel*, FlMethodCall* call, gpointer data) {
       g_autoptr(GKeyFile) entry = g_key_file_new();
       g_key_file_set_string(entry, "Desktop Entry", "Type", "Application");
       g_key_file_set_string(entry, "Desktop Entry", "Name", "Elarni");
-      g_key_file_set_string(entry, "Desktop Entry", "Exec", login_exec(binary, hidden && fl_value_get_bool(hidden)).c_str());
+      g_key_file_set_string(entry, "Desktop Entry", "Exec", registered_exec(binary, hidden).c_str());
       g_key_file_set_string(entry, "Desktop Entry", "Icon", APPLICATION_ID);
       g_autofree char* contents = g_key_file_to_data(entry, nullptr, nullptr);
       if (!write_private(path, contents, strlen(contents))) { fail(call, "login_registration_failed"); return; }
@@ -806,6 +857,57 @@ void settings_action(GSimpleAction*, GVariant*, gpointer data) {
   g_autoptr(FlValue) action = fl_value_new_string("settings");
   notify(host->desktop, "action", action);
 }
+// Sends Dart a window state, as the engine does when GTK changes the window's.
+void send_lifecycle(FlBinaryMessenger* messenger, const char* state) {
+  g_autoptr(FlValue) value = fl_value_new_string(state);
+  g_autoptr(FlStringCodec) codec = fl_string_codec_new();
+  g_autoptr(GError) error = nullptr;
+  g_autoptr(GBytes) message = fl_message_codec_encode_message(FL_MESSAGE_CODEC(codec), value, &error);
+  if (!message) { g_warning("Lifecycle state not sent: %s", error->message); return; }
+  fl_binary_messenger_send_on_channel(messenger, "flutter/lifecycle", message, nullptr, nullptr, nullptr);
+}
+void tray_wait_stop(TrayWait& wait) {
+  if (wait.timer) g_source_remove(wait.timer);
+  if (wait.handler) g_signal_handler_disconnect(wait.indicator, wait.handler);
+  wait.timer = 0;
+  wait.handler = 0;
+}
+void tray_connection_changed(gpointer, gboolean connected, gpointer data) {
+  if (connected) tray_wait_stop(*static_cast<TrayWait*>(data));
+}
+gboolean tray_wait_over(gpointer data) {
+  auto& wait = *static_cast<TrayWait*>(data);
+  // The source ends as this returns.
+  wait.timer = 0;
+  tray_wait_stop(wait);
+  gboolean connected = FALSE;
+  if (wait.indicator) g_object_get(wait.indicator, "connected", &connected, nullptr);
+  if (!connected) wait.show(wait.data);
+  return G_SOURCE_REMOVE;
+}
+// Calls show(data) once after wait_ms unless a status-notifier host takes the indicator's icon
+// first; nothing when one already has. A host that comes up later at login ends the wait as it
+// connects.
+void tray_wait_start(TrayWait& wait, gpointer indicator, guint wait_ms, void (*show)(gpointer), gpointer data) {
+  if (wait.timer) return;
+  gboolean connected = FALSE;
+  if (indicator) g_object_get(indicator, "connected", &connected, nullptr);
+  if (connected) return;
+  wait.indicator = indicator;
+  wait.show = show;
+  wait.data = data;
+  if (indicator)
+    wait.handler = g_signal_connect(indicator, APP_INDICATOR_SIGNAL_CONNECTION_CHANGED, G_CALLBACK(tray_connection_changed), &wait);
+  wait.timer = g_timeout_add(wait_ms, tray_wait_over, &wait);
+}
+// Without a tray host nothing else could show a window started hidden: it comes up minimized. One
+// already shown is left as it is.
+void show_minimized(gpointer data) {
+  auto* host = static_cast<DesktopHost*>(data);
+  if (gtk_widget_get_visible(GTK_WIDGET(host->window))) return;
+  gtk_window_iconify(host->window);
+  gtk_window_present(host->window);
+}
 }  // namespace
 
 DesktopHost* desktop_host_new(GtkApplication* app, GtkWindow* window, FlView* view) {
@@ -814,7 +916,8 @@ DesktopHost* desktop_host_new(GtkApplication* app, GtkWindow* window, FlView* vi
   host->window = window;
   g_autoptr(FlStandardMethodCodec) codec = fl_standard_method_codec_new();
   auto* messenger = fl_engine_get_binary_messenger(fl_view_get_engine(view));
-  host->desktop = fl_method_channel_new(messenger, "com.elarni/desktop", FL_METHOD_CODEC(codec));
+  host->messenger = FL_BINARY_MESSENGER(g_object_ref(messenger));
+  host->desktop =fl_method_channel_new(messenger, "com.elarni/desktop", FL_METHOD_CODEC(codec));
   host->platform = fl_method_channel_new(messenger, "com.elarni/linux", FL_METHOD_CODEC(codec));
   fl_method_channel_set_method_call_handler(host->desktop, desktop_call, host, nullptr);
   fl_method_channel_set_method_call_handler(host->platform, platform_call, host, nullptr);
@@ -883,23 +986,15 @@ bool desktop_host_hidden_start(const char* const* arguments) {
   return arguments && arguments[0] && strcmp(arguments[0], "--hidden") == 0 && !arguments[1];
 }
 void desktop_host_start_hidden(DesktopHost* host) {
-  if (!host || host->tray_wait) return;
-  host->tray_wait = g_timeout_add(kTrayHostWaitMs, [](gpointer data) -> gboolean {
-    auto* waiting = static_cast<DesktopHost*>(data);
-    waiting->tray_wait = 0;
-    gboolean connected = FALSE;
-    if (waiting->indicator) g_object_get(waiting->indicator, "connected", &connected, nullptr);
-    // Nothing else could show the window; one already shown is left as it is.
-    if (!connected && !gtk_widget_get_visible(GTK_WIDGET(waiting->window))) {
-      gtk_window_iconify(waiting->window);
-      gtk_window_present(waiting->window);
-    }
-    return G_SOURCE_REMOVE;
-  }, host);
+  if (!host) return;
+  // GTK sends no state for a window it never maps, and Dart would take the app as shown: it would
+  // poll traffic rates for nobody. Showing the window later sends its state.
+  send_lifecycle(host->messenger, "AppLifecycleState.hidden");
+  tray_wait_start(host->tray_wait, host->indicator, kTrayHostWaitMs, show_minimized, host);
 }
 void desktop_host_free(DesktopHost* host) {
   if (!host) return;
-  if (host->tray_wait) g_source_remove(host->tray_wait);
+  tray_wait_stop(host->tray_wait);
   stop_camera(host);
   g_action_map_remove_action(G_ACTION_MAP(host->app), "quit");
   g_action_map_remove_action(G_ACTION_MAP(host->app), "preferences");
@@ -913,5 +1008,6 @@ void desktop_host_free(DesktopHost* host) {
   fl_method_channel_set_method_call_handler(host->platform, nullptr, nullptr, nullptr);
   g_clear_object(&host->desktop);
   g_clear_object(&host->platform);
+  g_clear_object(&host->messenger);
   delete host;
 }

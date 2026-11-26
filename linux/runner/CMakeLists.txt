@@ -31,5 +31,9 @@ add_library(elarni_camera MODULE "elarni_camera.cc")
 apply_standard_settings(elarni_camera)
 target_link_libraries(elarni_camera PRIVATE PkgConfig::GSTREAMER)
 add_dependencies(${BINARY_NAME} elarni_camera)
+# Both name the app build, as the runner opens only its own build's module: an in-place upgrade
+# replaces the module under a runner that is still running.
+target_compile_definitions(${BINARY_NAME} PRIVATE ELARNI_BUILD="${FLUTTER_VERSION}")
+target_compile_definitions(elarni_camera PRIVATE ELARNI_BUILD="${FLUTTER_VERSION}")
 
 target_include_directories(${BINARY_NAME} PRIVATE "${CMAKE_SOURCE_DIR}")

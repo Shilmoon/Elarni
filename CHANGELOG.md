@@ -8,8 +8,8 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
 
 - **Windows and Linux: start at login hidden in the tray.** Under "Launch app at login", "Start
   hidden in the tray" starts Elarni at login with only its tray icon; the tray icon, opening
-  Elarni again or a link shows the window. On Linux without a tray, the window starts
-  minimized instead.
+  Elarni again or a link shows the window. On Linux, when no tray has shown the icon within
+  20 seconds of the login, the window starts minimized instead.
 - **Linux: a server keeps answering incoming connections while the VPN is on.** With the new
   `answerInbound` setting (`elarni-cli settings`, off by default), a connection that reaches the
   machine from outside (SSH, a web server, a published container port) is answered through the

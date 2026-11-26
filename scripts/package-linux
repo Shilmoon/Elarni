@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Package an existing Linux release bundle as a .deb, an AppImage and a portable .tar.gz.
 
-The AppImage carries the tray libraries of this Ubuntu 22.04 build system; their source packages, which
-apt-get source fetches (deb-src entries, patchelf and a current apt-get update needed), go into a .tar beside it.
+The AppImage carries the tray libraries of this Ubuntu 22.04 build system (patchelf needed); their source packages
+go into a .tar beside it. The build image of scripts/check-linux-container keeps them; elsewhere apt-get source fetches
+them, which needs deb-src entries and a current apt-get update.
 """
 import argparse
 import hashlib
@@ -37,6 +38,11 @@ BUNDLED_LIBRARIES=('libayatana-appindicator3.so.1','libayatana-indicator3.so.7',
     'libdbusmenu-glib.so.4','libdbusmenu-gtk3.so.4')
 # Where the AppImage keeps each carried package's licence file, as usr/share/doc/<package>/copyright of Debian.
 BUNDLED_NOTICES='usr/share/doc/elarni/bundled'
+# The source packages of the installed tray libraries, which the build image fetched with them, so packaging needs no
+# package archive (scripts/check-linux-container).
+BUNDLED_SOURCES_CACHE=Path('/usr/src/elarni-bundled-sources')
+# The THIRD_PARTY_NOTICES section that names each carried library's package and source package versions.
+NOTICES_SECTION='## Linux AppImage only: tray libraries'
 
 def root_owned(info):
     # Root may extract the portable archive; keep neither the builder's ids nor group/other write.
@@ -60,16 +66,20 @@ def appimage_tool(name):
 
 def bundled_libraries(documentation=Path('/usr/share/doc')):
     """Each library the AppImage carries: its file on this Ubuntu build system and the package that installed it."""
+    if sys.platform!='linux' or not shutil.which('dpkg-query'):
+        raise SystemExit('The AppImage takes its tray libraries from an Ubuntu build system.')
     known=subprocess.run([shutil.which('ldconfig') or '/sbin/ldconfig','-p'],check=True,capture_output=True,text=True).stdout
     libraries=[]
     for soname in BUNDLED_LIBRARIES:
         found=re.search(r'^\s*'+re.escape(soname)+r' \(libc6,x86-64\) => (\S+)$',known,re.M)
         if not found: raise SystemExit(f'The AppImage carries {soname}: install its package on the build system.')
         path=Path(found[1]).resolve(strict=True)
-        # "<package>:<architecture>: <path>"
-        package=subprocess.run(['dpkg-query','-S',str(path)],check=True,capture_output=True,text=True).stdout.split(':',1)[0]
+        # "<package>:<architecture>: <path>". The package name alone also matches another architecture's copy (an
+        # i386 one, for Steam or Wine), whose record dpkg-query -W would print too.
+        owner=subprocess.run(['dpkg-query','-S',str(path)],check=True,capture_output=True,text=True).stdout.split(': ',1)[0]
+        package=owner.split(':',1)[0]
         version,source,source_version=subprocess.run(['dpkg-query','-W','-f=${Version}\t${source:Package}\t${source:Version}',
-            package],check=True,capture_output=True,text=True).stdout.split('\t')
+            owner],check=True,capture_output=True,text=True).stdout.split('\t')
         copyright=documentation/package/'copyright'
         if not copyright.is_file() or not copyright.stat().st_size:
             raise SystemExit(f'Missing licence file of bundled {soname}: {copyright}')
@@ -77,18 +87,58 @@ def bundled_libraries(documentation=Path('/usr/share/doc')):
             'source_version':source_version,'copyright':copyright})
     return libraries
 
-def bundled_sources(libraries,archive,version):
+def check_notices(libraries,notices):
+    """Refuse a THIRD_PARTY_NOTICES whose tray library section names other packages or versions than the AppImage
+    carries, so the notices it ships describe what it ships."""
+    text=notices.read_text()
+    start=text.find(NOTICES_SECTION)
+    end=text.find('\n## ',start+1) if start>=0 else -1
+    section=' '.join(text[start:end if end>=0 else len(text)].split()) if start>=0 else ''
+    expected=[f"`{library['soname']}`: package `{library['package']}` {library['version']}, from source package "
+        f"`{library['source']}` {library['source_version']}." for library in libraries]
+    missing=[line for line in expected if line not in section]
+    if missing:
+        raise SystemExit(f'{notices} does not name the tray libraries the AppImage carries; its "{NOTICES_SECTION[3:]}" '
+            'section must say:\n'+'\n'.join(missing))
+
+def source_files(dsc):
+    """The files a source package's .dsc lists, by name, with their SHA-256."""
+    files,listed={},False
+    for line in dsc.read_text(errors='replace').splitlines():
+        if listed and line.startswith(' '):
+            digest,_size,name=line.split()
+            files[name]=digest
+        else:
+            listed=line.rstrip()=='Checksums-Sha256:'
+    return files
+
+def cached_source(dsc,folder):
+    """Copy a source package the build image keeps, its .dsc and the files that lists, into folder. False, copying
+    nothing, when there is none or one of its files is missing or differs."""
+    if not dsc.is_file(): return False
+    files=source_files(dsc)
+    if not files: return False
+    for name,digest in files.items():
+        path=dsc.parent/name
+        if not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest()!=digest: return False
+    for name in (dsc.name,*files): shutil.copy2(dsc.parent/name,folder/name)
+    return True
+
+def bundled_sources(libraries,archive,version,cache=BUNDLED_SOURCES_CACHE):
     """Write the exact Ubuntu source packages of the carried libraries, which their GPL and LGPL terms require
-    beside the AppImage, with a README naming the library each one builds, to the archive."""
+    beside the AppImage, with a README naming the library each one builds, to the archive. Each comes from the build
+    image's cache, or from apt-get source where that lacks it."""
     with tempfile.TemporaryDirectory(prefix='elarni-bundled-sources-') as temporary:
         folder=Path(temporary)/archive.name.removesuffix('.tar')
         folder.mkdir()
         for source,source_version in sorted({(library['source'],library['source_version']) for library in libraries}):
+            dsc=f"{source}_{source_version.split(':',1)[-1]}.dsc"
+            if cached_source(cache/dsc,folder): continue
             fetched=subprocess.run(['apt-get','source','--download-only','-qq',f'{source}={source_version}'],cwd=folder,
                 capture_output=True,text=True)
-            if fetched.returncode or not (folder/f"{source}_{source_version.split(':',1)[-1]}.dsc").is_file():
-                raise SystemExit(f'Cannot fetch source package {source} {source_version}; enable deb-src entries and run '
-                    f'apt-get update first: {fetched.stderr.strip()}')
+            if fetched.returncode or not (folder/dsc).is_file():
+                raise SystemExit(f'Cannot fetch source package {source} {source_version}: {cache} does not hold it, and '
+                    f'apt-get source needs deb-src entries and a current apt-get update: {fetched.stderr.strip()}')
         lines=[f"{library['soname']}  {library['package']} {library['version']}, "
             f"source package {library['source']} {library['source_version']}" for library in libraries]
         (folder/'README').write_text(f'Source code of the libraries in the lib/ folder of the Elarni {version} AppImage\n\n'
@@ -98,14 +148,9 @@ def bundled_sources(libraries,archive,version):
             f'{BUNDLED_NOTICES}/<package>/copyright.\n\n'+'\n'.join(lines)+'\n')
         with tarfile.open(archive,'w') as output: output.add(folder,arcname=folder.name,filter=root_owned)
 
-def build_appimage(bundle,destination,libraries,sources):
-    """Pack bundle, with the desktop entry, icon and the tray libraries, into the AppImage at destination."""
-    # The carried libraries' licences go with it, and their source archive is published beside it.
-    if not sources.is_file() or not sources.stat().st_size:
-        raise SystemExit(f'Missing the source archive of the bundled libraries: {sources}')
-    for library in libraries:
-        if not library['copyright'].is_file() or not library['copyright'].stat().st_size:
-            raise SystemExit(f"Missing licence file of bundled {library['soname']}: {library['copyright']}")
+def build_appimage(bundle,destination,libraries):
+    """Pack bundle, with the desktop entry, icon and the tray libraries, into the AppImage at destination. The
+    libraries' licence files go with them; main writes their source archive beside it first."""
     with tempfile.TemporaryDirectory(prefix='elarni-appdir-') as temporary:
         appdir=Path(temporary).resolve()/'Elarni.AppDir'
         shutil.copytree(bundle,appdir,symlinks=True)
@@ -157,8 +202,9 @@ def main():
         if header[:4]!=b'\x7fELF' or header[4:6]!=b'\x02\x01' or header[18:20]!=b'\x3e\x00':
             raise SystemExit('Expected Linux x86-64 ELF: '+name)
     if not (args.bundle/'data/flutter_assets/AssetManifest.bin').is_file(): raise SystemExit('Missing Flutter assets.')
-    # The AppImage's libraries, their licence files and their sources come before any package is written.
+    # The AppImage's libraries, their licence files, notices and sources come before any package is written.
     libraries=bundled_libraries()
+    check_notices(libraries,args.bundle/'THIRD_PARTY_NOTICES')
     prepare_output(args.output)
     sources=args.output/('elarni-'+version+'-linux-bundled-sources.tar')
     bundled_sources(libraries,sources,version)
@@ -221,7 +267,7 @@ def main():
         subprocess.run(['dpkg-deb','--build','--root-owner-group',str(package),str(deb)],check=True)
         subprocess.run(['desktop-file-validate',str(applications/'com.elarni.Elarni.desktop')],check=True)
         appimage=args.output/('Elarni-'+version+'-x86_64.AppImage')
-        build_appimage(args.bundle,appimage,libraries,sources)
+        build_appimage(args.bundle,appimage,libraries)
         write_manifest(args.output, [deb, appimage, archive, sources], 'linux-x64', 'unsigned-candidate')
         print(json.dumps({'deb':str(deb.resolve()),'appimage':str(appimage.resolve()),'portable':str(archive.resolve()),
             'bundledSources':str(sources.resolve()),'version':version}),flush=True)

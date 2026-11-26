@@ -195,12 +195,15 @@ Elarni), and delete the folder.
 
 ## Linux
 
-On Ubuntu 22.04, with `patchelf` installed and the `deb-src` entries enabled (the build
-container of `scripts/check-linux-container` has both):
+On Ubuntu 22.04 with `patchelf` installed. The build container of
+`scripts/check-linux-container` keeps the source packages of the AppImage's libraries
+(`/usr/src/elarni-bundled-sources`), fetched when its image is built; elsewhere
+`package-linux` fetches them with `apt-get source`, which needs the `deb-src` entries enabled
+and a current `sudo apt-get update`. It stops when `THIRD_PARTY_NOTICES` names other versions
+of those libraries than the system has: update the notices first.
 
 ```sh
 flutter build linux --release --target=lib/main.dart
-sudo apt-get update  # package-linux fetches the source packages of the AppImage's libraries
 python3 scripts/package-linux --output .build/linux-release
 ```
 
