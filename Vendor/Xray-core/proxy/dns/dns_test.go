@@ -1,7 +1,10 @@
 package dns
 
 import (
+	"bytes"
 	"context"
+	"encoding/binary"
+	"fmt"
 	"io"
 	"testing"
 	"time"
@@ -59,7 +62,7 @@ func TestHijackedQueriesAlwaysGetAnAnswer(t *testing.T) {
 	} {
 		messages := make(capturedMessages, 1)
 		timer := signal.CancelAfterInactivity(context.Background(), func() {}, time.Minute)
-		(&Handler{client: c.client}).handleIPQuery(7, c.qType, "example.test.", messages, timer)
+		(&Handler{client: c.client}).handleIPQuery(7, c.qType, "example.test.", messages, timer, 512)
 		timer.SetTimeout(0)
 		select {
 		case b := <-messages:
@@ -140,6 +143,144 @@ func (r *oneQueryReader) ReadMultiBuffer() (buf.MultiBuffer, error) {
 	b.Write(r.query)
 	r.query = nil
 	return buf.MultiBuffer{b}, nil
+}
+
+// queryFor is an A or AAAA query for example.test. that announces ednsSize in an OPT record, or
+// carries none when ednsSize is 0.
+func queryFor(qType dnsmessage.Type, ednsSize int) []byte {
+	builder := dnsmessage.NewBuilder(nil, dnsmessage.Header{ID: 9, RecursionDesired: true})
+	common.Must(builder.StartQuestions())
+	common.Must(builder.Question(dnsmessage.Question{Name: dnsmessage.MustNewName("example.test."), Type: qType, Class: dnsmessage.ClassINET}))
+	if ednsSize != 0 {
+		common.Must(builder.StartAdditionals())
+		var opt dnsmessage.ResourceHeader
+		common.Must(opt.SetEDNS0(ednsSize, dnsmessage.RCodeSuccess, false))
+		common.Must(builder.OPTResource(opt, dnsmessage.OPTResource{}))
+	}
+	query, err := builder.Finish()
+	common.Must(err)
+	return query
+}
+
+// answerFor sends query to h on a flow of its own, as an app's stub resolver does over network,
+// and returns the answer without its TCP length.
+func answerFor(t *testing.T, h *Handler, network net.Network, query []byte) []byte {
+	t.Helper()
+	target := net.UDPDestination(net.ParseAddress("192.0.2.53"), 53)
+	if network == net.Network_TCP {
+		target = net.TCPDestination(net.ParseAddress("192.0.2.53"), 53)
+		query = append(binary.BigEndian.AppendUint16(nil, uint16(len(query))), query...)
+	}
+	replies := make(capturedWrites, 1)
+	ctx := session.ContextWithOutbounds(context.Background(), []*session.Outbound{{Target: target}})
+	go h.Process(ctx, &transport.Link{Reader: &oneQueryReader{query: query}, Writer: replies}, nil)
+	select {
+	case mb := <-replies:
+		answer := []byte(mb.String())
+		buf.ReleaseMulti(mb)
+		if network == net.Network_TCP {
+			if len(answer) < 2 || int(binary.BigEndian.Uint16(answer)) != len(answer)-2 {
+				t.Fatalf("TCP answer of %d bytes does not match its length", len(answer))
+			}
+			answer = answer[2:]
+		}
+		return answer
+	case <-time.After(5 * time.Second):
+		t.Fatal("no answer")
+		return nil
+	}
+}
+
+// Elarni: every address went into one UDP answer of up to 8 KiB, but a stub resolver takes 512
+// bytes, or the EDNS size it announces, so a name with about 30 or more addresses got an answer
+// the asker dropped or cut.
+func TestUDPAnswersKeepTheAddressesThatFitWhatTheAskerTakes(t *testing.T) {
+	ipv4, ipv6 := make([]net.IP, 60), make([]net.IP, 60)
+	for i := range 60 {
+		ipv4[i] = net.ParseIP(fmt.Sprintf("198.51.100.%d", i+1))
+		ipv6[i] = net.ParseIP(fmt.Sprintf("2001:db8::%x", i+1))
+	}
+	for _, c := range []struct {
+		name     string
+		network  net.Network
+		qType    dnsmessage.Type
+		ednsSize int
+		limit    int // 0: every address
+	}{
+		{"60 A records without EDNS", net.Network_UDP, dnsmessage.TypeA, 0, 512},
+		{"60 A records with EDNS 1232", net.Network_UDP, dnsmessage.TypeA, 1232, 0}, // 990 bytes
+		{"60 AAAA records with EDNS 1232", net.Network_UDP, dnsmessage.TypeAAAA, 1232, 1232},
+		{"EDNS above 1232 counts as 1232", net.Network_UDP, dnsmessage.TypeAAAA, 4096, 1232},
+		{"EDNS below 512 counts as 512", net.Network_UDP, dnsmessage.TypeA, 100, 512},
+		{"60 A records over TCP", net.Network_TCP, dnsmessage.TypeA, 0, 0},
+		{"60 AAAA records over TCP", net.Network_TCP, dnsmessage.TypeAAAA, 1232, 0},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			ips, recordSize := ipv4, 16
+			if c.qType == dnsmessage.TypeAAAA {
+				ips, recordSize = ipv6, 28
+			}
+			h := &Handler{client: staticClient{ips: ips}, timeout: time.Minute}
+			answer := answerFor(t, h, c.network, queryFor(c.qType, c.ednsSize))
+			var msg dnsmessage.Message
+			if err := msg.Unpack(answer); err != nil {
+				t.Fatalf("answer of %d bytes does not parse: %v", len(answer), err)
+			}
+			if msg.ID != 9 || msg.RCode != dnsmessage.RCodeSuccess || msg.Truncated || len(msg.Questions) != 1 {
+				t.Fatalf("id %d rcode %v truncated %t with %d questions", msg.ID, msg.RCode, msg.Truncated, len(msg.Questions))
+			}
+			for i, record := range msg.Answers {
+				var got net.IP
+				switch body := record.Body.(type) {
+				case *dnsmessage.AResource:
+					got = body.A[:]
+				case *dnsmessage.AAAAResource:
+					got = body.AAAA[:]
+				}
+				if !got.Equal(ips[i]) {
+					t.Fatalf("answer %d is %v, want %v: the addresses in their order", i, got, ips[i])
+				}
+			}
+			n := len(msg.Answers)
+			if c.limit == 0 {
+				if n != len(ips) {
+					t.Fatalf("%d of %d addresses in %d bytes, want all", n, len(ips), len(answer))
+				}
+				return
+			}
+			if len(answer) > c.limit || n == 0 || n >= len(ips) {
+				t.Fatalf("%d of %d addresses in %d bytes, want some within %d bytes", n, len(ips), len(answer), c.limit)
+			}
+			if len(answer)+recordSize <= c.limit {
+				t.Fatalf("%d addresses in %d bytes leave room for another within %d", n, len(answer), c.limit)
+			}
+		})
+	}
+}
+
+// A short answer is the message the handler always sent: same header, question and records.
+func TestShortAnswersAreUnchanged(t *testing.T) {
+	ips := []net.IP{net.ParseIP("192.0.2.1"), net.ParseIP("192.0.2.2"), net.ParseIP("192.0.2.3")}
+	builder := dnsmessage.NewBuilder(nil, dnsmessage.Header{ID: 9, RecursionAvailable: true, RecursionDesired: true, Response: true, Authoritative: true})
+	builder.EnableCompression()
+	common.Must(builder.StartQuestions())
+	common.Must(builder.Question(dnsmessage.Question{Name: dnsmessage.MustNewName("example.test."), Class: dnsmessage.ClassINET, Type: dnsmessage.TypeA}))
+	common.Must(builder.StartAnswers())
+	for _, ip := range ips {
+		var r dnsmessage.AResource
+		copy(r.A[:], ip.To4())
+		common.Must(builder.AResource(dnsmessage.ResourceHeader{Name: dnsmessage.MustNewName("example.test."), Class: dnsmessage.ClassINET, TTL: 60}, r))
+	}
+	want, err := builder.Finish()
+	common.Must(err)
+	h := &Handler{client: staticClient{ips: ips}, timeout: time.Minute}
+	for _, network := range []net.Network{net.Network_UDP, net.Network_TCP} {
+		for _, ednsSize := range []int{0, 1232} {
+			if got := answerFor(t, h, network, queryFor(dnsmessage.TypeA, ednsSize)); !bytes.Equal(got, want) {
+				t.Errorf("%v with EDNS size %d: answer %x, want %x", network, ednsSize, got, want)
+			}
+		}
+	}
 }
 
 // One app query answered from the local resolver, on a flow of its own as stub resolvers send them.

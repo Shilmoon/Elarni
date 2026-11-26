@@ -86,11 +86,11 @@ func TestWireGuardRetriesFailedStart(t *testing.T) {
 				var server tunnelDevice
 				settings := map[string]string{}
 				if amnezia {
-					server = awg.NewDevice(adaptAmneziaTUN(serverTun), &amneziaBind{serverBind}, &awg.Logger{Verbosef: func(string, ...any) {}, Errorf: t.Logf})
+					server = amneziaDevice{Device: awg.NewDevice(adaptAmneziaTUN(serverTun), &amneziaBind{serverBind}, &awg.Logger{Verbosef: func(string, ...any) {}, Errorf: t.Logf})}
 					// Headers must match the server's, so a retry that skipped the config could not handshake.
 					settings = map[string]string{"jc": "2", "jmin": "10", "jmax": "20", "h1": "100000-100100", "h2": "200000-200100", "h3": "300000-300100", "h4": "400000-400100"}
 				} else {
-					server = device.NewDevice(serverTun, serverBind, &device.Logger{Verbosef: func(string, ...any) {}, Errorf: t.Logf})
+					server = wireguardDevice{Device: device.NewDevice(serverTun, serverBind, &device.Logger{Verbosef: func(string, ...any) {}, Errorf: t.Logf})}
 				}
 				defer serverSocket.Close()
 				defer server.Close()

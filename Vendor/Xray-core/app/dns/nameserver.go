@@ -2,6 +2,7 @@ package dns
 
 import (
 	"context"
+	go_errors "errors"
 	"net/url"
 	"strings"
 	"sync"
@@ -206,6 +207,16 @@ func (c *Client) Name() string {
 
 // QueryIP sends DNS query to the name server with the client's IP.
 func (c *Client) QueryIP(ctx context.Context, domain string, option dns.IPOption) ([]net.IP, uint32, error) {
+	ips, ttl, _, err := c.queryIP(ctx, domain, option)
+	return ips, ttl, err
+}
+
+// queryIP is QueryIP that also tells whether the name server itself answered without records
+// (Elarni): not a family the client leaves out, not an answer its address filters emptied, and only
+// a server that asks a resolver, so neither FakeDNS nor the system resolver. A server with expected
+// or unexpected addresses never tells: it is one half of a domestic/remote split, and its empty
+// answer goes on to the next server.
+func (c *Client) queryIP(ctx context.Context, domain string, option dns.IPOption) ([]net.IP, uint32, bool, error) {
 	if c.checkSystem {
 		supportIPv4, supportIPv6 := utils.CheckRoutes()
 		option.IPv4Enable = option.IPv4Enable && supportIPv4
@@ -216,7 +227,7 @@ func (c *Client) QueryIP(ctx context.Context, domain string, option dns.IPOption
 	}
 
 	if !option.IPv4Enable && !option.IPv6Enable {
-		return nil, 0, dns.ErrEmptyResponse
+		return nil, 0, false, dns.ErrEmptyResponse
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, c.timeoutMs)
@@ -225,18 +236,21 @@ func (c *Client) QueryIP(ctx context.Context, domain string, option dns.IPOption
 	cancel()
 
 	if err != nil {
-		return nil, 0, err
+		// IPRecord.getIPs: the resolver answered, without error and without records.
+		_, asksAResolver := c.server.(CachedNameserver)
+		filtered := c.expectedIPs != nil || c.unexpectedIPs != nil
+		return nil, 0, asksAResolver && !filtered && go_errors.Is(err, dns.ErrEmptyResponse), err
 	}
 
 	if len(ips) == 0 {
-		return nil, 0, dns.ErrEmptyResponse
+		return nil, 0, false, dns.ErrEmptyResponse
 	}
 
 	if c.expectedIPs != nil && !c.actPrior {
 		ips, _ = c.expectedIPs.FilterIPs(ips)
 		errors.LogDebug(context.Background(), "domain ", domain, " expectedIPs ", ips, " matched at server ", c.Name())
 		if len(ips) == 0 {
-			return nil, 0, dns.ErrEmptyResponse
+			return nil, 0, false, dns.ErrEmptyResponse
 		}
 	}
 
@@ -244,7 +258,7 @@ func (c *Client) QueryIP(ctx context.Context, domain string, option dns.IPOption
 		_, ips = c.unexpectedIPs.FilterIPs(ips)
 		errors.LogDebug(context.Background(), "domain ", domain, " unexpectedIPs ", ips, " matched at server ", c.Name())
 		if len(ips) == 0 {
-			return nil, 0, dns.ErrEmptyResponse
+			return nil, 0, false, dns.ErrEmptyResponse
 		}
 	}
 
@@ -264,7 +278,7 @@ func (c *Client) QueryIP(ctx context.Context, domain string, option dns.IPOption
 		}
 	}
 
-	return ips, ttl, nil
+	return ips, ttl, false, nil
 }
 
 func ResolveIpOptionOverride(queryStrategy QueryStrategy, ipOption dns.IPOption) dns.IPOption {

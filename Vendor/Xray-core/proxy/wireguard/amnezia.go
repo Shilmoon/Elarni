@@ -17,6 +17,8 @@ type tunnelDevice interface {
 	BindUpdate() error
 	IpcSet(string) error
 	Close()
+	// Rehandshake renews the keys of every configured peer (sleep.go).
+	Rehandshake() error
 }
 
 type amneziaTUN struct {
