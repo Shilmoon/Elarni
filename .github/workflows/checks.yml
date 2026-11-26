@@ -173,16 +173,19 @@ jobs:
             part: checks and release
             checks: true
             release: true
-          # Hosted macOS runners are separate machines, so the two parts overlap.
+          # Hosted macOS runners are separate machines, so the parts overlap.
           - os: macos-15
             part: checks
             checks: true
           - os: macos-15
             part: release
             release: true
-          # The iPhone app needs Xcode 26.4 or newer, which runs only on macOS 26.
+          # The iPhone app needs Xcode 26.4 or newer, which runs only on macOS 26. The Swift checks run beside it:
+          # with them the checks part took 18 minutes and was the last job of a pull request; now each part takes
+          # about 12.
           - os: macos-26
-            part: ios
+            part: swift and ios
+            swift: true
             ios: true
     defaults:
       run:
@@ -203,8 +206,6 @@ jobs:
       - uses: jdx/mise-action@6be3c7ed4c21d4f76b208d351d95aac273ebb76d # v5.2.4
         with:
           version: 2026.9.8
-          # The iPhone build needs only Go (and Rust through rustup), not Flutter.
-          install_args: ${{ matrix.ios && 'go' || '' }}
           # A self-hosted runner keeps its installs; restoring the 2 GB cache over them took 6 minutes.
           cache: ${{ runner.environment == 'github-hosted' }}
       - name: Install the Rust toolchain selected by the repository
@@ -240,7 +241,6 @@ jobs:
             . -> .build/ios/rust
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Fetch Flutter dependencies
-        if: ${{ !matrix.ios }}
         run: flutter pub get
       - name: Check report process integration
         if: matrix.checks
@@ -272,19 +272,22 @@ jobs:
         if: matrix.checks && runner.os != 'macOS'
         run: python scripts/check-windows
       - name: Restore cbindgen
-        if: runner.os == 'macOS' && !matrix.ios
+        if: runner.os == 'macOS'
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: .toolchains/cbindgen
           key: cbindgen-0.29.4-${{ runner.os }}-${{ runner.arch }}
       - name: Prepare macOS native tools
-        if: runner.os == 'macOS' && !matrix.ios
+        if: runner.os == 'macOS'
         run: |
           [ -x .toolchains/cbindgen/bin/cbindgen ] || cargo install cbindgen --version 0.29.4 --locked --root .toolchains/cbindgen
           ln -s "$(mise where go)" .toolchains/go
       - name: Swift and native FFI checks
-        if: matrix.checks && runner.os == 'macOS'
-        run: sh scripts/check-tests swift
+        if: matrix.swift
+        # The control checks link the Flutter macOS framework, which only a macOS build downloads.
+        run: |
+          flutter precache --macos
+          sh scripts/check-tests swift
       - name: Newest server core gate
         if: matrix.release
         env:
