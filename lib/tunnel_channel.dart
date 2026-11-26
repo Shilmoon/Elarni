@@ -1143,6 +1143,7 @@ final class TunnelSettings {
     this.logLevel = 'warning',
     this.recordDiagnostics = false,
     this.hideVPNIcon = false,
+    this.answerInbound = false,
     this.includedRoutes = const <String>['0.0.0.0/0', '::/0'],
     this.excludedRoutes = const <String>[],
   });
@@ -1200,6 +1201,7 @@ final class TunnelSettings {
     recordDiagnostics:
         recordingBuild && (value['recordDiagnostics'] as bool? ?? false),
     hideVPNIcon: value['hideVPNIcon'] as bool? ?? false,
+    answerInbound: value['answerInbound'] as bool? ?? false,
     includedRoutes: List<String>.from(
       value['includedRoutes'] as List? ?? const <String>['0.0.0.0/0', '::/0'],
     ),
@@ -1367,6 +1369,9 @@ final class TunnelSettings {
   // in a [recordingBuild].
   final bool recordDiagnostics;
   final bool hideVPNIcon;
+  // Linux: connections that arrive from outside are answered outside the tunnel,
+  // so a server keeps SSH and its published ports while the VPN is on.
+  final bool answerInbound;
   final List<String> includedRoutes;
   final List<String> excludedRoutes;
 
@@ -1425,6 +1430,7 @@ final class TunnelSettings {
     'logLevel': logLevel,
     'recordDiagnostics': recordDiagnostics,
     'hideVPNIcon': hideVPNIcon,
+    'answerInbound': answerInbound,
     'includedRoutes': includedRoutes,
     'excludedRoutes': excludedRoutes,
   };
@@ -1468,6 +1474,7 @@ final class TunnelSettings {
     String? logLevel,
     bool? recordDiagnostics,
     bool? hideVPNIcon,
+    bool? answerInbound,
     List<String>? includedRoutes,
     List<String>? excludedRoutes,
   }) => TunnelSettings(
@@ -1513,6 +1520,7 @@ final class TunnelSettings {
     logLevel: logLevel ?? this.logLevel,
     recordDiagnostics: recordDiagnostics ?? this.recordDiagnostics,
     hideVPNIcon: hideVPNIcon ?? this.hideVPNIcon,
+    answerInbound: answerInbound ?? this.answerInbound,
     includedRoutes: includedRoutes ?? this.includedRoutes,
     excludedRoutes: excludedRoutes ?? this.excludedRoutes,
   );

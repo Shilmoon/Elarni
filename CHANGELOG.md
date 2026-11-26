@@ -341,6 +341,13 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
 
 - **`url` 2.5.9.** 2.5.8 overflowed the stack in `Url::origin()` on nested `blob:` URLs
   (RUSTSEC-2026-0592). Elarni's own code does not call it; the update clears the advisory check.
+- **Linux: a server keeps answering incoming connections while the VPN is on.** With the new
+  `answerInbound` setting (`elarni-cli settings`, off by default), a connection that reaches the
+  machine from outside (SSH, a web server, a published container port, a UDP service) is
+  answered through the network it came from instead of the tunnel, and sessions opened before
+  the tunnel keep working. Under the kill switch the machine's own services answer; ports
+  forwarded to containers stay blocked. What the machine opens itself still goes
+  through the VPN. `linux/HEADLESS.md` has the command.
 
 ## 0.6.3 - 2026-11-22
 

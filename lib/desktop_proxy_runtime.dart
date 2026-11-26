@@ -335,6 +335,7 @@ extension _ProxyRuntime on DesktopProxy {
         'blockWithoutVPN': catalog.settings.blockWithoutVPN,
         'enforceRoutes': catalog.settings.enforceRoutes,
         'hideVPNIcon': catalog.settings.hideVPNIcon,
+        'answerInbound': catalog.settings.answerInbound,
       },
     },
     ...DesktopProxy._runtimeAssets(catalog),
