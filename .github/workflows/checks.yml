@@ -58,10 +58,13 @@ jobs:
              {"job": "apple", "os": "macos-26", "part": "swift and ios", "swift": true, "ios": true}]
         run: |
           if [ "$GITHUB_EVENT_NAME" = pull_request ]; then
-            files=$(gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$PR/files" --jq '.[].filename')
+            # A moved file counts under both names: its old folder lost it. GitHub lists at most 3000 files of a
+            # pull request; a list that long counts as every area.
+            files=$(gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$PR/files" --jq '.[] | .filename, (.previous_filename // empty)')
+            if [ "$(printf '%s\n' "$files" | wc -l)" -ge 3000 ]; then files=many; fi
           elif [ "$GITHUB_EVENT_NAME" = push ] && [ "${BEFORE#0000000}" = "$BEFORE" ]; then
             # The compare API lists at most 300 files; a longer list counts as code.
-            files=$(gh api "repos/$GITHUB_REPOSITORY/compare/$BEFORE...$GITHUB_SHA" --jq 'if (.files | length) < 300 then .files[].filename else "many" end')
+            files=$(gh api "repos/$GITHUB_REPOSITORY/compare/$BEFORE...$GITHUB_SHA" --jq 'if (.files | length) < 300 then .files[] | .filename, (.previous_filename // empty) else "many" end')
           else
             files=many
           fi
