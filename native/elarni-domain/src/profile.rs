@@ -559,7 +559,7 @@ pub fn compile_profile(
     }
     crate::compiler::close_with_app(&mut owned);
     crate::compiler::apply_per_app_routing(&mut owned, runtime, &prefix)?;
-    crate::compiler::block_tun_own_subnets(&mut owned, &format!("{prefix}block"));
+    crate::compiler::block_tun_own_subnets(&mut owned, &format!("{prefix}block"), backend);
     let endpoints = profile_endpoints(&owned)?;
     Ok(CompiledProfile {
         config: serde_json::to_vec(&owned).map_err(|_| CompileError::InvalidOutbound)?,

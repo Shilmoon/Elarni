@@ -2,6 +2,7 @@ package dns
 
 import (
 	"encoding/binary"
+	"math"
 	"sync"
 
 	"github.com/xtls/xray-core/common"
@@ -136,12 +137,27 @@ func (w *TCPWriter) WriteMessage(b *buf.Buffer) error {
 	if b.IsEmpty() {
 		return nil
 	}
+	return w.WriteMultiMessage(buf.MultiBuffer{b})
+}
 
-	mb := make(buf.MultiBuffer, 0, 2)
+// WriteMultiMessage writes one message held in several buffers (Elarni: a TCP answer may be
+// larger than one buffer). Its length is that of them all, at most 65535 bytes.
+func (w *TCPWriter) WriteMultiMessage(message buf.MultiBuffer) error {
+	length := message.Len()
+	if length == 0 {
+		return nil
+	}
+	if length > math.MaxUint16 {
+		buf.ReleaseMulti(message)
+		return errors.New("message size too large: ", length)
+	}
+
+	mb := make(buf.MultiBuffer, 0, 1+len(message))
 
 	size := buf.New()
-	binary.BigEndian.PutUint16(size.Extend(2), uint16(b.Len()))
-	mb = append(mb, size, b)
+	binary.BigEndian.PutUint16(size.Extend(2), uint16(length))
+	mb = append(mb, size)
+	mb = append(mb, message...)
 	w.Lock()
 	defer w.Unlock()
 	return w.WriteMultiBuffer(mb)

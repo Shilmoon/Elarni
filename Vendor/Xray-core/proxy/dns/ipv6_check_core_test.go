@@ -3,6 +3,7 @@ package dns_test
 import (
 	"context"
 	"fmt"
+	gonet "net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -30,6 +31,52 @@ func tlsService(t *testing.T) net.Destination {
 		t.Fatal(err)
 	}
 	return dest
+}
+
+// aaaaResolver is a UDP name server on loopback that answers AAAA queries for the names in
+// records with their address, and every other query without records. It returns its port.
+func aaaaResolver(t *testing.T, records map[string]string) int {
+	t.Helper()
+	conn, err := gonet.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { conn.Close() })
+	go func() {
+		b := make([]byte, 2048)
+		for {
+			n, from, err := conn.ReadFrom(b)
+			if err != nil {
+				return
+			}
+			var msg dnsmessage.Message
+			if msg.Unpack(b[:n]) != nil || len(msg.Questions) != 1 {
+				continue
+			}
+			q := msg.Questions[0]
+			msg.Response, msg.RecursionAvailable, msg.Additionals = true, true, nil
+			if address, ok := records[q.Name.String()]; ok && q.Type == dnsmessage.TypeAAAA {
+				msg.Answers = []dnsmessage.Resource{{
+					Header: dnsmessage.ResourceHeader{Name: q.Name, Type: q.Type, Class: dnsmessage.ClassINET, TTL: 60},
+					Body:   &dnsmessage.AAAAResource{AAAA: [16]byte(net.ParseIP(address).To16())},
+				}}
+			}
+			if packed, err := msg.Pack(); err == nil {
+				conn.WriteTo(packed, from)
+			}
+		}
+	}()
+	return conn.LocalAddr().(*gonet.UDPAddr).Port
+}
+
+func freePort(t *testing.T) int {
+	t.Helper()
+	listener, err := gonet.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	return listener.Addr().(*gonet.TCPAddr).Port
 }
 
 // lookup asks the core for the AAAA records of name as an app behind the inbound with this tag
@@ -68,32 +115,45 @@ func lookup(t *testing.T, instance *core.Instance, tag, name string) int {
 	return len(answer.Answers)
 }
 
-// Elarni: the whole path in a core built from JSON. The inbound "no-ipv6" stands for a tunnel to a
-// server that has no IPv6: a rule ends its connections to the IPv6 service, the IPv4 one answers.
-// Its apps get the AAAA record until the check has ended, and an empty answer from then on. The
-// inbound "with-ipv6" reaches both services and keeps the record, which also shows that the check
-// is routed as the traffic of the inbound that asked, and that each inbound has its own result.
-// The inbound "unasked" has no IPv6 either, but its DNS outbound was not told to check: its
-// answers stay as they were.
-func TestAAAAAnswersOfACoreFollowTheRouteOfTheInboundThatAsks(t *testing.T) {
+// Elarni: the whole path in a core built from JSON. The socks inbound "server-in" stands for a
+// proxy server without IPv6: it ends its connections to the IPv6 service, and the IPv4 one
+// answers. The inbound "no-ipv6" sends its traffic to that server, but a domain rule sends
+// direct.example.test direct; "via-provider" gets there through a loopback whose inbound routes as
+// "no-ipv6" does, as a provider profile's rules do in the compiled configs. Their apps get the
+// AAAA record of a proxied name until the check has ended and an empty answer from then on, while
+// the direct name and a name of the static hosts keep theirs. The inbound "with-ipv6" reaches both
+// services directly and keeps the record, which also shows that the check is routed as the
+// traffic of the inbound that asked, and that each inbound has its own result. The inbound
+// "unasked" has no IPv6 either, but its DNS outbound was not told to check: its answers stay as
+// they were.
+func TestAAAAAnswersOfACoreFollowTheRouteOfEachName(t *testing.T) {
 	v6, v4 := tlsService(t), tlsService(t)
-	t.Cleanup(dns_proxy.SetIPv6Services(v6, v4))
+	server := freePort(t)
+	resolver := aaaaResolver(t, map[string]string{"dual.example.test.": "2a00:1450:4001::7", "direct.example.test.": "2a00:1450:4001::9"})
 
 	config, err := serial.DecodeJSONConfig(strings.NewReader(fmt.Sprintf(`{
 		"log": {"loglevel": "warning"},
-		"dns": {"hosts": {"dual.example.test": ["2a00:1450:4001::7", "192.0.2.7"]}},
+		"dns": {"servers": [{"address": "127.0.0.1", "port": %d}], "hosts": {"pinned.example.test": ["2a00:1450:4001::8"]}},
+		"inbounds": [{"tag": "server-in", "listen": "127.0.0.1", "port": %d, "protocol": "socks", "settings": {"auth": "noauth"}}],
 		"routing": {"rules": [
-			{"type": "field", "inboundTag": ["no-ipv6", "with-ipv6"], "port": 53, "outboundTag": "dns-out"},
+			{"type": "field", "inboundTag": ["no-ipv6", "with-ipv6", "via-provider"], "port": 53, "outboundTag": "dns-out"},
 			{"type": "field", "inboundTag": ["unasked"], "port": 53, "outboundTag": "dns-unasked"},
-			{"type": "field", "inboundTag": ["no-ipv6", "unasked"], "port": %d, "outboundTag": "block"}
+			{"type": "field", "inboundTag": ["server-in"], "port": %d, "outboundTag": "block"},
+			{"type": "field", "inboundTag": ["server-in"], "outboundTag": "direct"},
+			{"type": "field", "inboundTag": ["no-ipv6", "provider-in"], "domain": ["full:direct.example.test"], "outboundTag": "direct"},
+			{"type": "field", "inboundTag": ["no-ipv6", "provider-in", "unasked"], "outboundTag": "server"},
+			{"type": "field", "inboundTag": ["with-ipv6"], "outboundTag": "direct"},
+			{"type": "field", "inboundTag": ["via-provider"], "outboundTag": "provider"}
 		]},
 		"outbounds": [
 			{"tag": "direct", "protocol": "freedom"},
 			{"tag": "block", "protocol": "blackhole"},
+			{"tag": "server", "protocol": "socks", "settings": {"servers": [{"address": "127.0.0.1", "port": %d}]}},
+			{"tag": "provider", "protocol": "loopback", "settings": {"inboundTag": "provider-in"}},
 			{"tag": "dns-out", "protocol": "dns", "settings": {"checkIPv6": true}},
 			{"tag": "dns-unasked", "protocol": "dns"}
 		]
-	}`, v6.Port)))
+	}`, resolver, server, v6.Port, server)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -105,32 +165,51 @@ func TestAAAAAnswersOfACoreFollowTheRouteOfTheInboundThatAsks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	handler := instance.GetFeature(outbound.ManagerType()).(outbound.Manager).GetHandler("dns-out").(*proxyman_outbound.Handler).GetOutbound().(*dns_proxy.Handler)
+	handler.SetIPv6Services(v6, v4, 2*time.Second)
 	if err := instance.Start(); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { instance.Close() })
-	handler := instance.GetFeature(outbound.ManagerType()).(outbound.Manager).GetHandler("dns-out").(*proxyman_outbound.Handler).GetOutbound().(*dns_proxy.Handler)
+	closed := false
+	t.Cleanup(func() {
+		if !closed {
+			instance.Close()
+		}
+	})
 
-	if n := lookup(t, instance, "no-ipv6", "dual.example.test."); n != 1 {
-		t.Fatalf("the first answer, before the check ended, has %d records, want 1", n)
-	}
-	if n := lookup(t, instance, "with-ipv6", "dual.example.test."); n != 1 {
-		t.Fatalf("the first answer with IPv6 has %d records, want 1", n)
+	for _, tag := range []string{"no-ipv6", "via-provider", "with-ipv6"} {
+		if n := lookup(t, instance, tag, "dual.example.test."); n != 1 {
+			t.Fatalf("%s: the first answer, before the check ended, has %d records, want 1", tag, n)
+		}
 	}
 	for _, c := range []struct {
 		tag, state string
-		records    int
-	}{{"no-ipv6", "not reachable", 0}, {"with-ipv6", "reachable", 1}} {
+		records    map[string]int
+	}{
+		{"no-ipv6", "not reachable", map[string]int{"dual.example.test.": 0, "direct.example.test.": 1, "pinned.example.test.": 1}},
+		{"via-provider", "not reachable", map[string]int{"dual.example.test.": 0, "direct.example.test.": 1}},
+		{"with-ipv6", "reachable", map[string]int{"dual.example.test.": 1}},
+	} {
 		for deadline := time.Now().Add(20 * time.Second); handler.IPv6State(c.tag) != c.state; time.Sleep(5 * time.Millisecond) {
 			if time.Now().After(deadline) {
 				t.Fatalf("public IPv6 for %s is %q, want %q", c.tag, handler.IPv6State(c.tag), c.state)
 			}
 		}
-		if n := lookup(t, instance, c.tag, "dual.example.test."); n != c.records {
-			t.Errorf("after the check, the answer for %s has %d records, want %d", c.tag, n, c.records)
+		for name, records := range c.records {
+			if n := lookup(t, instance, c.tag, name); n != records {
+				t.Errorf("after the check, the answer for %s to %s has %d records, want %d", name, c.tag, n, records)
+			}
 		}
 	}
 	if n := lookup(t, instance, "unasked", "dual.example.test."); n != 1 {
 		t.Errorf("without checkIPv6 the answer has %d records, want 1", n)
+	}
+
+	closed = true
+	if err := instance.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if !handler.IPv6CheckEnded() {
+		t.Error("the IPv6 check outlives its core")
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	go_errors "errors"
 	"io"
+	"math"
 	"strings"
 	"sync"
 	"time"
@@ -19,7 +20,9 @@ import (
 	"github.com/xtls/xray-core/common/task"
 	"github.com/xtls/xray-core/core"
 	"github.com/xtls/xray-core/features/dns"
+	"github.com/xtls/xray-core/features/outbound"
 	"github.com/xtls/xray-core/features/policy"
+	"github.com/xtls/xray-core/features/routing"
 	"github.com/xtls/xray-core/transport"
 	"github.com/xtls/xray-core/transport/internet"
 	"github.com/xtls/xray-core/transport/internet/stat"
@@ -38,7 +41,12 @@ func init() {
 			return nil, err
 		}
 		if instance := core.FromContext(ctx); instance != nil && config.(*Config).CheckIpv6 {
-			h.ipv6 = newIPv6Check(instance)
+			if err := core.RequireFeatures(ctx, func(router routing.Router, handlers outbound.Manager) error {
+				h.ipv6 = newIPv6Check(dialThrough(instance), routeThrough(router, handlers), publicIPv6Services())
+				return nil
+			}); err != nil {
+				return nil, err
+			}
 		}
 		return h, nil
 	}))
@@ -120,8 +128,22 @@ func (h *Handler) Init(config *Config, dnsClient dns.Client, policyManager polic
 	return nil
 }
 
+// Close implements common.Closable (Elarni): the IPv6 check ends with the handler's core.
+func (h *Handler) Close() error {
+	if h.ipv6 != nil {
+		h.ipv6.close()
+	}
+	return nil
+}
+
 func (h *Handler) isOwnLink(ctx context.Context) bool {
 	return h.ownLinkVerifier != nil && h.ownLinkVerifier.IsOwnLink(ctx)
+}
+
+// fromHosts reports whether the client answers domain from its static hosts.
+func (h *Handler) fromHosts(domain string) bool {
+	hosts, ok := h.client.(dns.HostsLookup)
+	return ok && len(hosts.LookupHosts(domain)) != 0
 }
 
 // parseQuery also returns the UDP payload size the query's OPT record announces, 0 without one.
@@ -302,7 +324,7 @@ func (h *Handler) Process(ctx context.Context, link *transport.Link, d internet.
 						return err
 					}
 				} else {
-					limit := 0 // TCP carries the whole answer
+					limit := math.MaxUint16 // TCP carries the whole answer that its length counts
 					if srcNetwork != net.Network_TCP {
 						limit = udpAnswerLimit(ednsSize)
 					}
@@ -368,8 +390,9 @@ func (h *Handler) handleIPQuery(id uint16, qType dnsmessage.Type, domain string,
 			IPv6Enable: true,
 			FakeEnable: true,
 		})
-		if h.ipv6 != nil {
-			ips = h.ipv6.reachable(inboundTag, ips)
+		// The static hosts are what the user or the provider set on purpose: they stay as written.
+		if h.ipv6 != nil && !h.fromHosts(domain) {
+			ips = h.ipv6.reachable(inboundTag, domain, ips)
 		}
 	}
 
@@ -453,6 +476,14 @@ func (h *Handler) handleIPQuery(id uint16, qType dnsmessage.Type, domain string,
 	}
 	if len(msgBytes) > buf.Size {
 		b.Release()
+		// Elarni: a TCP answer is one message in as many buffers as it takes; a UDP one never gets here.
+		if w, ok := writer.(interface{ WriteMultiMessage(buf.MultiBuffer) error }); ok {
+			if err := w.WriteMultiMessage(buf.MergeBytes(nil, msgBytes)); err != nil {
+				errors.LogInfoInner(context.Background(), err, "write IP answer")
+				timer.SetTimeout(0)
+			}
+			return
+		}
 		timer.SetTimeout(0)
 		errors.LogError(context.Background(), "DNS response message too large")
 		return

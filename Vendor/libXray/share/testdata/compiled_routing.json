@@ -126,6 +126,19 @@
       "rules": [
         {
           "inboundTag": [
+            "elarni-socks"
+          ],
+          "ip": [
+            "192.0.2.0/30",
+            "2001:db8::/126"
+          ],
+          "network": "tcp,udp",
+          "outboundTag": "elarni-block",
+          "port": "1-52,54-65535",
+          "type": "field"
+        },
+        {
+          "inboundTag": [
             "elarni-socks",
             "elarni-http",
             "elarni-tun"
@@ -494,6 +507,19 @@
     "routing": {
       "domainStrategy": "IPIfNonMatch",
       "rules": [
+        {
+          "inboundTag": [
+            "elarni-socks"
+          ],
+          "ip": [
+            "192.0.2.0/30",
+            "2001:db8::/126"
+          ],
+          "network": "tcp,udp",
+          "outboundTag": "elarni-block",
+          "port": "1-52,54-65535",
+          "type": "field"
+        },
         {
           "inboundTag": [
             "elarni-socks",
@@ -946,6 +972,19 @@
     "routing": {
       "domainStrategy": "IPIfNonMatch",
       "rules": [
+        {
+          "inboundTag": [
+            "elarni-socks"
+          ],
+          "ip": [
+            "192.0.2.0/30",
+            "2001:db8::/126"
+          ],
+          "network": "tcp,udp",
+          "outboundTag": "elarni-block",
+          "port": "1-52,54-65535",
+          "type": "field"
+        },
         {
           "inboundTag": [
             "elarni-socks",

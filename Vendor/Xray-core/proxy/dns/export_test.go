@@ -1,14 +1,22 @@
 package dns
 
-import "github.com/xtls/xray-core/common/net"
+import (
+	"time"
 
-// SetIPv6Services makes the IPv6 check of handlers built from now on connect to these two
-// addresses instead of the public services. The returned func puts those back.
-func SetIPv6Services(v6, v4 net.Destination) (restore func()) {
-	public := ipv6Services
-	ipv6Services = []ipv6Service{{v6: v6, v4: v4}}
-	return func() { ipv6Services = public }
+	"github.com/xtls/xray-core/common/net"
+)
+
+// SetIPv6Services makes the IPv6 check of this handler connect to these two addresses instead of
+// the public services, and give each family timeout to answer. Call it before the handler answers
+// its first query.
+func (h *Handler) SetIPv6Services(v6, v4 net.Destination, timeout time.Duration) {
+	h.ipv6.mu.Lock()
+	defer h.ipv6.mu.Unlock()
+	h.ipv6.v6, h.ipv6.v4, h.ipv6.timeout = []net.Destination{v6}, []net.Destination{v4}, timeout
 }
+
+// IPv6CheckEnded reports whether the handler's IPv6 check was ended
+func (h *Handler) IPv6CheckEnded() bool { return h.ipv6.ctx.Err() != nil }
 
 // IPv6State is what the handler knows of public IPv6 for the traffic of an inbound
 func (h *Handler) IPv6State(tag string) string {
