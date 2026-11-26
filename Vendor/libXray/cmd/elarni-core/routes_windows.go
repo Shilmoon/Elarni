@@ -25,11 +25,10 @@ import (
 )
 
 type physicalRoute struct {
-	prefix   netip.Prefix
-	index    uint32
-	metric   uint64
-	luid     winipcfg.LUID
-	loopback bool // a route of the loopback interface, where Block traffic without VPN keeps its fallback routes
+	prefix netip.Prefix
+	index  uint32
+	metric uint64
+	luid   winipcfg.LUID
 }
 
 type physicalNetworkSnapshot struct {
@@ -189,15 +188,13 @@ func windowsSuspended() time.Duration {
 	return windows.DurationSinceBoot() - time.Duration(unbiased)*100
 }
 
-// selectPhysicalRoute leaves out the loopback interface: the fallback routes there are more
-// specific than the physical default route, and a socket bound to that interface reaches nothing.
 func selectPhysicalRoute(routes []physicalRoute, address netip.Addr) *physicalRoute {
 	zone := address.Zone()
 	ip := address.Unmap().WithZone("")
 	var best *physicalRoute
 	for i := range routes {
 		r := &routes[i]
-		if r.loopback || zone != "" && zone != strconv.Itoa(int(r.index)) {
+		if zone != "" && zone != strconv.Itoa(int(r.index)) {
 			continue
 		}
 		if r.prefix.Contains(ip) && (best == nil || r.prefix.Bits() > best.prefix.Bits() || r.prefix.Bits() == best.prefix.Bits() && r.metric < best.metric) {
@@ -271,6 +268,10 @@ func (c *physicalNetworkCache) bind(network, address string, conn syscall.RawCon
 
 // Exclude our capture adapters on every refresh, including after TUN startup.
 // Retain longest-prefix routing for LAN/overlay destinations and normal metrics.
+// The loopback interface is left out too: Block traffic without VPN keeps its fallback routes
+// there, more specific than the physical default route, and a socket bound to it reaches nothing
+// (bind leaves loopback destinations alone). Without a physical network the snapshot has no
+// routes: the tunnel still starts, and each dial fails with route_unavailable until one is up.
 func readPhysicalNetwork(control func(string, string, syscall.RawConn) error) (*physicalNetworkSnapshot, error) {
 	rows, err := winipcfg.GetIPForwardTable2(windows.AF_UNSPEC)
 	if err != nil {
@@ -281,10 +282,8 @@ func readPhysicalNetwork(control func(string, string, syscall.RawConn) error) (*
 		return nil, errors.New("route_unavailable")
 	}
 	available := make(map[uint32]bool, len(interfaces))
-	loopback := map[uint32]bool{}
 	for _, iface := range interfaces {
-		available[uint32(iface.Index)] = iface.Flags&net.FlagUp != 0 && !strings.HasPrefix(strings.ToLower(iface.Name), "elarni-")
-		loopback[uint32(iface.Index)] = iface.Flags&net.FlagLoopback != 0
+		available[uint32(iface.Index)] = iface.Flags&net.FlagUp != 0 && iface.Flags&net.FlagLoopback == 0 && !strings.HasPrefix(strings.ToLower(iface.Name), "elarni-")
 	}
 	routes := []physicalRoute{}
 	metrics := map[[2]uint32]uint64{}
@@ -307,10 +306,7 @@ func readPhysicalNetwork(control func(string, string, syscall.RawConn) error) (*
 			metric = uint64(ipif.Metric)
 			metrics[key] = metric
 		}
-		routes = append(routes, physicalRoute{prefix, row.InterfaceIndex, uint64(row.Metric) + metric, row.InterfaceLUID, loopback[row.InterfaceIndex]})
-	}
-	if len(routes) == 0 {
-		return nil, errors.New("route_unavailable")
+		routes = append(routes, physicalRoute{prefix, row.InterfaceIndex, uint64(row.Metric) + metric, row.InterfaceLUID})
 	}
 	servers, err := readPhysicalDNSServers()
 	if err != nil {
@@ -336,6 +332,10 @@ func readPhysicalNetwork(control func(string, string, syscall.RawConn) error) (*
 // without VPN keeps its fallback routes. The interface is looked up on first use: its index
 // is not fixed, and a release without fallback routes needs none.
 type loopbackRoutes struct{ luid winipcfg.LUID }
+
+// helperFallbackRoutes is the loopback interface's part of the route table as this process knows
+// it (placedFallbackRoutes). vpnChild forgets it when it gives up the guard's claim.
+var helperFallbackRoutes = &placedFallbackRoutes{table: &loopbackRoutes{}}
 
 func (r *loopbackRoutes) loopback() (winipcfg.LUID, error) {
 	if r.luid != 0 {

@@ -26,6 +26,7 @@ import (
 	"github.com/xtls/libxray/share"
 	"github.com/xtls/libxray/xray"
 	"github.com/xtls/xray-core/common/flightrecorder"
+	"github.com/xtls/xray-core/common/log"
 	"github.com/xtls/xray-core/common/platform/filesystem"
 	"github.com/xtls/xray-core/proxy/tun"
 	"golang.org/x/sys/windows"
@@ -743,6 +744,8 @@ func (g *childGuard) settle() {
 	if !g.installed && g.owner != 0 {
 		windows.CloseHandle(g.owner)
 		g.owner = 0
+		// Another helper, Repair or the service may change the fallback routes from now on.
+		helperFallbackRoutes.forget()
 	}
 }
 
@@ -947,19 +950,28 @@ func runVPNTunnel(pipe io.Writer, parent windows.Handle, request vpnCommand, com
 		return fail("routes", err)
 	}
 	fallback := fallbackRoutes(tunnelRoutes, request.RoutePolicy != nil && request.RoutePolicy.BlockWithoutVPN)
-	if len(fallback) > 0 && !guard.installed {
-		// Until protectDNS puts the guard in place, a start that fails leaves nothing, as a failed
-		// guard does. Deferred before the core's stop, so it runs after the tunnel's routes are gone.
+	// Taken before the routes are placed, so the app gets a warning about them with the tunnel's first lines.
+	logCursor := xray.LastLogSeq()
+	placement, err := placeFallbackRoutes(helperFallbackRoutes, currentGuardMarker(), fallback)
+	if !guard.installed {
+		// Until protectDNS puts this child's guard in place, a start that fails takes back only the
+		// fallback routes it added. A guard a crashed helper left stays, with its routes and marker:
+		// with Block traffic without VPN the app keeps it until a tunnel replaces it. Deferred
+		// before the core's stop, so it runs after the tunnel's routes are gone. Routes it cannot
+		// remove stay named in the marker, for a later start, a stop and Repair.
 		defer func() {
-			if !guard.installed && releaseGuard() != nil {
-				guard.installed, guard.failed = true, true // The marker stays, for Repair.
+			if !guard.installed {
+				_ = undoFallbackRoutes(helperFallbackRoutes, currentGuardMarker(), placement)
 			}
 		}()
 	}
-	if err := placeFallbackRoutes(&loopbackRoutes{}, currentGuardMarker(), fallback); err != nil {
+	if err != nil {
 		return fail("block_routes", err)
 	}
-	logCursor := xray.LastLogSeq()
+	if placement.left != nil {
+		log.Record(&log.GeneralMessage{Severity: log.Severity_Warning,
+			Content: "Block traffic without VPN is off, but some of its earlier routes could not be removed; the VPN tries again when it disconnects: " + placement.left.Error()})
+	}
 	started := make(chan error, 1)
 	tun.SetSessionLimits(request.TCPMaxConnections, request.UDPMaxConnections)
 	if request.MemoryLimitMB > 0 {
@@ -1008,7 +1020,7 @@ func runVPNTunnel(pipe io.Writer, parent windows.Handle, request vpnCommand, com
 	if err != nil {
 		return fail("routes", err)
 	}
-	if err := protectDNS(uint64(iface.InterfaceLUID), protected, fallback); err != nil {
+	if err := protectDNS(uint64(iface.InterfaceLUID), protected, placement.named); err != nil {
 		return fail("dns", err)
 	}
 	// It also replaced any guard a lost tunnel kept.

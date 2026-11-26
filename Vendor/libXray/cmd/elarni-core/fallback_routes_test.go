@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -153,7 +154,7 @@ func TestFallbackRoutesAreListedBeforeTheyAreAdded(t *testing.T) {
 	own := netip.MustParsePrefix("::1/128")
 	table := newFakeLoopbackTable(marker, map[netip.Prefix]uint32{own: 256})
 	routes := prefixes("0.0.0.0/1", "128.0.0.0/1", "::1/128", "::/1", "8000::/1")
-	if err := placeFallbackRoutes(table, marker, routes); err != nil {
+	if _, err := placeFallbackRoutes(table, marker, routes); err != nil {
 		t.Fatal(err)
 	}
 	if len(table.unlisted) != 0 {
@@ -171,7 +172,7 @@ func TestFallbackRoutesAreListedBeforeTheyAreAdded(t *testing.T) {
 		t.Fatalf("Windows' own route to %s was changed to metric %d", own, table.routes[own])
 	}
 	// The next tunnel of a restart finds them in place: that is no failure.
-	if err := placeFallbackRoutes(table, marker, routes); err != nil {
+	if _, err := placeFallbackRoutes(table, marker, routes); err != nil {
 		t.Fatal("routes in place failed the next tunnel:", err)
 	}
 	// Release takes the helper's routes and the marker, never Windows' own.
@@ -189,7 +190,7 @@ func TestFallbackRoutesAreListedBeforeTheyAreAdded(t *testing.T) {
 func TestFallbackRoutesWithoutTheKillSwitchChangeNothing(t *testing.T) {
 	marker := testGuardMarker(t)
 	table := newFakeLoopbackTable(marker, nil)
-	if err := placeFallbackRoutes(table, marker, nil); err != nil {
+	if _, err := placeFallbackRoutes(table, marker, nil); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(marker.path); !os.IsNotExist(err) || len(table.calls) != 0 {
@@ -207,7 +208,7 @@ func TestFallbackRoutesWithoutTheKillSwitchChangeNothing(t *testing.T) {
 		t.Fatal(err)
 	}
 	table.routes[netip.MustParsePrefix("::1/128")] = 256
-	if err := placeFallbackRoutes(table, marker, nil); err != nil {
+	if _, err := placeFallbackRoutes(table, marker, nil); err != nil {
 		t.Fatal(err)
 	}
 	info, err := os.Stat(marker.path)
@@ -228,11 +229,11 @@ func TestFallbackRoutesOfAnEarlierTunnelGoOnceTheNextOnesAreIn(t *testing.T) {
 	marker := testGuardMarker(t)
 	table := newFakeLoopbackTable(marker, nil)
 	before, after := prefixes("0.0.0.0/1", "128.0.0.0/1"), prefixes("128.0.0.0/1", "0.0.0.0/2", "64.0.0.0/3")
-	if err := placeFallbackRoutes(table, marker, before); err != nil {
+	if _, err := placeFallbackRoutes(table, marker, before); err != nil {
 		t.Fatal(err)
 	}
 	table.calls = nil
-	if err := placeFallbackRoutes(table, marker, after); err != nil {
+	if _, err := placeFallbackRoutes(table, marker, after); err != nil {
 		t.Fatal(err)
 	}
 	want := []string{"add 128.0.0.0/1", "add 0.0.0.0/2", "add 64.0.0.0/3", "remove 0.0.0.0/1"}
@@ -244,7 +245,7 @@ func TestFallbackRoutesOfAnEarlierTunnelGoOnceTheNextOnesAreIn(t *testing.T) {
 	}
 	// The kill switch turned off while the guard holds: none are left, and the marker stays for
 	// the guard, naming them until protectDNS rewrites it (removing them again finds nothing).
-	if err := placeFallbackRoutes(table, marker, nil); err != nil {
+	if _, err := placeFallbackRoutes(table, marker, nil); err != nil {
 		t.Fatal(err)
 	}
 	if len(table.routes) != 0 {
@@ -261,7 +262,7 @@ func TestFallbackRouteFailuresKeepTheirList(t *testing.T) {
 	table := newFakeLoopbackTable(marker, nil)
 	routes := prefixes("0.0.0.0/1", "128.0.0.0/1", "::/1")
 	table.fail[routes[1]] = failed
-	if err := placeFallbackRoutes(table, marker, routes); !errors.Is(err, failed) {
+	if _, err := placeFallbackRoutes(table, marker, routes); !errors.Is(err, failed) {
 		t.Fatalf("a refused route did not fail the connect: %v", err)
 	}
 	if got := marker.routes(); !slices.Equal(got, routes) {
@@ -284,8 +285,249 @@ func TestFallbackRouteFailuresKeepTheirList(t *testing.T) {
 	// Without a marker a crash would leave routes nobody removes: nothing is added then.
 	unwritable := guardMarkerFile{path: filepath.Join(t.TempDir(), "missing", ".dns-guard")}
 	table = newFakeLoopbackTable(unwritable, nil)
-	if err := placeFallbackRoutes(table, unwritable, routes); err == nil || len(table.calls) != 0 {
+	if _, err := placeFallbackRoutes(table, unwritable, routes); err == nil || len(table.calls) != 0 {
 		t.Fatalf("routes were added without a marker: %v, %v", err, table.calls)
+	}
+}
+
+func fallbackTableWith(marker guardMarkerFile, routes []netip.Prefix) *fakeLoopbackTable {
+	table := newFakeLoopbackTable(marker, nil)
+	for _, prefix := range routes {
+		table.routes[prefix] = fallbackRouteMetric
+	}
+	return table
+}
+
+// Regression (Block traffic without VPN after a helper crash): the app keeps the crashed helper's
+// guard until a tunnel replaces it, but a start that failed before its own guard was in place
+// released the whole machine-wide guard and every route the marker named, so the PC was open. It
+// takes back only the routes it added.
+func TestAFailedStartTakesBackOnlyTheFallbackRoutesItAdded(t *testing.T) {
+	earlier := prefixes("0.0.0.0/1", "::/1")
+	routes := prefixes("0.0.0.0/1", "128.0.0.0/1", "::/1", "8000::/1")
+	marker := testGuardMarker(t)
+	if err := marker.write(earlier); err != nil {
+		t.Fatal(err)
+	}
+	table := fallbackTableWith(marker, earlier)
+	placement, err := placeFallbackRoutes(table, marker, routes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := prefixes("128.0.0.0/1", "8000::/1"); !slices.Equal(placement.added, want) || !placement.marked {
+		t.Fatalf("placement added %v (marked %v), want %v after an earlier marker", placement.added, placement.marked, want)
+	}
+	if err := undoFallbackRoutes(table, marker, placement); err != nil {
+		t.Fatal(err)
+	}
+	if len(table.routes) != len(earlier) || table.routes[earlier[0]] != fallbackRouteMetric || table.routes[earlier[1]] != fallbackRouteMetric {
+		t.Fatalf("after the failed start the loopback interface has %v, want the crashed helper's %v", table.routes, earlier)
+	}
+	if got := marker.routes(); !slices.Equal(got, earlier) {
+		t.Fatalf("after the failed start the marker names %v, want the crashed helper's %v", got, earlier)
+	}
+
+	// A crashed helper's guard without routes (its tunnel ran without the kill switch) keeps its
+	// empty marker: that marker is how the app finds the guard.
+	marker = testGuardMarker(t)
+	if err := os.WriteFile(marker.path, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	table = newFakeLoopbackTable(marker, nil)
+	if placement, err = placeFallbackRoutes(table, marker, routes); err != nil {
+		t.Fatal(err)
+	}
+	if err := undoFallbackRoutes(table, marker, placement); err != nil || len(table.routes) != 0 {
+		t.Fatalf("after the failed start the loopback interface has %v: %v", table.routes, err)
+	}
+	if info, err := os.Stat(marker.path); err != nil || info.Size() != 0 {
+		t.Fatalf("the crashed helper's empty marker did not stay: %v", err)
+	}
+
+	// Without an earlier guard a failed start leaves nothing, the marker included.
+	marker = testGuardMarker(t)
+	table = newFakeLoopbackTable(marker, nil)
+	if placement, err = placeFallbackRoutes(table, marker, routes); err != nil || placement.marked {
+		t.Fatalf("placement without a marker: %v (marked %v)", err, placement.marked)
+	}
+	if err := undoFallbackRoutes(table, marker, placement); err != nil || len(table.routes) != 0 {
+		t.Fatalf("after the failed start the loopback interface has %v: %v", table.routes, err)
+	}
+	if _, err := os.Stat(marker.path); !os.IsNotExist(err) {
+		t.Fatal("a failed start kept its marker:", err)
+	}
+
+	// The same when the start failed on one of its routes: those it added before it go.
+	failed := errors.New("route refused")
+	table.fail[routes[2]] = failed
+	if placement, err = placeFallbackRoutes(table, marker, routes); !errors.Is(err, failed) {
+		t.Fatalf("a refused route did not fail the start: %v", err)
+	}
+	delete(table.fail, routes[2])
+	if err := undoFallbackRoutes(table, marker, placement); err != nil || len(table.routes) != 0 {
+		t.Fatalf("after a refused route the loopback interface has %v: %v", table.routes, err)
+	}
+	if _, err := os.Stat(marker.path); !os.IsNotExist(err) {
+		t.Fatal("a start that failed on a route kept its marker:", err)
+	}
+
+	// A route that cannot be taken back stays named, for a later start, a stop and Repair.
+	if placement, err = placeFallbackRoutes(table, marker, routes); err != nil {
+		t.Fatal(err)
+	}
+	table.fail[routes[1]] = failed
+	if err := undoFallbackRoutes(table, marker, placement); !errors.Is(err, failed) {
+		t.Fatalf("a failed removal was not reported: %v", err)
+	}
+	if got := marker.routes(); !slices.Equal(got, routes[1:2]) || len(table.routes) != 1 {
+		t.Fatalf("after a failed removal the marker names %v and the table holds %v, want %v", got, table.routes, routes[1:2])
+	}
+
+	// A start whose marker could not be written added nothing, so it takes nothing back.
+	unwritable := guardMarkerFile{path: filepath.Join(t.TempDir(), "missing", ".dns-guard")}
+	table = newFakeLoopbackTable(unwritable, nil)
+	placement, _ = placeFallbackRoutes(table, unwritable, routes)
+	if err := undoFallbackRoutes(table, unwritable, placement); err != nil || len(table.calls) != 0 {
+		t.Fatalf("a start without a marker took back %v: %v", table.calls, err)
+	}
+}
+
+func addCalls(table *fakeLoopbackTable) []string {
+	var adds []string
+	for _, call := range table.calls {
+		if strings.HasPrefix(call, "add ") {
+			adds = append(adds, call)
+		}
+	}
+	return adds
+}
+
+// Each server switch and restart placed every fallback route again, up to 8,192 route calls during
+// the connect. The helper process adds only the routes it has not put in place itself.
+func TestALaterPlacementAddsOnlyTheRoutesThisHelperHasNotPlaced(t *testing.T) {
+	marker := testGuardMarker(t)
+	table := newFakeLoopbackTable(marker, nil)
+	helper := &placedFallbackRoutes{table: table}
+	routes := prefixes("0.0.0.0/1", "128.0.0.0/1", "::/1", "8000::/1")
+	if _, err := placeFallbackRoutes(helper, marker, routes); err != nil || len(addCalls(table)) != len(routes) {
+		t.Fatalf("the first placement added %v: %v", addCalls(table), err)
+	}
+	table.calls = nil
+	if _, err := placeFallbackRoutes(helper, marker, routes); err != nil || len(table.calls) != 0 {
+		t.Fatalf("the same routes again made route calls %v: %v", table.calls, err)
+	}
+	// Another tunnel's routes: only the new one is added, and the one it has not goes.
+	next := prefixes("0.0.0.0/1", "128.0.0.0/2", "::/1", "8000::/1")
+	if _, err := placeFallbackRoutes(helper, marker, next); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"add 128.0.0.0/2", "remove 128.0.0.0/1"}; !slices.Equal(table.calls, want) {
+		t.Fatalf("route calls %v, want %v", table.calls, want)
+	}
+	// A route this process removed, here a failed start's, is added again.
+	placement, err := placeFallbackRoutes(helper, marker, routes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := undoFallbackRoutes(helper, marker, placement); err != nil {
+		t.Fatal(err)
+	}
+	table.calls = nil
+	if _, err := placeFallbackRoutes(helper, marker, routes); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"add 128.0.0.0/1"}; !slices.Equal(table.calls, want) {
+		t.Fatalf("after a failed start route calls %v, want %v", table.calls, want)
+	}
+	// A route whose add failed is not taken as placed.
+	failed := errors.New("route refused")
+	if err := clearFallbackRoutes(helper, marker); err != nil || len(table.routes) != 0 {
+		t.Fatalf("release left %v: %v", table.routes, err)
+	}
+	table.fail[routes[2]] = failed
+	if _, err := placeFallbackRoutes(helper, marker, routes); !errors.Is(err, failed) {
+		t.Fatalf("a refused route did not fail the start: %v", err)
+	}
+	delete(table.fail, routes[2])
+	table.calls = nil
+	if _, err := placeFallbackRoutes(helper, marker, routes); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"add ::/1", "add 8000::/1"}; !slices.Equal(addCalls(table), want) {
+		t.Fatalf("after a refused route the next placement added %v, want %v", addCalls(table), want)
+	}
+	// What the marker names is not taken as placed: a restart of Windows removed the routes it names,
+	// and the next helper process adds them all again.
+	table.routes = map[netip.Prefix]uint32{}
+	table.calls = nil
+	if _, err := placeFallbackRoutes(&placedFallbackRoutes{table: table}, marker, routes); err != nil {
+		t.Fatal(err)
+	}
+	if len(addCalls(table)) != len(routes) || len(table.routes) != len(routes) {
+		t.Fatalf("a new helper process added %v and the table holds %v", addCalls(table), table.routes)
+	}
+	// Once the process gave up the guard's claim, another may have removed them: it adds them all again.
+	table.routes = map[netip.Prefix]uint32{}
+	helper.forget()
+	table.calls = nil
+	if _, err := placeFallbackRoutes(helper, marker, routes); err != nil || len(addCalls(table)) != len(routes) || len(table.routes) != len(routes) {
+		t.Fatalf("after forget the placement added %v and the table holds %v: %v", addCalls(table), table.routes, err)
+	}
+}
+
+// Regression: with Block traffic without VPN off, an earlier tunnel's fallback route that could not
+// be removed refused every connect with a kill-switch error. The connect goes on, and the routes
+// left stay named, for the stop that releases the guard and the next start.
+func TestWithoutTheKillSwitchARouteThatCannotGoRefusesNoConnect(t *testing.T) {
+	failed := errors.New("route refused")
+	earlier := prefixes("0.0.0.0/1", "128.0.0.0/1", "::/1")
+	marker := testGuardMarker(t)
+	if err := marker.write(earlier); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-time.Hour).Truncate(time.Second)
+	if err := os.Chtimes(marker.path, old, old); err != nil {
+		t.Fatal(err)
+	}
+	table := fallbackTableWith(marker, earlier)
+	table.fail[earlier[1]] = failed
+	placement, err := placeFallbackRoutes(table, marker, nil)
+	if err != nil {
+		t.Fatal("a route that could not go refused the connect:", err)
+	}
+	if !errors.Is(placement.left, failed) {
+		t.Fatalf("the failure was not kept for the log: %v", placement.left)
+	}
+	if !slices.Equal(placement.named, earlier[1:2]) || len(placement.added) != 0 {
+		t.Fatalf("placement names %v and added %v, want %v and none", placement.named, placement.added, earlier[1:2])
+	}
+	if len(table.routes) != 1 || table.routes[earlier[1]] != fallbackRouteMetric {
+		t.Fatalf("the routes that could go stayed: %v", table.routes)
+	}
+	// The marker stays as it is, its time included, until protectDNS names what is left.
+	if info, err := os.Stat(marker.path); err != nil || !info.ModTime().Equal(old) || !slices.Equal(marker.routes(), earlier) {
+		t.Fatalf("the marker changed before the guard was in place: %v, names %v", err, marker.routes())
+	}
+	if err := marker.write(placement.named); err != nil {
+		t.Fatal(err)
+	}
+	// The next start tries again.
+	delete(table.fail, earlier[1])
+	if placement, err = placeFallbackRoutes(table, marker, nil); err != nil || placement.left != nil || len(placement.named) != 0 || len(table.routes) != 0 {
+		t.Fatalf("the retry left %v, naming %v: %v, %v", table.routes, placement.named, err, placement.left)
+	}
+
+	// With the kill switch on, a route that cannot go still refuses the connect, and stays named.
+	if err := marker.write(earlier); err != nil {
+		t.Fatal(err)
+	}
+	table = fallbackTableWith(marker, earlier)
+	table.fail[earlier[1]] = failed
+	if _, err := placeFallbackRoutes(table, marker, prefixes("0.0.0.0/1", "::/1", "8000::/1")); !errors.Is(err, failed) {
+		t.Fatalf("with the kill switch on a route that could not go did not fail the connect: %v", err)
+	}
+	if !slices.Contains(marker.routes(), earlier[1]) {
+		t.Fatalf("the route that could not go is no longer named: %v", marker.routes())
 	}
 }
 
