@@ -220,8 +220,7 @@ class ElarniVpnService : VpnService() {
         try { foreground(vpn && !taken && prepare(this) == null) }
         catch (_: Exception) { app.repository.report(AppFailure("foreground_start_denied")); stopSelf(); return START_NOT_STICKY }
         val generation = intent?.takeIf { it.hasExtra(GENERATION) }?.getLongExtra(GENERATION, -1)
-        // Boot and always-on start as the device starts, perhaps before its network can look the server up.
-        val untilOnline = alwaysOn || intent?.getBooleanExtra(BOOT, false) == true
+        val untilOnline = waitsForNetwork(intent?.action, restarted = intent == null, boot = intent?.getBooleanExtra(BOOT, false) == true, isAlwaysOn = isAlwaysOn)
         app.repository.scope.launch { app.repository.serviceStart(this@ElarniVpnService, intent?.action != CONNECT, generation, startId, taken, alwaysOn, untilOnline) }
         if (monitor == null) monitor = app.repository.scope.launch {
             var ticks = 0
@@ -332,6 +331,12 @@ class ElarniVpnService : VpnService() {
     }
     companion object {
         const val CONNECT = "com.elarni.CONNECT"; const val DISCONNECT = "com.elarni.DISCONNECT"; const val GENERATION = "generation"; const val BOOT = "boot"
+        /** Whether a start waits for the network when its server cannot be looked up yet: boot and Always-on start as the
+         *  device starts, perhaps before its network can. That is a start at [boot], or one Android makes for Always-on VPN:
+         *  with its own [action], or as the restart of a sticky service, which comes without an intent ([restarted]), while
+         *  this app [isAlwaysOn]. A Connect from the app, its tile or a widget shows its failure at once, Always-on or not. */
+        fun waitsForNetwork(action: String?, restarted: Boolean, boot: Boolean, isAlwaysOn: Boolean) =
+            boot || action == VpnService.SERVICE_INTERFACE || restarted && isAlwaysOn
         // Each TUN packet costs the userspace stack one syscall; 9000 moves bulk TCP in about 6x fewer.
         const val MTU = 9000
         const val PACKAGES_SETTLE_MS = 2000L
