@@ -28,6 +28,11 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
 - **REALITY with a randomized fingerprint could not connect on about half of the app starts.**
   The randomized hello carried the post-quantum key share that REALITY servers since Xray 26.9.8
   require only half the time; it now takes the hello that "random" picks, which always has it.
+- **The "Firefox" fingerprint failed with "invalid server key share" against servers that pick
+  the P-256 key exchange**; uTLS now keeps a key for each share the hello offers. AmneziaWG
+  moves to amneziawg-go v3.1.20261116, which no longer loses a handshake retry or keepalive timer
+  change, and a profile that names Jmin without Jmax still connects. WireGuard and AmneziaWG take
+  gVisor's fix for TCP connections that retried a busy connection without yielding the processor.
 - **The tunnel could stop carrying traffic after one read error of its network adapter**, while
   the app still showed it connected. Elarni reads on after such an error and stops reading only
   when the tunnel stops.

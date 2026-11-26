@@ -356,6 +356,121 @@ func TestWireGuardRebindsWhenTheSocketPathChanges(t *testing.T) {
 	}
 }
 
+// BenchmarkWireGuardBulkTransfer sends 64 MiB up and then receives 64 MiB through the outbound's
+// gVisor netstack and WireGuard engine to a loopback peer with its own netstack. Compare a gVisor or
+// engine update with -bench=WireGuardBulkTransfer -benchtime=1x, one process per run.
+func BenchmarkWireGuardBulkTransfer(b *testing.B) {
+	const size = 64 << 20
+	clientKey, err := ecdh.X25519().GenerateKey(rand.Reader)
+	if err != nil {
+		b.Fatal(err)
+	}
+	serverKey, err := ecdh.X25519().GenerateKey(rand.Reader)
+	if err != nil {
+		b.Fatal(err)
+	}
+	clientTun, clientNet, _, err := CreateNetTUN([]netip.Addr{netip.MustParseAddr("10.29.0.2")}, nil, tunnelMTU(1420, false), true)
+	if err != nil {
+		b.Fatal(err)
+	}
+	serverTun, _, serverStack, err := CreateNetTUN([]netip.Addr{netip.MustParseAddr("10.29.0.1")}, nil, tunnelMTU(1420, false), false)
+	if err != nil {
+		clientTun.Close()
+		b.Fatal(err)
+	}
+	serverSocket, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	if err != nil {
+		clientTun.Close()
+		serverTun.Close()
+		b.Fatal(err)
+	}
+	server := device.NewDevice(serverTun, &bind{listenFunc: func() (net.PacketConn, error) { return serverSocket, nil }}, &device.Logger{Verbosef: func(string, ...any) {}, Errorf: b.Logf})
+	defer serverSocket.Close()
+	defer server.Close()
+	if err := server.IpcSet("private_key=" + hex.EncodeToString(serverKey.Bytes()) + "\npublic_key=" + hex.EncodeToString(clientKey.PublicKey().Bytes()) + "\nallowed_ip=10.29.0.2/32\n"); err != nil {
+		b.Fatal(err)
+	}
+	if err := server.Up(); err != nil {
+		b.Fatal(err)
+	}
+	handler := &Handler{conf: &DeviceConfig{SecretKey: hex.EncodeToString(clientKey.Bytes()),
+		Peers: []*PeerConfig{{PublicKey: hex.EncodeToString(serverKey.PublicKey().Bytes()), Endpoint: serverSocket.LocalAddr().String(), AllowedIps: []string{"0.0.0.0/0"}}}},
+		dns: offlineDNS{&atomic.Bool{}}, tun: clientTun, tnet: clientNet, streamSettings: &internet.MemoryStreamConfig{}}
+	defer handler.Close()
+	if err := handler.init(context.Background()); err != nil {
+		b.Fatal(err)
+	}
+	// The sink answers one byte once the upload ends; the source sends size bytes and closes.
+	serve := func(port uint16, handle func(net.Conn)) {
+		full, family := convertToFullAddr(netip.AddrPortFrom(netip.MustParseAddr("10.29.0.1"), port))
+		listener, err := gonet.ListenTCP(serverStack, full, family)
+		if err != nil {
+			b.Fatal(err)
+		}
+		b.Cleanup(func() { listener.Close() })
+		go func() {
+			for {
+				conn, err := listener.Accept()
+				if err != nil {
+					return
+				}
+				go func() { defer conn.Close(); handle(conn) }()
+			}
+		}()
+	}
+	serve(18185, func(conn net.Conn) {
+		if n, _ := io.Copy(io.Discard, conn); n == size {
+			conn.Write([]byte{1})
+		}
+	})
+	chunk := make([]byte, 64<<10)
+	serve(18186, func(conn net.Conn) {
+		for sent := 0; sent < size; sent += len(chunk) {
+			if _, err := conn.Write(chunk); err != nil {
+				return
+			}
+		}
+	})
+	dial := func(port uint16) net.Conn {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		conn, err := clientNet.DialContextTCPAddrPort(ctx, netip.AddrPortFrom(netip.MustParseAddr("10.29.0.1"), port))
+		if err != nil {
+			b.Fatal(err)
+		}
+		conn.SetDeadline(time.Now().Add(2 * time.Minute))
+		return conn
+	}
+	var up, down time.Duration
+	b.SetBytes(2 * size)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		started := time.Now()
+		upload := dial(18185)
+		for sent := 0; sent < size; sent += len(chunk) {
+			if _, err := upload.Write(chunk); err != nil {
+				b.Fatal(err)
+			}
+		}
+		upload.(*gonet.TCPConn).CloseWrite()
+		if _, err := io.ReadFull(upload, make([]byte, 1)); err != nil {
+			b.Fatalf("upload not confirmed: %v", err)
+		}
+		upload.Close()
+		up += time.Since(started)
+		started = time.Now()
+		download := dial(18186)
+		if n, err := io.Copy(io.Discard, download); err != nil || n != size {
+			b.Fatalf("downloaded %d bytes: %v", n, err)
+		}
+		download.Close()
+		down += time.Since(started)
+	}
+	b.StopTimer()
+	b.ReportMetric(float64(b.N)*size/(1<<20)/up.Seconds(), "up-MiB/s")
+	b.ReportMetric(float64(b.N)*size/(1<<20)/down.Seconds(), "down-MiB/s")
+}
+
 // Platforms report a network change as a burst of signals; each rebind loses the datagrams in flight.
 func TestBurstOfPathChangesRebindsOnceMore(t *testing.T) {
 	const gap = 200 * time.Millisecond
