@@ -10,23 +10,25 @@ the Go and Rust versions pinned in the repository root.
 
 ```sh
 rustup target add aarch64-apple-ios aarch64-apple-ios-sim
-scripts/build-ios-native iphonesimulator   # or iphoneos for a device
+CONFIGURATION=Debug scripts/build-ios-native iphonesimulator   # or iphoneos for a device
 ```
 
 Open `ios/Elarni/Elarni.xcodeproj`, choose the **Elarni** scheme and Run. Rebuild
 the native libraries after changing Rust, Go or their headers. Set `ELARNI_GO` if
 the pinned Go isn't the `go` on `PATH`.
 
-A device build (`iphoneos`) compiles the Rust libraries with the `release` profile,
-as the macOS release build does; the simulator uses the quicker `native-dev`
-profile, and `scripts/build-ios-native iphoneos --dev` uses it for a device too
-(CI's device compile check passes `--dev`).
+The Rust profile follows `CONFIGURATION`, the Xcode configuration the libraries
+are linked into, as on macOS: `Debug` compiles the quicker `native-dev` profile;
+`Release`, or no `CONFIGURATION`, compiles the `release` profile. Build with
+`CONFIGURATION=Debug` for Xcode's Debug scheme (Run and debugging), and without it
+(or with `CONFIGURATION=Release`) for a Release build on a phone. CI's device
+compile check builds the `release` profile.
 
 Go leaves CPU feature detection out of iOS builds until upstream commit 8058a577,
 so AES-GCM and SHA-256 would run without the CPU's AES and SHA instructions. The
 script applies that commit, kept as `scripts/go-ios-cpu-features.patch`, to copies
-of three `internal/cpu` files of the toolchain in `.build/ios/go-overlay/` and
-builds the core with `go build -overlay`; the toolchain itself is not changed. Once
+of three `internal/cpu` files of the toolchain in `.build/ios/go-overlay/<platform>/`
+and builds the core with `go build -overlay`; the toolchain itself is not changed. Once
 the pinned Go has the fix, the script says so and skips the patch; if the patch no
 longer applies, the build fails.
 

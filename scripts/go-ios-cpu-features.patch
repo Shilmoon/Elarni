@@ -4,8 +4,8 @@
 #
 # Without it GOOS=ios builds compile CPU feature detection out, so AES-GCM and SHA-256 run
 # without the CPU's AES and SHA instructions. scripts/build-ios-native applies this diff to
-# copies of the toolchain's files in .build/ios/go-overlay and passes them to `go build
-# -overlay`; the toolchain itself is never changed. Remove it once the pinned Go has the commit.
+# copies of the toolchain's files in .build/ios/go-overlay/<platform> and passes them to `go
+# build -overlay`; the toolchain itself is never changed. Remove it once the pinned Go has the commit.
 diff --git a/src/internal/cpu/cpu_arm64_darwin.go b/src/internal/cpu/cpu_arm64_darwin.go
 index d32b459329321b..964854381b4232 100644
 --- a/src/internal/cpu/cpu_arm64_darwin.go

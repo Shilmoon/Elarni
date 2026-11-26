@@ -85,3 +85,6 @@ since their senders never wait and a tunnel that stopped reading grew the queue
 without bound; TCP packets stay queued, bounded by each connection's window.
 
 `TcpConfig.close_wait_timeout` is removed: nothing read it.
+
+`Cargo.toml` asks for etherparse 0.20.4 or newer, the first release with the fix
+for RUSTSEC-2026-0596, so a regenerated or updated lockfile cannot pick 0.20.3.
