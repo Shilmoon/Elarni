@@ -210,13 +210,16 @@ func TestBurstOfPathChangesRetiresOnceMore(t *testing.T) {
 	c := pooledClient(t, newRelay(t, echoServer(t).Addr()))
 	time.Sleep(probeBound) // a watcher pass from an earlier test is over
 	_, _, before := c.state()
-	for range 10 { // spread over one check, as a path monitor reports a change
+	// Signals spread over most of one check, as a path monitor reports a change. A loaded runner
+	// oversleeps each step; one sent after the check would rightly start a third pass.
+	signals := 0
+	for start := time.Now(); time.Since(start) < probeBound*9/10; signals++ {
 		internet.SocketPathChanged()
 		time.Sleep(probeBound / 10)
 	}
 	time.Sleep(3 * probeBound)
 	if _, _, moves := c.state(); moves-before < 1 || moves-before > 2 {
-		t.Fatalf("a burst of 10 signals retired connections %d times, want 1 or 2", moves-before)
+		t.Fatalf("a burst of %d signals retired connections %d times, want 1 or 2", signals, moves-before)
 	}
 }
 

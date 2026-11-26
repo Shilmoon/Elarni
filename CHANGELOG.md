@@ -4,6 +4,13 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
 
 ## Unreleased
 
+### Fixed
+
+- For contributors: the path-change burst tests of Hysteria, gRPC and TUIC
+  (`TestBurstOfPathChangesRetiresOnceMore`) no longer fail on a runner whose timers run late.
+  They sent ten signals over 90% of one check whatever the time taken, and a signal sent after
+  the check rightly started a third pass; the burst now ends by the clock, as WireGuard's does.
+
 ## 0.6.5 - 2026-11-26
 
 ### Added

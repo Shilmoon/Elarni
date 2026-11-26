@@ -277,7 +277,10 @@ func TestBurstOfPathChangesRetiresOnceMore(t *testing.T) {
 	var passes atomic.Int32
 	defer close(done)
 	go coalesce(moves, done, func() { passes.Add(1) })
-	for range 10 { // spread over one check, as a path monitor reports a change
+	// Signals spread over most of one check, as a path monitor reports a change. A loaded runner
+	// oversleeps each step; one sent after the check would rightly start a third pass.
+	signals := 0
+	for start := time.Now(); time.Since(start) < probeBound*9/10; signals++ {
 		select {
 		case moves <- struct{}{}:
 		default:
@@ -286,6 +289,6 @@ func TestBurstOfPathChangesRetiresOnceMore(t *testing.T) {
 	}
 	time.Sleep(3 * probeBound)
 	if n := passes.Load(); n < 1 || n > 2 {
-		t.Fatalf("a burst of 10 signals ran %d passes, want 1 or 2", n)
+		t.Fatalf("a burst of %d signals ran %d passes, want 1 or 2", signals, n)
 	}
 }
