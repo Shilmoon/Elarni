@@ -282,36 +282,49 @@ func shadowsocksPluginStream(plugin string) (*conf.StreamConfig, error) {
 // header, which is what 3x-ui writes for a Shadowsocks inbound with Xray's HTTP header. Its TLS mode
 // fakes a TLS session Xray has no transport for.
 func simpleObfsStream(options []string) (*conf.StreamConfig, error) {
-	fields := shareTransportFields{Network: "raw"}
+	// obfs-local's own default host.
+	httpMode, host, uri := false, "cloudfront.net", ""
 	for _, option := range options {
 		key, value, _ := strings.Cut(option, "=")
 		switch key {
 		case "obfs":
 			switch value {
 			case "http":
-				fields.HeaderType = "http"
+				httpMode = true
 			case "tls":
 				return nil, fmt.Errorf("simple-obfs TLS mode has no Xray equivalent")
 			default:
 				return nil, fmt.Errorf("unsupported shadowsocks plugin mode")
 			}
 		case "obfs-host":
-			fields.Host = value
+			if value != "" {
+				host = value
+			}
 		case "obfs-uri":
-			fields.Path = value
+			uri = value
+		case "fast-open", "mptcp", "t", "i", "a", "v", "V", "6":
+			// obfs-local's client-side flags (timeout, interface, user, verbose, VPN mode, IPv6 first):
+			// what it sends stays the same.
 		default:
 			return nil, fmt.Errorf("unsupported shadowsocks plugin option")
 		}
 	}
-	if fields.HeaderType == "" {
+	if !httpMode {
 		return nil, fmt.Errorf("unsupported shadowsocks plugin mode")
 	}
-	stream, err := buildStreamFromTransportFields(fields)
+	// obfs-server takes a request as obfs only with "Upgrade: websocket", which obfs-local sends with
+	// "Connection: Upgrade"; an Xray server with an HTTP header reads only the path.
+	request := XrayRawSettingsHeaderRequest{Headers: &XrayRawSettingsHeaderRequestHeaders{
+		Host: strings.Split(host, ","), Upgrade: []string{"websocket"}, Connection: []string{"Upgrade"},
+	}}
+	if uri != "" {
+		request.Path = strings.Split(uri, ",")
+	}
+	header, err := convertJsonToRawMessage(XrayRawSettingsHeader{Type: "http", Request: &request})
 	if err != nil {
 		return nil, err
 	}
-	stream.Security = "none"
-	return stream, nil
+	return &conf.StreamConfig{Network: new(conf.TransportProtocol("raw")), Security: "none", RAWSettings: &conf.TCPConfig{HeaderConfig: header}}, nil
 }
 
 func parseShadowsocksUserInfo(user *url.Userinfo) (string, string, error) {
@@ -528,13 +541,12 @@ func (proxy xrayShareLink) hysteriaOutbound() (*conf.OutboundDetourConfig, error
 			}
 		}
 	}
-	// The official URI names no gecko packet sizes: Hysteria's own client defaults stand for them.
-	if query.Get("obfs") == "gecko" {
-		for key, value := range map[string]string{"minPacketSize": "512", "maxPacketSize": "1200"} {
-			if !query.Has(key) {
-				query.Set(key, value)
-			}
-		}
+	// The official URI names no gecko packet sizes: Hysteria's own client defaults stand for them
+	// (geckoPacketSize), unless the link's "fm" names them. The link's layer then says gecko of no size.
+	obfs := query.Get("obfs")
+	unsizedGecko := obfs == "gecko" && query.Get("minPacketSize") == "" && query.Get("maxPacketSize") == "" && query.Get("fm") != ""
+	if unsizedGecko {
+		obfs = "salamander"
 	}
 	var hopInterval conf.Int32Range
 	if hopStr := query.Get("hop-interval"); hopStr != "" {
@@ -550,7 +562,7 @@ func (proxy xrayShareLink) hysteriaOutbound() (*conf.OutboundDetourConfig, error
 	}
 	finalMask, mErr := buildHy2FinalMask(
 		query.Get("up"), query.Get("down"), query.Get("ports"),
-		hopInterval, query.Get("obfs"), query.Get("obfs-password"),
+		hopInterval, obfs, query.Get("obfs-password"),
 		query.Get("minPacketSize"), query.Get("maxPacketSize"),
 	)
 	if mErr != nil {
@@ -566,7 +578,7 @@ func (proxy xrayShareLink) hysteriaOutbound() (*conf.OutboundDetourConfig, error
 			return nil, err
 		}
 		if finalMask != nil {
-			if err := mergeHy2Masks(explicit, finalMask); err != nil {
+			if err := mergeHy2Masks(explicit, finalMask, unsizedGecko); err != nil {
 				return nil, err
 			}
 		}
@@ -627,18 +639,12 @@ func parseClientLink(line string) (*url.URL, error) {
 	if link, ok := legacyShadowsocksLink(line); ok {
 		return link, nil
 	}
-	link, err := parseShareURL(line)
-	if err != nil {
-		return nil, err
-	}
-	if name := withoutServerDescription(link.Fragment); name != link.Fragment {
-		link.Fragment, link.RawFragment = name, ""
-	}
-	return link, nil
+	return parseShareURL(line)
 }
 
-// withoutServerDescription is a link's name without the server description 3x-ui appends to it
-// as "?serverDescription=" and Base64, which Happ shows apart and other clients do not read.
+// withoutServerDescription is a name without the server description 3x-ui appends to it as
+// "?serverDescription=" and Base64, which Happ shows apart and other clients do not read. The
+// naming step of an import (ImportClientProfiles, skippedMembers.add) applies it to every format.
 func withoutServerDescription(name string) string {
 	const marker = "?serverDescription="
 	if index := strings.LastIndex(name, marker); index >= 0 {
@@ -705,7 +711,7 @@ func legacyShadowsocksLink(line string) (*url.URL, bool) {
 	if err != nil {
 		return nil, false
 	}
-	return &url.URL{Scheme: "ss", User: url.UserPassword(method, password), Host: net.JoinHostPort(host, port), Fragment: withoutServerDescription(name)}, true
+	return &url.URL{Scheme: "ss", User: url.UserPassword(method, password), Host: net.JoinHostPort(host, port), Fragment: name}, true
 }
 
 // Many clients leave ';' bare in SIP002 plugin options and paths, and net/url drops
@@ -715,6 +721,24 @@ func keepSemicolons(link *url.URL) *url.URL {
 		link.RawQuery = strings.ReplaceAll(link.RawQuery, ";", "%3B")
 	}
 	return link
+}
+
+// plusKeptQueryValue is the value url.Values.Get(key) reads from rawQuery, parsed, with a bare "+"
+// kept as "+". Base64 keys and secrets hold "+" and never a space, and a panel that writes one
+// unescaped (Hiddify's WireGuard keys) means the character, not the space a form's "+" stands for.
+func plusKeptQueryValue(rawQuery, key, parsed string) string {
+	for _, part := range strings.Split(rawQuery, "&") {
+		name, raw, _ := strings.Cut(part, "=")
+		// url.ParseQuery leaves out a part it cannot unescape.
+		unescaped, err := url.QueryUnescape(name)
+		if err != nil || unescaped != key {
+			continue
+		}
+		if kept, err := url.QueryUnescape(strings.ReplaceAll(raw, "+", "%2B")); err == nil {
+			return kept
+		}
+	}
+	return parsed
 }
 
 func clientPort(link *url.URL) (uint16, error) {

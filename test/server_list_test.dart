@@ -147,6 +147,8 @@ void main() {
     final ended = find.text('Provider: ✖ Package Ended');
     await reveal(tester, ended);
     expect(ended, findsOneWidget);
+    // Its notices say why it has no servers: no pending-fetch text under them.
+    expect(find.text('No servers yet'), findsNothing);
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox());
   });

@@ -65,7 +65,7 @@ func InvokeRequest(request LibXrayInvokeRequest) string {
 		if err != nil {
 			return encodeInvokeResponse(nil, errors.New("invalid client import payload"))
 		}
-		result, err := share.ImportClientProfiles(payload.Text)
+		result, err := share.ImportFeedProfiles(payload.Text, payload.SourceURL)
 		if err == nil && payload.SourceURL != "" {
 			// An invalid move hint is ignored so the parsed servers still apply.
 			if newURL, hintErr := share.SubscriptionMigrationURL(payload.SourceURL, result.Migration, payload.MigrationHeaders); hintErr == nil {

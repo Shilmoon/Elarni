@@ -6589,16 +6589,31 @@ if tunnel: note('closed')
     }
   });
 
-  // A panel's root named in its fragment is a subscription under that name
-  // (probe N10-09); an HTTP proxy link names no path.
-  test('a root URL named in its fragment imports as a subscription', () async {
+  // A panel's https root named in its fragment is a subscription under that
+  // name (probe N10-09); the core decides it, as on every platform.
+  test(
+    'an https root URL named in its fragment imports as a subscription',
+    () async {
+      final added = await backend.control.importClientProfiles(
+        content: 'https://127.0.0.1:9/#Root%20feed',
+      );
+      final group = added.snapshot.subscriptions.single;
+      expect([group.isLocal, group.name], [false, 'Root feed']);
+      // The loopback address waits for approval before anything is contacted.
+      expect(added.warning, isNotNull);
+    },
+  );
+
+  // http://host:port/#Name is the HTTP proxy link a browser's URL writes
+  // (146.1): it stays a proxy, named by its fragment.
+  test('an http root URL named in its fragment stays an HTTP proxy', () async {
     final added = await backend.control.importClientProfiles(
-      content: 'http://127.0.0.1:9/#Root%20feed',
+      content: 'http://127.0.0.1:9/#Office',
     );
     final group = added.snapshot.subscriptions.single;
-    expect([group.isLocal, group.name], [false, 'Root feed']);
-    // The loopback address waits for approval before anything is contacted.
-    expect(added.warning, isNotNull);
+    expect(group.isLocal, isTrue);
+    expect([for (final node in group.nodes) node.name], ['Office']);
+    expect(added.warning, isNull);
   });
 
   // The provider's Profile-Update-Interval is each subscription's default; the

@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	incylink "github.com/INCY-DEV/incy-link-encoder/go"
 	"github.com/makiuchi-d/gozxing"
 	"github.com/makiuchi-d/gozxing/qrcode"
 	"github.com/xtls/xray-core/app/proxyman"
@@ -134,8 +135,21 @@ func TestIncyInputsPreserveProfilesAndValidateCrypt1(t *testing.T) {
 	// Published upstream cross-platform vector, independent of this wrapper.
 	const wire = "incy://crypt1/AAECAwQFBgcICQoLNyIQL3rDwRZqnyoD8pGKSLXP6o8NdSXQVSSALNbbUyIr__tWGFUexdIfKvvmDnuDGbmBvuppfNef6aKNZUwOm4c-Sg"
 	got, err := NormalizeClientInput(wire)
-	if err != nil || got.Text != "https://sub.example.com/test-vector" || got.ShareLink != wire {
+	if err != nil || got.Text != "https://sub.example.com/test-vector" || got.ShareLink != wire || got.Kind != ClientInputSubscription {
 		t.Fatal("crypt1 vector or original sharing format was lost")
+	}
+	// crypt1 carries only subscription URLs: a panel's root is one with a name or without (146.7).
+	for _, test := range []struct{ target, name string }{
+		{"https://sub.example.com/", ""}, {"https://sub.example.com/", "Root"}, {"http://192.0.2.1:2096/", ""}, {"https://sub.example.com", ""},
+	} {
+		link, err := incylink.EncryptLink(test.target, test.name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := ClientInput{Text: test.target, Name: test.name, ShareLink: link, Kind: ClientInputSubscription}
+		if got, err := NormalizeClientInput(link); err != nil || got != want {
+			t.Errorf("crypt1 of %s named %q: %#v, %v; want %#v", test.target, test.name, got, err, want)
+		}
 	}
 	for _, input := range []string{wire[:len(wire)-8] + "AAAAAAAA", "incy://crypt1/invalid", strings.Repeat("incy://add/", 6) + profile} {
 		if _, err := NormalizeClientInput(input); err == nil {
@@ -168,13 +182,15 @@ func TestSubscriptionImportSeparatesFragmentNameFromDownloadURL(t *testing.T) {
 			t.Fatal("normalized subscription still rejected by downloader", err)
 		}
 	}
-	// A panel's subscription may be its root, named in the fragment (probe N10-09).
+	// A panel's subscription may be its root, named in the fragment of an https link (probe N10-09).
 	for input, want := range map[string]ClientInput{
 		"https://sub.example.com/#VPN%20Name":         {Text: "https://sub.example.com/", Name: "VPN Name"},
-		"http://192.0.2.1:2096/#Root":                 {Text: "http://192.0.2.1:2096/", Name: "Root"},
 		"https://sub.example.com/?token=a%2Bb#Root":   {Text: "https://sub.example.com/?token=a%2Bb", Name: "Root"},
 		"happ://add/https://sub.example.com/#Wrapped": {Text: "https://sub.example.com/", Name: "Wrapped"},
+		"http://192.0.2.1:2096/sub/token#Feed":        {Text: "http://192.0.2.1:2096/sub/token", Name: "Feed"},
+		"https://sub.example.com/feed":                {Text: "https://sub.example.com/feed"},
 	} {
+		want.Kind = ClientInputSubscription
 		got, err := NormalizeClientInput(input)
 		if err != nil || got != want {
 			t.Errorf("%s: %#v, %v; want %#v", input, got, err, want)
@@ -189,10 +205,22 @@ func TestSubscriptionImportSeparatesFragmentNameFromDownloadURL(t *testing.T) {
 		"https://t.me/proxy?server=192.0.2.1&port=443&secret=fixture#Telegram",
 		// A root URL whose fragment cannot be a name stays a link, as before.
 		"https://sub.example.com/#" + strings.Repeat("n", 129),
+		// An HTTP proxy link with a root path, as JS URL.toString() writes it, stays a proxy (146.1).
+		"http://203.0.113.5:8080/#Office",
+		"http://192.0.2.1:2096/#Root",
+		// A root or no path without a name is an HTTP proxy link too.
+		"https://sub.example.com/",
+		"https://sub.example.com",
 	} {
 		got, err := NormalizeClientInput(input)
-		if err != nil || got.Text != input || got.Name != "" {
-			t.Fatal("non-subscription profile fragment changed")
+		if err != nil || got != (ClientInput{Text: input, Kind: ClientInputLink}) {
+			t.Errorf("%s: a link became %#v, %v", input, got, err)
+		}
+	}
+	// Text the importer reads is a link, whatever URL it starts with.
+	for _, input := range []string{"https://sub.example.com/feed\nhttps://sub.example.com/other", "https://sub.example.com/a b"} {
+		if got, err := NormalizeClientInput(input); err != nil || got.Kind != ClientInputLink {
+			t.Errorf("%q: %#v, %v", input, got, err)
 		}
 	}
 }
@@ -597,10 +625,18 @@ func TestShadowsocksPluginLinksMapOrFail(t *testing.T) {
 	link := func(plugin string) string {
 		return "ss://" + user + "@127.0.0.1:8388/?plugin=" + url.QueryEscape(plugin) + "#Plugin"
 	}
-	for _, plugin := range []string{"obfs-local;obfs=tls;obfs-host=example.com", "obfs-local;obfs-host=example.com", "obfs-local;obfs=http;fast-open",
-		"simple-obfs;obfs=websocket", "v2ray-plugin;mode=quic", "v2ray-plugin;cert=/ca.pem"} {
+	for _, plugin := range []string{"obfs-local;obfs=tls;obfs-host=example.com", "obfs-local;obfs-host=example.com", "obfs-local;fast-open",
+		"simple-obfs;obfs=websocket", "obfs-local;obfs=http;http-method=POST", "obfs-local;obfs=http;c=/etc/obfs.json",
+		"v2ray-plugin;mode=quic", "v2ray-plugin;cert=/ca.pem"} {
 		if _, err := ImportClientProfiles(link(plugin)); err == nil {
 			t.Fatalf("imported %q without its plugin", plugin)
+		}
+	}
+	// obfs-local's client-side flags change nothing it sends (146.4, 146.10).
+	for _, plugin := range []string{"obfs-local;obfs=http;obfs-host=example.com;fast-open", "obfs-local;obfs=http;fast-open",
+		"obfs-local;obfs=http;mptcp;t=60;i=eth0;a=nobody;v;V;6"} {
+		if _, err := ImportClientProfiles(link(plugin)); err != nil {
+			t.Errorf("%q: %v", plugin, err)
 		}
 	}
 	result, err := ImportClientProfiles(link("v2ray-plugin;mode=websocket;tls;host=cdn.example;path=/ws;mux=1"))
@@ -639,7 +675,9 @@ type rawHeader struct {
 	Request  struct {
 		Path    []string `json:"path"`
 		Headers struct {
-			Host []string `json:"Host"`
+			Host       []string `json:"Host"`
+			Upgrade    []string `json:"Upgrade"`
+			Connection []string `json:"Connection"`
 		} `json:"headers"`
 	} `json:"request"`
 }
@@ -679,19 +717,41 @@ func TestShadowsocksSimpleObfsHTTPIsARawStreamWithAnHTTPHeader(t *testing.T) {
 	}{
 		{"ss://YWVzLTI1Ni1nY206cHc@example.com:8388?plugin=obfs-local%3Bobfs%3Dhttp%3Bobfs-host%3Dexample.com#ss-obfs-http", []string{"example.com"}, nil},
 		{"ss://YWVzLTI1Ni1nY206cHc@example.com:8388/?plugin=simple-obfs%3Bobfs%3Dhttp%3Bobfs-host%3Dcdn.example.com%3Bobfs-uri%3D%2Fpath#n", []string{"cdn.example.com"}, []string{"/path"}},
-		{"ss://YWVzLTI1Ni1nY206cHc@example.com:8388?plugin=obfs-local%3Bobfs%3Dhttp#n", nil, nil},
+		// obfs-local's own default host.
+		{"ss://YWVzLTI1Ni1nY206cHc@example.com:8388?plugin=obfs-local%3Bobfs%3Dhttp#n", []string{"cloudfront.net"}, nil},
+		// Mihomo's simple-obfs, with its own default host.
+		{"proxies:\n - {name: f, type: ss, server: example.com, port: 8388, cipher: aes-256-gcm, password: pw, plugin: obfs, plugin-opts: {mode: http, host: cdn.example.com}}\n", []string{"cdn.example.com"}, nil},
+		{"proxies:\n - {name: f, type: ss, server: example.com, port: 8388, cipher: aes-256-gcm, password: pw, plugin: obfs, plugin-opts: {mode: http}}\n", []string{"bing.com"}, nil},
 	} {
 		imported, err := ImportClientProfiles(test.link)
 		if err != nil {
 			t.Errorf("%s: %v", test.link, err)
 			continue
 		}
-		header := rawHTTPHeader(t, imported.Profiles[0].Config)
+		config := imported.Profiles[0].Config
+		if strings.HasPrefix(test.link, "proxies:") {
+			// A Clash profile adds its DIRECT and REJECT outbounds after the server.
+			var profile struct {
+				Outbounds []json.RawMessage `json:"outbounds"`
+			}
+			if err := json.Unmarshal(config, &profile); err != nil || len(profile.Outbounds) == 0 {
+				t.Fatalf("profile %s: %v", config, err)
+			}
+			config, _ = json.Marshal(map[string]any{"outbounds": profile.Outbounds[:1]})
+		}
+		header := rawHTTPHeader(t, config)
+		// obfs-server takes a request as obfs only with "Upgrade: websocket" (146.9).
 		if header.Network != "raw" || header.Security != "none" || header.Type != "http" ||
-			!slices.Equal(header.Request.Headers.Host, test.host) || !slices.Equal(header.Request.Path, test.paths) {
+			!slices.Equal(header.Request.Headers.Host, test.host) || !slices.Equal(header.Request.Path, test.paths) ||
+			!slices.Equal(header.Request.Headers.Upgrade, []string{"websocket"}) || !slices.Equal(header.Request.Headers.Connection, []string{"Upgrade"}) {
 			t.Errorf("%s imported as %s", test.link, imported.Profiles[0].Config)
 		}
 		builtOutbound(t, imported.Profiles[0].Config)
+	}
+	for _, opts := range []string{"", ", plugin-opts: {mode: tls, host: cdn.example.com}", ", plugin-opts: {host: cdn.example.com}"} {
+		if _, err := ImportClientProfiles("proxies:\n - {name: f, type: ss, server: example.com, port: 8388, cipher: aes-256-gcm, password: pw, plugin: obfs" + opts + "}\n"); err == nil {
+			t.Errorf("Clash obfs%s imported", opts)
+		}
 	}
 	link, err := parseClientLink("ss://YWVzLTI1Ni1nY206cHc@example.com:443/?plugin=obfs-local%3Bobfs%3Dtls%3Bobfs-host%3Dexample.com#ss-obfs-tls")
 	if err != nil {
@@ -1296,6 +1356,8 @@ func TestHysteria2LinkParametersMergeWithItsFinalMask(t *testing.T) {
 		// The hop interval, and the error a refused link gives.
 		interval int64
 		err      string
+		// The gecko packet sizes, 512-1200 when zero.
+		min, max int32
 	}{
 		{name: "obfs and the same salamander fm", link: base + obfs + fm(`{"udp":[{"type":"salamander","settings":{"password":"secret"}}]}`), masks: []string{"salamander"}},
 		{name: "fm with a zero packet size", link: base + obfs + fm(`{"udp":[{"type":"salamander","settings":{"password":"secret","packetSize":"0"}}]}`), masks: []string{"salamander"}},
@@ -1310,7 +1372,14 @@ func TestHysteria2LinkParametersMergeWithItsFinalMask(t *testing.T) {
 		{name: "fm udpHop beside an fm salamander", link: base + fm(`{"udp":[{"type":"salamander","settings":{"password":"secret"}}],"quicParams":{"udpHop":{"ports":"20000-20009"}}}`), masks: []string{"salamander", "udphop"}, interval: 30},
 		{name: "bandwidth beside fm brutal", link: base + "&up=100%20mbps" + fm(`{"quicParams":{"congestion":"brutal","brutalUp":"100 mbps"}}`)},
 		{name: "another password", link: base + obfs + fm(`{"udp":[{"type":"salamander","settings":{"password":"other"}}]}`), err: "conflicting"},
-		{name: "another packet size", link: base + "&obfs=gecko&obfs-password=secret" + fm(`{"udp":[{"type":"salamander","settings":{"password":"secret","packetSize":"600-1000"}}]}`), err: "conflicting"},
+		// The link names no sizes: those of fm are the server's (146.2), and Hysteria's defaults stand only for sizes neither names.
+		{name: "gecko and sizes only fm names", link: base + "&obfs=gecko&obfs-password=secret" + fm(`{"udp":[{"type":"salamander","settings":{"password":"secret","packetSize":"600-1000"}}]}`), masks: []string{"gecko"}, min: 600, max: 1000},
+		{name: "gecko beside an fm hop", link: base + "&obfs=gecko&obfs-password=secret" + fm(`{"udp":[{"type":"udphop","settings":{"mode":"intervalLocal,intervalRemote","remotePorts":"20000-20009"}}]}`), masks: []string{"gecko", "udphop"}, interval: 30},
+		{name: "another packet size", link: base + "&obfs=gecko&obfs-password=secret&minPacketSize=512&maxPacketSize=1200" + fm(`{"udp":[{"type":"salamander","settings":{"password":"secret","packetSize":"600-1000"}}]}`), err: "conflicting"},
+		// Plain salamander and gecko differ on the wire (146.3).
+		{name: "salamander beside an fm gecko", link: base + obfs + fm(`{"udp":[{"type":"salamander","settings":{"password":"secret","packetSize":"512-1200"}}]}`), err: "conflicting"},
+		{name: "gecko beside an fm salamander", link: base + "&obfs=gecko&obfs-password=secret" + fm(`{"udp":[{"type":"salamander","settings":{"password":"secret"}}]}`), err: "conflicting"},
+		{name: "sized gecko beside an fm salamander", link: base + "&obfs=gecko&obfs-password=secret&minPacketSize=600" + fm(`{"udp":[{"type":"salamander","settings":{"password":"secret"}}]}`), err: "conflicting"},
 		{name: "other hop ports", link: base + "&ports=30000-30009" + fm(`{"quicParams":{"udpHop":{"ports":"20000-20009"}}}`), err: "conflicting"},
 		{name: "another hop interval", link: base + "&ports=20000-20009&hop-interval=15" + fm(`{"udp":[{"type":"udphop","settings":{"mode":"intervalLocal,intervalRemote","remotePorts":"20000-20009","interval":"20"}}]}`), err: "conflicting"},
 		{name: "bandwidth beside fm bbr", link: base + "&up=100%20mbps" + fm(`{"quicParams":{"congestion":"bbr"}}`), err: "conflicting"},
@@ -1346,7 +1415,11 @@ func TestHysteria2LinkParametersMergeWithItsFinalMask(t *testing.T) {
 				}
 				masks = append(masks, "salamander")
 			case *salamander.GeckoConfig:
-				if instance.Password != "secret" || instance.MinPacketSize != 512 || instance.MaxPacketSize != 1200 {
+				low, high := test.min, test.max
+				if low == 0 {
+					low, high = 512, 1200
+				}
+				if instance.Password != "secret" || instance.MinPacketSize != low || instance.MaxPacketSize != high {
 					t.Errorf("%s: gecko %v", test.name, instance)
 				}
 				masks = append(masks, "gecko")
@@ -1365,19 +1438,32 @@ func TestHysteria2LinkParametersMergeWithItsFinalMask(t *testing.T) {
 	}
 }
 
-// An obfuscation the core cannot apply must not import as plain QUIC. A gecko link without packet
-// sizes takes Hysteria's defaults (TestHysteria2GeckoWithoutSizesTakesHysteriasDefaults); a Clash
-// file's gecko does not yet.
+// An obfuscation the core cannot apply must not import as plain QUIC. Gecko without packet sizes takes
+// Hysteria's defaults, from a link (TestHysteria2GeckoWithoutSizesTakesHysteriasDefaults) or a Clash file.
 func TestHysteria2UnsupportedObfuscationIsRefused(t *testing.T) {
 	for _, input := range []string{"hysteria2://secret@127.0.0.1:443?obfs=brutal&obfs-password=fixture", "hysteria2://secret@127.0.0.1:443?obfs=salamander",
 		"hysteria2://secret@127.0.0.1:443?obfs=gecko",
-		"proxies:\n - {name: f, type: hysteria2, server: 127.0.0.1, port: 443, password: secret, obfs: gecko, obfs-password: fixture}\n"} {
+		"proxies:\n - {name: f, type: hysteria2, server: 127.0.0.1, port: 443, password: secret, obfs: gecko}\n"} {
 		if _, err := ImportClientProfiles(input); err == nil {
 			t.Fatalf("%q imported without its obfuscation", input)
 		}
 	}
 	if _, err := ImportClientProfiles("hysteria2://secret@127.0.0.1:443?obfs=salamander&obfs-password=fixture"); err != nil {
 		t.Fatal(err)
+	}
+	// The same server from a Clash file and from its link (146.0a).
+	clash, err := ImportClientProfiles("proxies:\n - {name: f, type: hysteria2, server: 127.0.0.1, port: 443, password: secret, sni: h.example, obfs: gecko, obfs-password: fixture}\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	masks := builtOutbound(t, clash.Profiles[0].Config).stream.(*internet.StreamConfig).Udpmasks
+	if len(masks) != 1 {
+		t.Fatalf("%d masks: %s", len(masks), clash.Profiles[0].Config)
+	}
+	if mask, err := masks[0].GetInstance(); err != nil {
+		t.Fatal(err)
+	} else if gecko, ok := mask.(*salamander.GeckoConfig); !ok || gecko.Password != "fixture" || gecko.MinPacketSize != 512 || gecko.MaxPacketSize != 1200 {
+		t.Fatalf("Clash gecko mask %T %v", mask, mask)
 	}
 }
 

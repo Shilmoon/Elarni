@@ -231,9 +231,25 @@ func (proxy ClashProxy) shadowsocksOutbound() (*conf.OutboundDetourConfig, error
 	}
 	outbound.Settings = &settingsRawMessage
 
+	// Mihomo's obfs is simple-obfs: its HTTP mode maps as from a link, and with no host Mihomo sends bing.com.
+	if proxy.Plugin == "obfs" {
+		if proxy.PluginOpts == nil {
+			return nil, fmt.Errorf("unsupport ss plugin-opts: nil")
+		}
+		host := proxy.PluginOpts.Host
+		if host == "" {
+			host = "bing.com"
+		}
+		stream, err := simpleObfsStream([]string{"obfs=" + proxy.PluginOpts.Mode, "obfs-host=" + host})
+		if err != nil {
+			return nil, err
+		}
+		outbound.StreamSetting = stream
+		return outbound, nil
+	}
 	if len(proxy.Plugin) != 0 {
 		if proxy.Plugin != "v2ray-plugin" {
-			return nil, fmt.Errorf("unsupport ss plugin: obfs")
+			return nil, fmt.Errorf("unsupport ss plugin: %s", proxy.Plugin)
 		}
 		if proxy.PluginOpts == nil {
 			return nil, fmt.Errorf("unsupport ss plugin-opts: nil")
@@ -472,7 +488,7 @@ func (proxy ClashProxy) streamSettings(outbound conf.OutboundDetourConfig) (*con
 		if err != nil {
 			return nil, err
 		}
-		// No packet sizes: Clash's gecko stays refused.
+		// Clash names no gecko packet sizes: Hysteria's defaults stand for them.
 		fm, err := buildHy2FinalMask(clashBandwidth(proxy.Up), clashBandwidth(proxy.Down), proxy.Ports, hopInterval, proxy.Obfs, proxy.ObfsPassword, "", "")
 		if err != nil {
 			return nil, err

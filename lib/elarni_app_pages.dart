@@ -1965,7 +1965,12 @@ extension _HomePages on _ElarniHomeState {
     final countries = _countryGroups(subscription);
     return [
       if (_subscriptions.subscriptions.isEmpty) () => _gettingStarted(scheme),
-      if (countries.isEmpty && _subscriptions.subscriptions.isNotEmpty)
+      if (countries.isEmpty &&
+          _subscriptions.subscriptions.isNotEmpty &&
+          // A feed of messages alone has no servers: its notices say why.
+          !(subscription != null &&
+              subscription.nodes.isEmpty &&
+              subscription.notices.isNotEmpty))
         () => Padding(
           padding: const EdgeInsets.all(28),
           child: Column(

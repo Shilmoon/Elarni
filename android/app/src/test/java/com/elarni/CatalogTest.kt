@@ -96,46 +96,39 @@ class CatalogTest {
     // A refresh's servers still unmatched after the exact identity pair with the stored ones by the
     // identity without the REALITY values 3x-ui rotates, when it occurs as often on both sides.
     @Test fun stableIdentityPairsOnlyEqualCountsInFeedOrder() {
+        fun fresh(vararg items: Triple<Int, String, String>) = items.map { Catalog.Pairing(it.first, it.second, it.third) }
+        fun stale(vararg items: Triple<String, String, String>) = items.mapIndexed { order, it -> Catalog.Pairing(it.first, it.second, it.third, order) }
         assertEquals("A unique identity on both sides", mapOf(0 to "a", 2 to "c"),
-            Catalog.pairByStableIdentity(listOf(0 to "A", 2 to "C"), listOf("a" to "A", "c" to "C")))
+            Catalog.pairByStableIdentity(fresh(Triple(0, "A", "a"), Triple(2, "C", "c")), stale(Triple("a", "A", "a"), Triple("c", "C", "c"))))
         assertEquals("One host listed three times pairs in order", mapOf(1 to "x1", 3 to "x2", 4 to "x3"),
-            Catalog.pairByStableIdentity(listOf(1 to "X", 3 to "X", 4 to "X"), listOf("x1" to "X", "x2" to "X", "x3" to "X")))
+            Catalog.pairByStableIdentity(fresh(Triple(1, "X", "X 9GB"), Triple(3, "X", "X 9GB"), Triple(4, "X", "X 9GB")),
+                stale(Triple("x1", "X", "X 8GB"), Triple("x2", "X", "X 8GB"), Triple("x3", "X", "X 8GB"))))
         assertEquals("Fewer in the refresh is left to the name stages", emptyMap<Int, String>(),
-            Catalog.pairByStableIdentity(listOf(0 to "X"), listOf("x1" to "X", "x2" to "X")))
+            Catalog.pairByStableIdentity(fresh(Triple(0, "X", "X")), stale(Triple("x1", "X", "X"), Triple("x2", "X", "X"))))
         assertEquals("More in the refresh too; other identities still pair", mapOf(3 to "b"),
-            Catalog.pairByStableIdentity(listOf(0 to "X", 1 to "X", 2 to "X", 3 to "B"), listOf("x1" to "X", "x2" to "X", "b" to "B")))
+            Catalog.pairByStableIdentity(fresh(Triple(0, "X", "X"), Triple(1, "X", "X"), Triple(2, "X", "X"), Triple(3, "B", "B")),
+                stale(Triple("x1", "X", "X"), Triple("x2", "X", "X"), Triple("b", "B", "B"))))
         assertEquals("A key on one side only", emptyMap<Int, String>(),
-            Catalog.pairByStableIdentity(listOf(0 to "xrayProfile\nX"), listOf("t" to "telegram\nX")))
-        assertEquals(emptyMap<Int, String>(), Catalog.pairByStableIdentity(emptyList(), listOf("a" to "A")))
+            Catalog.pairByStableIdentity(fresh(Triple(0, "xrayProfile\nX", "X")), stale(Triple("t", "telegram\nX", "X"))))
+        assertEquals(emptyMap<Int, String>(), Catalog.pairByStableIdentity(emptyList(), stale(Triple("a", "A", "A"))))
     }
 
-    // The importer marks a line whose server no provider runs ("📊 10GB left", "Device limit reached"); it is a
-    // message only in a feed whose own host is public: a feed from this device or a lab lists real servers there.
-    @Test fun providerMessageLinesCountOnlyInAPublicFeed() {
-        listOf("https://sub.example/feed", "https://SUB.example:8443/feed?token=1", "http://192.0.3.1/feed", "http://10.0.0.1:2096/feed",
-            "https://[2001:db9::1]/feed", "https://127.0.0.1.example/feed", "https://localhost.example/feed",
-        ).forEach { assertTrue(it, Catalog.noticesApply(it)) }
-        listOf("http://127.0.0.1:8080/feed", "http://127.1.2.3/feed", "http://[::1]:8080/feed", "http://localhost/feed", "http://LocalHost:8080/feed",
-            "http://0.0.0.0/feed", "http://[::]/feed", "http://192.0.2.1/feed", "http://198.51.100.7/feed", "http://203.0.113.255/feed",
-            "http://[2001:db8::1]/feed", "http://[2001:DB8:ffff::1]/feed", "http://[::ffff:127.0.0.1]/feed", "http://[::ffff:192.0.2.1]/feed",
-            "not a link", "",
-        ).forEach { assertFalse(it, Catalog.noticesApply(it)) }
-    }
-
-    @Test fun providerMessageLinesOfAPublicFeedAreNoticesInOrderEachOnceAndFiveAtMost() {
-        fun line(name: String, notice: Boolean = false) = obj("format" to "xrayProfile", "name" to name,
-            "config" to obj("outbounds" to JSONArray(listOf(obj("protocol" to "socks"))))).apply { if (notice) put("notice", true) }
-        val feed = listOf(line("DE-1"), line("📊 10GB left", true), line("Device limit reached", true), line("NL-1"), line("📊 10GB left", true),
-            line("✖ Package Ended", true), line(" Renew at panel.example ", true), line("Sixth", true), line("Seventh", true))
-        val (servers, notices) = Catalog.providerNotices(feed, "https://sub.example/feed")
-        assertEquals(listOf("DE-1", "NL-1"), servers.map { it.string("name") })
-        assertEquals(listOf("📊 10GB left", "Device limit reached", "✖ Package Ended", "Renew at panel.example", "Sixth"), notices)
-        val (local, none) = Catalog.providerNotices(feed, "http://127.0.0.1:2096/feed")
-        assertEquals("A feed from this device lists servers", feed.map { it.string("name") }, local.map { it.string("name") })
-        assertEquals(emptyList<String>(), none)
-        val (alone, ended) = Catalog.providerNotices(listOf(line("✖ Package Ended", true)), "https://sub.example/feed")
-        assertEquals(emptyList<JSONObject>(), alone)
-        assertEquals(listOf("✖ Package Ended"), ended)
+    // A provider lists one inbound twice, names the copies apart and swaps them (156.2); the user hid one DE-1 and
+    // favorited the other, so the stored lists hold them out of feed order (156.1).
+    @Test fun stableIdentityPairsANameOnceOnEachSideFirstAndTheRestInThePreviousFeedOrder() {
+        fun pairing(value: String, key: String, name: String, order: Int) = Catalog.Pairing(value, key, name, order)
+        assertEquals("Swapped servers with their own names pair by name", mapOf(0 to "wa", 1 to "yt"),
+            Catalog.pairByStableIdentity(listOf(Catalog.Pairing(0, "X", "WhatsApp"), Catalog.Pairing(1, "X", "YouTube")),
+                listOf(pairing("yt", "X", "YouTube", 0), pairing("wa", "X", "WhatsApp", 1))))
+        assertEquals("A repeated name is no name to pair by; the rest keep their order", mapOf(0 to "d1", 1 to "d2", 2 to "solo"),
+            Catalog.pairByStableIdentity(listOf(Catalog.Pairing(0, "X", "DE"), Catalog.Pairing(1, "X", "DE"), Catalog.Pairing(2, "X", "Solo")),
+                listOf(pairing("solo", "X", "Solo", 0), pairing("d1", "X", "DE", 1), pairing("d2", "X", "DE", 2))))
+        assertEquals("Stored servers pair in the order of their feed", mapOf(0 to "id0", 1 to "id1", 2 to "nl"),
+            Catalog.pairByStableIdentity(listOf(Catalog.Pairing(0, "X", "DE-1"), Catalog.Pairing(1, "X", "DE-1"), Catalog.Pairing(2, "N", "NL-1")),
+                listOf(pairing("id1", "X", "DE-1", 1), pairing("nl", "N", "NL-1", 2), pairing("id0", "X", "DE-1", 0))))
+        assertEquals("The same place keeps the list order", mapOf(0 to "second", 1 to "first"),
+            Catalog.pairByStableIdentity(listOf(Catalog.Pairing(0, "X", "A"), Catalog.Pairing(1, "X", "A")),
+                listOf(pairing("second", "X", "A", 5), pairing("first", "X", "A", 5))))
     }
 
     @Test fun probeKeyNamesTheHandshakeSNI() {

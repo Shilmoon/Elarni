@@ -21,7 +21,9 @@ type XrayRawSettingsHeaderRequest struct {
 }
 
 type XrayRawSettingsHeaderRequestHeaders struct {
-	Host []string `json:"Host,omitempty"`
+	Host       []string `json:"Host,omitempty"`
+	Upgrade    []string `json:"Upgrade,omitempty"`
+	Connection []string `json:"Connection,omitempty"`
 }
 
 type XrayFakeHeader struct {

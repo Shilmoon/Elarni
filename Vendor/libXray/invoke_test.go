@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -149,7 +150,8 @@ func TestImportKeepsServersWhenTheMigrationHintIsInvalid(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			request, err := json.Marshal(map[string]any{"apiVersion": 1, "method": "importClientProfiles", "payload": map[string]any{
-				"text": "socks://127.0.0.1:1080", "sourceURL": "https://feed.example/sub", "migrationHeaders": headers,
+				// Not a loopback server: in a public feed that line would be a provider's message.
+				"text": "socks://10.0.0.1:1080", "sourceURL": "https://feed.example/sub", "migrationHeaders": headers,
 			}})
 			if err != nil {
 				t.Fatal(err)
@@ -169,6 +171,38 @@ func TestImportKeepsServersWhenTheMigrationHintIsInvalid(t *testing.T) {
 				t.Fatalf("invalid hint broke a working feed: %+v", response)
 			}
 		})
+	}
+}
+
+// Every platform passes the feed's URL and shows the notices the core returns (156.3, 156.6).
+func TestImportOfAPublicFeedReturnsItsNotices(t *testing.T) {
+	for source, want := range map[string]struct {
+		profiles int
+		notices  []string
+	}{
+		"https://feed.example/sub":  {1, []string{"📊 10GB left"}},
+		"http://127.0.0.1:2096/sub": {2, nil},
+		"":                          {2, nil},
+	} {
+		request, err := json.Marshal(map[string]any{"apiVersion": 1, "method": "importClientProfiles", "payload": map[string]any{
+			"text": "socks://127.0.0.1:1080#📊 10GB left\nsocks://10.0.0.1:1080#DE-1", "sourceURL": source,
+		}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var response struct {
+			Success bool `json:"success"`
+			Data    struct {
+				Profiles []json.RawMessage `json:"profiles"`
+				Notices  []string          `json:"notices"`
+			} `json:"data"`
+		}
+		if err := json.Unmarshal([]byte(Invoke(string(request))), &response); err != nil {
+			t.Fatal(err)
+		}
+		if !response.Success || len(response.Data.Profiles) != want.profiles || !slices.Equal(response.Data.Notices, want.notices) {
+			t.Errorf("%q: %+v", source, response)
+		}
 	}
 }
 

@@ -16,7 +16,15 @@ type ClientInput struct {
 	Text      string `json:"text"`
 	Name      string `json:"name,omitempty"`
 	ShareLink string `json:"shareLink,omitempty"`
+	// Kind is the one answer every app follows: "subscription" for a URL it adds and fetches as a
+	// subscription, "link" for text it imports as it is (share links, profiles, an HTTP proxy link).
+	Kind string `json:"kind"`
 }
+
+const (
+	ClientInputSubscription = "subscription"
+	ClientInputLink         = "link"
+)
 
 // SubscriptionMigrationURL resolves public provider hints without fetching.
 // Callers publish it with the feed and apply normal safety checks on the next fetch.
@@ -119,7 +127,7 @@ func NormalizeClientInput(input string) (ClientInput, error) {
 		// not a wrapper around all subsequent server lines.
 		if strings.Contains(text, "\n") && strings.HasPrefix(text, "incy://") &&
 			!strings.HasPrefix(text, "incy://import/[") && !strings.HasPrefix(text, "incy://import/{") {
-			result.Text = text
+			result.Text, result.Kind = text, ClientInputLink
 			return result, nil
 		}
 		if strings.HasPrefix(text, "incy://crypt1/") {
@@ -150,19 +158,20 @@ func NormalizeClientInput(input string) (ClientInput, error) {
 		}
 		if !wrapped {
 			u, err := url.Parse(text)
-			usableName := err == nil && utf8.RuneCountInString(u.Fragment) <= 128 && strings.IndexFunc(u.Fragment, unicode.IsControl) < 0
+			usableName := err == nil && u.Fragment != "" && utf8.RuneCountInString(u.Fragment) <= 128 && strings.IndexFunc(u.Fragment, unicode.IsControl) < 0
 			// Subscription QR links may carry a display name, which is not part of the HTTP target.
-			// A panel's root counts when the name is usable (https://host/#Name, probe N10-09): the
-			// apps add a root URL as a subscription when it has a name. An HTTP proxy link has no path
-			// (https://host:443#Name).
-			if err == nil && (u.Scheme == "https" || u.Scheme == "http") &&
-				u.User == nil && u.Hostname() != "" && u.Path != "" && (u.Path != "/" || usableName) && u.Fragment != "" &&
-				!((strings.EqualFold(u.Hostname(), "t.me") || strings.EqualFold(u.Hostname(), "telegram.me")) && u.Path == "/proxy") {
-				if result.Name == "" && usableName {
-					result.Name = u.Fragment
+			result.Kind = ClientInputLink
+			if err == nil && subscriptionURL(u, usableName, result.ShareLink != "") {
+				if u.Fragment != "" {
+					if result.Name == "" && usableName {
+						result.Name = u.Fragment
+					}
+					u.Fragment, u.RawFragment = "", ""
+					text = u.String()
 				}
-				u.Fragment, u.RawFragment = "", ""
-				text = u.String()
+				if storableSubscriptionURL(text) {
+					result.Kind = ClientInputSubscription
+				}
 			}
 			result.Text = text
 			return result, nil
@@ -183,4 +192,26 @@ func NormalizeClientInput(input string) (ClientInput, error) {
 		text = strings.TrimSpace(payload)
 	}
 	return ClientInput{}, invalid
+}
+
+// subscriptionURL tells a subscription's URL from an HTTP proxy link, which has no path or a root
+// one (https://host:443#Name, http://203.0.113.5:8080/#Office as JS URL.toString() writes it). A
+// panel's root is a subscription when an https link names it (https://host/#Name, probe N10-09) or
+// crypt1 wraps it: crypt1 carries only subscription URLs.
+func subscriptionURL(u *url.URL, named, crypt1 bool) bool {
+	if (u.Scheme != "https" && u.Scheme != "http") || u.User != nil || u.Hostname() == "" ||
+		((strings.EqualFold(u.Hostname(), "t.me") || strings.EqualFold(u.Hostname(), "telegram.me")) && u.Path == "/proxy") {
+		return false
+	}
+	if crypt1 {
+		return true
+	}
+	return u.Path != "" && (u.Path != "/" || (named && u.Scheme == "https"))
+}
+
+// storableSubscriptionURL is what every app stores and fetches as a subscription URL: no space,
+// control character or fragment, at most 16 KiB.
+func storableSubscriptionURL(text string) bool {
+	return len(text) <= 16*1024 && !strings.Contains(text, "#") &&
+		strings.IndexFunc(text, func(r rune) bool { return r <= ' ' || r == 0x7f || unicode.IsControl(r) || unicode.IsSpace(r) }) < 0
 }

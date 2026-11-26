@@ -13,7 +13,8 @@ import (
 
 // buildHy2FinalMask builds Hysteria2 bandwidth / port hopping / salamander masks (shared by URI and Clash).
 // Gecko is Xray's salamander with a packet size range, which 3x-ui and v2rayN write as minPacketSize and
-// maxPacketSize; without them the mask cannot be built.
+// maxPacketSize; a size left out is Hysteria's own default (geckoPacketSize), as the official URI and
+// Clash files name none.
 func buildHy2FinalMask(up, down, ports string, hopInterval conf.Int32Range, obfsType, obfsPassword, minPacketSize, maxPacketSize string) (*conf.FinalMask, error) {
 	var quicParams *conf.QuicParamsConfig
 	if up != "" || down != "" {
@@ -74,7 +75,9 @@ var (
 // mergeHy2Masks adds the mask a link's own parameters say (obfs, ports, up and down) to the one its
 // "fm" says. Remnawave and PasarGuard write both for the same server, each spelled its own way, so a
 // setting both name must mean the same, and a layer or setting only one of them names is kept.
-func mergeHy2Masks(explicit map[string]any, legacy *conf.FinalMask) error {
+// unsizedGecko says the link's salamander layer is gecko without packet sizes: "fm" may name them, and
+// Hysteria's defaults stand for them only when neither does.
+func mergeHy2Masks(explicit map[string]any, legacy *conf.FinalMask, unsizedGecko bool) error {
 	if legacy.QuicParams != nil {
 		merged, err := mergeMaskSettings(explicit["quicParams"], setJSON(legacy.QuicParams), func() any { return &conf.QuicParamsConfig{} })
 		if err != nil {
@@ -83,7 +86,7 @@ func mergeHy2Masks(explicit map[string]any, legacy *conf.FinalMask) error {
 		explicit["quicParams"] = merged
 	}
 	for _, layer := range legacy.Udp {
-		if err := mergeUDPMask(explicit, layer); err != nil {
+		if err := mergeUDPMask(explicit, layer, unsizedGecko && !strings.EqualFold(layer.Type, "udphop")); err != nil {
 			return err
 		}
 	}
@@ -92,7 +95,9 @@ func mergeHy2Masks(explicit map[string]any, legacy *conf.FinalMask) error {
 
 // mergeUDPMask merges a salamander or udphop layer into the "fm" layer of its type, or adds it. Xray
 // applies the layers last to first and only the first may dial, so a new udphop goes last, others first.
-func mergeUDPMask(explicit map[string]any, layer conf.Mask) error {
+// Plain salamander and gecko share the type but not the wire format, so a link and an "fm" that say one
+// each disagree.
+func mergeUDPMask(explicit map[string]any, layer conf.Mask, unsizedGecko bool) error {
 	var layers []any
 	if value := explicit["udp"]; value != nil {
 		var ok bool
@@ -118,12 +123,37 @@ func mergeUDPMask(explicit map[string]any, layer conf.Mask) error {
 		if kind, _ := existing["type"].(string); !strings.EqualFold(kind, layer.Type) {
 			continue
 		}
+		if !strings.EqualFold(layer.Type, "udphop") {
+			stated, err := geckoLayer(existing["settings"])
+			if err != nil {
+				return err
+			}
+			linked, err := geckoLayer(added)
+			if err != nil {
+				return err
+			}
+			if stated != (linked || unsizedGecko) {
+				return errHy2MaskConflict
+			}
+		}
 		merged, err := mergeMaskSettings(existing["settings"], added, settings)
 		if err != nil {
 			return err
 		}
 		existing["settings"] = merged
 		return nil
+	}
+	if unsizedGecko {
+		var gecko conf.Salamander
+		if len(added) > 0 && json.Unmarshal(added, &gecko) != nil {
+			return errHy2MaskInvalid
+		}
+		gecko.PacketSize, _ = geckoPacketSize("", "")
+		sized, err := convertJsonToRawMessage(&gecko)
+		if err != nil {
+			return err
+		}
+		added = sized
 	}
 	merged, err := mergeMaskSettings(nil, added, settings)
 	if err != nil {
@@ -216,17 +246,44 @@ func moveLegacyUDPHop(explicit map[string]any) error {
 		if err != nil {
 			return err
 		}
-		return mergeUDPMask(explicit, conf.Mask{Type: "udphop", Settings: &hop})
+		return mergeUDPMask(explicit, conf.Mask{Type: "udphop", Settings: &hop}, false)
 	}
 	return nil
 }
 
 // geckoPacketSize reads gecko's packet sizes within the bounds Xray's salamander builds: 0 < min <= max <= 2048.
+// A size left out is Hysteria's own client default, 512 or 1200.
 func geckoPacketSize(minPacketSize, maxPacketSize string) (conf.Int32Range, error) {
+	if minPacketSize == "" {
+		minPacketSize = "512"
+	}
+	if maxPacketSize == "" {
+		maxPacketSize = "1200"
+	}
 	low, lowErr := strconv.ParseUint(minPacketSize, 10, 16)
 	high, highErr := strconv.ParseUint(maxPacketSize, 10, 16)
 	if lowErr != nil || highErr != nil || low == 0 || low > high || high > 2048 {
 		return conf.Int32Range{}, fmt.Errorf("unsupported Hysteria2 obfuscation")
 	}
 	return conf.Int32Range{Left: int32(low), Right: int32(high), From: int32(low), To: int32(high)}, nil
+}
+
+// geckoLayer says whether salamander settings, as "fm" or setJSON writes them, are gecko: Xray builds
+// gecko for a packet size range and plain salamander without one.
+func geckoLayer(settings any) (bool, error) {
+	var text []byte
+	switch value := settings.(type) {
+	case nil:
+	case json.RawMessage:
+		text = value
+	case map[string]any:
+		text, _ = json.Marshal(value)
+	default:
+		return false, errHy2MaskInvalid
+	}
+	var layer conf.Salamander
+	if len(text) > 0 && json.Unmarshal(text, &layer) != nil {
+		return false, errHy2MaskInvalid
+	}
+	return layer.PacketSize.To > 0, nil
 }

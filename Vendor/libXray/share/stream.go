@@ -54,7 +54,8 @@ func (proxy xrayShareLink) parseSecurityFromURL(link *url.URL, streamSettings *c
 	tlsSettings.ServerName = sni
 	realitySettings.ServerName = sni
 
-	tlsSettings.ECHConfigList = query.Get("ech")
+	// Standard Base64 or "name+https://resolver": a "+" in it is never a space.
+	tlsSettings.ECHConfigList = plusKeptQueryValue(link.RawQuery, "ech", query.Get("ech"))
 	tlsSettings.PinnedPeerCertSha256 = query.Get("pcs")
 	if tlsSettings.PinnedPeerCertSha256 == "" {
 		// Hysteria2 links carry the pin as pinSHA256.
