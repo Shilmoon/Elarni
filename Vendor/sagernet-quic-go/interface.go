@@ -208,6 +208,10 @@ type Config struct {
 	// Client side only; it has no effect on a listener. Because it pins the
 	// values above, settings that conflict with Chrome's are ignored.
 	ChromeParrot bool
+
+	// Elarni: defaultInitialPacketSize is the InitialPacketSize populateConfig filled in because
+	// none was set; 0 if the application set one.
+	defaultInitialPacketSize uint16
 }
 
 // ClientInfo contains information about an incoming connection attempt.

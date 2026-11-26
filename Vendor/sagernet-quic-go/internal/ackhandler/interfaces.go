@@ -16,6 +16,9 @@ type SentPacketHandler interface {
 	ReceivedAck(f *wire.AckFrame, encLevel protocol.EncryptionLevel, rcvTime monotime.Time) (bool /* 1-RTT packet acked */, error)
 	ReceivedPacket(protocol.EncryptionLevel, monotime.Time)
 	ReceivedBytes(_ protocol.ByteCount, rcvTime monotime.Time)
+	// Elarni: PacketRefused takes a packet of size bytes that SentPacket counted, but that the
+	// socket refused ("message too long"), off the amplification limit.
+	PacketRefused(size protocol.ByteCount, now monotime.Time)
 	DropPackets(_ protocol.EncryptionLevel, rcvTime monotime.Time)
 	ResetForRetry(rcvTime monotime.Time)
 
@@ -41,7 +44,9 @@ type SentPacketHandler interface {
 
 	MigratedPath(now monotime.Time, initialMaxPacketSize protocol.ByteCount)
 
-	SetCongestionControl(congestion.CongestionControl)
+	// Elarni: seed is the largest datagram size the controller may have been seeded with; it is
+	// told only larger sizes.
+	SetCongestionControl(cc congestion.CongestionControl, seed protocol.ByteCount)
 
 	// UpdateAppLimited is called after every attempt to send packets. The congestion
 	// controller is notified on the packets sent while the connection is application-limited.

@@ -15,6 +15,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/apernet/quic-go/congestion"
+	"github.com/apernet/quic-go/internal/ackhandler"
 	"github.com/apernet/quic-go/internal/protocol"
 )
 
@@ -219,5 +221,76 @@ func TestHandshakeKeepsExplicitPacketSizeAsFloor(t *testing.T) {
 	}
 	if !errors.Is(err, msgSizeErrno()) {
 		t.Fatalf("dial failed with %v, want %v", err, msgSizeErrno())
+	}
+}
+
+// Elarni: Conn.Config().InitialPacketSize read 0 when the application set none, where it used to
+// read 1280, so a library that sized its congestion controller from the Config got no size. It
+// reads the default again; only a size the application set is the floor.
+func TestPopulatedConfigReadsTheDefaultInitialPacketSize(t *testing.T) {
+	conf := populateConfig(&Config{})
+	if conf.InitialPacketSize != protocol.InitialPacketSize {
+		t.Fatalf("InitialPacketSize %d, want %d", conf.InitialPacketSize, protocol.InitialPacketSize)
+	}
+	if conf.initialPacketSizeIsFloor() {
+		t.Fatal("the default size is a floor")
+	}
+	// The server populates the Config that GetConfigForClient returns once more.
+	if populateConfig(conf).initialPacketSizeIsFloor() {
+		t.Fatal("the default size is a floor once the Config is populated again")
+	}
+	if !populateConfig(&Config{InitialPacketSize: protocol.InitialPacketSize}).initialPacketSizeIsFloor() {
+		t.Fatal("a size the application set is no floor")
+	}
+	changed := conf.Clone()
+	changed.InitialPacketSize = 1350
+	if !populateConfig(changed).initialPacketSizeIsFloor() {
+		t.Fatal("a size the application set on a populated Config is no floor")
+	}
+	if conf := populateConfig(&Config{ChromeParrot: true}); conf.InitialPacketSize != chromeInitialPacketSize || conf.initialPacketSizeIsFloor() {
+		t.Fatalf("with ChromeParrot: InitialPacketSize %d, floor %t; want %d, no floor", conf.InitialPacketSize, conf.initialPacketSizeIsFloor(), chromeInitialPacketSize)
+	}
+}
+
+// seedRecordingHandler records the seed SetCongestionControl passes on.
+type seedRecordingHandler struct {
+	ackhandler.SentPacketHandler
+	seed protocol.ByteCount
+}
+
+func (h *seedRecordingHandler) SetCongestionControl(_ congestion.CongestionControl, seed protocol.ByteCount) {
+	h.seed = seed
+}
+
+// Elarni: a controller is seeded with a size InitialPacketSize returned, before or after the
+// fallback to 1200 bytes; SetCongestionControl passes on the largest one, so that the controller
+// is told every larger size and no smaller one.
+func TestSetCongestionControlSeedIsTheLargestReportedSize(t *testing.T) {
+	for _, tc := range []struct {
+		name                string
+		askBefore, askAfter bool
+		want                protocol.ByteCount
+	}{
+		{"asked before the fallback", true, false, protocol.InitialPacketSize},
+		{"asked before and after the fallback", true, true, protocol.InitialPacketSize},
+		{"asked after the fallback", false, true, protocol.MinInitialPacketSize},
+		{"not asked", false, false, protocol.MinInitialPacketSize},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := &seedRecordingHandler{}
+			c := &Conn{sentPacketHandler: h}
+			c.currentInitialPacketSize.Store(uint32(protocol.InitialPacketSize))
+			if tc.askBefore {
+				c.InitialPacketSize()
+			}
+			c.currentInitialPacketSize.Store(uint32(protocol.MinInitialPacketSize))
+			if tc.askAfter {
+				c.InitialPacketSize()
+			}
+			c.SetCongestionControl(nil)
+			if h.seed != tc.want {
+				t.Fatalf("seed %d, want %d", h.seed, tc.want)
+			}
+		})
 	}
 }

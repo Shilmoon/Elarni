@@ -734,6 +734,14 @@ func (p *packetPacker) composeNextPacket(
 		}
 	}
 
+	// Elarni: a DATAGRAM frame that control frames and retransmissions kept out of
+	// DatagramFrameMaxPeekTimes packets goes ahead of them, instead of being dropped, so that
+	// UDP traffic is not lost while a stream recovers from loss.
+	datagramFirst := p.peekTimes >= DatagramFrameMaxPeekTimes
+	if datagramFirst {
+		p.appendDatagramFrame(&pl, maxPayloadSize, v)
+	}
+
 	// Control frames and retransmissions go ahead of DATAGRAM frames, so that application data
 	// can't starve the connection (quic-go/quic-go#5970).
 	if hasData {
@@ -757,31 +765,8 @@ func (p *packetPacker) composeNextPacket(
 		}
 	}
 
-	if p.datagramQueue != nil {
-		if f := p.datagramQueue.Peek(); f != nil {
-			size := f.Length(v)
-			if size <= maxPayloadSize-pl.length { // DATAGRAM frame fits
-				pl.frames = append(pl.frames, ackhandler.Frame{Frame: f})
-				pl.length += size
-				p.datagramQueue.Pop()
-				p.peekTimes = 0
-			} else if pl.ack == nil && len(pl.frames) == 0 {
-				// The DATAGRAM frame doesn't fit, and the packet doesn't contain an ACK or any other frames.
-				// Discard this frame. There's no point in retrying this in the next packet,
-				// as it's unlikely that the available packet size will increase.
-				p.datagramQueue.Pop()
-				p.peekTimes = 0
-			}
-			// If the DATAGRAM frame was too large and the packet contained an ACK or other frames, we'll try to send it out later.
-			p.peekTimes++
-			if p.peekTimes > DatagramFrameMaxPeekTimes {
-				if p.datagramQueue.logger != nil && p.datagramQueue.logger.Debug() {
-					p.datagramQueue.logger.Debugf("Discarded DATAGRAM frame (%d bytes payload)", size)
-				}
-				p.datagramQueue.Pop()
-				p.peekTimes = 0
-			}
-		}
+	if !datagramFirst {
+		p.appendDatagramFrame(&pl, maxPayloadSize, v)
 	}
 
 	if pl.ack != nil && !hasData && !hasRetransmission {
@@ -811,6 +796,37 @@ func (p *packetPacker) composeNextPacket(
 		}
 	}
 	return pl
+}
+
+// appendDatagramFrame appends the next DATAGRAM frame, if it fits. One that does not fit waits
+// for a later packet when this one carries an ACK or other frames, and is dropped when it would
+// be alone: it can't fit into any packet then. One that waited DatagramFrameMaxPeekTimes packets
+// goes right after the ACK; if the ACK leaves too little room for it, it is dropped, as one that
+// waits beside ACKs always was.
+func (p *packetPacker) appendDatagramFrame(pl *payload, maxPayloadSize protocol.ByteCount, v protocol.Version) {
+	if p.datagramQueue == nil {
+		return
+	}
+	f := p.datagramQueue.Peek()
+	if f == nil {
+		return
+	}
+	size := f.Length(v)
+	switch {
+	case size <= maxPayloadSize-pl.length: // DATAGRAM frame fits
+		pl.frames = append(pl.frames, ackhandler.Frame{Frame: f})
+		pl.length += size
+		p.datagramQueue.Pop()
+		p.peekTimes = 0
+	case len(pl.frames) == 0 && (pl.ack == nil || p.peekTimes >= DatagramFrameMaxPeekTimes):
+		if p.datagramQueue.logger != nil && p.datagramQueue.logger.Debug() {
+			p.datagramQueue.logger.Debugf("Discarded DATAGRAM frame (%d bytes payload)", size)
+		}
+		p.datagramQueue.Pop()
+		p.peekTimes = 0
+	default:
+		p.peekTimes++
+	}
 }
 
 func (p *packetPacker) PackPTOProbePacket(

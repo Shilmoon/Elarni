@@ -170,9 +170,13 @@ type Conn struct {
 	// Elarni (quic-go/quic-go#5911): the Initial packet size in effect: the configured one, or 1200
 	// bytes once a write at the configured size failed with "message too long".
 	currentInitialPacketSize atomic.Uint32
-	// initialPacketSizeTried is set once a packet of the initial size was written, or refused.
-	// Until then, and until the handshake is confirmed, packets are written directly rather than
-	// through the send queue, which drops a "message too long" error.
+	// reportedInitialPacketSize is the largest size InitialPacketSize returned. A controller
+	// installed with SetCongestionControl was seeded with at most that size.
+	reportedInitialPacketSize atomic.Uint32
+	// initialPacketSizeTried is set once a packet of the initial size was tried: written, refused,
+	// or dropped on a transient error. Until then, and until the handshake is confirmed, packets
+	// are written directly rather than through the send queue, which drops a "message too long"
+	// error.
 	initialPacketSizeTried bool
 
 	initialStream       *initialCryptoStream
@@ -201,9 +205,10 @@ type Conn struct {
 	droppedInitialKeys bool
 	handshakeComplete  bool
 	handshakeConfirmed bool
-	// Elarni: the send queue's goroutine reads it to tell a dial that cannot reach the
-	// server from a connection that loses its network for a moment.
-	handshakeCompleteForSend atomic.Bool
+	// Elarni: tells the failed sends that lose only their packet from those that close the
+	// connection: a dial that cannot reach the server from a connection that loses its network
+	// for a moment. The send queues and the direct writes during the handshake share it.
+	sendErrors sendErrors
 
 	receivedRetry       bool
 	versionNegotiated   bool
@@ -541,7 +546,8 @@ func (c *Conn) preSetup() {
 	c.largestRcvdAppData = protocol.InvalidPacketNumber
 	c.initialStream = newInitialCryptoStream(c.perspective == protocol.PerspectiveClient, c.config.ChromeParrot)
 	c.handshakeStream = newCryptoStream()
-	c.sendQueue = newSendQueue(c.conn, &c.handshakeCompleteForSend)
+	c.sendErrors.grace = networkChangeGrace
+	c.sendQueue = newSendQueue(c.conn, &c.sendErrors)
 	c.retransmissionQueue = newRetransmissionQueue()
 	c.frameParser = *wire.NewFrameParser(
 		c.config.EnableDatagrams,
@@ -952,14 +958,10 @@ func (c *Conn) idleTimeoutStartTime() monotime.Time {
 func (c *Conn) switchToNewPath(tr *Transport, now monotime.Time) {
 	initialPacketSize := c.initialPacketSize()
 	c.sentPacketHandler.MigratedPath(now, initialPacketSize)
-	maxPacketSize := protocol.ByteCount(protocol.MaxPacketBufferSize)
-	if c.peerParams.MaxUDPPayloadSize > 0 && c.peerParams.MaxUDPPayloadSize < maxPacketSize {
-		maxPacketSize = c.peerParams.MaxUDPPayloadSize
-	}
-	c.mtuDiscoverer.Reset(now, initialPacketSize, maxPacketSize)
+	c.mtuDiscoverer.Reset(now, initialPacketSize, c.maxMTU())
 	c.conn = newSendConn(tr.conn, c.conn.RemoteAddr(), packetInfo{}, utils.DefaultLogger) // TODO: find a better way
 	c.sendQueue.Close()
-	c.sendQueue = newSendQueue(c.conn, &c.handshakeCompleteForSend)
+	c.sendQueue = newSendQueue(c.conn, &c.sendErrors)
 	go func() {
 		if err := c.sendQueue.Run(); err != nil {
 			c.destroyImpl(err)
@@ -969,7 +971,7 @@ func (c *Conn) switchToNewPath(tr *Transport, now monotime.Time) {
 
 func (c *Conn) handleHandshakeComplete(now monotime.Time) error {
 	defer close(c.handshakeCompleteChan)
-	c.handshakeCompleteForSend.Store(true)
+	c.sendErrors.handshakeComplete.Store(true)
 	// Once the handshake completes, we have derived 1-RTT keys.
 	// There's no point in queueing undecryptable packets for later decryption anymore.
 	c.undecryptablePackets = nil
@@ -1338,14 +1340,10 @@ func (c *Conn) handleShortHeaderPacket(
 	}
 	c.pathManager.SwitchToPath(p.remoteAddr)
 	c.sentPacketHandler.MigratedPath(p.rcvTime, c.initialPacketSize())
-	maxPacketSize := protocol.ByteCount(protocol.MaxPacketBufferSize)
-	if c.peerParams.MaxUDPPayloadSize > 0 && c.peerParams.MaxUDPPayloadSize < maxPacketSize {
-		maxPacketSize = c.peerParams.MaxUDPPayloadSize
-	}
 	c.mtuDiscoverer.Reset(
 		p.rcvTime,
 		c.initialPacketSize(),
-		maxPacketSize,
+		c.maxMTU(),
 	)
 	c.conn.ChangeRemoteAddr(p.remoteAddr, p.info)
 	return true, nil
@@ -2902,33 +2900,39 @@ func (c *Conn) sendPackedCoalescedPacket(packet *coalescedPacket, ecn protocol.E
 		c.sendQueue.Send(packet.buffer, 0, ecn)
 		return nil
 	}
-	c.writeUntilInitialPacketSizeTried(packet.buffer, ecn)
+	c.writeUntilInitialPacketSizeTried(packet.buffer, ecn, now)
 	return nil
 }
 
 // writeUntilInitialPacketSizeTried writes a packet directly, so that the connection learns when
 // the interface refuses the initial packet size (quic-go/quic-go#5911, ported to v0.61): an MTU
-// below 1280 bytes, or below Chrome's 1250, as on some tunnels and mobile networks. Until the
-// configured size was tried, no packet went through the send queue, so the two never write at
-// the same time. Errors the send queue drops are dropped here too, and the others close the
-// connection with the raw error, as when the send queue stops on them.
-func (c *Conn) writeUntilInitialPacketSizeTried(buf *packetBuffer, ecn protocol.ECN) {
+// below 1280 bytes, or below Chrome's 1250, as on some tunnels and mobile networks. After the
+// first packet of the initial size, packets go through the send queue again, so that a slow
+// write does not hold up the run loop for longer. Until then no packet went through the send
+// queue, and SendProbe writes on the run loop as well, so no two writes happen at the same time.
+// Errors the send queue drops are dropped here too, and the others close the connection with
+// the raw error, as when the send queue stops on them.
+func (c *Conn) writeUntilInitialPacketSizeTried(buf *packetBuffer, ecn protocol.ECN, now monotime.Time) {
 	size := buf.Len()
 	err := c.conn.Write(buf.Data, 0, ecn)
 	buf.Release()
 	initialPacketSize := c.initialPacketSize()
+	if size >= initialPacketSize {
+		c.initialPacketSizeTried = true
+	}
 	var tooLarge *DatagramTooLargeError
 	switch {
 	case err == nil:
-		if size >= initialPacketSize {
-			c.initialPacketSizeTried = true
-		}
+		c.sendErrors.sent()
 	case isSendMsgSizeErr(err) || errors.As(err, &tooLarge):
 		if c.config.initialPacketSizeIsFloor() {
 			// The application accepts no smaller packets.
 			c.destroyImpl(err)
 			return
 		}
+		// The packet never left, so it takes no amplification budget: on a server, its resend
+		// and the rest of the flight are not held back until the client sends more.
+		c.sentPacketHandler.PacketRefused(size, now)
 		if size < initialPacketSize || initialPacketSize <= protocol.MinInitialPacketSize {
 			return // dropped, as the send queue drops it
 		}
@@ -2940,8 +2944,7 @@ func (c *Conn) writeUntilInitialPacketSizeTried(buf *packetBuffer, ecn protocol.
 		if c.mtuDiscoverer != nil {
 			c.mtuDiscoverer = newMTUDiscoverer(c.rttStats, protocol.MinInitialPacketSize, c.maxMTU(), c.qlogger)
 		}
-		c.initialPacketSizeTried = true
-	case isNoBufferSpaceErr(err), c.handshakeCompleteForSend.Load() && isNetworkChangeErr(err):
+	case c.sendErrors.transient(err):
 		// dropped, as the send queue drops it
 	default:
 		c.destroyImpl(err)
@@ -3264,7 +3267,14 @@ func estimateMaxPayloadSize(mtu protocol.ByteCount) protocol.ByteCount {
 
 // SetCongestionControl replace the current congestion control algorithm with a new one.
 func (c *Conn) SetCongestionControl(cc congestion.CongestionControl) {
-	c.sentPacketHandler.SetCongestionControl(cc)
+	// Elarni: cc was seeded with a size InitialPacketSize returned, so at most the largest one
+	// (or the size in effect, if the application did not ask). It learns only larger sizes, and
+	// every one of those: Hysteria's and sing-quic's controllers panic on a smaller one.
+	seed := c.reportedInitialPacketSize.Load()
+	if seed == 0 {
+		seed = c.currentInitialPacketSize.Load()
+	}
+	c.sentPacketHandler.SetCongestionControl(cc, protocol.ByteCount(seed))
 }
 
 // InitialPacketSize returns the datagram size the connection starts out with,
@@ -3279,7 +3289,15 @@ func (c *Conn) SetCongestionControl(cc congestion.CongestionControl) {
 // MTU discovery reports a size between the two, which the connection sees as an
 // increase but the controller sees as a decrease.
 func (c *Conn) InitialPacketSize() congestion.ByteCount {
-	return congestion.ByteCount(c.currentInitialPacketSize.Load())
+	size := c.currentInitialPacketSize.Load()
+	// Elarni: SetCongestionControl takes the largest size reported as the seed of the controller.
+	for {
+		reported := c.reportedInitialPacketSize.Load()
+		if reported >= size || c.reportedInitialPacketSize.CompareAndSwap(reported, size) {
+			break
+		}
+	}
+	return congestion.ByteCount(size)
 }
 
 // SetRemoteAddr Replace the current remote addr with a new one

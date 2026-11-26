@@ -39,14 +39,18 @@ taken on top (below), without the commits between them.
   learns the connection dialed over it, which sing-quic's TUIC client keeps private; Xray-core
   checks it after a network change. Tests: `client_unconnected_test.go`; end to end in
   Xray-core's `proxy/tuic/path_test.go`.
-- `send_queue.go`, `connection.go` (`handshakeCompleteForSend`), `sys_conn_netchange_{unix,windows,other}.go`:
+- `send_queue.go` (`sendErrors`), `connection.go`, `sys_conn_netchange_{unix,windows,other}.go`:
   a send that fails with ENETUNREACH, EHOSTUNREACH, EADDRNOTAVAIL or ENETDOWN (the interface,
   route or local address gone while the device moves between Wi-Fi and cellular; WSAE* on
-  Windows) drops that packet instead of closing the connection, as upstream's ENOBUFS handling
-  (e86a8a79) does, but only once the handshake is complete: the connection sets the flag in
-  `handleHandshakeComplete`, and before that these errors still fail the dial at once (an IPv6
-  server address without an IPv6 route). Loss recovery resends the packet, and the idle timeout
-  still ends a connection whose network does not come back. Test: `send_queue_transient_test.go`.
+  Windows, and the Win32 codes ERROR_NETWORK_UNREACHABLE and ERROR_HOST_UNREACHABLE an
+  overlapped send reports) drops that packet instead of closing the connection, as upstream's
+  ENOBUFS handling (e86a8a79) does, but only once the handshake is complete, and only for 5 s
+  (`networkChangeGrace`) from the first failure of a streak; a successful send ends the streak.
+  The connection sets the flag in `handleHandshakeComplete`, and before that these errors still
+  fail the dial at once (an IPv6 server address without an IPv6 route). After the 5 s the next
+  such error closes the connection with it, as before, so a connection whose network does not
+  come back ends within seconds instead of at the idle timeout. Loss recovery resends a dropped
+  packet. As in `Vendor/quic-go`. Test: `send_queue_transient_test.go`.
 - `send_stream.go` (`write`): quic-go/quic-go 254a5393 (issue #6136). A Write blocked when the
   peer sent STOP_SENDING (or the stream was canceled) put its data into a new frame that was
   never sent, so the stream never completed and its MAX_STREAMS credit never came back. Test:
@@ -68,17 +72,27 @@ taken on top (below), without the commits between them.
   (`composeNextPacket`): quic-go/quic-go PR #5970 (6dfb89eb), ported by hand as in
   `Vendor/quic-go`: frames are packed in the order ACK, control frames, retransmissions,
   DATAGRAM, STREAM, so UDP over TUIC no longer delays MAX_DATA, MAX_STREAM_DATA and lost frames.
-  Only the order is taken (one DATAGRAM per packet, with its length; the `peekTimes` limit is
-  kept). Test: `packet_packer_datagram_order_test.go`.
-- `connection.go` (`writeUntilInitialPacketSizeTried`, `InitialPacketSize`, `maxMTU`),
-  `config.go` (`initialPacketSize`, `initialPacketSizeIsFloor`), `interface.go`,
-  `internal/congestion/cubic_sender.go`, `internal/ackhandler/sent_packet_handler.go`
-  (`SetMaxDatagramSize`): quic-go/quic-go PR #5911 (99c74363), ported by hand as in
+  Only the order is taken (one DATAGRAM per packet, with its length). The `peekTimes` limit
+  stays, but a DATAGRAM that waited `DatagramFrameMaxPeekTimes` (10) packets goes first in the
+  next one instead of being dropped, so UDP packets are not lost while a stream recovers from
+  loss, and `peekTimes` is 0 again once a DATAGRAM was sent or dropped. Test:
+  `packet_packer_datagram_order_test.go`.
+- `connection.go` (`writeUntilInitialPacketSizeTried`, `InitialPacketSize`,
+  `SetCongestionControl`, `maxMTU`), `config.go` (`initialPacketSize`, `initialPacketSizeIsFloor`,
+  `populateConfig`), `interface.go`, `internal/congestion/cubic_sender.go`
+  (`FallBackToMinDatagramSize`), `internal/ackhandler/sent_packet_handler.go`
+  (`SetMaxDatagramSize`, `PacketRefused`, `SetCongestionControl`),
+  `internal/ackhandler/interfaces.go`: quic-go/quic-go PR #5911 (99c74363), ported by hand as in
   `Vendor/quic-go` (see there): a "message too long" error for a packet over 1,200 bytes
   during the handshake drops the connection to 1,200 bytes, which `InitialPacketSize()` then
-  reports (sing-quic's TUIC congestion controllers are created with it). A controller installed
-  with `SetCongestionControl` is told only sizes above the configured initial size: with
-  `ZeroRTTHandshake` sing-quic installs one on the early connection, possibly before the
-  fallback, and its controllers panic on a smaller size. Tests: `mtu_fallback_test.go`,
+  reports (sing-quic's TUIC congestion controllers are created with it). Direct writes end after
+  the first try of the initial size; the cubic sender takes only this decrease and still panics
+  on any other; the refused packet is taken off the amplification limit; `Config().InitialPacketSize`
+  reads 1,280 when unset. A controller installed with `SetCongestionControl` is told every size
+  above its seed (the largest size `InitialPacketSize()` returned so far) and none at or below
+  it: with `ZeroRTTHandshake` sing-quic installs one on the early connection, possibly before the
+  fallback, and its controllers panic on a smaller size. `switchToNewPath` and
+  `handleShortHeaderPacket` take the peer's limit from `maxMTU` too. Tests:
+  `mtu_fallback_test.go`, `send_queue_transient_test.go`,
   `internal/ackhandler/installed_congestion_size_test.go`.
 - `go.mod`, `go.sum`: tidied for the copied sources, without the `tool` block.

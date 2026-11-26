@@ -80,14 +80,16 @@ func startBBRService(tb testing.TB, handler quic.ServiceHandler) net.Addr {
 }
 
 // newShapedRelay is newRelay with a link of rate bits per second and delay in each direction, as
-// in the sing-box#4538 reproduction (100 Mbit/s, 5 ms each way, no loss).
-func newShapedRelay(tb testing.TB, server net.Addr, rate float64, delay time.Duration) net.Addr {
+// in the sing-box#4538 reproduction (100 Mbit/s, 5 ms each way, no loss). closeRelay stops it; the
+// test's cleanup does too.
+func newShapedRelay(tb testing.TB, server net.Addr, rate float64, delay time.Duration) (addr net.Addr, closeRelay func()) {
 	socket, err := net.ListenPacket("udp", "127.0.0.1:0")
 	if err != nil {
 		tb.Fatal(err)
 	}
 	done := make(chan struct{})
-	tb.Cleanup(func() { close(done); socket.Close() })
+	closeRelay = sync.OnceFunc(func() { close(done); socket.Close() })
+	tb.Cleanup(closeRelay)
 	type packet struct {
 		data []byte
 		to   net.Addr
@@ -141,7 +143,7 @@ func newShapedRelay(tb testing.TB, server net.Addr, rate float64, delay time.Dur
 			}
 		}
 	}()
-	return socket.LocalAddr()
+	return socket.LocalAddr(), closeRelay
 }
 
 func later(a, b time.Time) time.Time {
@@ -201,7 +203,7 @@ func BenchmarkBBRUploadAfterDownload(b *testing.B) {
 			for range b.N {
 				b.StopTimer()
 				ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-				relay := newShapedRelay(b, server, 100e6, 5*time.Millisecond)
+				relay, closeRelay := newShapedRelay(b, server, 100e6, 5*time.Millisecond)
 				options := bbrQUICOptions
 				options.ConnectionReceiveWindow = clientQUICOptions.ConnectionReceiveWindow
 				client, err := quic.NewClient(quic.ClientOptions{Context: ctx, Dialer: N.SystemDialer, ServerAddress: M.SocksaddrFromNet(relay),
@@ -233,6 +235,9 @@ func BenchmarkBBRUploadAfterDownload(b *testing.B) {
 				mbps += float64(upload*8) / time.Since(start).Seconds() / 1e6
 				client.CloseWithError(nil)
 				cancel()
+				// Each iteration's relay (a socket, its goroutines and their queues) goes with it,
+				// so relays do not pile up over a larger b.N and skew the figures.
+				closeRelay()
 			}
 			b.ReportMetric(mbps/float64(b.N), "upload-Mbit/s")
 		})
