@@ -222,7 +222,9 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
   connection through a ShadowQUIC server failed at once, and the log repeated "bind socket to
   interface (IPv6 Unicast) failed ... os error 10022". The client opened its socket for IPv4
   and IPv6 together and Windows refused to bind it to an adapter without IPv6, although the
-  server address was IPv4. The socket now has the address family of the server. Since 0.6.2.
+  server address was IPv4. When the adapter refuses that socket, the client now opens one for
+  the server's address family alone. The log still shows the refused IPv6 binding, followed by
+  a line saying that the client uses a socket for IPv4 only. Since 0.6.2.
 ### Fixed
 
 - **A server without IPv6 no longer gets apps' IPv6 traffic through DNS answers.** With the IP

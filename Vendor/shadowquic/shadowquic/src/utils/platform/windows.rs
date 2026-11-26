@@ -70,9 +70,10 @@ pub fn bind_device(socket: &Socket, device_name: &str) -> io::Result<()> {
             }
         }
 
-        // Try bind dual-stack IPv4 unicast option
-        // (Don't fail if the socket is IPv6-only)
-        let _ = unsafe {
+        // Bind dual-stack IPv4 unicast option. Elarni: an IPv6-only socket carries no IPv4, so
+        // only a dual-stack socket must have it; there a failure would send IPv4 by the default
+        // route, so it fails the bind and the caller falls back to an IPv4 socket.
+        let errno = unsafe {
             setsockopt(
                 handle,
                 IPPROTO_IP.0,
@@ -80,6 +81,16 @@ pub fn bind_device(socket: &Socket, device_name: &str) -> io::Result<()> {
                 Some(idx.to_be_bytes().as_ref()),
             )
         };
+        if errno != 0 && !socket.only_v6().unwrap_or(true) {
+            let last_err = io::Error::last_os_error();
+            tracing::error!(
+                event = "connectivity:interface_binding_failed",
+                "bind dual-stack socket to interface (IPv4 Unicast) failed, errno: {}, err: {:?}",
+                errno,
+                last_err
+            );
+            return Err(last_err);
+        }
         if is_udp {
             let _ = unsafe {
                 setsockopt(
