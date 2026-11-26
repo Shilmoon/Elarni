@@ -4,6 +4,12 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
 
 ## Unreleased
 
+### Changed
+
+- For contributors: the Supply chain checks run on a pull request only when it changes the locked
+  dependencies, the Go version or the Gradle wrapper, and daily on `main` instead of weekly. A
+  newly published advisory used to fail every open pull request, whatever it changed.
+
 ## 0.6.5 - 2026-11-26
 
 ### Added
