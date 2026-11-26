@@ -531,6 +531,7 @@
         "Vendor/shadowquic/shadowquic/src/utils/dual_socket.rs",
         "Vendor/shadowquic/shadowquic/src/utils/log.rs",
         "Vendor/shadowquic/shadowquic/src/utils/mod.rs",
+        "Vendor/shadowquic/shadowquic/src/utils/socket_opt.rs",
         "Vendor/shadowquic/shadowquic/src/utils/user_store.rs"
       ],
       "purpose": "ShadowQUIC v0.4.12 client fixes and memory reductions listed in Vendor/shadowquic/ELARNI_PATCHES.md (bounded message decoding, UDP relay robustness and send path, pooled unidirectional streams, 0-RTT handling, SOCKS5 fixes, endpoint and resolver fixes, smaller buffers); the SOCKS listener reports its bound address; the global allocator is a feature that Elarni leaves off; only the library is kept: the command-line program, the REST interface's dependencies, the build script, the integration tests and the packaging files are removed"

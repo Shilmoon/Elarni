@@ -177,6 +177,14 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
   to Linux as directly connected networks, and Docker gives no network a subnet inside one. The
   routes now go through an address of the tunnel adapter's own subnet, which routes the same
   traffic and leaves Docker's address pools free.
+### Fixed
+
+- **Windows: ShadowQUIC did not connect on a network adapter with IPv6 switched off.** With
+  "Internet Protocol Version 6 (TCP/IPv6)" unticked in the adapter's properties, every
+  connection through a ShadowQUIC server failed at once, and the log repeated "bind socket to
+  interface (IPv6 Unicast) failed ... os error 10022". The client opened its socket for IPv4
+  and IPv6 together and Windows refused to bind it to an adapter without IPv6, although the
+  server address was IPv4. The socket now has the address family of the server. Since 0.6.2.
 
 ## 0.6.4 - 2026-11-23
 
