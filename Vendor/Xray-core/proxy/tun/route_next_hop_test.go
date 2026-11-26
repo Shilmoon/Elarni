@@ -19,6 +19,7 @@ func TestRouteNextHopIsAnotherAddressOfTheAdapterSubnet(t *testing.T) {
 		return prefixes
 	}
 	desktop := parse("198.51.100.254/30", "fd76:6f75:7465::2/126")
+	twoSubnets := parse("10.0.0.1/24", "10.1.0.1/24")
 	for _, c := range []struct {
 		name        string
 		addresses   []netip.Prefix
@@ -37,9 +38,18 @@ func TestRouteNextHopIsAnotherAddressOfTheAdapterSubnet(t *testing.T) {
 		{"the adapter's own subnet", desktop, "198.51.100.252/30", "0.0.0.0"},
 		{"inside the adapter's own subnet", desktop, "198.51.100.253/32", "0.0.0.0"},
 		{"a route holding the adapter's subnet", desktop, "198.51.100.0/24", "198.51.100.253"},
+		// Every IPv4 subnet of the adapter keeps its routes on-link, not only the first one's.
+		{"a later address's own subnet", twoSubnets, "10.1.0.0/24", "0.0.0.0"},
+		{"inside a later address's subnet", twoSubnets, "10.1.0.9/32", "0.0.0.0"},
+		{"outside every subnet of the adapter", twoSubnets, "128.0.0.0/2", "10.0.0.2"},
 		{"multicast", desktop, "224.0.0.0/4", "0.0.0.0"},
+		{"part of multicast", desktop, "232.0.0.0/5", "0.0.0.0"},
 		{"one multicast group", desktop, "224.0.0.251/32", "0.0.0.0"},
+		// What counts is the whole range a route covers, not its first address.
+		{"multicast with unicast above it", desktop, "224.0.0.0/3", "198.51.100.253"},
+		{"a route holding multicast", desktop, "128.0.0.0/1", "198.51.100.253"},
 		{"limited broadcast", desktop, "255.255.255.255/32", "0.0.0.0"},
+		{"a route holding the limited broadcast", desktop, "255.255.255.0/24", "198.51.100.253"},
 		{"IPv6", desktop, "8000::/2", "::"},
 		{"IPv6 multicast", desktop, "ff00::/8", "::"},
 	} {

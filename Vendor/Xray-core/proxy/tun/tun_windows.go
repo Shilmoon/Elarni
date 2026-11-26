@@ -222,11 +222,9 @@ func demoteRoute(row *winipcfg.MibIPforwardRow2) error {
 	return nil
 }
 
-// setRoutes is winipcfg's SetRoutesForFamily over flushRoutes.
-func (t *WindowsTun) setRoutes(family winipcfg.AddressFamily, routes []*winipcfg.RouteData) error {
-	if err := t.flushRoutes(family); err != nil {
-		return err
-	}
+// addRoutes adds the routes of family, the second half of winipcfg's SetRoutesForFamily after
+// flushRoutes; Start sets the adapter's addresses in between.
+func (t *WindowsTun) addRoutes(family winipcfg.AddressFamily, routes []*winipcfg.RouteData) error {
 	for _, route := range routes {
 		if route.Destination.Addr().Is4() == (family == windows.AF_INET) {
 			err := t.luid.AddRoute(route.Destination, route.NextHop, route.Metric)
@@ -363,11 +361,8 @@ func (t *WindowsTun) Start() (err error) {
 	}
 	discoveryLeft, discoveryTaken := splitDiscovery(captured)
 	for _, prefix := range discoveryTaken {
-		next := netip.IPv4Unspecified()
-		if prefix.Addr().Is6() {
-			next = netip.IPv6Unspecified()
-		}
-		routesMap[winipcfg.RouteData{Destination: prefix, NextHop: next}] = struct{}{}
+		// The same rule as the routes above, so one destination never gets two rows.
+		routesMap[winipcfg.RouteData{Destination: prefix, NextHop: routeNextHop(addresses, prefix)}] = struct{}{}
 	}
 	routesData := make([]*winipcfg.RouteData, 0, len(routesMap))
 	for route := range routesMap {
@@ -398,8 +393,13 @@ startOver:
 	}
 	retryTimes++
 	for _, family := range []winipcfg.AddressFamily{windows.AF_INET, windows.AF_INET6} {
-		if family == windows.AF_INET && route4 || family == windows.AF_INET6 && route6 {
-			err = t.setRoutes(family, routesData)
+		routed := family == windows.AF_INET && route4 || family == windows.AF_INET6 && route6
+		// Elarni: the old routes go first and the new ones after the addresses. A route through a
+		// next hop in the adapter's subnet (routeNextHop) then finds that subnet in place, and no
+		// address flush follows that could take it away; flushing after the addresses would delete
+		// the routes Windows derives from them.
+		if routed {
+			err = t.flushRoutes(family)
 			if err != nil {
 				firstErr = errors.New("unable to set routes").Base(err)
 				if ignored(family, firstErr) {
@@ -415,6 +415,19 @@ startOver:
 			err = t.luid.SetIPAddressesForFamily(family, addresses)
 			if err != nil {
 				firstErr = errors.New("unable to set ips").Base(err)
+				if ignored(family, firstErr) {
+					continue
+				}
+				if err == windows.ERROR_NOT_FOUND {
+					goto startOver
+				}
+				return firstErr
+			}
+		}
+		if routed {
+			err = t.addRoutes(family, routesData)
+			if err != nil {
+				firstErr = errors.New("unable to set routes").Base(err)
 				if ignored(family, firstErr) {
 					continue
 				}

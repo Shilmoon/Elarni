@@ -268,6 +268,30 @@ def assert_fallback(adapter, tunnel_up):
         '; routes chosen ' + str(chosen) + ', want ' + str(want))
 
 
+def assert_next_hops(adapter):
+    # The capture routes go to a next hop inside the adapter's own subnet. Without one a route is
+    # on-link, which WSL in mirrored mode shows Linux as "scope link", and Docker gives no network
+    # a subnet inside such a route: under the tunnel's wide routes it had none left in its pools.
+    # The subnet and the hop come from the address Windows reports for the adapter: the hop is a
+    # host address of that subnet other than the adapter's own.
+    addresses = json.loads(powershell("ConvertTo-Json -Compress -InputObject @(Get-NetIPAddress -InterfaceAlias '" + adapter +
+        "' -AddressFamily IPv4 -ErrorAction Stop | Select-Object IPAddress,PrefixLength)"))
+    assert len(addresses) == 1, 'The adapter has not one IPv4 address: ' + str(addresses)
+    own = ipaddress.ip_interface(addresses[0]['IPAddress'] + '/' + str(addresses[0]['PrefixLength']))
+    hop = next((str(host) for host in own.network.hosts() if host != own.ip), None)
+    assert hop, 'The adapter subnet ' + str(own.network) + ' has no address for a next hop'
+    routes = json.loads(powershell("ConvertTo-Json -Compress -InputObject @(Get-NetRoute -InterfaceAlias '" + adapter +
+        "' -AddressFamily IPv4 | Select-Object DestinationPrefix,NextHop)"))
+    def on_link(network):
+        # By the whole range a route covers: routes inside the adapter's subnet, and those wholly in
+        # multicast or to the limited broadcast, which no gateway carries. Anything else gets the hop.
+        return network.subnet_of(own.network) or network.is_multicast or network == ipaddress.ip_network('255.255.255.255/32')
+    wrong = [(row['DestinationPrefix'], row['NextHop']) for row in routes
+             if row['NextHop'] != ('0.0.0.0' if on_link(ipaddress.ip_network(row['DestinationPrefix'])) else hop)]
+    assert routes and not wrong, 'Routes with the wrong next hop (want ' + hop + ' outside ' + str(own.network) + \
+        ', none for multicast and the limited broadcast): ' + str(wrong or routes)
+
+
 def kill_pid(pid):
     kernel = ctypes.windll.kernel32
     kernel.OpenProcess.restype = ctypes.c_void_p
@@ -459,16 +483,7 @@ try:
                 adapter + "' | ForEach-Object {$_.ServerAddresses}) | ConvertTo-Json -Compress")
             assert '127.0.0.1' in remaining and '198.51.100.253' not in remaining and 'fd76:6f75:7465::1' not in remaining, 'Admission fixture still owns OS DNS queries: ' + remaining
         routes = json.loads(powershell("@(Get-NetRoute -InterfaceAlias '" + adapter + "' | Select-Object -ExpandProperty DestinationPrefix) | ConvertTo-Json -Compress"))
-        # The capture routes go to a next hop inside the adapter's own subnet. Without one a route is
-        # on-link, which WSL in mirrored mode shows Linux as "scope link", and Docker gives no network
-        # a subnet inside such a route: under the tunnel's wide routes it had none left in its pools.
-        hops = json.loads(powershell("@(Get-NetRoute -InterfaceAlias '" + adapter + "' -AddressFamily IPv4 | Select-Object DestinationPrefix,NextHop) | ConvertTo-Json -Compress"))
-        adapter_subnet = ipaddress.ip_network('198.51.100.252/30')
-        on_link = [row['DestinationPrefix'] for row in hops if row['NextHop'] != '198.51.100.253'
-                   and not ipaddress.ip_network(row['DestinationPrefix']).subnet_of(adapter_subnet)
-                   and not ipaddress.ip_network(row['DestinationPrefix']).network_address.is_multicast
-                   and row['DestinationPrefix'] != '255.255.255.255/32']
-        assert hops and not on_link, 'Capture routes without a next hop: ' + str(on_link or hops)
+        assert_next_hops(adapter)
         if mode == 'route-enforcement':
             prefixes = [ipaddress.ip_network(value) for value in routes]
             assert any(ipaddress.ip_address('198.18.0.1') in p for p in prefixes)
@@ -575,6 +590,8 @@ try:
                     assert restarted['helperPid'] == ready['helperPid'], 'Reconnect replaced the elevated owner'
                     # The identity is fixed per Windows session, so NLA keeps one profile.
                     assert restarted['adapter'] == adapter, 'Reconnect changed the adapter identity'
+                    # The parked adapter gets its addresses and routes anew, the next hops with them.
+                    assert_next_hops(adapter)
                     http_target('198.18.0.1', http_server.server_port)
                     assert powershell("(Get-NetAdapter -IncludeHidden -Name '" + adapter + "').ifIndex") == str(parked), 'Reconnect replaced the parked adapter'
                     http_target('2001:db8::1', http_server.server_port)
