@@ -35,8 +35,9 @@ and `output.log`. [docs/TESTING.md](docs/TESTING.md) lists each suite.
   when its pull request merges.
 - `scripts/check-linux-container` (Linux CI in a warm Ubuntu 22.04 container, local Docker or
   `--host`) and `scripts/check-mac --host` (a kept workspace on a Mac) run one at a time per
-  host: a second run is refused, not queued. Start one in the background and wait for it to
-  exit; do not poll with `sleep`.
+  host: a second run is refused, not queued (only a CI job waits, up to 45 minutes, for a manual
+  run on its runner's host). Start one in the background and wait for it to exit; do not poll
+  with `sleep`.
 - The CI runs on one self-hosted Linux runner and one Windows VM, so pull requests queue behind
   main. Wait for a run with `python scripts/ci-wait [run-id]` in the background, not with
   repeated `gh run list` or `gh run view`: it exits when the run ends and prints each job's

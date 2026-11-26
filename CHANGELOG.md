@@ -9,6 +9,9 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
 - For contributors: the Supply chain checks run on a pull request only when it changes the locked
   dependencies, the Go version or the Gradle wrapper, and daily on `main` instead of weekly. A
   newly published advisory used to fail every open pull request, whatever it changed.
+- For contributors: a CI job that finds the Linux container in use by a manual
+  `scripts/check-linux-container` run waits for it to end, up to 45 minutes, instead of failing
+  within seconds. Such a failed job could only be rerun together with its whole workflow run.
 
 ## 0.6.5 - 2026-11-26
 

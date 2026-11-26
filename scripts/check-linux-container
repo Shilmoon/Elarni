@@ -7,7 +7,8 @@ run only rebuilds what changed. Uncommitted and untracked files are included.
 New check reports, and anything the command writes to /out, are copied to
 .build/check-results here. The container is capped at 8 GB of memory (ELARNI_LINUX_MEMORY overrides it). With
 --host it runs on that SSH host's Docker instead. Without the docker group,
-Docker is reached through passwordless sudo, here or on the host.
+Docker is reached through passwordless sudo, here or on the host. One run at a time uses a host's container: a
+second one is refused, except that a CI job waits up to 45 minutes (ELARNI_LINUX_WAIT_MINUTES) for a manual run.
 """
 import argparse
 import hashlib
@@ -18,10 +19,12 @@ import shlex
 import subprocess
 import sys
 import tarfile
+import time
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / 'scripts'))
 from snapshot import git, snapshot
+NAME = 'elarni-linux-container'
 # The AppImage carries the tray libraries (scripts/package-linux: BUNDLED_LIBRARIES, from these five packages), whose
 # copies patchelf points at one another. Their exact source packages, which a release publishes beside it, are fetched
 # here with the libraries and kept in /usr/src/elarni-bundled-sources (BUNDLED_SOURCES_CACHE): the image keeps no
@@ -131,14 +134,37 @@ def main():
     if ci:
         # A CI runner takes one job at a time, so a CI-labelled container under that name is a cancelled run's
         # leftover. A manual run on the same host has no label and is left running: this run is then refused.
-        leftover = docker('ps', '-aq', '--filter', 'name=^elarni-linux-container$', '--filter', 'label=elarni.ci',
+        leftover = docker('ps', '-aq', '--filter', f'name=^{NAME}$', '--filter', 'label=elarni.ci',
                           capture_output=True, text=True).stdout.split()
         if leftover:
             docker('rm', '--force', *leftover, capture_output=True)
     limits += ['--label', 'elarni.ci'] if ci else []
-    code = docker('run', '--rm', '--init', '--name', 'elarni-linux-container', *mounts, *limits,
-                  '--env', f'ELARNI_COMMIT={commit}', '--env', 'MISE_YES=1', '--env', 'GOFLAGS=-count=1', '--env', 'ANDROID_HOME=/opt/android-sdk',
-                  image, 'bash', '-c', PREPARE, 'bash', *command).returncode
+
+    def holder():
+        return docker('ps', '-q', '--filter', f'name=^{NAME}$', capture_output=True, text=True).stdout.split()
+
+    # A CI job refused for the name cannot be rerun before its whole workflow run ends, and a manual run on the
+    # runner's host refused 20 of them in November 2026: the job waits for its turn instead.
+    wait = 60 * float(os.environ.get('ELARNI_LINUX_WAIT_MINUTES', 45))
+    deadline = time.monotonic() + wait
+    while True:
+        while ci and (held := holder()):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                print(f'Another run still holds the container {NAME} after {wait / 60:g} minutes (docker ps shows it); giving up',
+                      flush=True)
+                return 125
+            print(f'Another run holds the container {NAME}; waiting up to {remaining / 60:.0f} more minutes for it to end', flush=True)
+            try:
+                docker('wait', *held, capture_output=True, timeout=remaining)
+            except subprocess.TimeoutExpired:
+                pass
+        code = docker('run', '--rm', '--init', '--name', NAME, *mounts, *limits,
+                      '--env', f'ELARNI_COMMIT={commit}', '--env', 'MISE_YES=1', '--env', 'GOFLAGS=-count=1', '--env', 'ANDROID_HOME=/opt/android-sdk',
+                      image, 'bash', '-c', PREPARE, 'bash', *command).returncode
+        # 125 is Docker's own refusal: another run took the name between the look and the start.
+        if not (ci and code == 125 and holder()):
+            break
     if host:
         archive = subprocess.run(['ssh', host, f'tar -C {run} -cf - . && rm -rf {run}'], check=True, capture_output=True).stdout
         with tarfile.open(fileobj=io.BytesIO(archive)) as reports:
