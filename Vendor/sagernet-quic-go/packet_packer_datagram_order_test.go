@@ -129,7 +129,58 @@ func TestPackControlFramesAndRetransmissionsBeforeDatagram(t *testing.T) {
 			if p.datagramQueue.Peek() != nil {
 				t.Fatal("the DATAGRAM frame is still queued")
 			}
+			// The next DATAGRAM frame has waited for no packet yet.
+			if p.peekTimes != 0 {
+				t.Fatalf("peekTimes %d after the DATAGRAM frame was sent, want 0", p.peekTimes)
+			}
 		})
+	}
+}
+
+// Elarni: during loss recovery every packet was filled with retransmissions, so a DATAGRAM frame
+// of a whole packet never fit beside them, and after DatagramFrameMaxPeekTimes packets it was
+// dropped: UDP traffic over Hysteria2 and TUIC was lost while a stream recovered. Now it goes
+// first in the next packet, and the retransmissions carry on after it.
+func TestPackDatagramFirstAfterItWaitedTheMaxPeekTimes(t *testing.T) {
+	p, _ := newOrderTestPacker(nil)
+	datagram := fullPacketDatagram()
+	if err := p.datagramQueue.Add(datagram); err != nil {
+		t.Fatal(err)
+	}
+	p.retransmissionQueue.addAppData(&wire.CryptoFrame{Data: make([]byte, 20*orderTestMaxPayload)})
+
+	for i := range DatagramFrameMaxPeekTimes {
+		pl := composeOrderTestPacket(p)
+		checkPayloadLength(t, pl)
+		if len(pl.frames) == 0 {
+			t.Fatalf("packet %d is empty", i+1)
+		}
+		for _, f := range pl.frames {
+			if f.Frame == datagram {
+				t.Fatalf("packet %d has the DATAGRAM frame beside the retransmissions, which fill it", i+1)
+			}
+		}
+		if p.datagramQueue.Peek() != datagram {
+			t.Fatalf("the DATAGRAM frame was dropped after %d packets", i+1)
+		}
+	}
+	pl := composeOrderTestPacket(p)
+	checkPayloadLength(t, pl)
+	if len(pl.frames) == 0 || pl.frames[0].Frame != datagram {
+		t.Fatalf("packet %d has frames %v, want the DATAGRAM first", DatagramFrameMaxPeekTimes+1, frameTypes(pl.frames))
+	}
+	if p.datagramQueue.Peek() != nil {
+		t.Fatal("the DATAGRAM frame is still queued")
+	}
+	if p.peekTimes != 0 {
+		t.Fatalf("peekTimes %d after the DATAGRAM frame was sent, want 0", p.peekTimes)
+	}
+	if !p.retransmissionQueue.HasData(protocol.Encryption1RTT) {
+		t.Fatal("the retransmissions are gone")
+	}
+	pl = composeOrderTestPacket(p)
+	if len(pl.frames) == 0 {
+		t.Fatal("the retransmissions did not carry on in the next packet")
 	}
 }
 
@@ -191,6 +242,9 @@ func TestPackDatagramThatDoesNotFit(t *testing.T) {
 		}
 		if p.datagramQueue.Peek() != nil {
 			t.Fatal("a DATAGRAM frame larger than the packet was kept")
+		}
+		if p.peekTimes != 0 {
+			t.Fatalf("peekTimes %d after the DATAGRAM frame was dropped, want 0", p.peekTimes)
 		}
 	})
 

@@ -111,29 +111,36 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
   cancels the connections it handed to the core.
 - **Ranges in profiles now include their upper end.** Fragment, noise, padding and XHTTP size
   ranges never took their largest value, so "1-2" was always 1.
-- **A Hysteria2, TUIC or XHTTP/3 connection no longer closes over one packet it could not send.**
-  A full send buffer, frequent on Mac and iPhone, closed a Hysteria2 or XHTTP/3 connection, and a
-  moment without a network, route or local address while the device moved between Wi-Fi and
-  mobile data closed those and TUIC connections, so every app on them reconnected. Such a packet
-  is now resent like a lost one; a connection whose network does not come back still ends at the
-  idle timeout, and a connection attempt to a server the device has no route to (an IPv6 address
-  without IPv6) still fails at once. All platforms.
-- **A long-lived Hysteria2, TUIC or XHTTP/3 connection no longer runs out of streams.** A stream
+- **A Hysteria2, TUIC, XHTTP/3, MASQUE, XDRIVE or DNS over HTTP/3 connection no longer closes
+  over one packet it could not send.** A full send buffer, frequent on Mac and iPhone, closed any
+  of these but TUIC, and a moment without a network, route or local address while the device
+  moved between Wi-Fi and mobile data closed all of them, so every app on them reconnected. Such
+  a packet is now resent like a lost one. When sends keep failing for 5 seconds, the connection
+  closes as before, so apps reconnect instead of waiting for the idle timeout; a connection
+  attempt to a server the device has no route to (an IPv6 address without IPv6) still fails at
+  once. All platforms.
+- **A long-lived Hysteria2, TUIC, XHTTP/3, MASQUE or XDRIVE connection no longer runs out of
+  streams.** A stream
   that either side stopped while an app was still sending on it never gave its slot back, so
   after many such streams (a video or download closed mid-transfer) the connection refused new
   ones with "too many open streams". All platforms.
 - **Servers with a long certificate chain or a post-quantum key exchange connect over
-  Hysteria2, TUIC and XHTTP/3.** A server's first handshake reply larger than 16 KiB failed the
+  Hysteria2, TUIC, XHTTP/3, MASQUE, XDRIVE and DNS over HTTP/3.** A server's first handshake reply larger than 16 KiB failed the
   connection with CRYPTO_BUFFER_EXCEEDED. All platforms.
-- **A UDP packet over Hysteria2 or TUIC is no longer delivered twice on a path that reorders
-  packets.** After more than 64 gaps in what had arrived, a late copy of an old packet was taken
+- **A UDP packet over Hysteria2, TUIC or MASQUE is no longer delivered twice on a path that
+  reorders packets.** After more than 64 gaps in what had arrived, a late copy of an old packet was taken
   as new. All platforms.
-- **Hysteria2, TUIC and XHTTP/3 connect on networks that do not take 1,280-byte packets**
-  (some tunnels and mobile networks): the connection attempt ran into its timeout and now falls
-  back to 1,200-byte packets. On any of these connections, game and call traffic no longer delays
-  flow-control updates and resent data, and sending no longer pauses when the send buffer frees
-  up at the wrong moment. TUIC with BBR takes SagerNet's changes to how periods with nothing to
+- **Hysteria2, TUIC, XHTTP/3, XDRIVE and DNS over HTTP/3 connect on networks that do not take
+  1,280-byte packets** (some tunnels and mobile networks): the connection attempt ran into its
+  timeout and now falls back to 1,200-byte packets. On these connections and MASQUE, game and
+  call traffic no longer delays flow-control updates and resent data, UDP packets are no longer
+  dropped while lost data is resent, and sending no longer pauses when the send buffer frees up
+  at the wrong moment. TUIC with BBR takes SagerNet's changes to how periods with nothing to
   send reach BBR. All platforms.
+- **WireGuard drops a malformed IPv6 packet instead of passing on part of it**: a packet whose
+  length field was near 65,535 bytes went to the tunnel cut short. A handshake reply that
+  arrived twice at once while a new handshake started could also set up keys of the old
+  handshake. All platforms.
 - **A DNS resolver running on the computer works in VPN mode.** On Windows the DNS guard blocked
   every lookup to port 53 that did not go through the tunnel, including lookups to 127.0.0.1
   and ::1, so apps that used a local resolver (dnscrypt-proxy, Acrylic, AdGuard Home) got no
