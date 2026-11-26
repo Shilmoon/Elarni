@@ -12,6 +12,10 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
 - For contributors: a CI job that finds the Linux container in use by a manual
   `scripts/check-linux-container` run waits for it to end, up to 45 minutes, instead of failing
   within seconds. Such a failed job could only be rerun together with its whole workflow run.
+- For contributors: an Android acceptance run (`scripts/check-android`) no longer fails for a
+  test that failed in its suite and passed when rerun alone. The test is still reported as
+  `FLAKY`, the CI run's summary names it, and `scripts/flaky-report` ranks it. A test that fails
+  again, a crash or a suite that ran too few tests fails the run as before.
 
 ## 0.6.5 - 2026-11-26
 

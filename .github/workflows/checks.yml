@@ -143,6 +143,13 @@ jobs:
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 14
+      - name: Name the flaky tests
+        # A test that failed and then passed on its rerun does not fail its check. The run's summary lists it, and
+        # scripts/flaky-report ranks such tests over the last runs.
+        if: always()
+        run: |
+          grep -hE '^[[:space:]]*FLAKY ' .build/check-results/*/output.log 2>/dev/null | sed -E 's/^[[:space:]]*//' | sort -u |
+            sed 's/^/::warning title=Flaky test::/' || true
       - name: Retain synthetic check results
         if: always()
         continue-on-error: true
@@ -343,6 +350,13 @@ jobs:
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 14
+      - name: Name the flaky tests
+        # A test that failed and then passed on its rerun does not fail its check. The run's summary lists it, and
+        # scripts/flaky-report ranks such tests over the last runs.
+        if: always()
+        run: |
+          grep -hE '^[[:space:]]*FLAKY ' .build/check-results/*/output.log 2>/dev/null | sed -E 's/^[[:space:]]*//' | sort -u |
+            sed 's/^/::warning title=Flaky test::/' || true
       - name: Retain synthetic check results
         if: always()
         continue-on-error: true
