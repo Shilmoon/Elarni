@@ -807,8 +807,8 @@ final class DesktopCatalog {
     // 3x-ui picks a REALITY server's shortId and serverName per fetch and
     // writes the traffic left into the remark, which defeats the stages before
     // and after this one. Without those values a still unmatched identity that
-    // occurs as often on both sides pairs in feed order; other counts are left
-    // to the name stages.
+    // occurs as often on both sides pairs (see pairByStableIdentity); other
+    // counts are left to the name stages.
     final unmatched = [
       for (var i = 0; i < parsed.length; i++)
         if (!matches.containsKey(i)) i,
@@ -817,22 +817,28 @@ final class DesktopCatalog {
       String stableKey(CatalogMap node) =>
           '${node['format']}\n${domain('catalogStableIdentity', catalogMap(node['config']))['identity']}';
       final left = Set<CatalogMap>.identity()..addAll(available);
-      final fresh = <String, List<int>>{};
-      final stale = <String, List<CatalogMap>>{};
-      for (final i in unmatched) {
-        (fresh[stableKey(parsed[i])] ??= []).add(i);
-      }
-      for (final old in previous) {
-        if (left.contains(old)) (stale[stableKey(old)] ??= []).add(old);
-      }
-      for (final MapEntry(:key, value: positions) in fresh.entries) {
-        final olds = stale[key];
-        if (olds == null || olds.length != positions.length) continue;
-        for (var k = 0; k < positions.length; k++) {
-          matches[positions[k]] = olds[k];
-          available.remove(olds[k]);
-        }
-      }
+      final paired = pairByStableIdentity(
+        [
+          for (final i in unmatched)
+            (position: i, key: stableKey(parsed[i]), name: parsed[i]['name']),
+        ],
+        [
+          // A server stored before feedIndex keeps its place in the list.
+          for (final (index, old) in previous.indexed)
+            if (left.contains(old))
+              (
+                value: old,
+                key: stableKey(old),
+                name: old['name'],
+                order: old['feedIndex'] is int
+                    ? old['feedIndex']! as int
+                    : index,
+              ),
+        ],
+      );
+      matches.addAll(paired);
+      final taken = Set<CatalogMap>.identity()..addAll(paired.values);
+      available.removeWhere(taken.contains);
     }
     final parsedKeys = counts(parsed.map(logicalKey)),
         parsedNames = counts(parsed.map((item) => item['name'])),
@@ -898,10 +904,10 @@ final class DesktopCatalog {
         unchanged = oldIdentity == identity(config);
       }
       result.add({
-        // The importer's mark of a provider's message line is not stored.
-        for (final MapEntry(:key, :value) in item.entries)
-          if (key != 'notice') key: value,
+        ...item,
         'id': old?['id'] ?? desktopID(),
+        // Its place in this feed, the order the next refresh pairs in.
+        'feedIndex': i,
         'config': config,
         'favorite': old?['favorite'] == true,
         'configurationRevision': old != null && unchanged
@@ -918,6 +924,71 @@ final class DesktopCatalog {
       });
     }
     return result;
+  }
+
+  /// Pairs a refresh's unmatched [fresh] positions with [stale] stored servers
+  /// by their stable identity key: a key that occurs as often on both sides
+  /// pairs, any other count is left to the later stages. Within a key, a name
+  /// that occurs once on each side pairs first: a provider that lists one
+  /// server twice, with two SNIs, names the copies apart and may swap them.
+  /// The rest pair in feed order, the stored servers in the order of the feed
+  /// they came from ([order]), not the order of the visible and hidden lists.
+  static Map<int, T> pairByStableIdentity<T>(
+    List<({int position, String key, Object? name})> fresh,
+    List<({T value, String key, Object? name, int order})> stale,
+  ) {
+    final ordered = [...stale.indexed]
+      ..sort(
+        (a, b) => a.$2.order != b.$2.order
+            ? a.$2.order.compareTo(b.$2.order)
+            : a.$1.compareTo(b.$1),
+      );
+    final olds = <String, List<({T value, Object? name})>>{};
+    for (final (_, old) in ordered) {
+      (olds[old.key] ??= []).add((value: old.value, name: old.name));
+    }
+    final news = <String, List<({int position, Object? name})>>{};
+    for (final item in fresh) {
+      (news[item.key] ??= []).add((position: item.position, name: item.name));
+    }
+    Map<Object?, int> counts(Iterable<Object?> names) {
+      final counts = <Object?, int>{};
+      for (final name in names) {
+        counts.update(name, (count) => count + 1, ifAbsent: () => 1);
+      }
+      return counts;
+    }
+
+    final matches = <int, T>{};
+    for (final MapEntry(:key, value: items) in news.entries) {
+      final same = olds[key];
+      if (same == null || same.length != items.length) continue;
+      final newNames = counts(items.map((item) => item.name)),
+          oldNames = counts(same.map((old) => old.name));
+      final byName = <Object?, int>{
+        for (var k = 0; k < same.length; k++)
+          if (oldNames[same[k].name] == 1) same[k].name: k,
+      };
+      final taken = <int>{};
+      final rest = <int>[];
+      for (final item in items) {
+        final k = newNames[item.name] == 1 ? byName[item.name] : null;
+        if (k == null) {
+          rest.add(item.position);
+        } else {
+          matches[item.position] = same[k].value;
+          taken.add(k);
+        }
+      }
+      final left = [
+        for (var k = 0; k < same.length; k++)
+          if (!taken.contains(k)) same[k].value,
+      ];
+      for (var k = 0; k < rest.length; k++) {
+        matches[rest[k]] = left[k];
+      }
+    }
+    return matches;
   }
 
   /// The selected server and a subscription's last one stay. A provider's
@@ -1126,44 +1197,6 @@ final class DesktopCatalog {
         : null;
   }
 
-  /// Whether the lines the importer marks as a provider's messages are
-  /// messages in a feed fetched from [feedURL]. A feed served from this device
-  /// or a documentation address (a test or lab feed) lists real servers
-  /// there; a host name counts as public and is not resolved.
-  static bool noticesApply(String feedURL) {
-    final host = Uri.tryParse(feedURL)?.host.toLowerCase() ?? '';
-    if (host.isEmpty || host == 'localhost') return false;
-    List<int> bytes;
-    try {
-      bytes = host.contains(':')
-          ? Uri.parseIPv6Address(host)
-          : Uri.parseIPv4Address(host);
-    } on FormatException {
-      return true;
-    }
-    if (bytes.length == 16 &&
-        bytes.take(10).every((byte) => byte == 0) &&
-        bytes[10] == 0xff &&
-        bytes[11] == 0xff)
-      bytes = bytes.sublist(12);
-    if (bytes.every((byte) => byte == 0)) return false;
-    if (bytes.length == 4) {
-      final network = bytes[0] << 16 | bytes[1] << 8 | bytes[2];
-      // 127/8, 192.0.2/24, 198.51.100/24 and 203.0.113/24.
-      return bytes[0] != 127 &&
-          !const {0xc00002, 0xc63364, 0xcb0071}.contains(network);
-    }
-    final loopback =
-        bytes.take(15).every((byte) => byte == 0) && bytes[15] == 1;
-    // 2001:db8::/32.
-    final documentation =
-        bytes[0] == 0x20 &&
-        bytes[1] == 0x01 &&
-        bytes[2] == 0x0d &&
-        bytes[3] == 0xb8;
-    return !loopback && !documentation;
-  }
-
   static bool isRoutingLink(String value) => [
     'happ://routing/',
     'incy://routing/',
@@ -1286,22 +1319,13 @@ final class DesktopCatalog {
       },
     });
     final migratedURL = imported['newSourceURL'] as String?;
-    // A line the importer marks carries a provider's message ("📊 10GB left",
-    // "Device limit reached"), not a server: the subscription shows the first
-    // five, each once.
-    var profiles = catalogList(imported['profiles']);
-    final notices = <String>[];
-    if (noticesApply(url)) {
-      for (final profile in profiles.where((item) => item['notice'] == true)) {
-        final text = (profile['name'] as String? ?? '').trim();
-        if (text.isNotEmpty && notices.length < 5 && !notices.contains(text))
-          notices.add(text);
-      }
-      profiles = [
-        for (final profile in profiles)
-          if (profile['notice'] != true) profile,
-      ];
-    }
+    // The core takes a public feed's message lines ("📊 10GB left", "Device
+    // limit reached") out of its servers and returns the ones to show.
+    final profiles = catalogList(imported['profiles']);
+    final notices = [
+      for (final notice in imported['notices'] as List? ?? const [])
+        if (notice is String) notice,
+    ];
     // Hidden servers match like the rest, and stay hidden while the provider lists them.
     final hidden = {
       for (final node in catalogList(current['hiddenNodes'] ?? [])) node['id'],
@@ -1309,7 +1333,7 @@ final class DesktopCatalog {
     // A feed of messages alone leaves the subscription without servers.
     final merged = profiles.isEmpty && notices.isNotEmpty
         ? <CatalogMap>[]
-        : parseNodes({...imported, 'profiles': profiles}, [
+        : parseNodes(imported, [
             ...catalogList(current['nodes']),
             ...catalogList(current['hiddenNodes'] ?? []),
           ]);

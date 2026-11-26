@@ -733,16 +733,174 @@ void main() {
       expect(ids(profile).single, isNot(ids(telegram).single));
     });
 
-    // The importer marks a provider's message line; a stored server carries
-    // no such key.
-    test('stores no notice mark on a server', () {
-      final nodes = catalog().parseNodes({
+    // A provider lists one inbound twice with two SNIs, names the copies
+    // apart and swaps them while it rotates the sid (156.2): each keeps its
+    // user state by name, not by position.
+    test('pairs a name once on each side before position', () {
+      final subject = catalog();
+      final before = subject.parseNodes({
         'profiles': [
-          {...server('Host 1'), 'notice': true},
-          server('Host 2', host: '192.0.2.12'),
+          server('DE-1 YouTube', sid: '01', sni: 'a.example'),
+          server('DE-1 WhatsApp', sid: '02', sni: 'b.example'),
         ],
       }, []);
-      expect(nodes.where((node) => node.containsKey('notice')), isEmpty);
+      before[0]['favorite'] = true;
+      final after = subject.parseNodes({
+        'profiles': [
+          server('DE-1 WhatsApp', sid: '12', sni: 'b.example'),
+          server('DE-1 YouTube', sid: '11', sni: 'a.example'),
+        ],
+      }, before);
+      expect(ids(after), [before[1]['id'], before[0]['id']]);
+      expect(after[1]['favorite'], isTrue);
+    });
+
+    // The user hid the first DE-1 (its SNI is blocked) and favorited the
+    // second; stored, they are [id1, NL, id0]. A refresh that rotates the sid
+    // pairs them in the feed's order, not the stored lists' (156.1).
+    test('pairs stored servers in the order of their feed', () {
+      final subject = catalog();
+      final before = subject.parseNodes({
+        'profiles': [
+          server('DE-1', sid: '01', sni: 'blocked.example'),
+          server('DE-1', sid: '01', sni: 'open.example'),
+          server('NL-1', host: '192.0.2.13'),
+        ],
+      }, []);
+      expect([for (final node in before) node['feedIndex']], [0, 1, 2]);
+      final stored = [before[1], before[2], before[0]];
+      final after = subject.parseNodes({
+        'profiles': [
+          server('DE-1', sid: '11', sni: 'blocked.example'),
+          server('DE-1', sid: '11', sni: 'open.example'),
+          server('NL-1', host: '192.0.2.13'),
+        ],
+      }, stored);
+      expect(ids(after), ids(before));
+      // A server stored before feedIndex keeps its place in the list.
+      final legacy = [
+        for (final node in stored)
+          {
+            for (final MapEntry(:key, :value) in node.entries)
+              if (key != 'feedIndex') key: value,
+          },
+      ];
+      final unordered = subject.parseNodes({
+        'profiles': [
+          server('DE-1', sid: '21', sni: 'blocked.example'),
+          server('DE-1', sid: '21', sni: 'open.example'),
+          server('NL-1', host: '192.0.2.13'),
+        ],
+      }, legacy);
+      expect(ids(unordered), [
+        before[1]['id'],
+        before[0]['id'],
+        before[2]['id'],
+      ]);
+    });
+  });
+
+  // The equal-count pairing of the stable identity stage (156.9), as
+  // Catalog.pairByStableIdentity on Android and pairedByStableIdentity on
+  // Apple platforms.
+  group('pairByStableIdentity', () {
+    Map<int, String> pair(
+      List<(int, String, String)> fresh,
+      List<(String, String, String, int)> stale,
+    ) => DesktopCatalog.pairByStableIdentity(
+      [
+        for (final (position, key, name) in fresh)
+          (position: position, key: key, name: name),
+      ],
+      [
+        for (final (value, key, name, order) in stale)
+          (value: value, key: key, name: name, order: order),
+      ],
+    );
+
+    test('pairs a key that occurs as often on both sides', () {
+      expect(
+        pair(
+          [(0, 'A', 'a'), (2, 'C', 'c')],
+          [('a', 'A', 'a', 0), ('c', 'C', 'c', 1)],
+        ),
+        {0: 'a', 2: 'c'},
+      );
+      expect(
+        pair(
+          [(1, 'X', 'X 9GB'), (3, 'X', 'X 9GB'), (4, 'X', 'X 9GB')],
+          [
+            ('x1', 'X', 'X 8GB', 0),
+            ('x2', 'X', 'X 8GB', 1),
+            ('x3', 'X', 'X 8GB', 2),
+          ],
+        ),
+        {1: 'x1', 3: 'x2', 4: 'x3'},
+        reason: 'one host listed three times pairs in order',
+      );
+      expect(
+        pair([(0, 'X', 'X')], [('x1', 'X', 'X', 0), ('x2', 'X', 'X', 1)]),
+        isEmpty,
+        reason: 'fewer in the refresh is left to the name stages',
+      );
+      expect(
+        pair(
+          [(0, 'X', 'X'), (1, 'X', 'X'), (2, 'X', 'X'), (3, 'B', 'B')],
+          [('x1', 'X', 'X', 0), ('x2', 'X', 'X', 1), ('b', 'B', 'B', 2)],
+        ),
+        {3: 'b'},
+        reason: 'more in the refresh too; other identities still pair',
+      );
+      expect(
+        pair([(0, 'xrayProfile\nX', 'X')], [('t', 'telegram\nX', 'X', 0)]),
+        isEmpty,
+        reason: 'a key on one side only',
+      );
+      expect(pair([], [('a', 'A', 'A', 0)]), isEmpty);
+    });
+
+    test('pairs a name once on each side first, the rest in feed order', () {
+      expect(
+        pair(
+          [(0, 'X', 'WhatsApp'), (1, 'X', 'YouTube')],
+          [('yt', 'X', 'YouTube', 0), ('wa', 'X', 'WhatsApp', 1)],
+        ),
+        {0: 'wa', 1: 'yt'},
+      );
+      // A repeated name is no name to pair by; the rest keep their order.
+      expect(
+        pair(
+          [(0, 'X', 'DE'), (1, 'X', 'DE'), (2, 'X', 'Solo')],
+          [
+            ('solo', 'X', 'Solo', 0),
+            ('d1', 'X', 'DE', 1),
+            ('d2', 'X', 'DE', 2),
+          ],
+        ),
+        {0: 'd1', 1: 'd2', 2: 'solo'},
+      );
+    });
+
+    test('takes the stored servers in their feed order', () {
+      expect(
+        pair(
+          [(0, 'X', 'DE-1'), (1, 'X', 'DE-1'), (2, 'N', 'NL-1')],
+          [
+            ('id1', 'X', 'DE-1', 1),
+            ('nl', 'N', 'NL-1', 2),
+            ('id0', 'X', 'DE-1', 0),
+          ],
+        ),
+        {0: 'id0', 1: 'id1', 2: 'nl'},
+      );
+      expect(
+        pair(
+          [(0, 'X', 'A'), (1, 'X', 'A')],
+          [('second', 'X', 'A', 5), ('first', 'X', 'A', 5)],
+        ),
+        {0: 'second', 1: 'first'},
+        reason: 'the same place keeps the list order',
+      );
     });
   });
 
@@ -750,43 +908,10 @@ void main() {
   // instead of stopping silently when a refresh drops the selected one.
   // Providers write "📊 10GB left" or "Device limit reached" into the remark of
   // a line no server answers (N10-07); the importer marks such lines.
+  // The core decides which lines are messages and returns them as notices
+  // (Go's TestFeedNotices*); desktop shows what it returns.
   group('provider message lines', () {
-    test('count only in a feed whose own host is public', () {
-      for (final url in [
-        'https://sub.example/feed',
-        'https://SUB.example:8443/feed?token=1',
-        'http://192.0.3.1/feed',
-        'http://10.0.0.1:2096/feed',
-        'https://[2001:db9::1]/feed',
-        // Names are not resolved, whatever they look like.
-        'https://127.0.0.1.example/feed',
-        'https://localhost.example/feed',
-      ]) {
-        expect(DesktopCatalog.noticesApply(url), isTrue, reason: url);
-      }
-      for (final url in [
-        'http://127.0.0.1:8080/feed',
-        'http://127.1.2.3/feed',
-        'http://[::1]:8080/feed',
-        'http://localhost/feed',
-        'http://LocalHost:8080/feed',
-        'http://0.0.0.0/feed',
-        'http://[::]/feed',
-        'http://192.0.2.1/feed',
-        'http://198.51.100.7/feed',
-        'http://203.0.113.255/feed',
-        'http://[2001:db8::1]/feed',
-        'http://[2001:DB8:ffff::1]/feed',
-        'http://[::ffff:127.0.0.1]/feed',
-        'http://[::ffff:192.0.2.1]/feed',
-        'not a link',
-        '',
-      ]) {
-        expect(DesktopCatalog.noticesApply(url), isFalse, reason: url);
-      }
-    });
-
-    CatalogMap line(String name, {bool notice = false}) => {
+    CatalogMap line(String name) => {
       'format': 'xrayProfile',
       'name': name,
       'config': {
@@ -797,89 +922,67 @@ void main() {
           },
         ],
       },
-      if (notice) 'notice': true,
     };
     late List<CatalogMap> feed;
-    DesktopCatalog catalog(String url) => DesktopCatalog(
-      DesktopCatalog.empty(),
-      (method, payload) async => switch (method) {
-        'fetchSubscription' => {
-          'body': 'feed',
-          'headers': {},
-          'url': payload['url'],
-        },
-        'importClientProfiles' => {'profiles': feed},
-        _ => throw StateError(method),
-      },
-      (operation, payload) => switch (operation) {
-        'catalogIdentity' ||
-        'catalogStableIdentity' => {'identity': jsonEncode(payload)},
-        _ => throw StateError(operation),
-      },
-    )..putSource({
-        'id': 'feed',
-        'name': 'Feed',
-        'url': url,
-        'format': 'source',
-        'status': 'ready',
-        'nodes': <CatalogMap>[],
-      });
-    SubscriptionGroup shown(DesktopCatalog catalog) => SubscriptionGroup.fromMap(
-      catalogList(catalog.snapshot()['subscriptions']).single,
-    );
+    late List<String> notices;
+    final sourceURLs = <Object?>[];
+    DesktopCatalog catalog(String url) =>
+        DesktopCatalog(
+          DesktopCatalog.empty(),
+          (method, payload) async {
+            if (method == 'importClientProfiles') {
+              sourceURLs.add(payload['sourceURL']);
+            }
+            return switch (method) {
+              'fetchSubscription' => {
+                'body': 'feed',
+                'headers': {},
+                'url': payload['url'],
+              },
+              'importClientProfiles' => {
+                'profiles': feed,
+                if (notices.isNotEmpty) 'notices': notices,
+              },
+              _ => throw StateError(method),
+            };
+          },
+          (operation, payload) => switch (operation) {
+            'catalogIdentity' ||
+            'catalogStableIdentity' => {'identity': jsonEncode(payload)},
+            _ => throw StateError(operation),
+          },
+        )..putSource({
+          'id': 'feed',
+          'name': 'Feed',
+          'url': url,
+          'format': 'source',
+          'status': 'ready',
+          'nodes': <CatalogMap>[],
+        });
+    SubscriptionGroup shown(DesktopCatalog catalog) =>
+        SubscriptionGroup.fromMap(
+          catalogList(catalog.snapshot()['subscriptions']).single,
+        );
 
-    test('of a public feed are its notices: in feed order, each once, five '
-        'at most, and no server', () async {
-      feed = [
-        line('DE-1'),
-        line('📊 10GB left', notice: true),
-        line('Device limit reached', notice: true),
-        line('NL-1'),
-        line('📊 10GB left', notice: true),
-        line('✖ Package Ended', notice: true),
-        line(' Renew at panel.example ', notice: true),
-        line('Sixth', notice: true),
-        line('Seventh', notice: true),
-      ];
+    test('are the notices the core returns, beside the servers', () async {
+      sourceURLs.clear();
+      feed = [line('DE-1'), line('NL-1')];
+      notices = ['📊 10GB left', 'Device limit reached'];
       final subscriptions = catalog('https://sub.example/feed');
       expect(await subscriptions.refresh('feed'), isNull);
+      // The core applies its feed-host rule to the URL desktop fetched.
+      expect(sourceURLs, ['https://sub.example/feed']);
       final group = shown(subscriptions);
-      expect(group.notices, [
-        '📊 10GB left',
-        'Device limit reached',
-        '✖ Package Ended',
-        'Renew at panel.example',
-        'Sixth',
-      ]);
-      expect(subscriptions.source('feed')['notices'], hasLength(5));
+      expect(group.notices, ['📊 10GB left', 'Device limit reached']);
+      expect(subscriptions.source('feed')['notices'], hasLength(2));
       expect([for (final node in group.nodes) node.name], ['DE-1', 'NL-1']);
       expect(subscriptions.selected, group.nodes.first.id);
     });
 
-    test('of a feed from this device are servers, as before', () async {
-      feed = [
-        line('📊 10GB left', notice: true),
-        line('DE-1'),
-        line('Device limit reached', notice: true),
-      ];
-      final subscriptions = catalog('http://127.0.0.1:2096/feed');
-      await subscriptions.refresh('feed');
-      final group = shown(subscriptions);
-      expect([for (final node in group.nodes) node.name], [
-        '📊 10GB left',
-        'DE-1',
-        'Device limit reached',
-      ]);
-      expect(subscriptions.source('feed').containsKey('notices'), isFalse);
-      expect(group.notices, isEmpty);
-    });
-
     test('alone refresh a subscription to no server, and the next refresh '
         'replaces them', () async {
-      feed = [
-        line('Device limit reached', notice: true),
-        line('✖ Package Ended', notice: true),
-      ];
+      feed = [];
+      notices = ['Device limit reached', '✖ Package Ended'];
       final subscriptions = catalog('https://sub.example/feed');
       expect(await subscriptions.refresh('feed'), isNull);
       expect(subscriptions.source('feed')['status'], 'ready');
@@ -889,22 +992,27 @@ void main() {
         '✖ Package Ended',
       ]);
       expect(subscriptions.selected, isNull);
-      feed = [line('DE-1'), line('📊 9GB left', notice: true)];
+      feed = [line('DE-1')];
+      notices = ['📊 9GB left'];
       await subscriptions.refresh('feed');
       expect(shown(subscriptions).notices, ['📊 9GB left']);
       expect(subscriptions.selected, shown(subscriptions).nodes.single.id);
-      feed = [line('DE-1')];
+      notices = [];
       await subscriptions.refresh('feed');
       expect(subscriptions.source('feed').containsKey('notices'), isFalse);
       expect(shown(subscriptions).notices, isEmpty);
     });
 
     test('pasted by hand are servers', () async {
-      feed = [line('📊 10GB left', notice: true)];
+      sourceURLs.clear();
+      feed = [line('📊 10GB left')];
+      notices = [];
       final subscriptions = catalog('https://sub.example/feed');
       final local = await subscriptions.importLocal(
         'socks://127.0.0.1:1080#📊 10GB left',
       );
+      // No feed URL: the core keeps every line a server.
+      expect(sourceURLs, [null]);
       expect([for (final node in local.added) node['name']], ['📊 10GB left']);
       expect(subscriptions.source(local.id).containsKey('notices'), isFalse);
     });

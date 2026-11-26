@@ -51,12 +51,15 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
   values.** A refresh in which the panel changed a server's remark (the traffic left) together
   with its REALITY short ID or SNI made every server new: favorites, renamed and hidden servers,
   the automation list and the selected server were lost. Such a server is now found again by
-  its address, credentials and keys, on every platform.
+  its address, credentials and keys, on every platform; a server the panel lists more than once
+  is told apart by a name of its own, otherwise by its place in the previous list.
 - **A provider's messages are no longer servers.** Some providers put the traffic left, a device
   limit or "Package Ended" into the name of a line that points nowhere (a local or documentation
   address, a public DNS resolver, port 0 or 1). From a subscription's own public address these
   lines now show as "Provider: ..." under the subscription's name instead of as servers that
-  fail every test, and a subscription that sends only such lines is added without an error.
+  fail every test, and a subscription that sends only such lines is added without an error and
+  shows just those lines. Every platform applies the same rule, including Android for addresses
+  with `_` in the host name.
 - **Android: "Connect after device restart" waits for the network.** A server given by name
   was looked up once as the phone started, often before Wi-Fi or mobile data worked; the
   start failed and, with "Reconnect automatically" off, the phone stayed without VPN. A start
@@ -176,18 +179,22 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
   downloaded as usual.
 - **More panel and app links import.** Hysteria2 links with `obfs=salamander` next to a
   FinalMask (`fm`) that says the same, `mports` port hopping and an old `fm` with
-  `quicParams.udpHop`; Hysteria2 Gecko without packet sizes (Hysteria's 512 and 1200);
-  Shadowsocks with `plugin=obfs-local;obfs=http` (simple-obfs HTTP mode); WireGuard links with
-  a `/` before the query, `privatekey`, a UDP `fm` and `ifp=0`; WireGuard configurations with
-  an IPv6 `Endpoint` written without brackets; TUIC links with `congestion_control=BBR`,
-  `reduce_rtt` or `fp`; versioned fingerprints such as `fp=chrome_120` (the browser's preset);
-  mKCP `mtu` and `tti`; VMess QR JSON with `"tls":"reality"`. What still cannot work says why:
-  simple-obfs TLS mode, WireGuard noise packets (`ifp`), TUIC `disable_sni=1`, VMess REALITY
-  without a public key.
+  `quicParams.udpHop`; Hysteria2 Gecko without packet sizes (Hysteria's 512 and 1200), in links
+  and Clash profiles; Shadowsocks with `plugin=obfs-local;obfs=http` (simple-obfs HTTP mode;
+  client-only options such as `fast-open` are left out) and Clash `plugin: obfs`;
+  WireGuard links with a `/` before the query, `privatekey`, a UDP `fm` and `ifp=0`, and keys
+  written with a bare `+` (also in an `ech` config list); WireGuard configurations with an IPv6
+  `Endpoint` written without brackets; TUIC links with `congestion_control=BBR`, `reduce_rtt`
+  or `fp`; versioned fingerprints such as `fp=chrome_120` (the browser's preset); mKCP `mtu` and
+  `tti`, which a shared link now keeps; VMess QR JSON with `"tls":"reality"`. What still cannot work says why: simple-obfs TLS mode,
+  a link whose `obfs` says Salamander and its `fm` Gecko (or the other way round), WireGuard
+  noise packets (`ifp`), TUIC `disable_sni=1`, VMess REALITY without a public key.
 - **Server names no longer end in `?serverDescription=…`.** 3x-ui appends a server's
-  description to its name this way for Happ; Elarni leaves it out.
+  description to its name this way for Happ; Elarni leaves it out in every link and profile
+  format.
 - **A subscription at a panel's root named in its link, `https://host/#Name`, is added under
-  that name** on every platform, instead of failing or importing as an HTTP proxy.
+  that name** on every platform, instead of failing or importing as an HTTP proxy. An
+  `http://` link at a root path stays an HTTP proxy, as before.
 - **A subscription encrypted for Happ says so.** A feed that only Happ can decrypt (an
   `Encrypt-Tag` header and `?key=` in its link) failed as an invalid or unsupported feed; the
   message now says it is encrypted for another app and to ask the provider for another link.

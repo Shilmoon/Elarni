@@ -871,21 +871,27 @@ class AndroidE2E {
             }
         }
     }
-    // Providers write a message into the remark of a line no server answers (N10-07). With the real importer, the marked
-    // lines of a public feed are notices and never servers; a feed served from this device keeps all five as servers.
+    // Providers write a message into the remark of a line no server answers (N10-07). The real importer returns a public
+    // feed's message lines as notices and never servers, a host with "_" included (156.3); a feed served from this device
+    // keeps all five as servers.
     @Test fun e_providerMessageLinesAreNoticesOnlyInAPublicFeed() {
         val messages = listOf("socks://127.0.0.1:1080#📊 10GB left", "socks://192.0.2.1:1#Device limit reached", "trojan://1@1.1.1.1#✖ Package Ended")
         val servers = listOf("vless://00000000-0000-4000-8000-000000000001@de.example:443?encryption=none&security=reality&type=tcp&fp=chrome" +
             "&pbk=FCNsCTRerqst97Y-_Pc32LnnBu0g_hw-LhJYlaeiEVs&sni=www.example.com&sid=0a1b#DE-1", "trojan://fixture@nl.example:443?security=tls&sni=nl.example#NL-1")
         val mixed = listOf(messages[0], servers[0], messages[1], servers[1], messages[2]).joinToString("\n")
-        fun imported(text: String) = Native.call("importClientProfiles", obj("text" to text)).objects("profiles")
-        val (kept, notices) = Catalog.providerNotices(imported(mixed), "https://sub.example/feed")
-        assertEquals(listOf("DE-1", "NL-1"), kept.map { it.string("name") })
-        assertEquals(listOf("📊 10GB left", "Device limit reached", "✖ Package Ended"), notices)
-        val (local, none) = Catalog.providerNotices(imported(mixed), "http://127.0.0.1:2096/feed")
-        assertEquals(listOf("📊 10GB left", "DE-1", "Device limit reached", "NL-1", "✖ Package Ended"), local.map { it.string("name") })
+        fun imported(text: String, source: String): Pair<List<String>, List<String>> {
+            val result = Native.call("importClientProfiles", obj("text" to text, "sourceURL" to source))
+            return result.objects("profiles").map { it.string("name") } to result.strings("notices")
+        }
+        for (source in listOf("https://sub.example/feed", "https://sub_1.provider.example/feed")) {
+            val (kept, notices) = imported(mixed, source)
+            assertEquals(source, listOf("DE-1", "NL-1"), kept)
+            assertEquals(source, listOf("📊 10GB left", "Device limit reached", "✖ Package Ended"), notices)
+        }
+        val (local, none) = imported(mixed, "http://127.0.0.1:2096/feed")
+        assertEquals(listOf("📊 10GB left", "DE-1", "Device limit reached", "NL-1", "✖ Package Ended"), local)
         assertTrue(none.isEmpty())
-        val (alone, ended) = Catalog.providerNotices(imported(messages.joinToString("\n")), "https://sub.example/feed")
+        val (alone, ended) = imported(messages.joinToString("\n"), "https://sub.example/feed")
         assertTrue(alone.isEmpty())
         assertEquals(3, ended.size)
         HTTPFixture().use { feed ->

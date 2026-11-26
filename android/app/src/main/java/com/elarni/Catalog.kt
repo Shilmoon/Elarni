@@ -5,7 +5,6 @@ import android.os.Build
 import android.util.Base64
 import org.json.JSONArray
 import org.json.JSONObject
-import java.net.InetAddress
 import java.net.URI
 
 class ResourceReview(val catalog: Catalog, val routeID: String, val url: String, val warning: JSONObject) : Exception()
@@ -89,8 +88,6 @@ class Catalog(val data: JSONObject, private val snapshot: Boolean = false) {
     }
     fun parseNodes(imported: JSONObject, previous: List<JSONObject>): List<JSONObject> {
         val parsed = imported.objects("profiles").map { it.copy().apply {
-            // The importer's mark of a provider's message line is not stored.
-            remove("notice")
             if (string("format") == "telegram" && has("url")) put("config", obj("url" to get("url")))
         } }
         if (parsed.isEmpty() || parsed.size > 4096) throw AppFailure("unsupported_profile")
@@ -109,19 +106,21 @@ class Catalog(val data: JSONObject, private val snapshot: Boolean = false) {
             val old = byIdentity[node.string("format") + "\n" + identity(node)]?.removeFirstOrNull()
             if (old != null) { matches[i] = old; claimed.add(old) }
         }
+        // A server the user renamed keeps the provider's name for matching.
+        fun providerName(node: JSONObject) = node.string("providerName", node.string("name"))
         // 3x-ui picks a REALITY server's shortId and serverName per fetch and writes the traffic left into the
         // remark, which defeats the stage before and the ones after this one. Without those values a still
-        // unmatched identity that occurs as often on both sides pairs in feed order.
+        // unmatched identity that occurs as often on both sides pairs (see [pairByStableIdentity]).
         val unmatched = parsed.indices.filter { it !in matches }
-        val unclaimed = previous.filter { it !in claimed }
+        val unclaimed = previous.withIndex().filter { it.value !in claimed }
         if (unmatched.isNotEmpty() && unclaimed.isNotEmpty()) {
             fun stableKey(node: JSONObject) = node.string("format") + "\n" +
                 Native.domain("catalogStableIdentity", node.getJSONObject("config")).getString("identity")
-            pairByStableIdentity(unmatched.map { it to stableKey(parsed[it]) }, unclaimed.map { it to stableKey(it) })
+            pairByStableIdentity(unmatched.map { Pairing(it, stableKey(parsed[it]), parsed[it].string("name")) },
+                // A server stored before feedIndex keeps its place in the list.
+                unclaimed.map { (index, old) -> Pairing(old, stableKey(old), providerName(old), old.optInt("feedIndex", index)) })
                 .forEach { (i, old) -> matches[i] = old; claimed.add(old) }
         }
-        // A server the user renamed keeps the provider's name for matching.
-        fun providerName(node: JSONObject) = node.string("providerName", node.string("name"))
         // Name, protocol, transport and security tell same-named servers apart when a provider rotates their keys.
         fun logicalKey(node: JSONObject): String {
             val outbounds = node.mapObject("config").objects("outbounds")
@@ -160,6 +159,8 @@ class Catalog(val data: JSONObject, private val snapshot: Boolean = false) {
                 unchanged = oldIdentity == canonical(config)
             }
             value.put("id", old?.string("id") ?: newId())
+                // Its place in this feed, the order the next refresh pairs in.
+                .put("feedIndex", i)
                 .put("favorite", old?.optBoolean("favorite") ?: false)
                 .put("configurationRevision", if (old != null && unchanged) old.string("configurationRevision", old.string("id")) else newId())
             listOf("lastSuccessAt", "lastSuccessRevision", "groupOverrides", "ipPreference").forEach { key -> if (old?.has(key) == true) value.put(key, old.get(key)) }
@@ -173,11 +174,9 @@ class Catalog(val data: JSONObject, private val snapshot: Boolean = false) {
         val content = input.getString("text")
         val decoded = runCatching { Native.domain("decodeRouting", obj("content" to content)) }.getOrNull()
         if (decoded != null) { importRouting(content); return null }
-        val url = safeURL(content.trim())
-        if (url != null && !(URI(url).host in listOf("t.me", "telegram.me") && URI(url).path == "/proxy")) {
-            val id = addSource(url, input)
-            return refresh(id)
-        }
+        // The core tells a subscription from a proxy link, as on every platform: an http(s) URL is an HTTP proxy at
+        // a root path unless it is a panel's https://host/#Name.
+        if (input.string("kind") == "subscription") return refresh(addSource(content.trim(), input))
         val imported = Native.call("importClientProfiles", obj("text" to content))
         // Local imports join one group and skip servers it already has. Hidden
         // imports keep their own group so their sharing limit doesn't spread.
@@ -262,9 +261,10 @@ class Catalog(val data: JSONObject, private val snapshot: Boolean = false) {
         val headers = feed.mapObject("headers")
         val migration = JSONObject().apply { listOf("new-url", "new-domain", "fallback-url").forEach { if (headers.has(it)) put(it, headers.get(it)) } }
         val imported = Native.call("importClientProfiles", obj("text" to body, "sourceURL" to url, "migrationHeaders" to migration))
-        // A line the importer marks carries a provider's message ("📊 10GB left", "Device limit reached"), not a server.
-        val (profiles, notices) = providerNotices(imported.objects("profiles"), url)
-        imported.put("profiles", JSONArray(profiles))
+        // The core takes a public feed's message lines ("📊 10GB left", "Device limit reached") out of its servers
+        // and returns the ones to show.
+        val profiles = imported.objects("profiles")
+        val notices = imported.strings("notices")
         // Hidden servers are matched too, so that a refresh keeps them out.
         val hiddenIDs = source.objects("hiddenNodes").map { it.string("id") }.toSet()
         // A feed of messages alone leaves the subscription without servers.
@@ -651,6 +651,8 @@ class Catalog(val data: JSONObject, private val snapshot: Boolean = false) {
             }
         }
     }
+    /** One side of [pairByStableIdentity]: a refresh's position or a stored node, its key, its provider name and its place in the feed. */
+    data class Pairing<T>(val value: T, val key: String, val name: String, val order: Int = 0)
     companion object {
         private val installationPattern = Regex("^[a-f0-9]{64}$")
         private val idPattern = Regex("^[A-Za-z0-9-]{1,128}$")
@@ -662,46 +664,29 @@ class Catalog(val data: JSONObject, private val snapshot: Boolean = false) {
             .joinToString("") { "%02x".format(it.toInt() and 255) }
         /**
          * Pairs a refresh's unmatched positions with stored nodes by a key: a key that occurs as often on both sides
-         * pairs in order, any other count is left to the later stages.
+         * pairs, any other count is left to the later stages. Within a key, a name that occurs once on each side pairs
+         * first: a provider that lists one server twice, with two SNIs, names the copies apart and may swap them. The
+         * rest pair in feed order, the stored nodes in the order of the feed they came from ([Pairing.order]), not the
+         * order of the visible and hidden lists.
          */
-        fun <T> pairByStableIdentity(fresh: List<Pair<Int, String>>, stale: List<Pair<T, String>>): Map<Int, T> {
-            val olds = stale.groupBy({ it.second }, { it.first })
+        fun <T> pairByStableIdentity(fresh: List<Pairing<Int>>, stale: List<Pairing<T>>): Map<Int, T> {
+            // sortedBy is stable: the same place keeps the list order.
+            val olds = stale.sortedBy { it.order }.groupBy { it.key }
             val matches = mutableMapOf<Int, T>()
-            fresh.groupBy({ it.second }, { it.first }).forEach { (key, positions) ->
-                val same = olds[key]?.takeIf { it.size == positions.size } ?: return@forEach
-                positions.zip(same).forEach { (position, old) -> matches[position] = old }
+            fresh.groupBy { it.key }.forEach { (key, items) ->
+                val same = olds[key]?.takeIf { it.size == items.size } ?: return@forEach
+                val newNames = items.groupingBy { it.name }.eachCount()
+                val oldNames = same.groupingBy { it.name }.eachCount()
+                val byName = same.indices.filter { oldNames[same[it].name] == 1 }.associateBy { same[it].name }
+                val taken = BooleanArray(same.size)
+                val rest = items.filter { item ->
+                    val index = byName[item.name]?.takeIf { newNames[item.name] == 1 }
+                    if (index != null) { matches[item.value] = same[index].value; taken[index] = true }
+                    index == null
+                }
+                rest.zip(same.indices.filter { !taken[it] }).forEach { (item, index) -> matches[item.value] = same[index].value }
             }
             return matches
-        }
-        /**
-         * Whether the lines the importer marks as a provider's messages are messages in a feed fetched from [feedUrl].
-         * A feed served from this device or a documentation address (a test or lab feed) lists real servers there; a host
-         * name counts as public and is not resolved.
-         */
-        fun noticesApply(feedUrl: String): Boolean {
-            val host = runCatching { URI(feedUrl).host }.getOrNull()?.lowercase()?.removeSurrounding("[", "]")
-            if (host.isNullOrEmpty() || host == "localhost") return false
-            // URI accepted the bracketed form as an IPv6 literal, so this parses it and resolves nothing.
-            var bytes = if (':' in host) runCatching { InetAddress.getByName(host).address }.getOrNull() ?: return true
-                else host.split('.').takeIf { parts -> parts.size == 4 && parts.all { it.length in 1..3 && it.all(Char::isDigit) && it.toInt() <= 255 } }
-                    ?.map { it.toInt().toByte() }?.toByteArray() ?: return true
-            if (bytes.size == 16 && bytes.take(10).all { it == 0.toByte() } && bytes[10] == 0xff.toByte() && bytes[11] == 0xff.toByte())
-                bytes = bytes.copyOfRange(12, 16)
-            val octets = bytes.map { it.toInt() and 0xff }
-            if (octets.all { it == 0 }) return false
-            // 127/8, 192.0.2/24, 198.51.100/24 and 203.0.113/24.
-            if (octets.size == 4) return octets[0] != 127 && octets.take(3) !in listOf(listOf(192, 0, 2), listOf(198, 51, 100), listOf(203, 0, 113))
-            // ::1 and 2001:db8::/32.
-            return !(octets.take(15).all { it == 0 } && octets[15] == 1) && octets.take(4) != listOf(0x20, 0x01, 0x0d, 0xb8)
-        }
-        /**
-         * The servers of [profiles], an import of the feed fetched from [feedUrl], and the provider's message lines among
-         * them: the first five texts, each once, in feed order. A feed where [noticesApply] says no keeps every line a server.
-         */
-        fun providerNotices(profiles: List<JSONObject>, feedUrl: String): Pair<List<JSONObject>, List<String>> {
-            if (!noticesApply(feedUrl)) return profiles to emptyList()
-            val (marked, servers) = profiles.partition { it.optBoolean("notice") }
-            return servers to marked.map { it.string("name").trim() }.filter(String::isNotEmpty).distinct().take(5)
         }
         // The SNI a probe's handshake sends: bulk tests run at most two probes per SNI,
         // as TSPU counts handshakes per SNI. TLS without a name sends the address;

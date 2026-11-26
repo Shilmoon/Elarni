@@ -213,11 +213,9 @@ final class SubscriptionStore {
   func registerProfiles(_ content: String) throws -> String {
     let input = try normalizeClientInput(content)
     let text = input.text
-    if let url = URL(string: text), ["https", "http"].contains(url.scheme?.lowercased()),
-       // A root URL is an HTTP proxy unless it named itself, as a panel's https://host/#Name.
-       url.user == nil, !url.path.isEmpty, url.path != "/" || input.name != nil,
-       !( ["t.me", "telegram.me"].contains(url.host?.lowercased()) && url.path == "/proxy" ),
-       !text.contains(where: { $0.isWhitespace }) {
+    // The core tells a subscription from a proxy link, as on every platform: an http(s) URL is an HTTP
+    // proxy at a root path unless it is a panel's https://host/#Name.
+    if input.kind == "subscription" {
       return try register(urlText: content)
     }
     let data = Data(text.utf8)
@@ -1357,11 +1355,15 @@ final class SubscriptionStore {
       // remark, which defeats the stage before and the ones after this one. Without those values a still
       // unmatched identity of the same format that occurs as often on both sides pairs in feed order.
       let unmatched = parsed.indices.filter { exactIDs[$0] == nil }
-      let unused = old.allNodes.filter { !usedOldIDs.contains($0.id) }
+      let unused = old.allNodes.enumerated().filter { !usedOldIDs.contains($0.element.id) }
       if !unmatched.isEmpty, !unused.isEmpty {
-        let fresh = try unmatched.map { (position: $0, key: try parsed[$0].format + "\n" + stableIdentity(parsed[$0].outbound)) }
-        let stale = try unused.map { node in
-          (id: node.id, key: try (node.format ?? "xrayOutbound") + "\n" + stableIdentity(oldOutbounds[node.id] ?? Data()))
+        let fresh = try unmatched.map {
+          (position: $0, key: try parsed[$0].format + "\n" + stableIdentity(parsed[$0].outbound), name: parsed[$0].name)
+        }
+        // A server stored before feedIndex keeps its place in the list.
+        let stale = try unused.map { offset, node in
+          (id: node.id, key: try (node.format ?? "xrayOutbound") + "\n" + stableIdentity(oldOutbounds[node.id] ?? Data()),
+           name: node.name, order: node.feedIndex ?? offset)
         }
         for (position, id) in pairedByStableIdentity(fresh: fresh, stale: stale) {
           exactIDs[position] = id
@@ -1435,7 +1437,8 @@ final class SubscriptionStore {
           lastSuccessAt: previous?.lastSuccessAt,
           lastSuccessRevision: previous?.lastSuccessRevision,
           lastSuccessSession: previous?.lastSuccessSession,
-          probeKey: probeKey(outbound: parsedNode.outbound)
+          probeKey: probeKey(outbound: parsedNode.outbound),
+          feedIndex: position
         ))
       }
       guard !nodes.isEmpty || !notices.isEmpty else { throw SubscriptionError.noSupportedNodes }
@@ -1504,7 +1507,7 @@ final class SubscriptionStore {
     }
   }
 
-  func normalizeClientInput(_ text: String) throws -> (text: String, name: String?, shareLink: String?) {
+  func normalizeClientInput(_ text: String) throws -> (text: String, name: String?, shareLink: String?, kind: String?) {
     guard text.utf8.count <= Self.maxFeedBytes else { throw SubscriptionError.feedTooLarge }
     let data = try JSONSerialization.data(withJSONObject: ["apiVersion": 1,
       "method": "normalizeClientInput", "payload": ["text": text]])
@@ -1520,11 +1523,11 @@ final class SubscriptionStore {
           let value = envelope["data"] as? [String: Any], let content = value["text"] as? String else {
       throw SubscriptionError.invalidFeed
     }
-    return (content, value["name"] as? String, value["shareLink"] as? String)
+    return (content, value["name"] as? String, value["shareLink"] as? String, value["kind"] as? String)
   }
 
-  /// A feed's servers. `sourceURL` names the feed a refresh fetched; the lines the importer marks as a provider's
-  /// messages are then `notices` instead of servers where `noticesApply` says so. An import without it, such as a
+  /// A feed's servers. `sourceURL` names the feed a refresh fetched; the core then returns a public feed's message
+  /// lines ("📊 10GB left", "Device limit reached") as `notices` instead of servers. An import without it, such as a
   /// link pasted by hand, has none.
   func parseImport(_ data: Data, sourceURL: String? = nil, migrationHeaders: [String: String] = [:]) throws -> (nodes: [ParsedNode], directives: [String], hideURL: Bool, newSourceURL: String?, systemResolverDNS: Bool, fallbackURL: String?, skippedCount: Int, skippedKinds: String, notices: [String]) {
     guard let text = String(data: data, encoding: .utf8) else {
@@ -1566,18 +1569,9 @@ final class SubscriptionStore {
     var skippedKinds = (imported["skipped"] as? [[String: Any]] ?? []).compactMap { $0["kind"] as? String }
     var skippedCount = imported["skippedCount"] as? Int ?? 0
     var refusal: SubscriptionError?
-    let messages = sourceURL.map { noticesApply(feedURL: $0) } ?? false
-    var notices: [String] = []
+    let notices = imported["notices"] as? [String] ?? []
     let nodes = try profiles.compactMap { profile -> ParsedNode? in
       guard let format = profile["format"] as? String else { throw SubscriptionError.invalidFeed }
-      // A line the importer marks carries a provider's message ("📊 10GB left", "Device limit reached"), not a
-      // server: the subscription shows the first five, each once.
-      if messages, profile["notice"] as? Bool == true {
-        if let text = usableDisplayText(profile["name"] as? String ?? ""), notices.count < 5, !notices.contains(text) {
-          notices.append(text)
-        }
-        return nil
-      }
       if format == "telegram" {
         guard let url = profile["url"] as? String else { throw SubscriptionError.invalidFeed }
         return ParsedNode(name: "Telegram proxy", protocolName: "MTProto", transport: "Telegram", security: "MTProto",
@@ -1752,7 +1746,8 @@ final class SubscriptionStore {
       lastSuccessAt: old.lastSuccessAt,
       lastSuccessRevision: old.lastSuccessRevision,
       lastSuccessSession: old.lastSuccessSession,
-      probeKey: probeKey(outbound: edit.outbound)
+      probeKey: probeKey(outbound: edit.outbound),
+      feedIndex: old.feedIndex
     )
     record.retiredSecretRefs = (record.retiredSecretRefs ?? []) + [old.outboundRef]
     record.publishedRevision = UUID().uuidString.lowercased()
@@ -2208,6 +2203,8 @@ private struct SubscriptionNode: Codable {
   var lastSuccessSession: String? = nil
   /// The SNI its probes send; nil for records saved before 0.3.7 until their next refresh.
   var probeKey: String? = nil
+  /// Its place in the feed it came from, the order the next refresh pairs in; nil until a refresh.
+  var feedIndex: Int? = nil
   var displayName: String { manualName ?? name }
 }
 
@@ -2225,29 +2222,6 @@ struct ParsedNode {
   var outbound: Data
   var format: String = "xrayProfile"
   var groups: [ProfileGroupSelection]? = nil
-}
-
-/// Whether the lines the importer marks as a provider's messages are messages in a feed fetched from `feedURL`.
-/// A feed served from this device or a documentation address (a test or lab feed) lists real servers there; a
-/// host name counts as public and is not resolved.
-func noticesApply(feedURL: String) -> Bool {
-  guard var host = URLComponents(string: feedURL)?.host?.lowercased(), !host.isEmpty else { return false }
-  if host.hasPrefix("["), host.hasSuffix("]") { host = String(host.dropFirst().dropLast()) }
-  if host == "localhost" { return false }
-  var v4 = in_addr(), v6 = in6_addr()
-  var bytes: [UInt8]
-  if inet_pton(AF_INET, host, &v4) == 1 { bytes = withUnsafeBytes(of: &v4) { Array($0) } }
-  else if inet_pton(AF_INET6, host, &v6) == 1 { bytes = withUnsafeBytes(of: &v6) { Array($0) } }
-  else { return true }
-  if bytes.count == 16, bytes[0..<10].allSatisfy({ $0 == 0 }), bytes[10] == 0xff, bytes[11] == 0xff { bytes = Array(bytes[12...]) }
-  if bytes.allSatisfy({ $0 == 0 }) { return false }
-  if bytes.count == 4 {
-    // 127/8, 192.0.2/24, 198.51.100/24 and 203.0.113/24.
-    let documentation: [[UInt8]] = [[192, 0, 2], [198, 51, 100], [203, 0, 113]]
-    return bytes[0] != 127 && !documentation.contains(Array(bytes[0..<3]))
-  }
-  // ::1 and 2001:db8::/32.
-  return !(bytes[0..<15].allSatisfy { $0 == 0 } && bytes[15] == 1) && Array(bytes[0..<4]) != [0x20, 0x01, 0x0d, 0xb8]
 }
 
 enum SubscriptionError: Error, Equatable {

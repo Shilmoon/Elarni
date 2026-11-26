@@ -51,7 +51,7 @@ func parseVMessQrCode(text string) (*conf.OutboundDetourConfig, error) {
 func (proxy vmessQrCode) outbound() (*conf.OutboundDetourConfig, error) {
 	outbound := &conf.OutboundDetourConfig{}
 	outbound.Protocol = "vmess"
-	setOutboundName(outbound, withoutServerDescription(proxy.Ps))
+	setOutboundName(outbound, proxy.Ps)
 
 	settings := conf.VMessOutboundConfig{}
 	settings.Address = parseAddress(proxy.Add)

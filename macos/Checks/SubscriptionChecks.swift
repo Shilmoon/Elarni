@@ -535,16 +535,33 @@ struct SubscriptionChecks {
       try expect(uniqueNodeIDs([(key, "a")])[key] == "a", "unique node identity")
     }
     try check("the stable identity pairs only counts equal on both sides, in feed order") {
-      try expect(pairedByStableIdentity(fresh: [(0, "A"), (2, "C")], stale: [("a", "A"), ("c", "C")]) == [0: "a", 2: "c"],
-        "a unique identity on both sides did not pair")
-      try expect(pairedByStableIdentity(fresh: [(1, "X"), (3, "X"), (4, "X")], stale: [("x1", "X"), ("x2", "X"), ("x3", "X")]) ==
+      try expect(pairedByStableIdentity(fresh: [(0, "A", "a"), (2, "C", "c")], stale: [("a", "A", "a", 0), ("c", "C", "c", 1)]) ==
+        [0: "a", 2: "c"], "a unique identity on both sides did not pair")
+      try expect(pairedByStableIdentity(fresh: [(1, "X", "X 9GB"), (3, "X", "X 9GB"), (4, "X", "X 9GB")],
+        stale: [("x1", "X", "X 8GB", 0), ("x2", "X", "X 8GB", 1), ("x3", "X", "X 8GB", 2)]) ==
         [1: "x1", 3: "x2", 4: "x3"], "one host listed three times did not pair in feed order")
-      try expect(pairedByStableIdentity(fresh: [(0, "X")], stale: [("x1", "X"), ("x2", "X")]).isEmpty,
+      try expect(pairedByStableIdentity(fresh: [(0, "X", "X")], stale: [("x1", "X", "X", 0), ("x2", "X", "X", 1)]).isEmpty,
         "fewer servers in the refresh were paired")
-      try expect(pairedByStableIdentity(fresh: [(0, "X"), (1, "X"), (2, "X"), (3, "B")], stale: [("x1", "X"), ("x2", "X"), ("b", "B")]) ==
+      try expect(pairedByStableIdentity(fresh: [(0, "X", "X"), (1, "X", "X"), (2, "X", "X"), (3, "B", "B")],
+        stale: [("x1", "X", "X", 0), ("x2", "X", "X", 1), ("b", "B", "B", 2)]) ==
         [3: "b"], "more servers in the refresh were paired, or stopped the other identities")
-      try expect(pairedByStableIdentity(fresh: [(0, "xrayProfile\nX")], stale: [("t", "telegram\nX")]).isEmpty,
+      try expect(pairedByStableIdentity(fresh: [(0, "xrayProfile\nX", "X")], stale: [("t", "telegram\nX", "X", 0)]).isEmpty,
         "different keys paired")
+    }
+    // A provider lists one inbound twice, names the copies apart and swaps them (156.2); the user hid one DE-1
+    // and favorited the other, so the stored lists hold them out of feed order (156.1).
+    try check("the stable identity pairs a name once on each side first, the rest in the previous feed's order") {
+      try expect(pairedByStableIdentity(fresh: [(0, "X", "WhatsApp"), (1, "X", "YouTube")],
+        stale: [("yt", "X", "YouTube", 0), ("wa", "X", "WhatsApp", 1)]) == [0: "wa", 1: "yt"],
+        "swapped servers with their own names paired by position")
+      try expect(pairedByStableIdentity(fresh: [(0, "X", "DE"), (1, "X", "DE"), (2, "X", "Solo")],
+        stale: [("solo", "X", "Solo", 0), ("d1", "X", "DE", 1), ("d2", "X", "DE", 2)]) == [0: "d1", 1: "d2", 2: "solo"],
+        "a repeated name was paired by name, or the rest lost their order")
+      try expect(pairedByStableIdentity(fresh: [(0, "X", "DE-1"), (1, "X", "DE-1"), (2, "N", "NL-1")],
+        stale: [("id1", "X", "DE-1", 1), ("nl", "N", "NL-1", 2), ("id0", "X", "DE-1", 0)]) == [0: "id0", 1: "id1", 2: "nl"],
+        "stored servers paired in the order of the visible and hidden lists")
+      try expect(pairedByStableIdentity(fresh: [(0, "X", "A"), (1, "X", "A")], stale: [("second", "X", "A", 5), ("first", "X", "A", 5)]) ==
+        [0: "second", 1: "first"], "the same place did not keep the list order")
     }
 
     try check("metadata handles byte counters Unix expiry and malformed fields") {
@@ -1307,13 +1324,22 @@ struct SubscriptionChecks {
     try expect(name(store) == "Hysteria2", "link fallback was lost after a provider title change")
     try await mode("baseline")
     print("PASS subscription link labels stay below provider titles and explicit renames across relaunch")
-    // A panel's root named in its fragment is a subscription (probe N10-09); an HTTP proxy link has no path.
-    let root = try store.registerProfiles(fixture.absoluteString + "/#Root%20feed")
+    // A panel's https root named in its fragment is a subscription (probe N10-09); the core decides, as on every
+    // platform. It is only registered here, not fetched.
+    let root = try store.registerProfiles("https://127.0.0.1:\(fixture.port ?? 443)/#Root%20feed")
     let rootGroup = (store.snapshot()["subscriptions"] as! [[String: Any]]).first { $0["id"] as? String == root }
     try expect(root != id && rootGroup?["isLocal"] as? Bool == false && rootGroup?["name"] as? String == "Root feed",
       "a named root URL was not added as a subscription with its name")
     print("PASS a root subscription URL named in its fragment is added under that name")
-    return 2
+    // http://host:port/#Name is the HTTP proxy link a browser's URL writes (146.1): it stays a proxy.
+    let proxy = try store.registerProfiles(fixture.absoluteString + "/#Office")
+    _ = try await store.refresh(id: proxy)
+    let proxyGroup = (store.snapshot()["subscriptions"] as! [[String: Any]]).first { $0["id"] as? String == proxy }
+    try expect(proxy != root && proxyGroup?["isLocal"] as? Bool == true &&
+      (proxyGroup?["nodes"] as? [[String: Any]] ?? []).map { $0["name"] as? String } == ["Office"],
+      "an http root URL named in its fragment did not import as an HTTP proxy")
+    print("PASS an http root URL named in its fragment stays an HTTP proxy")
+    return 3
   }
 
   static func refreshChecks(fixture: URL) async throws -> Int {
@@ -2095,22 +2121,9 @@ struct SubscriptionChecks {
   }
 
   // Providers write a message into the remark of a line no server answers (N10-07): a feed with a public host
-  // gets them as the subscription's notices, a feed served from this machine or a lab range as servers.
+  // gets them as the subscription's notices, a feed served from this machine or a lab range as servers. The core
+  // decides (Go's TestFeedNotices*); these checks go through it.
   static func providerMessageChecks(fixture: URL) async throws -> Int {
-    for url in ["https://sub.example/feed", "https://SUB.example:8443/feed?token=1", "http://192.0.3.1/feed",
-                "http://10.0.0.1:2096/feed", "https://[2001:db9::1]/feed", "http://127.0.0.1.example/feed",
-                "http://localhost.example/feed"] {
-      try expect(noticesApply(feedURL: url), "\(url) does not count as a public feed")
-    }
-    for url in ["http://127.0.0.1:8080/feed", "http://127.1.2.3/feed", "http://[::1]/feed", "http://localhost/feed",
-                "http://LocalHost:2096/feed", "http://0.0.0.0/feed", "http://[::]/feed", "http://192.0.2.1/feed",
-                "http://198.51.100.7/feed", "http://203.0.113.255/feed", "http://[2001:db8::1]/feed",
-                "http://[2001:DB8:ffff::1]/feed", "http://[::ffff:127.0.0.1]/feed", "http://[::ffff:192.0.2.1]/feed",
-                "not a link", ""] {
-      try expect(!noticesApply(feedURL: url), "\(url) counts as a public feed")
-    }
-    print("PASS provider message lines count only in a feed whose own host is public")
-
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent("elarni-provider-messages-\(UUID())")
     defer { try? FileManager.default.removeItem(at: directory) }
     let secrets = MemorySecrets()
@@ -2134,6 +2147,10 @@ struct SubscriptionChecks {
     try expect(fromPublic.nodes.map(\.name) == ["DE-1", "NL-1"] &&
       fromPublic.notices == ["📊 10GB left", "Device limit reached", "✖ Package Ended"],
       "a public feed's message lines became servers, or its servers were lost")
+    // A host name with "_", which Java's URI does not parse as a host, is a public name too (156.3).
+    let underscore = try store.parseImport(mixed, sourceURL: "https://sub_1.provider.example/feed")
+    try expect(underscore.nodes.map(\.name) == ["DE-1", "NL-1"] && underscore.notices.count == 3,
+      "a feed host with an underscore kept its message lines as servers")
     let fromHere = try store.parseImport(mixed, sourceURL: "http://127.0.0.1:2096/feed")
     try expect(fromHere.nodes.map(\.name) == ["📊 10GB left", "DE-1", "Device limit reached", "NL-1", "✖ Package Ended"] &&
       fromHere.notices.isEmpty, "a feed served from this machine lost servers to notices")

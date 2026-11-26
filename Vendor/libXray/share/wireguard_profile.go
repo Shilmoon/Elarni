@@ -179,9 +179,14 @@ func importWireGuard(text string, forceAmnezia bool, name string) (ClientProfile
 }
 
 // bracketIPv6Endpoint brackets an IPv6 endpoint written without brackets, as 3x-ui writes an AmneziaWG
-// server's ("2001:db8::1:51820"): the port follows the last colon when the rest is an IPv6 address.
+// server's ("2001:db8::1:51820"): the port follows the last colon when the rest is an IPv6 address. An
+// endpoint that is an IPv6 address whole ("2001:db8::1:5182") names no port, which the core refuses: its
+// last group may as well be the address's.
 func bracketIPv6Endpoint(endpoint string) string {
 	if _, _, err := net.SplitHostPort(endpoint); err == nil {
+		return endpoint
+	}
+	if _, err := netip.ParseAddr(endpoint); err == nil {
 		return endpoint
 	}
 	colon := strings.LastIndexByte(endpoint, ':')
@@ -337,13 +342,19 @@ func importWireGuardLink(text string) (ClientProfile, error) {
 		if len(values) != 1 || strings.ContainsAny(values[0], "\r\n") {
 			return ClientProfile{}, fmt.Errorf("unsupported WireGuard query field")
 		}
+		value := values[0]
+		switch strings.ToLower(key) {
+		case "privatekey", "publickey", "presharedkey":
+			// Base64 keys, which Hiddify writes unescaped as in the userinfo: a "+" is the key's.
+			value = plusKeptQueryValue(u.RawQuery, key, value)
+		}
 		switch strings.ToLower(key) {
 		case "privatekey":
 			// Hiddify repeats the key here for its apps before 2026-02.
-			if privateKey != "" && privateKey != values[0] {
+			if privateKey != "" && privateKey != value {
 				return ClientProfile{}, fmt.Errorf("conflicting WireGuard private keys")
 			}
-			privateKey = values[0]
+			privateKey = value
 			continue
 		case "ifp":
 			// Hiddify's noise packets before the handshake have no Xray equivalent; none is nothing lost.
@@ -366,15 +377,15 @@ func importWireGuardLink(text string) (ClientProfile, error) {
 			return ClientProfile{}, fmt.Errorf("unsupported WireGuard query field")
 		}
 		if name == "Address" || name == "DNS" || name == "MTU" || name == "Reserved" {
-			iface += name + "=" + values[0] + "\n"
+			iface += name + "=" + value + "\n"
 		} else {
-			peer += name + "=" + values[0] + "\n"
+			peer += name + "=" + value + "\n"
 		}
 	}
 	if privateKey == "" || strings.ContainsAny(privateKey, "\r\n#;") {
 		return ClientProfile{}, fmt.Errorf("invalid WireGuard credentials or path")
 	}
-	profile, err := importWireGuard("[Interface]\nPrivateKey="+privateKey+"\n"+iface+peer, false, withoutServerDescription(u.Fragment))
+	profile, err := importWireGuard("[Interface]\nPrivateKey="+privateKey+"\n"+iface+peer, false, u.Fragment)
 	if err != nil || mask == nil || len(mask.Udp) == 0 {
 		return profile, err
 	}

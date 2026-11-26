@@ -444,11 +444,11 @@ func zlibBytes(t *testing.T, data []byte) []byte {
 func TestHappAddLinksUnwrapLikeIncy(t *testing.T) {
 	const target = "https://sub.example.com/feed/token?key=a%2Bb"
 	for input, want := range map[string]ClientInput{
-		"happ://add/" + target:                  {Text: target},
-		"happ://add/" + target + "#Happ%20name": {Text: target, Name: "Happ name"},
-		"happ://add/" + url.PathEscape(target):  {Text: target},
-		"happ://routing/onadd/fixture":          {Text: "happ://routing/onadd/fixture"},
-		"happ://crypt3/fixture":                 {Text: "happ://crypt3/fixture"},
+		"happ://add/" + target:                  {Text: target, Kind: ClientInputSubscription},
+		"happ://add/" + target + "#Happ%20name": {Text: target, Name: "Happ name", Kind: ClientInputSubscription},
+		"happ://add/" + url.PathEscape(target):  {Text: target, Kind: ClientInputSubscription},
+		"happ://routing/onadd/fixture":          {Text: "happ://routing/onadd/fixture", Kind: ClientInputLink},
+		"happ://crypt3/fixture":                 {Text: "happ://crypt3/fixture", Kind: ClientInputLink},
 	} {
 		got, err := NormalizeClientInput(input)
 		if err != nil || got != want {
@@ -577,6 +577,82 @@ func TestWireGuardLinkVariantsFromPanels(t *testing.T) {
 			t.Errorf("%s: %d masks, want %d: %s", test.link, len(masks), test.masks, profile.Config)
 		}
 	}
+	// Hiddify writes the Base64 key raw, "+" and all, in the userinfo and in privatekey: one key, not
+	// two (146.6). An escaped "+" and a "+" read as the space it would be in a form stay other keys.
+	const raw = "+cdBAlUKFi4b5U9jac58v0fK1kNFW1w%2FTILhJsV+1V4="
+	for _, link := range []string{
+		"wireguard://" + raw + "@example.com:51820/?" + peer + "&privatekey=" + raw + "#raw",
+		"wireguard://" + raw + "@example.com:51820/?" + peer + "&privatekey=" + other + "#raw",
+		"wireguard://" + other + "@example.com:51820/?" + peer + "&PrivateKey=" + raw + "#raw",
+		"wireguard://@example.com:51820/?" + peer + "&privatekey=" + raw + "#raw",
+	} {
+		imported, err := ImportClientProfiles(link)
+		var root struct {
+			Outbounds []struct {
+				Settings struct {
+					SecretKey string `json:"secretKey"`
+				} `json:"settings"`
+			} `json:"outbounds"`
+		}
+		if err != nil || json.Unmarshal(imported.Profiles[0].Config, &root) != nil ||
+			root.Outbounds[0].Settings.SecretKey != "+cdBAlUKFi4b5U9jac58v0fK1kNFW1w/TILhJsV+1V4=" {
+			t.Errorf("%s: imported %+v, %v", link, imported, err)
+		}
+	}
+	if _, err := importWireGuardLink("wireguard://" + raw + "@example.com:51820/?" + peer + "&privatekey=" + key); err == nil ||
+		err.Error() != "conflicting WireGuard private keys" {
+		t.Errorf("two keys: %v", err)
+	}
+	// The peer's keys are Base64 too, written the same way.
+	const rawPublic, rawShared = "+gNJhyP2BguxwtnHSwW0jLnqtqMMXQFgDPolsdOAjv8=", "obtmjnnvEuzlJqNw/+y7Hu73jATWN9Qu0u/j1V5c9OE="
+	for _, link := range []string{
+		"wireguard://" + key + "@example.com:51820/?publickey=" + rawPublic + "&presharedkey=" + rawShared + "&address=10.0.0.2/32#raw",
+		"wireguard://" + key + "@example.com:51820/?PublicKey=" + url.QueryEscape(rawPublic) + "&PresharedKey=" + url.QueryEscape(rawShared) + "&address=10.0.0.2/32#raw",
+	} {
+		imported, err := ImportClientProfiles(link)
+		var root struct {
+			Outbounds []struct {
+				Settings struct {
+					Peers []struct {
+						PublicKey    string `json:"publicKey"`
+						PreSharedKey string `json:"preSharedKey"`
+					} `json:"peers"`
+				} `json:"settings"`
+			} `json:"outbounds"`
+		}
+		if err != nil || len(imported.Profiles) != 1 || json.Unmarshal(imported.Profiles[0].Config, &root) != nil ||
+			len(root.Outbounds[0].Settings.Peers) != 1 || root.Outbounds[0].Settings.Peers[0].PublicKey != rawPublic ||
+			root.Outbounds[0].Settings.Peers[0].PreSharedKey != rawShared {
+			t.Errorf("%s: imported %+v, %v", link, imported, err)
+		}
+	}
+}
+
+// An ECH config list is standard Base64 or "name+https://resolver"; a panel that writes the "+" bare
+// means it, not a space, and an escaped one stays as it is.
+func TestLinkECHConfigListKeepsItsPlus(t *testing.T) {
+	const link = "vless://00000000-0000-4000-8000-000000000001@example.com:443?encryption=none&security=tls&sni=example.com&ech="
+	for ech, want := range map[string]string{
+		"AEX+DQBB/w==":                          "AEX+DQBB/w==",
+		"AEX%2BDQBB%2Fw%3D%3D":                  "AEX+DQBB/w==",
+		"example.com+https://dns.example/query": "example.com+https://dns.example/query",
+		"AA%3D%3D":                              "AA==",
+	} {
+		imported, err := ImportClientProfiles(link + ech + "#ech")
+		var profile struct {
+			Outbounds []struct {
+				StreamSettings struct {
+					TLSSettings struct {
+						ECHConfigList string `json:"echConfigList"`
+					} `json:"tlsSettings"`
+				} `json:"streamSettings"`
+			} `json:"outbounds"`
+		}
+		if err != nil || len(imported.Profiles) != 1 || json.Unmarshal(imported.Profiles[0].Config, &profile) != nil ||
+			profile.Outbounds[0].StreamSettings.TLSSettings.ECHConfigList != want {
+			t.Errorf("ech=%s: imported %+v, %v; want %q", ech, imported, err, want)
+		}
+	}
 }
 
 // 3x-ui writes an AmneziaWG server's IPv6 Endpoint without brackets (probe N10-05). The port follows
@@ -591,8 +667,11 @@ func TestWireGuardUnbracketedIPv6Endpoint(t *testing.T) {
 		"192.0.2.1:51820":     "192.0.2.1:51820",
 		"example.com:51820":   "example.com:51820",
 		// Each of these is no endpoint, which the core refuses.
-		"2001:db8::1":          "",
-		"2001:db8::1:0":        "",
+		"2001:db8::1":   "",
+		"2001:db8::1:0": "",
+		// A whole address with the port left out, not a host and a port (146.5).
+		"2001:db8::1:5182":     "",
+		"2001:db8::1:443":      "",
 		"2001:db8::1:65536":    "",
 		"fe80::1%eth0:51820":   "",
 		"192.0.2.1:2001:51820": "",
@@ -632,6 +711,13 @@ func TestLinkNamesLeaveOutTheServerDescription(t *testing.T) {
 	vmess := "vmess://" + base64.StdEncoding.EncodeToString([]byte(`{"v":"2","ps":"VMess`+description+
 		`","add":"example.com","port":"443","id":"`+uuid+`","net":"tcp","tls":"tls","sni":"example.com"}`))
 	legacy := "ss://" + base64.StdEncoding.EncodeToString([]byte("aes-256-gcm:pw@192.0.2.1:8388")) + "#SS" + description
+	// Formats with their own name sources (146.8): AmneziaVPN keys, WireGuard links and Xray JSON remarks.
+	key := base64.StdEncoding.EncodeToString(make([]byte, 32))
+	wireguard := "[Interface]\nPrivateKey=" + key + "\nAddress=10.20.0.2/32\n[Peer]\nPublicKey=" + key + "\nEndpoint=127.0.0.1:51820\nAllowedIPs=0.0.0.0/0\n"
+	amnezia := "vpn://" + base64.RawURLEncoding.EncodeToString([]byte(wireguard)) + "#AWG" + description
+	wireguardLink := "wireguard://" + url.QueryEscape(key) + "@127.0.0.1:51820?publickey=" + url.QueryEscape(key) + "&address=10.20.0.2/32#WG" + description
+	xray := `{"remarks":"JSON` + description + `","outbounds":[{"protocol":"trojan","settings":{"servers":[{"address":"example.com","port":443,"password":"pw"}]},` +
+		`"streamSettings":{"security":"tls","tlsSettings":{"serverName":"example.com"}}}]}`
 	for link, want := range map[string]string{
 		vless + "DE-1?serverDescription=U3ViIHRpdGxl":       "DE-1",
 		vless + "DE%201" + description:                      "DE 1",
@@ -640,8 +726,11 @@ func TestLinkNamesLeaveOutTheServerDescription(t *testing.T) {
 		vless + "Q?serverDescription=not%20base64":                             "Q?serverDescription=not base64",
 		vless + "Q?serverDescription=":                                         "Q?serverDescription=",
 		"trojan://secret@example.com:443?sni=example.com#Trojan" + description: "Trojan",
-		vmess:  "VMess",
-		legacy: "SS",
+		vmess:         "VMess",
+		legacy:        "SS",
+		amnezia:       "AWG",
+		wireguardLink: "WG",
+		xray:          "JSON",
 	} {
 		imported, err := ImportClientProfiles(link)
 		if err != nil || len(imported.Profiles) != 1 || imported.Profiles[0].Name != want {
@@ -886,27 +975,20 @@ func TestSkippedTextLinesAreNotNamedAsSchemes(t *testing.T) {
 }
 
 // Providers write a message into the remark of a line whose server cannot be theirs: a loopback,
-// unspecified, documentation or well-known resolver address, or port 0 or 1. Such a profile is
-// marked, so a subscription can show it as a notice instead of a server.
+// unspecified, documentation or well-known resolver address, or port 0 or 1. In a public feed such
+// a profile is a notice instead of a server.
 func TestProviderMessageLinesAreMarkedAsNotices(t *testing.T) {
 	const id = "00000000-0000-4000-8000-000000000001"
 	notice := func(text string) bool {
 		t.Helper()
-		result, err := ImportClientProfiles(text)
-		if err != nil || len(result.Profiles) != 1 {
+		result, err := ImportFeedProfiles(text, "https://sub.example/feed")
+		if err != nil || len(result.Profiles)+len(result.Notices) != 1 {
 			t.Fatalf("%s: %+v, %v", text, result, err)
 		}
-		encoded, err := json.Marshal(result.Profiles[0])
-		if err != nil {
-			t.Fatal(err)
+		if encoded, err := json.Marshal(result); err != nil || strings.Contains(string(encoded), `"notice"`) {
+			t.Errorf("%s: encoded as %s, %v", text, encoded, err)
 		}
-		if marked := strings.Contains(string(encoded), `"notice":true`); marked != result.Profiles[0].Notice {
-			t.Errorf("%s: encoded as %s", text, encoded)
-		}
-		if !result.Profiles[0].Notice && strings.Contains(string(encoded), `"notice"`) {
-			t.Errorf("%s: an unmarked profile carries the field: %s", text, encoded)
-		}
-		return result.Profiles[0].Notice
+		return len(result.Notices) == 1
 	}
 	// A Trojan server at 1.1.1.1 with TLS that names no serverName, and the given transport.
 	cdn := func(stream string) string {
@@ -973,6 +1055,79 @@ func TestProviderMessageLinesAreMarkedAsNotices(t *testing.T) {
 		if notice(line) {
 			t.Errorf("%s: marked as a notice", line)
 		}
+	}
+}
+
+// A feed's message lines are notices only in a feed whose own host is public: a feed from this
+// device or a documentation address (a test or lab feed) lists real servers there. Host names are
+// not resolved, whatever they look like; Go parses the host, so one with "_" is a name too (156.3).
+func TestFeedNoticesApplyOnlyToAPublicHost(t *testing.T) {
+	for _, url := range []string{
+		"https://sub.example/feed", "https://SUB.example:8443/feed?token=1", "http://192.0.3.1/feed", "http://10.0.0.1:2096/feed",
+		"https://[2001:db9::1]/feed", "https://127.0.0.1.example/feed", "https://localhost.example/feed",
+		"https://sub_1.provider.example/feed",
+	} {
+		if !noticesApply(url) {
+			t.Errorf("%s does not count as a public feed", url)
+		}
+	}
+	for _, url := range []string{
+		"http://127.0.0.1:8080/feed", "http://127.1.2.3/feed", "http://[::1]:8080/feed", "http://localhost/feed", "http://LocalHost:8080/feed",
+		"http://0.0.0.0/feed", "http://[::]/feed", "http://192.0.2.1/feed", "http://198.51.100.7/feed", "http://203.0.113.255/feed",
+		"http://[2001:db8::1]/feed", "http://[2001:DB8:ffff::1]/feed", "http://[::ffff:127.0.0.1]/feed", "http://[::ffff:192.0.2.1]/feed",
+		"not a link", "", "%zz",
+	} {
+		if noticesApply(url) {
+			t.Errorf("%s counts as a public feed", url)
+		}
+	}
+}
+
+// Go takes a public feed's notices out of its profiles, so every platform shows the same ones: the
+// first five usable texts, trimmed, each once, in feed order (156.3, 156.6).
+func TestFeedNoticesAreTheFirstFiveTextsEachOnce(t *testing.T) {
+	const servers = "trojan://pw@de.example:443?security=tls&sni=de.example#DE-1\ntrojan://pw@nl.example:443?security=tls&sni=nl.example#NL-1"
+	message := func(port int, name string) string {
+		return fmt.Sprintf("socks://127.0.0.1:%d#%s", 1080+port, url.PathEscape(name))
+	}
+	mixed := strings.Join([]string{
+		message(0, "📊 10GB left"), "trojan://pw@de.example:443?security=tls&sni=de.example#DE-1", message(1, "Device limit reached"),
+		message(2, "📊 10GB left"), message(3, " ✖ Package Ended "), message(4, strings.Repeat("x", 257)), message(5, "bell\a"),
+		// Format characters: a right-to-left override that shows "📊 10GB left" backwards, a zero-width space.
+		message(9, "\u202etfel BG01 📊"), message(10, "Renew\u200b now"),
+		// A joiner inside an emoji sequence is kept.
+		message(11, "👨\u200d💻 Support"),
+		"trojan://pw@nl.example:443?security=tls&sni=nl.example#NL-1", message(6, "Four"), message(7, "Five"), message(8, "Six"),
+	}, "\n")
+	names := func(result *ClientImport) []string {
+		var names []string
+		for _, profile := range result.Profiles {
+			names = append(names, profile.Name)
+		}
+		return names
+	}
+	result, err := ImportFeedProfiles(mixed, "https://sub.example/feed")
+	if err != nil || !slices.Equal(names(result), []string{"DE-1", "NL-1"}) ||
+		!slices.Equal(result.Notices, []string{"📊 10GB left", "Device limit reached", "✖ Package Ended", "👨\u200d💻 Support", "Four"}) {
+		t.Fatalf("public feed: %v, %+v, %v", names(result), result, err)
+	}
+	for _, source := range []string{"http://127.0.0.1:2096/feed", ""} {
+		result, err := ImportFeedProfiles(mixed, source)
+		if err != nil || len(result.Profiles) != 14 || result.Notices != nil {
+			t.Errorf("%q: %v, %+v, %v", source, names(result), result, err)
+		}
+	}
+	if result, err := ImportFeedProfiles(servers, "https://sub.example/feed"); err != nil || len(result.Profiles) != 2 || result.Notices != nil {
+		t.Errorf("servers alone: %+v, %v", result, err)
+	}
+	// A feed of messages alone imports: no servers, and its notices.
+	result, err = ImportFeedProfiles(message(0, "✖ Package Ended")+"\n"+message(1, "Device limit reached"), "https://sub.example/feed")
+	if err != nil || !slices.Equal(result.Notices, []string{"✖ Package Ended", "Device limit reached"}) {
+		t.Fatalf("messages alone: %+v, %v", result, err)
+	}
+	if encoded, err := json.Marshal(result); err != nil || !strings.Contains(string(encoded), `"profiles":[]`) ||
+		!strings.Contains(string(encoded), `"notices":["✖ Package Ended","Device limit reached"]`) {
+		t.Errorf("messages alone encode as %s, %v", encoded, err)
 	}
 }
 
