@@ -326,9 +326,11 @@ jobs:
         run: python scripts/check_report.py -- xcodebuild -quiet -workspace macos/Runner.xcworkspace -scheme Runner -configuration Debug -derivedDataPath .build/diagnostics-macos CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO ARCHS=arm64 ONLY_ACTIVE_ARCH=YES ELARNI_DIAGNOSTICS_SUFFIX=-diagnostics 'SWIFT_ACTIVE_COMPILATION_CONDITIONS=$(inherited) DEBUG ELARNI_DIAGNOSTICS' build
       - name: iOS unsigned device build
         if: matrix.ios
+        # The Rust libraries use the release profile a phone's Release build links, so a
+        # release-only Rust or link failure fails here; the app itself compiles as Debug.
         run: |
           rustup target add aarch64-apple-ios
-          sh scripts/build-ios-native iphoneos --dev
+          CONFIGURATION=Release sh scripts/build-ios-native iphoneos
           python scripts/check_report.py -- xcodebuild -quiet -project ios/Elarni/Elarni.xcodeproj -scheme Elarni -configuration Debug -destination 'generic/platform=iOS' -derivedDataPath .build/ios/Device CODE_SIGNING_ALLOWED=NO build
       - name: Retain candidates (not production releases)
         if: matrix.release && github.event_name != 'pull_request'

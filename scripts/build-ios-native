@@ -2,20 +2,19 @@
 set -eu
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$root"
-usage='usage: scripts/build-ios-native [iphoneos|iphonesimulator] [--dev]'
-[ "$#" -le 2 ] || { echo "$usage" >&2; exit 2; }
+usage='usage: [CONFIGURATION=Debug|Release] scripts/build-ios-native [iphoneos|iphonesimulator]'
+[ "$#" -le 1 ] || { echo "$usage" >&2; exit 2; }
 platform=${1:-iphonesimulator}
-# A device build compiles Rust at the macOS release build's profile; the simulator, and a
-# device build with --dev (CI's compile check), use the quicker native-dev profile.
 case "$platform" in
-  iphoneos) target=aarch64-apple-ios; triple=arm64-apple-ios18.0; profile=release ;;
-  iphonesimulator) target=aarch64-apple-ios-sim; triple=arm64-apple-ios18.0-simulator; profile=native-dev ;;
+  iphoneos) target=aarch64-apple-ios; triple=arm64-apple-ios18.0 ;;
+  iphonesimulator) target=aarch64-apple-ios-sim; triple=arm64-apple-ios18.0-simulator ;;
   *) echo "$usage" >&2; exit 2 ;;
 esac
-case "${2:-}" in
-  '') ;;
-  --dev) profile=native-dev ;;
-  *) echo "$usage" >&2; exit 2 ;;
+# The Rust profile follows the Xcode configuration the libraries are linked into, as on macOS:
+# Debug compiles the quicker native-dev profile, any other configuration (or none) the release one.
+case "${CONFIGURATION:-}" in
+  Debug) profile=native-dev ;;
+  *) profile=release ;;
 esac
 go_command=${ELARNI_GO:-go}
 # Go leaves CPU feature detection out of GOOS=ios builds until upstream commit 8058a577, so
@@ -25,7 +24,10 @@ go_command=${ELARNI_GO:-go}
 goroot=$(GOTOOLCHAIN=local GOFLAGS= "$go_command" env GOROOT)
 cpu_source="$goroot/src/internal/cpu"
 cpu_patch="$root/scripts/go-ios-cpu-features.patch"
-overlay_dir="$root/.build/ios/go-overlay"
+cpu_files='cpu_arm64_darwin.go cpu_arm64_other.go cpu_darwin.go'
+# One directory per platform: a simulator and a device build running at the same time would
+# otherwise delete and rewrite the files the other one's Go build is reading.
+overlay_dir="$root/.build/ios/go-overlay/$platform"
 overlay=
 if [ ! -f "$cpu_source/cpu_arm64_darwin.go" ]; then
   printf 'error: %s is missing, so %s cannot be applied\n' "$cpu_source/cpu_arm64_darwin.go" "$cpu_patch" >&2
@@ -35,7 +37,7 @@ elif ! grep -q '^//go:build.*!ios' "$cpu_source/cpu_arm64_darwin.go"; then
 else
   rm -rf "$overlay_dir"
   mkdir -p "$overlay_dir/src/internal/cpu"
-  for file in cpu_arm64_darwin.go cpu_arm64_other.go cpu_darwin.go; do
+  for file in $cpu_files; do
     cp "$cpu_source/$file" "$overlay_dir/src/internal/cpu/$file"
   done
   # No fuzz and no guessing at a reversed patch: a changed file fails the build.
@@ -46,15 +48,22 @@ else
     exit 1
   fi
   overlay="$overlay_dir/overlay.json"
-  {
-    printf '{"Replace":{'
-    separator=
-    for file in cpu_arm64_darwin.go cpu_arm64_other.go cpu_darwin.go; do
-      printf '%s"%s":"%s"' "$separator" "$cpu_source/$file" "$overlay_dir/src/internal/cpu/$file"
-      separator=,
-    done
-    printf '}}\n'
-  } > "$overlay"
+  # json.dump escapes the quotes, backslashes and control characters a path may hold.
+  elarni_python=$(command -v python3 || command -v python) || {
+    echo 'error: python3 is needed to write the Go overlay' >&2
+    exit 1
+  }
+  # shellcheck disable=SC2086 # $cpu_files is a list of plain file names.
+  "$elarni_python" -I - "$overlay" "$cpu_source" "$overlay_dir/src/internal/cpu" $cpu_files <<'PY'
+import json
+import os
+import sys
+
+overlay, source, patched, *files = sys.argv[1:]
+with open(overlay, 'w', encoding='utf-8') as out:
+    json.dump({'Replace': {os.path.join(source, name): os.path.join(patched, name) for name in files}}, out)
+    out.write('\n')
+PY
 fi
 output="$root/.build/ios/Native/$platform"
 mkdir -p "$output"

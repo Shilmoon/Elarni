@@ -35,9 +35,13 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
   tray libraries (their source code is a
   separate download of each release), and without GStreamer only scanning QR codes with a
   camera is unavailable. The AppImage and the portable archive need glibc 2.34 or newer.
-- **Two dependencies with published advisories are updated**: the packet parser of the tunnel
-  stack (etherparse 0.20.4: a read past the end of a packet with IPv6 extension headers) and the
-  WebSocket library (the mask key now comes from the system's random source). All platforms.
+- **Two dependencies with published security advisories are updated**: the packet parser of
+  the tunnel stack (etherparse 0.20.4, RUSTSEC-2026-0596) and the WebSocket library
+  (gorilla/websocket, GO-2026-6278: the mask key now comes from the system's random source).
+  No release of the WebSocket library has the fix yet, so Elarni uses the upstream commit that
+  has it, with the library's other changes since v1.5.3; among them, a WebSocket inbound
+  answers a request that is not a WebSocket upgrade with "426 Upgrade Required" instead of
+  "400 Bad Request". All platforms.
 - **A server whose network cuts transfers off no longer looks healthy.** Some hosting networks
   stop each connection after its first 16 KB or so: the quick server checks passed while pages
   never loaded. Elarni now also downloads about 100 KB through the connected server after
@@ -203,10 +207,11 @@ Notable changes to Elarni. Versions follow `pubspec.yaml`.
   Names with many addresses resolve again in apps that take small DNS answers, a name without
   an IPv6 address no longer waits for the next DNS server, and on the Mac and iPhone a probe to
   the tunnel's own addresses ends at once instead of hanging until its timeout.
-- **iPhone: encryption uses the phone's AES and SHA instructions.** The iPhone core encrypted
-  AES-GCM about 45 times slower than the phone's own crypto library, costing battery and heat
-  on every connection that uses it. Its packet path and ShadowQUIC client are now built with
-  full optimization too.
+- **iPhone: encryption uses the phone's AES and SHA instructions.** The iPhone core ran
+  AES-GCM and SHA-256 without them, costing battery and heat on every connection that uses
+  them. In the iPhone simulator, AES-128-GCM went from 146 to 9,115 MB/s and SHA-256 from 458
+  to 3,247 MB/s; the phone itself was not measured. A Release build also compiles its packet
+  path and ShadowQUIC client with full optimization.
 ### Fixed
 
 - **Windows: Docker in WSL can create networks while Elarni is connected.** With WSL in mirrored

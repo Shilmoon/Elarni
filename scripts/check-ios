@@ -10,7 +10,8 @@ if [ "$#" -ne 1 ]; then
   echo 'usage: scripts/check-ios SIMULATOR-UDID | --build' >&2
   exit 2
 fi
-sh scripts/build-ios-native iphonesimulator
+# Both xcodebuild runs below use the Debug configuration, so Rust uses its native-dev profile.
+CONFIGURATION=Debug sh scripts/build-ios-native iphonesimulator
 if [ "$1" = --build ]; then
   # What scripts/check-changed runs: the app, its extensions and both test targets compile; no simulator is used.
   xcodebuild -quiet -project ios/Elarni/Elarni.xcodeproj -scheme Elarni \
